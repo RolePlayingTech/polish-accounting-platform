@@ -7,6 +7,7 @@ Projekt: Polish Accounting Platform. Wszystkie zmiany projektuj dla jurysdykcji 
 - [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md): zatwierdzony bazowy stack i wdrożenia.
 - [Zasady architektoniczne](docs/16-zasady-architektoniczne.md): granice modułów, bezpieczeństwo i DoD.
 - [Struktura repo](docs/17-struktura-repo-i-standardy.md): kierunek zależności, przyszłe monorepo i polecenia.
+- [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md): propozycja rozdziału administratora platformy, tenanta i księgowego oraz przygotowanie przyszłych abonamentów. Nie wdrażać płatności w #5.
 
 Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający moduł, ale respektuj spójność i autoryzację. W E1-01 (#5) stwórz faktycznie działające skrypty CI/build/test; dzisiejsze README to specyfikacja, a nie działająca aplikacja.
 
