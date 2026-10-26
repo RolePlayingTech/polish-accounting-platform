@@ -1,6 +1,6 @@
 # Współtworzenie
 
-Dziękujemy za zainteresowanie projektem polskiej księgowości open source. Projekt pozostaje na etapie **dokumentacji**.
+Dziękujemy za zainteresowanie projektem polskiej księgowości open source. Repozytorium zawiera działający szkielet developerski. Nie obsługuje jeszcze rzeczywistych procesów księgowych.
 
 ## Przed zgłoszeniem
 
@@ -16,6 +16,8 @@ Dziękujemy za zainteresowanie projektem polskiej księgowości open source. Pro
 - Dla zmian prawnych: dodaj źródła i oczekiwane wyniki zweryfikowane merytorycznie.
 - Dla MCP: wyjaśnij scopes, izolację podmiotów, idempotencję i zatwierdzenia.
 - Dla integracji: używaj mocków i środowisk testowych, nigdy produkcyjnych danych w CI.
+- Przed zmianami kodu przeczytaj [przewodnik developera](docs/19-przewodnik-developera.md), [strategię testów](docs/20-strategia-testow.md) oraz zasady z [AGENTS.md](AGENTS.md).
+- Zmiana kodu powinna przechodzić `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm test` i `pnpm build`.
 
 ## Bezpieczeństwo
 

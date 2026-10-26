@@ -1,6 +1,28 @@
 # 17. Docelowa struktura repozytorium i standardy implementacji
 
-**Status:** wymagania dla [Issue #5](https://github.com/RolePlayingTech/polish-accounting-platform/issues/5). To **projekt katalogów i kontraktów**, nie deklaracja, że istnieje działający kod. Obowiązuje [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md).
+**Status:** kierunek architektury przyjęty dla [Issue #5](https://github.com/RolePlayingTech/polish-accounting-platform/issues/5). Część „Aktualny szkielet” opisuje kod, który istnieje. Pozostałe pakiety poniżej to plan, a nie deklaracja wdrożenia. Obowiązuje [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md).
+
+## Aktualny szkielet
+
+```text
+polish-accounting-platform/
+├── apps/
+│   ├── web/                    # Next.js; /app oraz statyczne placeholdery
+│   ├── api/                    # NestJS + Fastify; publiczny status bez danych firm
+│   └── mcp/                    # lokalne STDIO; tylko read-only system_status
+├── packages/
+│   ├── domain/                 # identyfikatory tenant/company, bez autoryzacji
+│   ├── application/            # use case publicznego statusu
+│   ├── contracts/              # ścisły kontrakt statusu
+│   └── ui/                     # współdzielone komponenty interfejsu
+├── .github/workflows/ci.yml
+├── compose.yaml                # lokalny development, porty tylko na loopback
+├── pnpm-workspace.yaml
+├── pnpm-lock.yaml
+└── turbo.json
+```
+
+Szkielet nie zawiera DB, migracji, OIDC, tenantów, workerów, integracji zewnętrznych ani księgowania. Identyfikatory firm z pakietu `domain` nie nadają dostępu. Role i egzekwowanie uprawnień pozostają do wdrożenia w kolejnych zadaniach zależnych od modelu zagrożeń.
 
 ## Struktura monorepo
 
@@ -55,7 +77,7 @@ Konwencja katalogów wewnątrz każdego modułu: `domain/`, `application/`, `inf
 - Ładunki plików: proces przygotowania uploadu i osobny etap potwierdzenia checksum/skanowania; brak bezpośredniego uploadu do API jako domyślnego rozwiązania przy dużych plikach.
 - Zmiana kontraktu API: migracja kompatybilna i test kontraktowy; MCP deklaruje wersjonowaną semantykę narzędzi.
 
-## Wymagane polecenia po bootstrapie
+## Polecenia dostępne obecnie
 
 ```bash
 corepack enable
@@ -64,13 +86,22 @@ pnpm dev
 pnpm lint
 pnpm typecheck
 pnpm test
-pnpm test:integration
-pnpm test:e2e
 pnpm build
+pnpm test:e2e
+pnpm format:check
+pnpm audit --audit-level high
+```
+
+Powyższe skrypty są skonfigurowane w repozytorium. Szczegółowa instalacja jest w [19 — przewodniku developera](19-przewodnik-developera.md), a zakres testów w [20 — strategii testów](20-strategia-testow.md). Przeglądarkowy E2E sprawdza rzeczywisty przepływ web → API oraz niedostępność API. Testy integracyjne z DB i migracje pozostają przyszłym zakresem, bo nie ma jeszcze bazy ani funkcji uwierzytelniania.
+
+## Docelowe polecenia po wdrożeniu kolejnych modułów
+
+```bash
+pnpm test:integration
 pnpm db:migrate
 ```
 
-Dopóki nie istnieje `package.json`, **nie obiecujemy, że polecenia działają**. W Issue #5 należy je rzeczywiście zaimplementować, udokumentować i przetestować.
+Powyższe polecenia są przyszłym wymaganiem dla modułów DB i uwierzytelniania; nie są aktualnymi skryptami.
 
 ## Standard CI i dependency hygiene
 
@@ -80,6 +111,7 @@ Dopóki nie istnieje `package.json`, **nie obiecujemy, że polecenia działają*
 4. Lockfile, automatyczne PR z aktualizacjami bezpieczeństwa, cykl patch releases.
 5. Zmiana `domain` lub `tax-rules` wymaga testów referencyjnych i przeglądu merytorycznego.
 6. Environment validation przy starcie: fail fast przy braku sekretu, brak hard-coded fallbacków prod.
+7. ESLint `no-restricted-imports` sprawdza w CI, że `packages/domain` nie importuje Next/Nest/HTTP/ORM/MCP ani pakietu DB, a `apps/web` i `apps/mcp` nie importują pakietu DB ani adapterów ORM.
 
 ## Warunki promocji i pracy z agentami
 

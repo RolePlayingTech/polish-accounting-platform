@@ -1,0 +1,39 @@
+{
+  "name": "polish-accounting-platform",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.15.0",
+  "engines": {
+    "node": ">=24.22.1 <25",
+    "pnpm": ">=12.15.0 <13"
+  },
+  "scripts": {
+    "dev": "turbo run dev --filter=@pap/web",
+    "dev:container": "turbo run dev:container --filter=@pap/web",
+    "dev:mcp": "pnpm --filter @pap/mcp dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint && eslint playwright.config.ts",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "turbo run build && playwright test",
+    "format:check": "prettier --check \"apps/**/*.{ts,tsx,json,css,mjs}\" \"!apps/**/next-env.d.ts\" \"packages/**/*.{ts,tsx,json,css,mjs}\" \"*.json\" \"*.mjs\" \"*.yaml\" \"playwright.config.ts\" \"pnpm-lock.yaml\" \".github/workflows/ci.yml\"",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@next/eslint-plugin-next": "16.4.3",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "10.13.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "prettier": "3.9.10",
+    "tsx": "4.23.15",
+    "turbo": "2.11.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
+  }
+}

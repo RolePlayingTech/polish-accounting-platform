@@ -19,9 +19,9 @@
 - pnpm + Turborepo; Vitest/Playwright/Testcontainers, OpenTelemetry.
 - Docker Compose w lokalnym środowisku, kontenery i OpenTofu w wydzielonym EU/EOG stage/prod.
 
-Nie instalowano jeszcze aplikacji ani infrastruktury; to kontrakt dla następnych Issue/PR. Wersje zależności zostaną przypięte w Issue #5.
+Issue #5 dostarcza pierwszą implementację szkieletu i przypięte wersje zależności. Działające pakiety i zakres opisuje [17 — struktura repo](17-struktura-repo-i-standardy.md), a uruchomienie i walidację [19 — przewodnik developera](19-przewodnik-developera.md) oraz [20 — strategia testów](20-strategia-testow.md). Nie wdrożono jeszcze PostgreSQL, Drizzle, OIDC/MFA, tenantów, workerów, integracji ani zdalnego MCP. Poniższe komponenty, przepływ i granice opisują cel architektoniczny; nie należy traktować ich jako obecnych funkcji.
 
-## Komponenty i odpowiedzialność
+## Docelowe komponenty i odpowiedzialność
 
 | Komponent | Odpowiedzialność | Dostęp |
 | --- | --- | --- |
@@ -34,7 +34,7 @@ Nie instalowano jeszcze aplikacji ani infrastruktury; to kontrakt dla następnyc
 | `packages/db` | Postgres, migracje, RLS, transakcje | tylko aplikacja i infrastruktura |
 | `packages/integrations` | KSeF, JPK, NBP, REGON, banki, OCR | za portami, sandbox first |
 
-## Przepływ
+## Docelowy przepływ
 
 ```mermaid
 flowchart TD
@@ -53,7 +53,7 @@ flowchart TD
 
 **Ważne:** workery mogą wykonywać komendy aplikacyjne w tym samym procesie/kompozycji, nie potrzebują nowego publicznego REST round-trip; są objęte tymi samymi politykami i audytem. Diagram pokazuje logiczne kierunki, a nie obligatoryjne fizyczne połączenia.
 
-## Granice bezpieczeństwa i spójności
+## Wymagane granice bezpieczeństwa i spójności
 
 - `tenant_id` i `legal_entity_id` oraz tożsamość aktora: serwerowa autoryzacja RBAC/ABAC; PostgreSQL RLS jako dodatkowa bariera, osobno testowana z connection pooling.
 - Dokument oryginalny write-once, SHA-256, skan AV, retencja i krótkie signed URLs.
