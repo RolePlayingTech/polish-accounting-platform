@@ -71,6 +71,10 @@ Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js
 
 **Uwaga:** aktualnie repozytorium zawiera dokumentację, nie kod aplikacji ani działający MCP. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani deployment produkcyjny.
 
+## Administracja i przyszłe abonamenty
+
+Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operatora platformy**, **ustawienia organizacji** i **obszar księgowości konkretnej firmy**. Operator techniczny nie uzyskuje automatycznie dostępu do faktur ani ksiąg klientów. Architektura umożliwi przyszłe plany, limity i płatności przez adapter, bez wiązania księgowości z dostawcą płatności. W pierwszym etapie to **założenia projektowe, nie działające funkcje**. Szczegóły: [ADR-003 — administracja i entitlementy](docs/adr/003-administracja-i-uprawnienia-produktowe.md).
+
 ## Zakres pierwszej wersji
 
 **MVP — stabilny rdzeń:** wielopodmiotowość, konto i role, bezpieczne archiwum dokumentów, import XML/PDF/CSV, kontrola duplikatów, wyodrębnienie danych i walidacja, rejestr faktur, kalendarz zobowiązań, podstawowe raporty, odczyt i przygotowanie operacji przez MCP, audyt. Obsługa rzeczywistych ksiąg i wysyłka do MF będą udostępniane **profil po profilu** po testach zgodności. Pierwszy kandydat: **JDG z KPiR**, następnie **ryczałt**, a osobny tor dla **sp. z o.o. z pełnymi księgami**.
@@ -98,6 +102,7 @@ Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js
 | [15 — Decyzje otwarte](docs/15-decyzje.md) | Decyzje projektowe do podjęcia |
 | [ADR-001](docs/adr/001-rdzen-i-mcp.md) | Oddzielenie księgowania od AI i MCP |
 | [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md) | Decyzja technologiczna, koszty, alternatywy i środowiska |
+| [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md) | Propozycja administracji, ról platformowych oraz abonamentów |
 | [16 — Standard architektury](docs/16-zasady-architektoniczne.md) | Zasady modułów, uprawnień, ksiąg, testów i skalowania |
 | [17 — Standard repo](docs/17-struktura-repo-i-standardy.md) | Docelowe pakiety, importy, CI i komendy |
 
