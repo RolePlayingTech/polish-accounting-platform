@@ -27,15 +27,20 @@ Docelowo MCP Streamable HTTP zgodny z aktualnym standardem i audytowanym SDK; dl
 - Wysyłka KSeF/JPK, trwałe księgowanie, zamknięcie okresu i płatności — nie są zwykłymi automatycznymi tools.
 
 ## Schemat żądania
-Każdy tool wymaga aktywnego entity_id i autoryzacji względem tenant_id, a write także idempotency_key, request_id i oczekiwanej wersji obiektu. Każda odpowiedź zawiera status, identyfikator audytu, wersję reguły (gdy dotyczy), działania użytkownika i czytelne błędy.
+Nie wszystkie narzędzia MCP mają ten sam zakres i wymagania uwierzytelnienia:
 
-## Threat model
-- Złośliwy tekst w OCR faktury jest danymi, a nie instrukcją dla agenta.
-- Agent nie może podwyższać scope ani wybierać innego tenant_id przez argument wejściowy.
-- Deny by default, limitowanie wywołań, ochrona przed replay i masowym pobraniem danych.
-- Logi nie przechowują całych dokumentów ani tokenów; metryki są odpersonalizowane.
-- Krótki TTL draftów; hash zatwierdzanej treści uniemożliwia potwierdzenie zmienionej operacji.
-- Osobne zgody na integracje i dostęp agenta, z możliwością natychmiastowego cofnięcia.
+- **Narzędzia operujące na danych konkretnej firmy:** wymagają wskazania `entity_id` albo jednoznacznej identyfikacji firmy na podstawie uprawnionego zasobu; serwer zawsze wyznacza tenant i ponownie sprawdza aktywny grant dla firmy, zasobu oraz akcji. Selektor przekazany przez klienta nie jest dowodem dostępu.
+- **Narzędzia na poziomie użytkownika/organizacji**, np. `entities.list`: wymagają uwierzytelnionej tożsamości i właściwego grantu/zakresu, ale **nie** wymagają wcześniej wybranej firmy. Odpowiedź zawiera tylko podmioty dozwolone temu aktorowi; brak aktywnego `entity_id` nigdy nie czyni takiego narzędzia publicznym.
+- **Jawnie publiczne narzędzia techniczne**, np. `system_status` w lokalnym szkielecie: nie korzystają z kontekstu firmy ani danych tenanta i mogą działać bez uwierzytelnienia tylko po osobnej, jawnej decyzji w allowliście. Odpowiedź zawiera minimalne, niewrażliwe metadane; nie ujawnia konfiguracji infrastruktury, klientów ani sekretów. Przed publikacją zdalnego MCP obowiązuje oddzielny przegląd transportu i polityki.
+- **Przygotowanie lub zapis:** oprócz powyższych reguł wymaga właściwej komendy, `idempotency_key`, `request_id` i — tam, gdzie potrzebne — oczekiwanej wersji obiektu; operacje krytyczne wymagają oddzielnego potwierdzenia przez człowieka w UI.
+
+Odpowiedzi biznesowe mają czytelny status, kod błędu, ślad audytowy i wersję reguły, gdy ma zastosowanie. Nie wymagamy fikcyjnego identyfikatora audytu ani danych firmy w odpowiedzi jawnie publicznego `system_status`.
+
+## Threat model i autoryzacja
+
+Kanoniczny model zagrożeń, role, warunki dostępu oraz wymagane odmowy dla wszystkich kanałów opisuje [docs/18-model-zagrozen-i-uprawnien.md](18-model-zagrozen-i-uprawnien.md); uzasadnienie architektoniczne zawiera [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md). MCP jest niezaufanym adapterem protokołu i przechodzi przez tę samą politykę aplikacyjną co REST i UI.
+
+Wymagania specyficzne dla MCP: serwer waliduje audience, scopes, termin ważności i odwołanie tokenu; argument `tenant_id`/`entity_id` jest tylko selektorem do sprawdzenia na serwerze; narzędzia są deny-by-default i ograniczone allowlistą; agent nie zatwierdza własnego draftu ani nie wykonuje krytycznego zapisu. Złośliwy tekst w OCR pozostaje danymi. Limity, idempotencja i audyt nie mogą utrwalać pełnego dokumentu ani tokenu. Te zapisy są wymaganiami projektowymi, nie działającym serwerem MCP.
 
 ## Przykładowy flow
 1. Client MCP pobiera profile firm dostępne w scope.

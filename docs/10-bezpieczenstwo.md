@@ -4,7 +4,9 @@
 Aplikacja operuje na fakturach, danych identyfikacyjnych osób fizycznych, danych finansowych i uprawnieniach do systemów urzędowych. Repozytorium publiczne ma zawierać wyłącznie kod i syntetyczne przykłady.
 
 ## Kontrola dostępu
-OIDC, MFA dla operacji wrażliwych, zasadniczo role z minimalnymi uprawnieniami. RBAC wsparty warunkami ABAC: tenant, entity, profil, typ operacji i okres. Tokeny MCP mają osobne scope, TTL i odwołanie. Każdy odczyt lub zapis sprawdza prawa po stronie serwera.
+Kontrakt ról, granic zaufania, reguł odmowy i przypadków negatywnych opisuje [model zagrożeń i uprawnień](18-model-zagrozen-i-uprawnien.md) oraz [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md). Są to wymagania dla implementacji, nie dowód, że aplikacja już egzekwuje te polityki.
+
+Docelowo OIDC/OAuth, MFA dla operacji wrażliwych i RBAC wsparty warunkami ABAC obejmującymi tenant, firmę, profil, typ operacji i okres. Tokeny MCP mają osobne odbiorniki/scopes, krótki TTL i odwołanie. Każdy odczyt i zapis sprawdza bieżące prawa po stronie serwera. UI nie jest granicą bezpieczeństwa.
 
 ## Dokumenty
 Malware scanning, MIME/content sniffing, limity wielkości, bezpieczna obróbka plików, anti-zip-bomb i izolowane przetwarzanie OCR. Przechowywanie szyfrowane; oryginał i jego hash niezmienne. Linki do obiektów krótkotrwałe i uwierzytelnione.
