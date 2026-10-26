@@ -13,6 +13,7 @@ const navigation = [
 export default async function WorkspacePage() {
   const result = await readPublicSystemStatus();
   const isAvailable = result.state === 'available';
+  const apiStatusLabel = isAvailable ? 'Dostępny' : 'Niedostępny';
 
   return (
     <div className="min-h-screen lg:grid lg:grid-cols-[252px_1fr]">
@@ -166,7 +167,7 @@ export default async function WorkspacePage() {
                 {(
                   [
                     ['Interfejs webowy', 'Uruchomiony', true],
-                    ['Kontrakt i status API', isAvailable ? 'Dostępny' : 'Niedostępny', isAvailable],
+                    ['Kontrakt i status API', apiStatusLabel, isAvailable],
                     ['Tożsamość i izolacja firm', 'Przed implementacją', false],
                     ['Księgowość i dokumenty', 'Nieaktywne', false],
                     ['Zdalny MCP i autoryzacja', 'Nieaktywne', false],
