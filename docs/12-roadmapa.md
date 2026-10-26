@@ -9,7 +9,7 @@
 - [ ] `E0-01` Zatwierdzić nazwę, licencję, repo, odpowiedzialnych za review podatkowe i bezpieczeństwa.
 - [ ] `E0-02` Określić pierwszą grupę odbiorców: JDG KPiR czy sp. z o.o. (sugerowana JDG KPiR).
 - [ ] `E0-03` Matryca profilu JDG: księgi, VAT, ZUS i granice odpowiedzialności; próbki syntetyczne.
-- [ ] `E0-04` ADR wyboru stosu, hostingu, dostawcy tożsamości i modelu tenantów.
+- [x] `E0-04` Wybrany stos i zasady wdrożeń: [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md). Konkretnego hostingu, kosztów i operacyjnej konfiguracji OIDC nie wybieramy przed uruchomieniem. Bez produkcyjnego deploymentu.
 - [ ] `E0-05` Utworzyć rejestr źródeł, wersji schem i obowiązków aktualizacji; wskazać opiekuna merytorycznego.
 - [ ] `E0-06` Przygotować test threat-model i matrycę roli → narzędzia MCP → operacje domenowe.
 
@@ -70,7 +70,7 @@
 
 ## Zalecana kolejność pierwszych PR-ów
 
-1. Dokumentacja ADR i modelu odpowiedzialności/reguł.
+1. [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md) i [zasady architektury](16-zasady-architektoniczne.md); następnie threat-model (#3) i profil podatkowy (#1/#4).
 2. Logowanie + struktura tenantów (nie dokumenty przed izolacją dostępu).
 3. Dokumenty + audyt + oryginały.
 4. MCP read-only + testy uprawnień.
@@ -99,7 +99,7 @@ Zadania do wykonania są prowadzone w [GitHub Issues](https://github.com/RolePla
 | Kolejność | Zakres roadmapy | Issue | Start |
 | --- | --- | --- | --- |
 | 1 | E0-02 / E0-03 — profil pilota | [#1](https://github.com/RolePlayingTech/polish-accounting-platform/issues/1) | Można niezależnie |
-| 2 | E0-04 — ADR stosu | [#2](https://github.com/RolePlayingTech/polish-accounting-platform/issues/2) | Można niezależnie |
+| 2 | E0-04 — ADR stosu | [#2](https://github.com/RolePlayingTech/polish-accounting-platform/issues/2) | Rozwiązanie: [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md); warunkiem zamknięcia jest merge PR |
 | 3 | E0-06 — zagrożenia i autoryzacja | [#3](https://github.com/RolePlayingTech/polish-accounting-platform/issues/3) | Można niezależnie |
 | 4 | E0-05 — źródła prawa | [#4](https://github.com/RolePlayingTech/polish-accounting-platform/issues/4) | Można niezależnie |
 | 5 | E1-01 — szkielety/CI | [#5](https://github.com/RolePlayingTech/polish-accounting-platform/issues/5) | Po #2 i #3 |
