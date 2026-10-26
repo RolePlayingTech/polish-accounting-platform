@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 
+/* Explicitly scan shared workspace components, not only files under apps/web. */
+@source "../../../packages/ui/src";
+
 :root {
   color-scheme: light;
   --pap-ink: #17241f;
