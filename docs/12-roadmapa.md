@@ -92,3 +92,19 @@ Każda sprawa/issue musi określić: **cel, profil firmy, okres prawny, zakres p
 - [ ] Logi i audyt prawidłowe, bez danych wrażliwych.
 - [ ] Migracja/rollback/test odtwarzalności i dokumentacja zmian.
 - [ ] Test integracyjny nie wysyła przypadkowo danych do urzędu produkcyjnego.
+## Kanoniczna kolejka GitHub Issues — bootstrap (2026-10-26)
+
+Zadania do wykonania są prowadzone w [GitHub Issues](https://github.com/RolePlayingTech/polish-accounting-platform/issues). Ten spis jest mapowaniem etykiet z roadmapy na konkretne, niewielkie zadania; nie otwieraj duplikatów.
+
+| Kolejność | Zakres roadmapy | Issue | Start |
+| --- | --- | --- | --- |
+| 1 | E0-02 / E0-03 — profil pilota | [#1](https://github.com/RolePlayingTech/polish-accounting-platform/issues/1) | Można niezależnie |
+| 2 | E0-04 — ADR stosu | [#2](https://github.com/RolePlayingTech/polish-accounting-platform/issues/2) | Można niezależnie |
+| 3 | E0-06 — zagrożenia i autoryzacja | [#3](https://github.com/RolePlayingTech/polish-accounting-platform/issues/3) | Można niezależnie |
+| 4 | E0-05 — źródła prawa | [#4](https://github.com/RolePlayingTech/polish-accounting-platform/issues/4) | Można niezależnie |
+| 5 | E1-01 — szkielety/CI | [#5](https://github.com/RolePlayingTech/polish-accounting-platform/issues/5) | Po #2 i #3 |
+| 6 | E1-02 / E1-03 — tenant i role | [#6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) | Po #5 |
+| 7 | E1-04 / E1-05 — dokumenty | [#7](https://github.com/RolePlayingTech/polish-accounting-platform/issues/7) | Po #6 |
+| 8 | E2-01 / E2-02 — MCP read-only | [#8](https://github.com/RolePlayingTech/polish-accounting-platform/issues/8) | Po #6 i #7 |
+
+Dalsze Issues twórz dopiero po zweryfikowaniu ukończonych PR-ów oraz zależności. Etap 0 i etap 1 nie obejmują wysyłek na produkcję ani realnych rozliczeń podatkowych.
