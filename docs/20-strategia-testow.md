@@ -27,6 +27,7 @@ Osobny job skanuje pełną historię repozytorium pod kątem sekretów. Workflow
 - **Web:** renderowalny, prawidłowy status; odrzucanie niepoprawnego payloadu i adresu API zawierającego dane logowania.
 - **Web → API E2E:** przeglądarka sprawdza działające połączenie z lokalnym Nest/Fastify API, stan UI po zatrzymaniu API oraz styl komponentu współdzielonego z `packages/ui`.
 - **MCP:** test klient-serwer przez transport in-memory i potwierdzenie, że serwer udostępnia wyłącznie narzędzie `system_status`; osobny proces uruchamia serwer przez STDIO.
+- **Granice architektoniczne (`pnpm test:arch`, uruchamiane także w `pnpm test`):** programowy test ESLint weryfikujący reguły `no-restricted-imports` z `eslint.config.mjs` — blokowanie niedozwolonych zależności (m.in. `@nestjs/common` i `drizzle-orm` w `packages/domain`, `@pap/db` w `apps/web` oraz `apps/mcp`) oraz akceptację dozwolonych importów (np. `@pap/contracts`).
 
 Testy nie dowodzą izolacji tenantów ani poprawności księgowania, bo te mechanizmy jeszcze nie istnieją. Brak jest testów integracyjnych DB, migracji, OIDC, ról, audytu operacji finansowych i integracji urzędowych. Dla przyszłych operacji firmowych wymagane będą testy negatywne izolacji i uprawnień według [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md).
 
