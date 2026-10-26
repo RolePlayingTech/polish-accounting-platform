@@ -96,6 +96,7 @@ Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operat
 | [09 — Przepisy](docs/09-reguly-prawne.md) | Aktualizacja prawa, źródła, reguły, testy i kontrola |
 | [10 — Bezpieczeństwo](docs/10-bezpieczenstwo.md) | RODO, ryzyka finansowe, szyfrowanie i audyt |
 | [11 — UI/UX](docs/11-ui-ux.md) | Mapa ekranów, stany, dostępność |
+| [21 — Kierunek wizualny](docs/21-kierunek-wizualny.md) | Propozycje estetyki, charakter interfejsu, UX i proces walidacji |
 | [12 — Roadmapa](docs/12-roadmapa.md) | Fazy, zależności, zadania dla agentów |
 | [13 — Testy i odbiór](docs/13-kryteria-akceptacji.md) | Kryteria akceptacji i scenariusze testowe |
 | [14 — Źródła](docs/14-zrodla.md) | Oficjalne strony i dokumentacja techniczna |
