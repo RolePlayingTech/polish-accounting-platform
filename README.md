@@ -105,6 +105,8 @@ Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operat
 | [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md) | Propozycja administracji, ról platformowych oraz abonamentów |
 | [16 — Standard architektury](docs/16-zasady-architektoniczne.md) | Zasady modułów, uprawnień, ksiąg, testów i skalowania |
 | [17 — Standard repo](docs/17-struktura-repo-i-standardy.md) | Docelowe pakiety, importy, CI i komendy |
+| [18 — Model zagrożeń i uprawnień](docs/18-model-zagrozen-i-uprawnien.md) | Granice zaufania, role, autoryzacja i testy negatywne (kontrakt projektowy) |
+| [ADR-004](docs/adr/004-model-zagrozen-i-autoryzacji.md) | Wspólna autoryzacja i granice zaufania (propozycja do przeglądu) |
 
 ## Status funkcji i bezpieczeństwa
 

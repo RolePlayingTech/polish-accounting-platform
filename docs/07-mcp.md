@@ -29,13 +29,11 @@ Docelowo MCP Streamable HTTP zgodny z aktualnym standardem i audytowanym SDK; dl
 ## Schemat żądania
 Każdy tool wymaga aktywnego entity_id i autoryzacji względem tenant_id, a write także idempotency_key, request_id i oczekiwanej wersji obiektu. Każda odpowiedź zawiera status, identyfikator audytu, wersję reguły (gdy dotyczy), działania użytkownika i czytelne błędy.
 
-## Threat model
-- Złośliwy tekst w OCR faktury jest danymi, a nie instrukcją dla agenta.
-- Agent nie może podwyższać scope ani wybierać innego tenant_id przez argument wejściowy.
-- Deny by default, limitowanie wywołań, ochrona przed replay i masowym pobraniem danych.
-- Logi nie przechowują całych dokumentów ani tokenów; metryki są odpersonalizowane.
-- Krótki TTL draftów; hash zatwierdzanej treści uniemożliwia potwierdzenie zmienionej operacji.
-- Osobne zgody na integracje i dostęp agenta, z możliwością natychmiastowego cofnięcia.
+## Threat model i autoryzacja
+
+Kanoniczny model zagrożeń, role, warunki dostępu oraz wymagane odmowy dla wszystkich kanałów opisuje [docs/18-model-zagrozen-i-uprawnien.md](18-model-zagrozen-i-uprawnien.md); uzasadnienie architektoniczne zawiera [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md). MCP jest niezaufanym adapterem protokołu i przechodzi przez tę samą politykę aplikacyjną co REST i UI.
+
+Wymagania specyficzne dla MCP: serwer waliduje audience, scopes, termin ważności i odwołanie tokenu; argument `tenant_id`/`entity_id` jest tylko selektorem do sprawdzenia na serwerze; narzędzia są deny-by-default i ograniczone allowlistą; agent nie zatwierdza własnego draftu ani nie wykonuje krytycznego zapisu. Złośliwy tekst w OCR pozostaje danymi. Limity, idempotencja i audyt nie mogą utrwalać pełnego dokumentu ani tokenu. Te zapisy są wymaganiami projektowymi, nie działającym serwerem MCP.
 
 ## Przykładowy flow
 1. Client MCP pobiera profile firm dostępne w scope.

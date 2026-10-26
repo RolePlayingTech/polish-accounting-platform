@@ -13,6 +13,8 @@
 
 ## B. Multi-tenant i tożsamość
 
+Kanoniczny kontrakt granic zaufania i uprawnień przed implementacją opisuje [model zagrożeń i uprawnień](18-model-zagrozen-i-uprawnien.md) oraz [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md). Zmiany polityki muszą zachować wspólny policy check dla UI/API/MCP/worker.
+
 7. Każdy odczyt i zapis uwzględnia tożsamość, `tenant_id`, `legal_entity_id`, role, okres i cel działania. `entity_id` w payload nie jest dowodem prawa dostępu.
 8. W serwisie zastosuj deny-by-default RBAC/ABAC, plus RLS w PostgreSQL. RLS nie zastępuje kontroli per-action. Runtime role nie ma `BYPASSRLS`, owner-bypass pod kontrolą; testy dla `SET LOCAL` przy poolingu.
 9. Wszelkie testy multi-tenant muszą obejmować: poziomą eskalację (firma A → B), historyczne uprawnienia, revoked memberships, masowy export, job worker i MCP.
