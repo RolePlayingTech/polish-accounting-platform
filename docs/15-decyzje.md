@@ -16,6 +16,9 @@ To rejestr decyzji architektury. Wybór stosu w [ADR-002](adr/002-stos-technolog
 | D-10 | Integracje produkcyjne | Brak bez osobnej zgody i testów | Zasada |
 | D-11 | MCP approval | Draft + TTL/hash + potwierdzenie człowieka | Zasada |
 | D-12 | Licencje danych rejestrów | Ocena warunków każdego API | Otwarte |
+| D-13 | Konsola administracyjna | Oddzielić operatora platformy, administratora tenanta i księgowego; początkowo jeden web z osobnym `/platform` | Propozycja [ADR-003](adr/003-administracja-i-uprawnienia-produktowe.md) |
+| D-14 | Plany i limity | Wspólny provider uprawnień produktowych (entitlements), niezależny od RBAC/ABAC i księgowości klienta | Propozycja [ADR-003](adr/003-administracja-i-uprawnienia-produktowe.md) |
+| D-15 | Płatności | Opcjonalny BillingProvider, bez integracji i wyboru dostawcy w MVP; zachować eksport i retencję danych | Otwarta decyzja biznesowa, [ADR-003](adr/003-administracja-i-uprawnienia-produktowe.md) |
 
 ## Reguła
 Decyzja wpływająca na bezpieczeństwo, podatki, strukturę danych lub dostawców zewnętrznych musi mieć uzasadnienie, konsekwencje i powiązany ADR/Issue. Nie podejmować jej automatycznie przez agenta.
