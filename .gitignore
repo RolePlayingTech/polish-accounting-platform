@@ -1,0 +1,31 @@
+# system
+.DS_Store
+Thumbs.db
+*.log
+# dependencies/build
+node_modules/
+dist/
+build/
+.next/
+coverage/
+# local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.key
+*.pfx
+*.crt
+# locally stored documents and customer data
+uploads/
+storage/
+backups/
+private/
+*.sqlite
+*.db
+# tools/editors
+.idea/
+.vscode/
+.pytest_cache/
+__pycache__/
