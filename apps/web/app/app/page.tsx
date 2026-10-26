@@ -165,8 +165,8 @@ export default async function WorkspacePage() {
               <div className="divide-y divide-stone-100">
                 {(
                   [
-                    ['Interfejs webowy', 'Połączony z API', true],
-                    ['Kontrakt i status API', 'Dostępny', true],
+                    ['Interfejs webowy', 'Uruchomiony', true],
+                    ['Kontrakt i status API', isAvailable ? 'Dostępny' : 'Niedostępny', isAvailable],
                     ['Tożsamość i izolacja firm', 'Przed implementacją', false],
                     ['Księgowość i dokumenty', 'Nieaktywne', false],
                     ['Zdalny MCP i autoryzacja', 'Nieaktywne', false],
