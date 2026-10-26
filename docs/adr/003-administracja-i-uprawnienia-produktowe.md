@@ -1,14 +1,14 @@
 # ADR-003 — Administracja platformą, uprawnienia i przygotowanie do rozliczania abonamentów
 
 **Data:** 2026-10-26  
-**Status:** przyjęty kierunek projektowy; implementacja etapowa w kolejnych Issues  
+**Status:** propozycja kierunku projektowego do przeglądu; implementacja etapowa w kolejnych Issues  
 **Powiązania:** [ADR-001](001-rdzen-i-mcp.md), [ADR-002](002-stos-technologiczny-i-wdrozenia.md), [model bezpieczeństwa — #3](https://github.com/RolePlayingTech/polish-accounting-platform/issues/3), [szkielet — #5](https://github.com/RolePlayingTech/polish-accounting-platform/issues/5), [tenant i uprawnienia — #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6).
 
 ## Problem
 
 Platforma może działać jako prywatna instalacja open source, produkt SaaS lub instalacja obsługująca wielu klientów biura rachunkowego. Potrzebuje zarządzania operacyjnego, użytkownikami, firmami, rolami, wsparciem, limitami i (opcjonalnie w przyszłości) opłatami. Nie można jednak utożsamiać administratora technicznego z księgowym ani dawać mu nieograniczonego dostępu do dokumentów klientów. Nie można też wprowadzić opłat przez rozproszone `if (plan === "pro")` w interfejsie.
 
-## Decyzja 1 — trzy odrębne obszary odpowiedzialności
+## Propozycja 1 — trzy odrębne obszary odpowiedzialności
 
 | Obszar | Przykładowe funkcje | Granica uprawnień |
 | --- | --- | --- |
@@ -18,7 +18,7 @@ Platforma może działać jako prywatna instalacja open source, produkt SaaS lub
 
 **Operator platformy nie jest automatycznie administratorem księgowości.** Wsparcie techniczne nie może podszywać się pod klienta. Ewentualny dostęp awaryjny (`break-glass`) wymaga osobnego ADR/procedury: określona przyczyna i zgoda, osobno ograniczony czas i zakres, MFA, log/alert oraz możliwość przeglądu przez klienta; w MVP nie implementujemy impersonacji.
 
-## Decyzja 2 — jedna aplikacja webowa, wyraźnie rozdzielone powierzchnie
+## Propozycja 2 — jedna aplikacja webowa, wyraźnie rozdzielone powierzchnie
 
 - `/app/*` — widok użytkownika/księgowego, skoncentrowany na wybranej firmie.
 - `/settings/*` — ustawienia organizacji i członkostw, dostęp sprawdzany na serwerze.
@@ -28,7 +28,7 @@ Platforma może działać jako prywatna instalacja open source, produkt SaaS lub
 
 **W pierwszym PR szkieletu (#5):** przygotować nazewnictwo i możliwość zbudowania tych shelli, ewentualnie statyczny/niedostępny produkcyjnie placeholder; *nie tworzyć* publicznego panelu administracyjnego z mockowanym przyciskiem zarządzania prawdziwymi użytkownikami i *nie implementować* własnego logowania.
 
-## Decyzja 3 — wspólna polityka dostępu
+## Propozycja 3 — wspólna polityka dostępu
 
 - Rozdzielić **role platformowe** (`platform_operator`, `platform_support`, `platform_auditor`) od **członkostw w tenantach** (`tenant_owner`, `tenant_admin`, `tenant_member`) oraz **grants do firmy** (`entity_accountant`, `entity_reviewer`, `entity_reader`).
 - Nie budować jednej uniwersalnej hierarchii, w której `admin` ma zawsze wszystkie uprawnienia.
@@ -37,7 +37,7 @@ Platforma może działać jako prywatna instalacja open source, produkt SaaS lub
 - Wszystkie mutacje uprawnień i operacje platformowe są audytowane z identyfikatorem aktora, powodem, zakresem i correlation ID, bez PII w standardowych logach.
 - Dane operatora (np. subskrypcje, monitoring) są logicznie oddzielone od rejestru księgowego klientów.
 
-## Decyzja 4 — abonamenty jako osobny bounded context (nie część księgowania klienta)
+## Propozycja 4 — abonamenty jako osobny bounded context (nie część księgowania klienta)
 
 Projektujemy **entitlements** od początku, a prawdziwe płatności później:
 
@@ -52,7 +52,7 @@ Autoryzacja odpowiada na pytanie **czy ten aktor może wykonać akcję na tych d
 
 Enforcement musi być **serwerowy** i wspólny dla web/API/MCP/workera; UI służy jedynie do pokazywania stanu i przycisków upgrade. Na czas wdrażania płatności można używać deklaratywnej polityki `entitlement provider` w pamięci (test/self-hosted), bez sztywnego kodowania planów w domenie.
 
-## Decyzja 5 — odpowiedzialna obsługa zmian abonamentów
+## Propozycja 5 — odpowiedzialna obsługa zmian abonamentów
 
 - Zakończenie triala, problem z kartą czy wygaśnięcie planu nie mogą automatycznie usunąć dokumentów ani pozbawić użytkownika możliwości eksportu danych i wykonania obowiązków prawnych.
 - Statusy: trial/active/past_due/grace/suspended/cancelled — dokładne konsekwencje osobno zdefiniować w policy i poddać przeglądowi biznesowo-prawnemu.
@@ -95,7 +95,7 @@ Modele `PlanVersion` i `EntitlementGrant` powinny jawnie definiować datę ważn
 | Jeden panel „superadmin” do wszystkich dokumentów | Odrzucony: nadmierne uprawnienia, ryzyko tajemnicy księgowej/RODO i nadużyć |
 | Osobny `apps/admin` i mikroserwis billing w pierwszym PR | Odrzucony: narzut i przedwczesne sprzężenie z nieznanym cennikiem |
 | Twarde warunki `if plan=pro` w Next.js | Odrzucony: obejście przez MCP/API, duplikacja i migracje |
-| Trzy powierzchnie w jednym web + polityki serwerowe + późniejszy billing adapter | **Wybrany**: rozszerzalność, mały zakres startowy, zachowane granice bezpieczeństwa |
+| Trzy powierzchnie w jednym web + polityki serwerowe + późniejszy billing adapter | **Rekomendowany**: rozszerzalność, mały zakres startowy, zachowane granice bezpieczeństwa |
 
 ## Wymagane testy w przyszłych implementacjach
 
