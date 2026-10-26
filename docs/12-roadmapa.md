@@ -15,6 +15,8 @@
 
 **Bramka:** jednoznacznie ustalony profil pilota, zagrożenia, kryteria odbioru.
 
+**Warunek dla #3 i #5:** rozróżnić operatora platformy, administratora tenanta i użytkownika firmy. Nie budować publicznego panelu administracyjnego bez serwerowej autoryzacji i nie implementować płatności w E1. Kierunek: [ADR-003](adr/003-administracja-i-uprawnienia-produktowe.md).
+
 ## Etap 1 — szkielet techniczny i dokumenty (pierwszy MVP)
 
 - [ ] `E1-01` Repo monorepo, konwencje PR, CI/lint/testy, wzorcowy sposób migracji DB.
@@ -67,6 +69,7 @@
 - [ ] `E5-03` Podatki specjalistyczne (CIT estoński, OSS/IOSS, WHT), NGO/fundacje i pozostałe profile.
 - [ ] `E5-04` Integracje bankowe przez uprawnionego dostawcę, import poczty, dashboardy.
 - [ ] `E5-05` Zaawansowane procesy AI z MCP, nadal z kontrolą człowieka.
+- [ ] `E5-06` Opcjonalny SaaS: plany i entitlementy, limitowanie na serwerze oraz integracja billingowa dopiero po decyzji biznesowej; bez blokowania ustawowych obowiązków i eksportu danych.
 
 ## Zalecana kolejność pierwszych PR-ów
 

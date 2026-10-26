@@ -8,6 +8,13 @@ Priorytety: P0 — fundament, P1 — pierwsza księgowość JDG, P2 — pełne k
 - Uwierzytelnione API, audyt każdego odczytu wrażliwych danych i modyfikacji.
 - Pulpit, powiadomienia, terminy, kolejki do weryfikacji.
 
+## P0 — przygotowanie administracji platformy
+- Wyodrębnione uprawnienia operatora platformy, administratora tenanta i pracownika księgowego; administrator techniczny domyślnie nie ma dostępu do dokumentów klienta.
+- Projekt obszarów `/app`, `/settings` i `/platform` oraz osobnych polityk serwerowych; pierwszy PR zapewnia tylko podział i bezpieczny szkielet, nie kompletny panel.
+- Planowane: zarządzanie tenantami, członkostwami, rolami, audyt, diagnostyka i zgody wsparcia; wdrażane po #6.
+- Przyszłe plany/limity i abonamenty przez osobny moduł `entitlements` / adapter `billing`; nie uruchamiać checkout/webhooków w MVP, nie mieszać faktur naszej usługi z fakturami klientów.
+- Szczegóły: [ADR-003](adr/003-administracja-i-uprawnienia-produktowe.md).
+
 ## P0 — dokumenty
 - Upload PDF, JPG/PNG, XML, CSV; weryfikacja MIME, skanowanie malware, limity, hash.
 - Wersja oryginalna write-once, metadane, OCR, ręczna poprawa, tagowanie i full-text search.
