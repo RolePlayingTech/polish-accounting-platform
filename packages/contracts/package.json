@@ -1,0 +1,22 @@
+{
+  "name": "@pap/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "zod": "4.6.7"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "eslint src test",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\""
+  }
+}

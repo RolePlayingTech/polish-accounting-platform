@@ -1,0 +1,33 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command: sh -c "pnpm install --frozen-lockfile && pnpm dev:container"
+    environment:
+      API_BASE_URL: http://127.0.0.1:4000
+      HOST: 0.0.0.0
+      PORT: 4000
+      NEXT_TELEMETRY_DISABLED: '1'
+    ports:
+      - '127.0.0.1:3000:3000'
+      - '127.0.0.1:4000:4000'
+    volumes:
+      - ./apps:/workspace/apps
+      - ./packages:/workspace/packages
+      - web_node_modules:/workspace/apps/web/node_modules
+      - api_node_modules:/workspace/apps/api/node_modules
+      - mcp_node_modules:/workspace/apps/mcp/node_modules
+      - domain_node_modules:/workspace/packages/domain/node_modules
+      - contracts_node_modules:/workspace/packages/contracts/node_modules
+      - application_node_modules:/workspace/packages/application/node_modules
+      - ui_node_modules:/workspace/packages/ui/node_modules
+
+volumes:
+  web_node_modules:
+  api_node_modules:
+  mcp_node_modules:
+  domain_node_modules:
+  contracts_node_modules:
+  application_node_modules:
+  ui_node_modules:

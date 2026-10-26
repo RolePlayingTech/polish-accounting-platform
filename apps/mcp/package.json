@@ -1,0 +1,24 @@
+{
+  "name": "@pap/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.4.0",
+    "@pap/application": "workspace:*",
+    "@pap/contracts": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
+  },
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "tsc -b",
+    "start": "node dist/main.js",
+    "lint": "eslint src test",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run --config ../../vitest.config.ts",
+    "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\""
+  }
+}

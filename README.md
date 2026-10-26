@@ -1,6 +1,7 @@
 # Polish Accounting Platform 🇵🇱
 
-> **Status: projekt koncepcyjny / dokumentacja (bez działającej aplikacji).**  
+> **Status: działający szkielet developerski (Issue #5); funkcje księgowe, logowanie i izolacja danych firmowych nie są wdrożone.**
+>
 > **Stan weryfikacji źródeł: 26 października 2026 r.**  
 > **Język dokumentacji: polski. Jurysdykcja: Polska.**
 
@@ -69,7 +70,7 @@ Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js
 - [16 — obowiązkowe zasady architektoniczne](docs/16-zasady-architektoniczne.md)
 - [17 — struktura repo i standardy pracy](docs/17-struktura-repo-i-standardy.md)
 
-**Uwaga:** aktualnie repozytorium zawiera dokumentację, nie kod aplikacji ani działający MCP. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani deployment produkcyjny.
+**Stan implementacji:** repozytorium zawiera monorepo pnpm/Turborepo, polski interfejs demonstracyjny `/app`, lokalne API statusu i lokalny serwer MCP STDIO z narzędziem tylko do odczytu. Nie ma jeszcze bazy danych, logowania, tenantów, firm, księgowania, integracji urzędowych ani wdrożenia produkcyjnego. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani wdrożenie produkcyjne. Zakres działającego szkieletu opisują [przewodnik developera](docs/19-przewodnik-developera.md) i [strategia testów](docs/20-strategia-testow.md).
 
 ## Administracja i przyszłe abonamenty
 
@@ -107,10 +108,12 @@ Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operat
 | [17 — Standard repo](docs/17-struktura-repo-i-standardy.md) | Docelowe pakiety, importy, CI i komendy |
 | [18 — Model zagrożeń i uprawnień](docs/18-model-zagrozen-i-uprawnien.md) | Granice zaufania, role, autoryzacja i testy negatywne (kontrakt projektowy) |
 | [ADR-004](docs/adr/004-model-zagrozen-i-autoryzacji.md) | Wspólna autoryzacja i granice zaufania (propozycja do przeglądu) |
+| [19 — Przewodnik developera](docs/19-przewodnik-developera.md) | Wymagania środowiska, instalacja, uruchamianie web/API/MCP |
+| [20 — Strategia testów](docs/20-strategia-testow.md) | Działające polecenia, testowane granice i ograniczenia pokrycia |
 
 ## Status funkcji i bezpieczeństwa
 
-Nie istnieje jeszcze działająca aplikacja, połączenie z KSeF ani serwer MCP. Wszystkie wymienione interfejsy stanowią **wymagania projektowe**, nie publiczne API. Nie przesyłaj do tego repozytorium prawdziwych faktur, numerów PESEL, danych klientów, certyfikatów KSeF ani tokenów. Błędy bezpieczeństwa zgłaszaj zgodnie z [SECURITY.md](SECURITY.md).
+Nie istnieją funkcje księgowe, konta użytkowników, izolacja danych firmowych, połączenie z KSeF ani zdalny serwer MCP. Lokalny MCP udostępnia wyłącznie publiczny status systemu. Trasy `/settings` i `/platform` są statycznymi stronami zastępczymi bez endpointów administracyjnych. Nie przesyłaj do tego repozytorium prawdziwych faktur, numerów PESEL, danych klientów, certyfikatów KSeF ani tokenów. Błędy bezpieczeństwa zgłaszaj zgodnie z [SECURITY.md](SECURITY.md).
 
 ## Zasady open source
 

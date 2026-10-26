@@ -19,7 +19,7 @@
 
 ## Etap 1 — szkielet techniczny i dokumenty (pierwszy MVP)
 
-- [ ] `E1-01` Repo monorepo, konwencje PR, CI/lint/testy, wzorcowy sposób migracji DB.
+- [x] `E1-01` Monorepo pnpm/Turborepo, CI/lint/typecheck/test/build, lokalne web/API/MCP STDIO i Compose dla developmentu; migracje DB pozostają przyszłym zakresem. Realny stan: [17 — struktura repo](17-struktura-repo-i-standardy.md), [19 — przewodnik developera](19-przewodnik-developera.md), [20 — strategia testów](20-strategia-testow.md).
 - [ ] `E1-02` OIDC/MFA, tenant i wybór firmy, role, audyt logowania i odmów.
 - [ ] `E1-03` Model `legal_entity` / `tax_subject` / `entity_profile_version` i uprawnienia zależne od czasu.
 - [ ] `E1-04` Magazyn oryginałów + upload + antywirus + hash + deduplikacja + retencja.
