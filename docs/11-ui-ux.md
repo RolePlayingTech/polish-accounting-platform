@@ -1,5 +1,7 @@
 # 11. Projekt interfejsu webowego
 
+**Kierunek wizualny i proces projektowy:** [21 — Tożsamość wizualna i doświadczenie użytkownika](21-kierunek-wizualny.md). Ten dokument opisuje funkcjonalne UX; dokument 21 definiuje aspiracje estetyczne, antywzorce i etapy walidacji. Koncepcja nie jest jeszcze zatwierdzonym design systemem. Powiązane [Issue #13](https://github.com/RolePlayingTech/polish-accounting-platform/issues/13).
+
 ## Założenia
 Profesjonalny, spokojny interfejs desktop-first, responsywny na tablecie i telefonie; język polski, waluta PLN, czytelne daty i statusy. Nie przytłaczać użytkownika językiem podatkowym bez potrzeby. WCAG 2.2 AA jako cel.
 
