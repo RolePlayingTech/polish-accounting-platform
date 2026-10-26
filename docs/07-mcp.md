@@ -27,7 +27,14 @@ Docelowo MCP Streamable HTTP zgodny z aktualnym standardem i audytowanym SDK; dl
 - Wysyłka KSeF/JPK, trwałe księgowanie, zamknięcie okresu i płatności — nie są zwykłymi automatycznymi tools.
 
 ## Schemat żądania
-Każdy tool wymaga aktywnego entity_id i autoryzacji względem tenant_id, a write także idempotency_key, request_id i oczekiwanej wersji obiektu. Każda odpowiedź zawiera status, identyfikator audytu, wersję reguły (gdy dotyczy), działania użytkownika i czytelne błędy.
+Nie wszystkie narzędzia MCP mają ten sam zakres i wymagania uwierzytelnienia:
+
+- **Narzędzia operujące na danych konkretnej firmy:** wymagają wskazania `entity_id` albo jednoznacznej identyfikacji firmy na podstawie uprawnionego zasobu; serwer zawsze wyznacza tenant i ponownie sprawdza aktywny grant dla firmy, zasobu oraz akcji. Selektor przekazany przez klienta nie jest dowodem dostępu.
+- **Narzędzia na poziomie użytkownika/organizacji**, np. `entities.list`: wymagają uwierzytelnionej tożsamości i właściwego grantu/zakresu, ale **nie** wymagają wcześniej wybranej firmy. Odpowiedź zawiera tylko podmioty dozwolone temu aktorowi; brak aktywnego `entity_id` nigdy nie czyni takiego narzędzia publicznym.
+- **Jawnie publiczne narzędzia techniczne**, np. `system_status` w lokalnym szkielecie: nie korzystają z kontekstu firmy ani danych tenanta i mogą działać bez uwierzytelnienia tylko po osobnej, jawnej decyzji w allowliście. Odpowiedź zawiera minimalne, niewrażliwe metadane; nie ujawnia konfiguracji infrastruktury, klientów ani sekretów. Przed publikacją zdalnego MCP obowiązuje oddzielny przegląd transportu i polityki.
+- **Przygotowanie lub zapis:** oprócz powyższych reguł wymaga właściwej komendy, `idempotency_key`, `request_id` i — tam, gdzie potrzebne — oczekiwanej wersji obiektu; operacje krytyczne wymagają oddzielnego potwierdzenia przez człowieka w UI.
+
+Odpowiedzi biznesowe mają czytelny status, kod błędu, ślad audytowy i wersję reguły, gdy ma zastosowanie. Nie wymagamy fikcyjnego identyfikatora audytu ani danych firmy w odpowiedzi jawnie publicznego `system_status`.
 
 ## Threat model i autoryzacja
 
