@@ -87,17 +87,17 @@ pnpm lint
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm test:e2e
 pnpm format:check
 pnpm audit --audit-level high
 ```
 
-Powyższe skrypty są skonfigurowane w repozytorium. Szczegółowa instalacja jest w [19 — przewodniku developera](19-przewodnik-developera.md), a zakres testów w [20 — strategii testów](20-strategia-testow.md). Testy integracyjne z DB, e2e przeglądarki i migracje nie istnieją, bo nie ma jeszcze DB ani funkcji uwierzytelniania.
+Powyższe skrypty są skonfigurowane w repozytorium. Szczegółowa instalacja jest w [19 — przewodniku developera](19-przewodnik-developera.md), a zakres testów w [20 — strategii testów](20-strategia-testow.md). Przeglądarkowy E2E sprawdza rzeczywisty przepływ web → API oraz niedostępność API. Testy integracyjne z DB i migracje pozostają przyszłym zakresem, bo nie ma jeszcze bazy ani funkcji uwierzytelniania.
 
 ## Docelowe polecenia po wdrożeniu kolejnych modułów
 
 ```bash
 pnpm test:integration
-pnpm test:e2e
 pnpm db:migrate
 ```
 
@@ -111,6 +111,7 @@ Powyższe polecenia są przyszłym wymaganiem dla modułów DB i uwierzytelniani
 4. Lockfile, automatyczne PR z aktualizacjami bezpieczeństwa, cykl patch releases.
 5. Zmiana `domain` lub `tax-rules` wymaga testów referencyjnych i przeglądu merytorycznego.
 6. Environment validation przy starcie: fail fast przy braku sekretu, brak hard-coded fallbacków prod.
+7. ESLint `no-restricted-imports` sprawdza w CI, że `packages/domain` nie importuje Next/Nest/HTTP/ORM/MCP ani pakietu DB, a `apps/web` i `apps/mcp` nie importują pakietu DB ani adapterów ORM.
 
 ## Warunki promocji i pracy z agentami
 

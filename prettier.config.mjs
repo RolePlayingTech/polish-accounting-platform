@@ -5,6 +5,7 @@ const config = {
   trailingComma: 'all',
   semi: true,
   proseWrap: 'preserve',
+  endOfLine: 'auto',
 };
 
 export default config;

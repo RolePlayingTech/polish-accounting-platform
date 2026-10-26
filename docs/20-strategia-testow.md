@@ -11,6 +11,8 @@ pnpm format:check
 pnpm typecheck
 pnpm test
 pnpm build
+pnpm exec playwright install chromium
+pnpm test:e2e
 pnpm audit --audit-level high
 ```
 
@@ -23,9 +25,10 @@ Osobny job skanuje pełną historię repozytorium pod kątem sekretów. Workflow
 - **Application:** wynik współdzielonego use case statusu.
 - **API:** testy przez prawdziwy adapter Nest/Fastify w pamięci; health check, zgodność odpowiedzi z kontraktem i brak niezdefiniowanej trasy administracyjnej tenantów.
 - **Web:** renderowalny, prawidłowy status; odrzucanie niepoprawnego payloadu i adresu API zawierającego dane logowania.
+- **Web → API E2E:** przeglądarka sprawdza działające połączenie z lokalnym Nest/Fastify API, stan UI po zatrzymaniu API oraz styl komponentu współdzielonego z `packages/ui`.
 - **MCP:** test klient-serwer przez transport in-memory i potwierdzenie, że serwer udostępnia wyłącznie narzędzie `system_status`; osobny proces uruchamia serwer przez STDIO.
 
-Testy nie dowodzą izolacji tenantów ani poprawności księgowania, bo te mechanizmy jeszcze nie istnieją. Brak jest testów integracyjnych DB, migracji, przeglądarkowych e2e, OIDC, ról, audytu operacji finansowych i integracji urzędowych. Dla przyszłych operacji firmowych wymagane będą testy negatywne izolacji i uprawnień według [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md).
+Testy nie dowodzą izolacji tenantów ani poprawności księgowania, bo te mechanizmy jeszcze nie istnieją. Brak jest testów integracyjnych DB, migracji, OIDC, ról, audytu operacji finansowych i integracji urzędowych. Dla przyszłych operacji firmowych wymagane będą testy negatywne izolacji i uprawnień według [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md).
 
 ## Lokalna kontrola PR
 
