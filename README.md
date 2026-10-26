@@ -61,6 +61,16 @@ To nie jest wyłącznie „OCR do faktur”. Długoterminowym celem jest **silni
 - **AI/OCR:** sugestie i ekstrakcja danych, nigdy jedyne źródło obliczenia podatku ani księgowania.
 - **Reguły:** wersjonowane, testowalne i zatwierdzane przez człowieka przed wejściem w życie.
 
+## Wybrana architektura techniczna (ADR-002)
+
+Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js 24 LTS, Next.js/React, NestJS/Fastify, PostgreSQL/Drizzle, pg-boss, S3-compatible object storage, OIDC/Keycloak, oficjalny MCP SDK i monorepo pnpm/Turborepo**. Granice modułów zabezpieczają przed wiązaniem logiki podatkowej z frameworkiem, dostawcą OCR czy modelem AI. Pozwala to zacząć od prostego modułowego monolitu i osobno skalować API, MCP oraz workery.
+
+- [ADR-002 — wybór technologii, porównanie wariantów i wdrożenia](docs/adr/002-stos-technologiczny-i-wdrozenia.md)
+- [16 — obowiązkowe zasady architektoniczne](docs/16-zasady-architektoniczne.md)
+- [17 — struktura repo i standardy pracy](docs/17-struktura-repo-i-standardy.md)
+
+**Uwaga:** aktualnie repozytorium zawiera dokumentację, nie kod aplikacji ani działający MCP. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani deployment produkcyjny.
+
 ## Zakres pierwszej wersji
 
 **MVP — stabilny rdzeń:** wielopodmiotowość, konto i role, bezpieczne archiwum dokumentów, import XML/PDF/CSV, kontrola duplikatów, wyodrębnienie danych i walidacja, rejestr faktur, kalendarz zobowiązań, podstawowe raporty, odczyt i przygotowanie operacji przez MCP, audyt. Obsługa rzeczywistych ksiąg i wysyłka do MF będą udostępniane **profil po profilu** po testach zgodności. Pierwszy kandydat: **JDG z KPiR**, następnie **ryczałt**, a osobny tor dla **sp. z o.o. z pełnymi księgami**.
@@ -87,6 +97,9 @@ To nie jest wyłącznie „OCR do faktur”. Długoterminowym celem jest **silni
 | [14 — Źródła](docs/14-zrodla.md) | Oficjalne strony i dokumentacja techniczna |
 | [15 — Decyzje otwarte](docs/15-decyzje.md) | Decyzje projektowe do podjęcia |
 | [ADR-001](docs/adr/001-rdzen-i-mcp.md) | Oddzielenie księgowania od AI i MCP |
+| [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md) | Decyzja technologiczna, koszty, alternatywy i środowiska |
+| [16 — Standard architektury](docs/16-zasady-architektoniczne.md) | Zasady modułów, uprawnień, ksiąg, testów i skalowania |
+| [17 — Standard repo](docs/17-struktura-repo-i-standardy.md) | Docelowe pakiety, importy, CI i komendy |
 
 ## Status funkcji i bezpieczeństwa
 

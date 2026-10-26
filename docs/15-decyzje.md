@@ -1,6 +1,6 @@
 # 15. Otwarte decyzje projektowe
 
-To jest rejestr do zatwierdzenia, nie zbiór domyślnych ustawień produkcyjnych.
+To rejestr decyzji architektury. Wybór stosu w [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md) dotyczy kodu, **nie** zgody na konfigurację ani uruchomienie produkcji.
 
 | ID | Decyzja | Propozycja | Status |
 | --- | --- | --- | --- |
@@ -8,10 +8,10 @@ To jest rejestr do zatwierdzenia, nie zbiór domyślnych ustawień produkcyjnych
 | D-02 | Pierwszy wspierany profil | JDG KPiR, potem ryczałt | Do zatwierdzenia |
 | D-03 | MVP dokumentowy | Multi-tenant + archive + OCR + draft + MCP read | Propozycja |
 | D-04 | Licencja | MIT (z wyłączeniem danych klientów) | Dokumentowana |
-| D-05 | Hosting | UE/EOG, mocny nacisk na RODO i backup | Do decyzji |
-| D-06 | Stack | TypeScript + React + Node + PostgreSQL | ADR wymagany |
-| D-07 | Storage | Szyfrowany S3-compatible, write-once oryginałów | ADR wymagany |
-| D-08 | Identity | OIDC/MFA, role, konta wielu firm | ADR wymagany |
+| D-05 | Hosting | Kontenery/managed Postgres/S3 w UE/EOG, OpenTofu, bez Kubernetes na start | Podejście wybrane; konkretny dostawca i koszty otwarte |
+| D-06 | Stack | TS strict, Node 24 LTS, Next.js, NestJS/Fastify, PostgreSQL/Drizzle, pg-boss | Wybrane w [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md) |
+| D-07 | Storage | Szyfrowany S3-compatible, immutable oryginały, AV scan i retencja | Architektura wybrana; dostawca przed wdrożeniem |
+| D-08 | Identity | OIDC/MFA; Keycloak jako dostawca referencyjny, API odpowiada za ABAC | Architektura wybrana; konfiguracja i operacje do przeglądu |
 | D-09 | Review podatkowe | Wyznaczyć osobę kompetentną i proces odbioru | Blokuje funkcje compliance |
 | D-10 | Integracje produkcyjne | Brak bez osobnej zgody i testów | Zasada |
 | D-11 | MCP approval | Draft + TTL/hash + potwierdzenie człowieka | Zasada |

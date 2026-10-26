@@ -1,36 +1,83 @@
 # 05. Architektura techniczna
 
-## Podejście
-Modułowy monolit jako pierwszy krok. Ten sam silnik domenowy obsługuje UI, API i MCP; integracje zewnętrzne implementujemy w adapterach. Unikamy mikroserwisów do czasu wykazania potrzeby.
+**Decyzja techniczna:** [ADR-002 — stos i wdrożenia](adr/002-stos-technologiczny-i-wdrozenia.md). **Wymagania obowiązkowe:** [16 — zasady architektoniczne](16-zasady-architektoniczne.md). **Układ katalogów:** [17 — repo i standardy](17-struktura-repo-i-standardy.md).
 
-## Logiczne komponenty
-- Web UI: responsywne widoki firmy, dokumentów, finansów, zadań i audytu.
-- API/BFF: uwierzytelnianie, RBAC/ABAC, rate limiting, CSRF i walidacje.
-- Identity & Tenant: relacje organizacja–podmiot–użytkownik–uprawnienie.
-- Document Service: upload, storage, OCR, deduplikacja, indeks, retencja.
-- Accounting Core: zdarzenia finansowe, okresy, zapisy i niezmienne korekty.
-- Tax Rules: wersjonowane definicje obliczeń oraz provenance.
-- Integrations: osobne adaptery KSeF, rejestry, JPK, bank, kursy NBP.
-- MCP Gateway: sesje, OAuth, scoped resources, tools, audyt.
-- Async Workers: import, ekstrakcja, synchronizacja, zadania i ponowienia.
+## Styl
 
-## Technologia — propozycja, jeszcze nie ADR zatwierdzony
-TypeScript + Node.js, React/Next.js dla web, NestJS lub Fastify dla API; PostgreSQL i S3-compatible encrypted object store; Redis/queue dla zadań; schema validation (Zod/JSON Schema), OpenTelemetry. Uzasadnienie, dostawcy i wersje do ustalenia przed E1.
+**Modularny monolit z odrębnymi procesami wejściowymi i workerami**, zamiast mikroserwisów na początku. Wspólny silnik domenowy obsługuje UI, API, integracje i MCP; dostawcy zewnętrzni działają przez adaptery. Unikamy zależności domeny od SDK i frameworków.
 
-## Izolacja i spójność
-- Każdy rekord biznesowy ma tenant_id oraz entity_id; dostęp kontroluje warstwa autoryzacji *przed* zapytaniem.
-- DB ogranicza spójność i wymusza referencje; row-level security jako dodatkowa obrona, nie jedyna.
-- Oryginał dokumentu nie zmienia się po przyjęciu; stan dokumentu i zapisy księgowe przechodzą przez jawne maszyny stanów.
-- Wieloetapowe integracje: transakcje lokalne, outbox/inbox i idempotency keys.
-- Brak bezpośredniego zapisu z MCP do ksiąg; serwer MCP wywołuje te same komendy domenowe co UI.
+## Stack (wybrany do startu)
 
-## Diagram
-Web UI → API → Auth/Tenant → Document & Accounting & Rules → DB/Object Store.
-MCP Clients → MCP Gateway → API/Domain Commands → ten sam DB/Object Store.
-Async Workers ↔ API/Outbox ↔ KSeF / rejestry / banki.
+- TypeScript `strict`, Node.js 24 LTS (stan na 2026-10-26).
+- Next.js (React) App Router, Tailwind CSS i shadcn/ui.
+- NestJS + Fastify dla REST/OpenAPI v1; Zod dla kontraktów.
+- PostgreSQL + Drizzle ORM i SQL dla transakcji/RLS.
+- `pg-boss` na PostgreSQL jako kolejka i worker; brak dodatkowego Redis w MVP.
+- S3-compatible szyfrowany storage dokumentów.
+- OIDC/OAuth i MFA, Keycloak jako referencyjny provider; autoryzacja domenowa w aplikacji.
+- TypeScript MCP SDK (Streamable HTTP, wersjonowanie protokołu i OAuth).
+- pnpm + Turborepo; Vitest/Playwright/Testcontainers, OpenTelemetry.
+- Docker Compose w lokalnym środowisku, kontenery i OpenTofu w wydzielonym EU/EOG stage/prod.
 
-## Obsługa błędów
-Timeouty i retry with backoff; osobne kolejki błędów, dziennik synchronizacji, możliwość ponowienia bez duplikatu, odtwarzalne checkpointy; żaden fail nie pozostawia „częściowo zaksięgowanego” dokumentu.
+Nie instalowano jeszcze aplikacji ani infrastruktury; to kontrakt dla następnych Issue/PR. Wersje zależności zostaną przypięte w Issue #5.
 
-## Operacje i wdrażanie
-Infrastruktura jako kod, izolowane test/stage/prod, secrets manager, backup i test restore, metryki działania bez PII, kontrola migracji, rollout/rollback. Nigdy nie wywołuj produkcyjnego MF w testach CI. Nie uruchamiaj deploymentu bez zgody.
+## Komponenty i odpowiedzialność
+
+| Komponent | Odpowiedzialność | Dostęp |
+| --- | --- | --- |
+| `apps/web` | UI, przegląd dokumentów i zatwierdzanie | przez API; bez bezpośredniego dostępu DB |
+| `apps/api` | polityki, kontrakty, komendy i REST | wywołanie application services |
+| `apps/mcp` | transport MCP, OAuth, mapowanie tools | przez autoryzowane API, bez DB |
+| `apps/worker` | OCR, import, synchronizacje i raporty | zadania aplikacyjne, kontrolowany dostęp do integracji |
+| `packages/domain` | księgowość, faktury, podatki, dokumenty | czyste funkcje i invariants |
+| `packages/application` | use-cases, role/ABAC, approvals, porty | jedna polityka dla wszystkich kanałów |
+| `packages/db` | Postgres, migracje, RLS, transakcje | tylko aplikacja i infrastruktura |
+| `packages/integrations` | KSeF, JPK, NBP, REGON, banki, OCR | za portami, sandbox first |
+
+## Przepływ
+
+```mermaid
+flowchart TD
+  W[Web UI] --> A[REST API + authZ]
+  M[MCP clients] --> G[MCP Gateway + OAuth]
+  G --> A
+  A --> U[Application use-cases + policies]
+  U --> D[Domain: documents / accounting / tax rules]
+  U --> P[(PostgreSQL + RLS)]
+  U --> O[(Encrypted object store)]
+  U --> Q[(pg-boss jobs / outbox)]
+  Q --> K[Workers]
+  K --> U
+  K --> X[Adapters: KSeF / JPK / OCR / banks]
+```
+
+**Ważne:** workery mogą wykonywać komendy aplikacyjne w tym samym procesie/kompozycji, nie potrzebują nowego publicznego REST round-trip; są objęte tymi samymi politykami i audytem. Diagram pokazuje logiczne kierunki, a nie obligatoryjne fizyczne połączenia.
+
+## Granice bezpieczeństwa i spójności
+
+- `tenant_id` i `legal_entity_id` oraz tożsamość aktora: serwerowa autoryzacja RBAC/ABAC; PostgreSQL RLS jako dodatkowa bariera, osobno testowana z connection pooling.
+- Dokument oryginalny write-once, SHA-256, skan AV, retencja i krótkie signed URLs.
+- Zapis księgowy atomowy, bez `float`, bez edycji historii; okresy i korekty jako jawny model.
+- Reguły podatkowe wersjonowane, trace do źródła urzędowego, recenzent i testy referencyjne.
+- Outbox/inbox, `Idempotency-Key`, retry/backoff i DLQ; przy niepewnej wysyłce nie dublować operacji.
+- MCP/OCR/LLM przygotowują propozycje; krytyczne wykonanie jest oddzielone od zatwierdzenia przez człowieka.
+
+## Skalowanie i monitoring
+
+- Web/API/MCP są horyzontalnie skalowalne jako kontenery stateless (dla protokołu MCP zastosować współczesny transport zgodny z SDK). Workery oddzielnie skalowane wg backlogu.
+- PostgreSQL: początkowo pojedynczy primary zarządzany + backup PITR, później repliki odczytu/partycjonowanie jeśli uzasadni to pomiar.
+- `pg-boss` ogranicza koszt wejścia, lecz zużywa wydajność DB. Gdy pomiary wykażą ograniczenia, można wymienić queue adapter bez przerabiania domeny.
+- Prometheus/Grafana/OTel lub zgodny vendor: p95, błędy integracji, kolejka, restore drills, redaction PII.
+
+## Bezpieczne wdrażanie
+
+Oddzielne local, CI, staging i production. Lokalne i CI tylko dane syntetyczne; test i sandbox KSeF/urzędów. Deploymenty, migracje produkcyjne, uruchomienie KSeF i wysyłki urzędowe **wyłącznie po odrębnej zgodzie**.
+
+## Decyzje pozostałe do wdrożenia
+
+- Konkretny dostawca infrastruktury/region i estymacja kosztów (bez zmiany vendor-neutralnej architektury).
+- Ostateczna wersja pakietów i obrazów w `pnpm-lock.yaml` i IaC.
+- Parametry RPO/RTO, polityka backupu i dokładna konfiguracja OIDC przed pilotażem.
+- Threat-model (#3) i matryca legal/tax profiles (#1/#4) blokują produkcyjne funkcje księgowe.
+
+Nie są to decyzje o napisaniu kodu ani uruchomieniu usługi.

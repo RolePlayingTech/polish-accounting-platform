@@ -2,6 +2,14 @@
 
 Projekt: Polish Accounting Platform. Wszystkie zmiany projektuj dla jurysdykcji polskiej i w języku polskim.
 
+## Dokumenty architektoniczne — obowiązkowe przed kodowaniem
+- [ADR-001](docs/adr/001-rdzen-i-mcp.md): jeden rdzeń aplikacji i MCP jako adapter.
+- [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md): zatwierdzony bazowy stack i wdrożenia.
+- [Zasady architektoniczne](docs/16-zasady-architektoniczne.md): granice modułów, bezpieczeństwo i DoD.
+- [Struktura repo](docs/17-struktura-repo-i-standardy.md): kierunek zależności, przyszłe monorepo i polecenia.
+
+Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający moduł, ale respektuj spójność i autoryzację. W E1-01 (#5) stwórz faktycznie działające skrypty CI/build/test; dzisiejsze README to specyfikacja, a nie działająca aplikacja.
+
 ## Zasady bezwzględne
 1. Priorytet: bezpieczeństwo danych, zgodność, audytowalność, dopiero potem funkcje.
 2. Zanim rozpoczniesz pracę, przeczytaj README, roadmapę, architekturę, MCP, bezpieczeństwo, Issue i otwarte PR. Nie duplikuj zadań.
@@ -22,4 +30,4 @@ Projekt: Polish Accounting Platform. Wszystkie zmiany projektuj dla jurysdykcji 
 - [ ] W przypadku reguł prawa udokumentowano źródło, wersję i datę.
 - [ ] Zmiany nie uruchamiają automatycznie połączeń produkcyjnych.
 
-Najpierw: docs/12-roadmapa.md i docs/13-kryteria-akceptacji.md.
+Najpierw: docs/12-roadmapa.md, docs/13-kryteria-akceptacji.md i ADR-002. Nie implementuj dodatkowego mikroserwisu, Redis/Kubernetes ani agentowego zapisu w księgach bez potrzeby i zatwierdzonej decyzji.
