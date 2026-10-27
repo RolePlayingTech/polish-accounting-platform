@@ -9,6 +9,47 @@ permissions:
   contents: read
 
 jobs:
+  db-integration:
+    name: PostgreSQL migration integration test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+        env:
+          POSTGRES_DB: pap_test
+          POSTGRES_PASSWORD: pap_test_only
+          POSTGRES_USER: pap_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pap_test -d pap_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PAP_DATABASE_ENV: test
+      DATABASE_URL: postgres://pap_test:pap_test_only@127.0.0.1:5432/pap_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+
+      - name: Activate pinned pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@12.15.0 --activate
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run PostgreSQL migration integration test
+        run: pnpm test:integration
+
   checks:
     name: Lint, typecheck, test, build and dependency audit
     runs-on: ubuntu-latest
