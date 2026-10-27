@@ -1,7 +1,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url));
 const eslint = new ESLint({ cwd: repoRoot });
@@ -20,6 +20,10 @@ async function lintImport(relativeFilePath: string, importSource: string) {
 }
 
 describe('architecture dependency boundaries (eslint.config.mjs)', () => {
+  beforeAll(async () => {
+    await eslint.calculateConfigForFile(resolve(repoRoot, 'packages/domain/src/index.ts'));
+  }, 30_000);
+
   it('blocks @nestjs/common imports in packages/domain', async () => {
     const result = await lintImport('packages/domain/src/boundary-check.ts', '@nestjs/common');
 
@@ -52,7 +56,10 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
 
   it.each([
     '@pap/db',
-    '../../packages/db/src/index.js',
+    '@pap/db/schema',
+    '../../db',
+    '../../db/src/index.js',
+    '../../../packages/db/src/index.js',
     'next',
     'fastify',
     'node:http',
@@ -69,6 +76,30 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     ]);
   });
 
+  it.each([
+    {
+      filePath: 'packages/domain/boundary-check.ts',
+      importSource: '../db/src/index.js',
+    },
+    {
+      filePath: 'packages/domain/src/model/boundary-check.ts',
+      importSource: '../../../db/src/index.js',
+    },
+  ])(
+    'blocks relative packages/db import $importSource from $filePath',
+    async ({ filePath, importSource }) => {
+      const result = await lintImport(filePath, importSource);
+
+      expect(result.errorCount).toBe(1);
+      expect(result.messages).toEqual([
+        expect.objectContaining({
+          ruleId: 'no-restricted-imports',
+          severity: 2,
+        }),
+      ]);
+    },
+  );
+
   it('blocks @pap/db imports in apps/web', async () => {
     const result = await lintImport('apps/web/lib/boundary-check.ts', '@pap/db');
 
@@ -84,20 +115,23 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     ]);
   });
 
-  it.each(['@pap/db/schema', '../../packages/db/src/index.js', 'drizzle-orm', 'pg'])(
-    'blocks %s imports in apps/web',
-    async (forbiddenSource) => {
-      const result = await lintImport('apps/web/lib/boundary-check.ts', forbiddenSource);
+  it.each([
+    '@pap/db/schema',
+    '../../../packages/db',
+    '../../../packages/db/src/index.js',
+    'drizzle-orm',
+    'pg',
+  ])('blocks %s imports in apps/web', async (forbiddenSource) => {
+    const result = await lintImport('apps/web/lib/boundary-check.ts', forbiddenSource);
 
-      expect(result.errorCount).toBe(1);
-      expect(result.messages).toEqual([
-        expect.objectContaining({
-          ruleId: 'no-restricted-imports',
-          severity: 2,
-        }),
-      ]);
-    },
-  );
+    expect(result.errorCount).toBe(1);
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        ruleId: 'no-restricted-imports',
+        severity: 2,
+      }),
+    ]);
+  });
 
   it('blocks @pap/db imports in apps/mcp', async () => {
     const result = await lintImport('apps/mcp/src/boundary-check.ts', '@pap/db');
@@ -114,24 +148,27 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     ]);
   });
 
-  it.each(['@pap/db/schema', '../../packages/db/src/index.js', 'drizzle-orm'])(
-    'blocks %s imports in apps/mcp',
-    async (forbiddenSource) => {
-      const result = await lintImport('apps/mcp/src/boundary-check.ts', forbiddenSource);
+  it.each([
+    '@pap/db/schema',
+    '../../../packages/db',
+    '../../../packages/db/src/index.js',
+    'drizzle-orm',
+  ])('blocks %s imports in apps/mcp', async (forbiddenSource) => {
+    const result = await lintImport('apps/mcp/src/boundary-check.ts', forbiddenSource);
 
-      expect(result.errorCount).toBe(1);
-      expect(result.messages).toEqual([
-        expect.objectContaining({
-          ruleId: 'no-restricted-imports',
-          severity: 2,
-        }),
-      ]);
-    },
-  );
+    expect(result.errorCount).toBe(1);
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        ruleId: 'no-restricted-imports',
+        severity: 2,
+      }),
+    ]);
+  });
 
   it.each([
     { filePath: 'packages/domain/src/boundary-check.ts', importSource: '@pap/contracts' },
     { filePath: 'packages/domain/src/boundary-check.ts', importSource: './identifiers.js' },
+    { filePath: 'packages/domain/src/boundary-check.ts', importSource: './db.js' },
     { filePath: 'packages/application/src/boundary-check.ts', importSource: '@pap/contracts' },
     { filePath: 'apps/web/lib/boundary-check.ts', importSource: '@pap/contracts' },
     { filePath: 'apps/web/lib/boundary-check.ts', importSource: '@pap/ui' },
