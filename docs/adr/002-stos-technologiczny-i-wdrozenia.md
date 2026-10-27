@@ -5,6 +5,8 @@
 - **Powiązania:** [Issue #2](https://github.com/RolePlayingTech/polish-accounting-platform/issues/2), [ADR-001](001-rdzen-i-mcp.md), [zasady](../16-zasady-architektoniczne.md)
 - **Zakres:** budowa oprogramowania; brak wdrożenia i zakupów
 
+**Aktualizacja sposobu pracy (2026-10-27):** [ADR-005](005-rozwoj-lokalny.md) ustala bieżący rozwój wyłącznie lokalny, bez Dockera, przygotowywania serwera i deploymentu. Stos pozostaje zgodny z tym ADR; opis infrastruktury i stage/prod poniżej jest odroczonym kierunkiem.
+
 ## Kontekst i cele
 
 Budujemy polską aplikację finansowo-księgową, w której błędna autoryzacja, utrata dokumentu, duplikat księgowania lub niewłaściwa reguła prawna mają wysoką wagę. Interfejs webowy, importy i MCP muszą wykonywać te same operacje domenowe. Pierwszy etap ma być dostępny dla małego zespołu, ale model musi rozszerzyć się na wiele organizacji, spółek, profili podatkowych i integracji bez przepisywania systemu.

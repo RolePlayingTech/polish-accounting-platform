@@ -14,17 +14,18 @@ polish-accounting-platform/
 │   ├── domain/                 # identyfikatory i deny-by-default polityka grantów
 │   ├── application/            # use case statusu i port polityki autoryzacji
 │   ├── contracts/              # ścisły kontrakt statusu
-│   └── ui/                     # współdzielone komponenty interfejsu
+│   ├── ui/                     # współdzielone komponenty interfejsu
+│   └── db/                     # Drizzle i techniczne migracje, bez tabel domenowych
 ├── .github/workflows/ci.yml
-├── compose.yaml                # lokalny development, porty tylko na loopback
+├── compose.yaml                # wcześniejszy scaffold; poza bieżącym trybem pracy
 ├── pnpm-workspace.yaml
 ├── pnpm-lock.yaml
 └── turbo.json
 ```
 
-Szkielet nie zawiera DB, migracji, OIDC, tenantów, workerów, integracji zewnętrznych ani księgowania. `domain` zawiera czystą funkcję decyzji dla aktywnego członkostwa i jawnego grantu do konkretnej firmy oraz akcji. `application` udostępnia port zaufanego źródła tych danych i wspólny use case; źródło in-memory jest wyłącznie testowym adapterem. Identyfikatory firm z pakietu `domain` nie nadają dostępu, a role administratora tenanta i operatora platformy nie dają domyślnego dostępu do ksiąg.
+Szkielet zawiera techniczny pakiet `db` dla opcjonalnego PostgreSQL zainstalowanego lokalnie, ale nie ma jeszcze tabel tenantów, firm ani innych danych domenowych, OIDC, RLS, workerów, integracji zewnętrznych ani księgowania. Bieżący tryb pracy nie wymaga Dockera i nie obejmuje serwera ani deploymentu ([ADR-005](adr/005-rozwoj-lokalny.md)). `domain` zawiera czystą funkcję decyzji dla aktywnego członkostwa i jawnego grantu do konkretnej firmy oraz akcji. `application` udostępnia port zaufanego źródła tych danych i wspólny use case; źródło in-memory jest wyłącznie testowym adapterem. Identyfikatory firm z pakietu `domain` nie nadają dostępu, a role administratora tenanta i operatora platformy nie dają domyślnego dostępu do ksiąg.
 
-**Ograniczenie bieżącego etapu Issue #6:** polityka nie jest jeszcze podłączona do uwierzytelniania ani do API/MCP. Nie ma rzeczywistych użytkowników, źródła bazodanowego, audytu decyzji, migracji ani testów izolacji end-to-end. `userId` przekazany do application service musi pochodzić z uwierzytelnionej tożsamości ustalonej po stronie serwera; taki mechanizm jeszcze nie istnieje.
+**Ograniczenie bieżącego etapu Issue #6:** polityka nie jest jeszcze podłączona do uwierzytelniania ani do API/MCP. Nie ma rzeczywistych użytkowników, bazodanowego źródła grantów, audytu decyzji, migracji tabel firmowych ani testów izolacji end-to-end. `userId` przekazany do application service musi pochodzić z uwierzytelnionej tożsamości ustalonej po stronie serwera; taki mechanizm jeszcze nie istnieje.
 
 ## Struktura monorepo
 
@@ -91,24 +92,18 @@ pnpm test
 pnpm build
 pnpm test:e2e
 pnpm format:check
+pnpm test:integration
+pnpm db:generate
+pnpm db:migrate
 pnpm audit --audit-level high
 ```
 
-Powyższe skrypty są skonfigurowane w repozytorium. Szczegółowa instalacja jest w [19 — przewodniku developera](19-przewodnik-developera.md), a zakres testów w [20 — strategii testów](20-strategia-testow.md). Przeglądarkowy E2E sprawdza rzeczywisty przepływ web → API oraz niedostępność API. Testy integracyjne z DB i migracje pozostają przyszłym zakresem, bo nie ma jeszcze bazy ani funkcji uwierzytelniania.
-
-## Docelowe polecenia po wdrożeniu kolejnych modułów
-
-```bash
-pnpm test:integration
-pnpm db:migrate
-```
-
-Powyższe polecenia są przyszłym wymaganiem dla modułów DB i uwierzytelniania; nie są aktualnymi skryptami.
+Powyższe skrypty są skonfigurowane w repozytorium. Szczegółowa instalacja jest w [19 — przewodniku developera](19-przewodnik-developera.md), a zakres testów w [20 — strategii testów](20-strategia-testow.md). Przeglądarkowy E2E sprawdza rzeczywisty przepływ web → API oraz niedostępność API. Test integracyjny migracji działa na izolowanej bazie PostgreSQL w CI; nie dowodzi jeszcze izolacji tenantów ani działania uwierzytelniania.
 
 ## Standard CI i dependency hygiene
 
 1. GitHub Actions: PR -> checkout (pinned action sha) -> Corepack/pnpm -> cache -> lint/typecheck/test/build -> skan sekretów -> skan zależności -> raport.
-2. Integracyjne Postgres+OIDC+object-store mocks w testcontainers/Compose; żadnych produkcyjnych danych.
+2. Obecny test integracyjny migracji: lokalnie bezpośrednio zainstalowany PostgreSQL, w CI izolowana usługa PostgreSQL na runnerze. OIDC i object-store mocks pozostają planem; żadnych produkcyjnych danych. Bieżący zakres nie wymaga lokalnych testcontainers/Compose.
 3. Review migracji DB osobno od kodu; transakcje, RLS, indeksy, zero downtime.
 4. Lockfile, automatyczne PR z aktualizacjami bezpieczeństwa, cykl patch releases.
 5. Zmiana `domain` lub `tax-rules` wymaga testów referencyjnych i przeglądu merytorycznego.

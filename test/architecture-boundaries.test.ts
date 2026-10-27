@@ -63,6 +63,8 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     'next',
     'fastify',
     'node:http',
+    'postgres',
+    'postgres/cjs',
     '@modelcontextprotocol/server',
   ])('blocks %s imports in packages/domain', async (forbiddenSource) => {
     const result = await lintImport('packages/domain/src/boundary-check.ts', forbiddenSource);
@@ -121,6 +123,8 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     '../../../packages/db/src/index.js',
     'drizzle-orm',
     'pg',
+    'postgres',
+    'postgres/cjs',
   ])('blocks %s imports in apps/web', async (forbiddenSource) => {
     const result = await lintImport('apps/web/lib/boundary-check.ts', forbiddenSource);
 
@@ -153,6 +157,8 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     '../../../packages/db',
     '../../../packages/db/src/index.js',
     'drizzle-orm',
+    'postgres',
+    'postgres/cjs',
   ])('blocks %s imports in apps/mcp', async (forbiddenSource) => {
     const result = await lintImport('apps/mcp/src/boundary-check.ts', forbiddenSource);
 

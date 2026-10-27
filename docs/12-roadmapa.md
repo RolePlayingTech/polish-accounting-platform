@@ -19,7 +19,7 @@
 
 ## Etap 1 — szkielet techniczny i dokumenty (pierwszy MVP)
 
-- [x] `E1-01` Monorepo pnpm/Turborepo, CI/lint/typecheck/test/build oraz przeglądarkowy E2E web → API, lokalne web/API/MCP STDIO i Compose dla developmentu; migracje DB pozostają przyszłym zakresem. Realny stan: [17 — struktura repo](17-struktura-repo-i-standardy.md), [19 — przewodnik developera](19-przewodnik-developera.md), [20 — strategia testów](20-strategia-testow.md).
+- [x] `E1-01` Monorepo pnpm/Turborepo, CI/lint/typecheck/test/build oraz przeglądarkowy E2E web → API i lokalne web/API/MCP STDIO. Bieżący rozwój jest wyłącznie lokalny, bez budowania obrazów, Compose i przygotowywania serwera ([ADR-005](adr/005-rozwoj-lokalny.md)); wcześniejsze pliki kontenerowe pozostają historyczną częścią szkieletu. Pakiet 6A dostarcza techniczny fundament PostgreSQL/Drizzle i ręczne migracje bez tabel domenowych, z opcjonalnym PostgreSQL zainstalowanym bezpośrednio na komputerze. `pnpm dev` działa bez DB. Tenanty, firmy i izolacja danych pozostają kolejnymi etapami. Realny stan: [17 — struktura repo](17-struktura-repo-i-standardy.md), [19 — przewodnik developera](19-przewodnik-developera.md), [20 — strategia testów](20-strategia-testow.md).
 - [ ] `E1-02` OIDC/MFA, tenant i wybór firmy, role, audyt logowania i odmów.
 - [ ] `E1-03` Model `legal_entity` / `tax_subject` / `entity_profile_version` i uprawnienia zależne od czasu.
 - [ ] `E1-04` Magazyn oryginałów + upload + antywirus + hash + deduplikacja + retencja.
@@ -28,7 +28,7 @@
 - [ ] `E1-07` Bank CSV/MT940/CAMT importowany i bezpiecznie dopasowywany do dokumentów.
 - [ ] `E1-08` Pulpit, zadania, kalendarz, podstawowe eksporty, UX testy dostępności.
 
-Pierwszy etap [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) dostarcza wyłącznie czystą politykę grantów i testy jednostkowe. Nie oznacza to ukończenia `E1-02` ani `E1-03`: logowanie/OIDC, źródło danych, egzekwowanie w API, audyt, model firm w bazie, migracje oraz testy izolacji integracyjne i end-to-end pozostają do realizacji w kolejnych PR-ach.
+Dotychczasowy zakres [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) obejmuje scaloną czystą politykę grantów (6C, PR #16) i proponowany w PR #17 techniczny fundament PostgreSQL/Drizzle z testem migracji (6A). Pakiet 6A nie jest działającym modułem firm ani księgowości; jego review nie zależy od uruchomienia Compose lub przyszłego serwera. Nie oznacza to ukończenia `E1-02` ani `E1-03`: logowanie/OIDC, źródło danych polityki, egzekwowanie w API, audyt, schemat i migracje firm (6B), RLS oraz testy izolacji integracyjne i end-to-end pozostają do realizacji w kolejnych PR-ach. Issue #6 pozostaje otwarte; 6B rozpoczynamy osobno po scaleniu 6A.
 
 **Bramka:** syntetyczne faktury różnych firm nie przeciekają między kontami; żaden ekstraktor nie zmienia oryginałów; backup odtwarzalny.
 
