@@ -17,9 +17,9 @@
 - OIDC/OAuth i MFA, Keycloak jako referencyjny provider; autoryzacja domenowa w aplikacji.
 - TypeScript MCP SDK (Streamable HTTP, wersjonowanie protokołu i OAuth).
 - pnpm + Turborepo; Vitest/Playwright/Testcontainers, OpenTelemetry.
-- Docker Compose w lokalnym środowisku, kontenery i OpenTofu w wydzielonym EU/EOG stage/prod.
+- Obecnie wyłącznie rozwój lokalny bez Dockera i przygotowywania serwera ([ADR-005](adr/005-rozwoj-lokalny.md)); kontenery i OpenTofu pozostają odroczonym kierunkiem ADR-002.
 
-Issue #5 dostarczyło szkielet, a pakiet 6A dodaje lokalny PostgreSQL, `packages/db` z Drizzle ORM oraz techniczne, wersjonowane migracje. Nie wdrożono jeszcze tabel domenowych, OIDC/MFA, RLS, tenantów, workerów, integracji ani zdalnego MCP. Baza jest opcjonalna dla `pnpm dev`; aplikacje web i MCP nie importują pakietu DB. Działające pakiety i zakres opisuje [17 — struktura repo](17-struktura-repo-i-standardy.md), a uruchomienie i walidację [19 — przewodnik developera](19-przewodnik-developera.md) oraz [20 — strategia testów](20-strategia-testow.md). Poniższe komponenty, przepływ i granice opisują cel architektoniczny; nie należy traktować ich jako obecnych funkcji.
+Issue #5 dostarczyło szkielet, a pakiet 6A dodaje `packages/db` z Drizzle ORM dla opcjonalnego PostgreSQL zainstalowanego bezpośrednio na komputerze oraz techniczne, wersjonowane migracje. Nie wdrożono jeszcze tabel domenowych, OIDC/MFA, RLS, tenantów, workerów, integracji ani zdalnego MCP. Baza jest opcjonalna dla `pnpm dev`; aplikacje web i MCP nie importują pakietu DB. Działające pakiety i zakres opisuje [17 — struktura repo](17-struktura-repo-i-standardy.md), a uruchomienie i walidację [19 — przewodnik developera](19-przewodnik-developera.md) oraz [20 — strategia testów](20-strategia-testow.md). Poniższe komponenty, przepływ i granice opisują cel architektoniczny; nie należy traktować ich jako obecnych funkcji.
 
 ## Docelowe komponenty i odpowiedzialność
 

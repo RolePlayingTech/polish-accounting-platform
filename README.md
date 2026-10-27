@@ -70,6 +70,8 @@ Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js
 - [16 — obowiązkowe zasady architektoniczne](docs/16-zasady-architektoniczne.md)
 - [17 — struktura repo i standardy pracy](docs/17-struktura-repo-i-standardy.md)
 
+**Bieżący tryb pracy: wyłącznie lokalny ([ADR-005](docs/adr/005-rozwoj-lokalny.md)).** `pnpm dev` uruchamia frontend i backend bez bazy. Opcjonalny PostgreSQL 18 instaluje się bezpośrednio na komputerze developera; Docker nie jest wymagany. Instrukcja Windows/PowerShell, oddzielne konta i bazy `pap_local`/`pap_test` oraz ręczne migracje są w [przewodniku developera](docs/19-przewodnik-developera.md#postgresql-lokalnie-bez-dockera). Pakiet 6A jest fundamentem technicznym, nie modułem firm ani księgowości. Nie przygotowujemy obecnie serwera, deploymentu ani infrastruktury kontenerowej.
+
 **Stan implementacji:** repozytorium zawiera monorepo pnpm/Turborepo, polski interfejs demonstracyjny `/app`, lokalne API statusu i lokalny serwer MCP STDIO z narzędziem tylko do odczytu. Pakiety `domain` i `application` zawierają pierwszą, deny-by-default politykę grantów tenant/firma/akcja oraz port zaufanego źródła; testy używają danych syntetycznych i źródła in-memory. Pakiet `@pap/db` udostępnia Drizzle ORM, kontrolowane połączenia wyłącznie do lokalnych baz `pap_local` i `pap_test` oraz wersjonowany mechanizm migracji. Migracja 6A nie tworzy tabel domenowych. To nie jest działająca autoryzacja użytkowników końcowych: brak OIDC/logowania, połączenia pakietu DB z API/MCP, egzekwowania polityki przez API/MCP, audytu decyzji i testów izolacji end-to-end. Nie ma jeszcze tenantów ani firm w aplikacji, księgowania, integracji urzędowych ani wdrożenia produkcyjnego. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani wdrożenie produkcyjne. Zakres działającego szkieletu opisują [przewodnik developera](docs/19-przewodnik-developera.md) i [strategia testów](docs/20-strategia-testow.md).
 
 ## Administracja i przyszłe abonamenty
@@ -109,6 +111,7 @@ Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operat
 | [17 — Standard repo](docs/17-struktura-repo-i-standardy.md) | Docelowe pakiety, importy, CI i komendy |
 | [18 — Model zagrożeń i uprawnień](docs/18-model-zagrozen-i-uprawnien.md) | Granice zaufania, role, autoryzacja i testy negatywne (kontrakt projektowy) |
 | [ADR-004](docs/adr/004-model-zagrozen-i-autoryzacji.md) | Wspólna autoryzacja i granice zaufania (propozycja do przeglądu) |
+| [ADR-005](docs/adr/005-rozwoj-lokalny.md) | Bieżący rozwój wyłącznie lokalny, bez Dockera i przygotowywania deploymentu |
 | [19 — Przewodnik developera](docs/19-przewodnik-developera.md) | Wymagania środowiska, instalacja, uruchamianie web/API/MCP |
 | [20 — Strategia testów](docs/20-strategia-testow.md) | Działające polecenia, testowane granice i ograniczenia pokrycia |
 
