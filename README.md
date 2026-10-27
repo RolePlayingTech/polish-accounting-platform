@@ -1,6 +1,6 @@
 # Polish Accounting Platform 🇵🇱
 
-> **Status: działający szkielet developerski (Issue #5); funkcje księgowe, logowanie i izolacja danych firmowych nie są wdrożone.**
+> **Status: działający szkielet developerski; istnieje pierwsza, testowana polityka dostępu w kodzie domeny i aplikacji, ale logowanie, egzekwowanie jej przez API/MCP i izolacja danych firmowych nie są wdrożone.**
 >
 > **Stan weryfikacji źródeł: 26 października 2026 r.**  
 > **Język dokumentacji: polski. Jurysdykcja: Polska.**
@@ -70,7 +70,7 @@ Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js
 - [16 — obowiązkowe zasady architektoniczne](docs/16-zasady-architektoniczne.md)
 - [17 — struktura repo i standardy pracy](docs/17-struktura-repo-i-standardy.md)
 
-**Stan implementacji:** repozytorium zawiera monorepo pnpm/Turborepo, polski interfejs demonstracyjny `/app`, lokalne API statusu i lokalny serwer MCP STDIO z narzędziem tylko do odczytu. Nie ma jeszcze bazy danych, logowania, tenantów, firm, księgowania, integracji urzędowych ani wdrożenia produkcyjnego. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani wdrożenie produkcyjne. Zakres działającego szkieletu opisują [przewodnik developera](docs/19-przewodnik-developera.md) i [strategia testów](docs/20-strategia-testow.md).
+**Stan implementacji:** repozytorium zawiera monorepo pnpm/Turborepo, polski interfejs demonstracyjny `/app`, lokalne API statusu i lokalny serwer MCP STDIO z narzędziem tylko do odczytu. Pakiety `domain` i `application` zawierają pierwszą, deny-by-default politykę grantów tenant/firma/akcja oraz port zaufanego źródła; testy używają danych syntetycznych i źródła in-memory. To nie jest działająca autoryzacja użytkowników końcowych: brak OIDC/logowania, adaptera bazy danych, integracji polityki z API/MCP, audytu decyzji i testów izolacji end-to-end. Nie ma jeszcze tenantów ani firm w aplikacji, księgowania, integracji urzędowych ani wdrożenia produkcyjnego. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani wdrożenie produkcyjne. Zakres działającego szkieletu opisują [przewodnik developera](docs/19-przewodnik-developera.md) i [strategia testów](docs/20-strategia-testow.md).
 
 ## Administracja i przyszłe abonamenty
 
@@ -114,7 +114,7 @@ Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operat
 
 ## Status funkcji i bezpieczeństwa
 
-Nie istnieją funkcje księgowe, konta użytkowników, izolacja danych firmowych, połączenie z KSeF ani zdalny serwer MCP. Lokalny MCP udostępnia wyłącznie publiczny status systemu. Trasy `/settings` i `/platform` są statycznymi stronami zastępczymi bez endpointów administracyjnych. Nie przesyłaj do tego repozytorium prawdziwych faktur, numerów PESEL, danych klientów, certyfikatów KSeF ani tokenów. Błędy bezpieczeństwa zgłaszaj zgodnie z [SECURITY.md](SECURITY.md).
+Nie istnieją funkcje księgowe, konta użytkowników, działająca autoryzacja, izolacja danych firmowych, połączenie z KSeF ani zdalny serwer MCP. Sama polityka w pakietach nie jest używana przez API i nie chroni danych aplikacji. Lokalny MCP udostępnia wyłącznie publiczny status systemu. Trasy `/settings` i `/platform` są statycznymi stronami zastępczymi bez endpointów administracyjnych. Nie przesyłaj do tego repozytorium prawdziwych faktur, numerów PESEL, danych klientów, certyfikatów KSeF ani tokenów. Błędy bezpieczeństwa zgłaszaj zgodnie z [SECURITY.md](SECURITY.md).
 
 ## Zasady open source
 

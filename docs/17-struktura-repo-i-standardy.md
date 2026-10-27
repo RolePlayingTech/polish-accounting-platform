@@ -11,8 +11,8 @@ polish-accounting-platform/
 │   ├── api/                    # NestJS + Fastify; publiczny status bez danych firm
 │   └── mcp/                    # lokalne STDIO; tylko read-only system_status
 ├── packages/
-│   ├── domain/                 # identyfikatory tenant/company, bez autoryzacji
-│   ├── application/            # use case publicznego statusu
+│   ├── domain/                 # identyfikatory i deny-by-default polityka grantów
+│   ├── application/            # use case statusu i port polityki autoryzacji
 │   ├── contracts/              # ścisły kontrakt statusu
 │   └── ui/                     # współdzielone komponenty interfejsu
 ├── .github/workflows/ci.yml
@@ -22,7 +22,9 @@ polish-accounting-platform/
 └── turbo.json
 ```
 
-Szkielet nie zawiera DB, migracji, OIDC, tenantów, workerów, integracji zewnętrznych ani księgowania. Identyfikatory firm z pakietu `domain` nie nadają dostępu. Role i egzekwowanie uprawnień pozostają do wdrożenia w kolejnych zadaniach zależnych od modelu zagrożeń.
+Szkielet nie zawiera DB, migracji, OIDC, tenantów, workerów, integracji zewnętrznych ani księgowania. `domain` zawiera czystą funkcję decyzji dla aktywnego członkostwa i jawnego grantu do konkretnej firmy oraz akcji. `application` udostępnia port zaufanego źródła tych danych i wspólny use case; źródło in-memory jest wyłącznie testowym adapterem. Identyfikatory firm z pakietu `domain` nie nadają dostępu, a role administratora tenanta i operatora platformy nie dają domyślnego dostępu do ksiąg.
+
+**Ograniczenie bieżącego etapu Issue #6:** polityka nie jest jeszcze podłączona do uwierzytelniania ani do API/MCP. Nie ma rzeczywistych użytkowników, źródła bazodanowego, audytu decyzji, migracji ani testów izolacji end-to-end. `userId` przekazany do application service musi pochodzić z uwierzytelnionej tożsamości ustalonej po stronie serwera; taki mechanizm jeszcze nie istnieje.
 
 ## Struktura monorepo
 
