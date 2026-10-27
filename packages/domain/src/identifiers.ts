@@ -2,9 +2,11 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}
 
 declare const tenantIdBrand: unique symbol;
 declare const legalEntityIdBrand: unique symbol;
+declare const userIdBrand: unique symbol;
 
 export type TenantId = string & { readonly [tenantIdBrand]: true };
 export type LegalEntityId = string & { readonly [legalEntityIdBrand]: true };
+export type UserId = string & { readonly [userIdBrand]: true };
 
 export class InvalidIdentifierError extends Error {
   constructor(identifierName: string) {
@@ -29,4 +31,9 @@ export function tenantId(value: string): TenantId {
 /** Validates identifier shape only. A valid ID never grants access to its company. */
 export function legalEntityId(value: string): LegalEntityId {
   return parseUuid<LegalEntityId>(value, 'legal_entity_id');
+}
+
+/** Validates identifier shape only. A valid ID never grants access to a user. */
+export function userId(value: string): UserId {
+  return parseUuid<UserId>(value, 'user_id');
 }

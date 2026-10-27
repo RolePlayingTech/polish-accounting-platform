@@ -10,7 +10,8 @@
     }
   },
   "dependencies": {
-    "@pap/contracts": "workspace:*"
+    "@pap/contracts": "workspace:*",
+    "@pap/domain": "workspace:*"
   },
   "scripts": {
     "build": "tsc -b",

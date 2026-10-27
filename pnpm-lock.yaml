@@ -326,6 +326,9 @@ importers:
       '@pap/contracts':
         specifier: workspace:*
         version: link:../contracts
+      '@pap/domain':
+        specifier: workspace:*
+        version: link:../domain
 
   packages/contracts:
     dependencies:

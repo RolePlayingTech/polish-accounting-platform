@@ -28,6 +28,8 @@
 - [ ] `E1-07` Bank CSV/MT940/CAMT importowany i bezpiecznie dopasowywany do dokumentów.
 - [ ] `E1-08` Pulpit, zadania, kalendarz, podstawowe eksporty, UX testy dostępności.
 
+Pierwszy etap [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) dostarcza wyłącznie czystą politykę grantów i testy jednostkowe. Nie oznacza to ukończenia `E1-02` ani `E1-03`: logowanie/OIDC, źródło danych, egzekwowanie w API, audyt, model firm w bazie, migracje oraz testy izolacji integracyjne i end-to-end pozostają do realizacji w kolejnych PR-ach.
+
 **Bramka:** syntetyczne faktury różnych firm nie przeciekają między kontami; żaden ekstraktor nie zmienia oryginałów; backup odtwarzalny.
 
 ## Etap 2 — MCP oraz kontrola działań

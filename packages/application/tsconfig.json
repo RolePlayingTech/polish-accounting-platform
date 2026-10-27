@@ -8,6 +8,6 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/application.tsbuildinfo"
   },
-  "references": [{ "path": "../contracts" }],
+  "references": [{ "path": "../contracts" }, { "path": "../domain" }],
   "include": ["src/**/*.ts"]
 }
