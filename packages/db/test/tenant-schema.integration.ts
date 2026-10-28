@@ -292,14 +292,15 @@ describe('Integralność tenantów, firm i jawnych grantów PostgreSQL', () => {
 
   it('nie usuwa ani nie przenosi referencjonowanego członkostwa i firmy', async () => {
     const { client: sql } = connection();
+    // PostgreSQL 18 rozróżnia odmowę RESTRICT (23001) od błędnego FK (23503).
     await expectDatabaseError(
       sql`DELETE FROM tenant_membership WHERE tenant_id = ${A} AND user_id = ${USER}`,
-      '23503',
+      '23001',
     );
-    await expectDatabaseError(sql`DELETE FROM legal_entity WHERE id = ${A1}`, '23503');
+    await expectDatabaseError(sql`DELETE FROM legal_entity WHERE id = ${A1}`, '23001');
     await expectDatabaseError(
       sql`UPDATE legal_entity SET tenant_id = ${B} WHERE id = ${A1}`,
-      '23503',
+      '23001',
     );
     await expectDatabaseError(
       sql`UPDATE company_access_grant SET legal_entity_id = ${B1} WHERE grant_id = ${id(41)}`,
