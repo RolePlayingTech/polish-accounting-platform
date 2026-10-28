@@ -3,7 +3,7 @@
 - **Data:** 2026-10-28
 - **Powiązane zadanie:** [Issue #19](https://github.com/RolePlayingTech/polish-accounting-platform/issues/19), [Audyt serwera Hetzner](HETZNER_SERVER_AUDIT_2026-10-28.md), [Architektura stagingu](HETZNER_STAGING_ARCHITECTURE.md), [Checklista gotowości](HETZNER_READINESS_CHECKLIST.md)
 - **Docelowa domena (jedyna kanoniczna):** `https://ksiegowosc.roleplayingtech.com`
-- **Status:** Środowisko serwerowe przygotowane w stanie nieaktywnym (`READY TO DEPLOY`) — **uruchomienie usług i aktywacja vhosta wymagają osobnej zgody właściciela projektu**.
+- **Status:** Infrastruktura serwerowa przygotowana w stanie nieaktywnym (`INFRASTRUCTURE PREPARED`) — **scalenie PR #23/#24, utworzenie `htpasswd`, wydanie certyfikatu TLS, uruchomienie usług i aktywacja vhosta wymagają osobnej zgody właściciela projektu**.
 
 ---
 
@@ -25,8 +25,8 @@ Aby możliwie najszybciej udostępnić właścicielowi działającą wersję apl
   - **Brak publicznych operacji na firmach i brak kont użytkowników końcowych:** API nie wystawia tras odczytu/zapisu tenantów ani firm.
   - **Brak rzeczywistych danych księgowych:** wyłącznie syntetyczny status techniczny szkieletu.
 - **Stan przygotowania w repozytorium i na hoście:**
-  - [PR #23](https://github.com/RolePlayingTech/polish-accounting-platform/pull/23) wprowadza w `apps/web/lib/read-system-status.ts` przy `NODE_ENV=production` zamkniętą allowlistę originów (`http://127.0.0.1:4100` dla komunikacji serwerowej loopback oraz `https://ksiegowosc.roleplayingtech.com` z `redirect: 'error'`). Dzięki temu **nie otwieramy żadnego wyjątku od Basic Auth w Nginx dla `/api/v1/system/status`**.
-  - [PR #24](https://github.com/RolePlayingTech/polish-accounting-platform/pull/24) rozszerza `packages/db/src/database-config.ts` o środowisko `PAP_DATABASE_ENV=staging` z rozdziałem ról `pap_staging_migrator` i `pap_staging_app` na potrzeby podetapu A.2.
+  - [PR #23](https://github.com/RolePlayingTech/polish-accounting-platform/pull/23) wprowadza w `apps/web/lib/read-system-status.ts` przy `NODE_ENV=production` zamkniętą allowlistę originów (`http://127.0.0.1:4100` dla komunikacji serwerowej loopback w Etapie A oraz `https://ksiegowosc.roleplayingtech.com` dla środowisk bez bramki Basic Auth na `/api/v1/system/status`, przy założeniu zaufanej konfiguracji DNS domeny właściciela i z `redirect: 'error'`). Dzięki temu w Etapie A SSR używa wyłącznie `http://127.0.0.1:4100` i **nie otwieramy żadnego wyjątku od Basic Auth w Nginx dla `/api/v1/system/status`**.
+  - [PR #24](https://github.com/RolePlayingTech/polish-accounting-platform/pull/24) rozszerza `packages/db/src/database-config.ts` o środowisko `PAP_DATABASE_ENV=staging` (wymagające fail-closed `NODE_ENV=production`) z rozdziałem ról `pap_staging_migrator` i `pap_staging_app` na potrzeby podetapu A.2.
 
 ### Etap B — Funkcjonalny staging (dopiero po zamknięciu bramek bezpieczeństwa Issue #6)
 
@@ -65,10 +65,10 @@ dig +short ksiegowosc.roleplayingtech.com A
 
 Na serwerze przygotowano (bez modyfikacji `/usr/bin/node` i bez uruchamiania usług):
 1. Konto systemowe `pap` (`uid=999(pap) gid=987(pap)`, `/usr/sbin/nologin`, zablokowane hasło).
-2. Strukturę katalogów:
-   - `/opt/pap-runtime` (`0755 root:root`, Node.js `v24.22.1` + `pnpm 12.15.0`)
-   - `/var/www/pap-staging` (`0750 root:pap`), `/var/www/pap-staging/releases`, `/var/www/pap-staging/shared`, `/var/www/pap-staging/bin`
-   - `/etc/pap` (`0750 root:pap`, pliki środowiskowe `0640 root:pap`)
+2. Strukturę katalogów i plików:
+   - `/opt/pap-runtime` (`0755 root:root`, symlink `/opt/pap-runtime/current -> /opt/pap-runtime/node-v24.22.1-linux-x64` z Node.js `v24.22.1` + `/opt/pap-runtime/pnpm/pnpm` z `pnpm 12.15.0` i `/opt/pap-runtime/corepack-home`)
+   - `/var/www/pap-staging` (`0750 root:pap`), `/var/www/pap-staging/releases` (`0750 root:pap`), `/var/www/pap-staging/shared` (`0750 pap:pap`), `/var/www/pap-staging/shared/next-cache` (`0750 pap:pap`), `/var/www/pap-staging/bin` (`0755 root:root`)
+   - `/etc/pap` (`0750 root:pap`, pliki `/etc/pap/pap-staging-api.env`, `/etc/pap/pap-staging-web.env`, `/etc/pap/pap-staging-db-runtime.env.example`, `/etc/pap/pap-staging-migrate.env.example` z uprawnieniami `0640 root:pap`)
    - `/var/lib/pap-acme/.well-known/acme-challenge` (`0750 root:www-data` — brak prawa zapisu dla `www-data`)
    - `/mnt/HC_Volume_<REDACTED>/pap-staging` (`0700 root:root` — podkatalogi `postgres/data`, `backups/daily`, `backups/pre-deploy`, `compose`, `sql`)
 
@@ -152,7 +152,23 @@ flowchart LR
     Switch --> Smoke["Health check (/health, /app)<br/>Automatyczny rollback przy błędzie"]
 ```
 
-1. **Budowanie poza serwerem:** Artefakt wydania (`release-<sha>.tar.gz` z wynikami `pnpm build`) powstaje poza serwerem Hetzner, po przejściu wszystkich testów.
+1. **Budowanie poza serwerem i zawartość artefaktu wydania (`.tar.gz`):**
+   - `apps/web/next.config.ts` używa standardowego trybu `next build` / `next start` (bez `output: 'standalone'`), a `pnpm` tworzy izolowane drzewo `node_modules` z relatywnymi symlinkami POSIX (`apps/web/node_modules/next -> ../../../node_modules/.pnpm/...`).
+   - Artefakt wydania (`pap-release-<sha>.tar.gz`) powstaje na runnerze Linux (`ubuntu-latest` w GitHub Actions) po wykonaniu `pnpm install --frozen-lockfile && pnpm build` i zawiera zbudowane artefakty (`apps/api/dist`, `apps/web/.next`, `packages/*/dist`) oraz drzewo `node_modules` z zachowanymi relatywnymi symlinkami POSIX (`tar -czf` bez `--dereference`, z wyłączeniem `.git`, `.github`, `.turbo`, `apps/web/.next/cache`, `test-results`, `playwright-report`):
+     ```bash
+     tar --exclude='./.git' \
+         --exclude='./.github' \
+         --exclude='./.turbo' \
+         --exclude='*/.turbo' \
+         --exclude='./apps/web/.next/cache' \
+         --exclude='./test-results' \
+         --exclude='./playwright-report' \
+         -czf "pap-release-${GITHUB_SHA}.tar.gz" .
+     ```
+   - Skrypt `/var/www/pap-staging/bin/pap-deploy-release.sh <release-sha-or-id> <path-to-release-tarball.tar.gz> [--with-db-migrate]` weryfikuje obecność `apps/api/dist/main.js`, `apps/api/node_modules/@nestjs/core`, `apps/web/.next/BUILD_ID`, `apps/web/node_modules/next/dist/bin/next` oraz `packages/{contracts,domain,application,ui}/dist/index.js`, podlinkowuje `apps/web/.next/cache -> /var/www/pap-staging/shared/next-cache` i atomowo przełącza symlink `/var/www/pap-staging/current`.
+   - Jednostki `systemd` uruchamiają bezpośrednio prebudowane entrypointy:
+     - `pap-staging-api.service`: `/opt/pap-runtime/current/bin/node /var/www/pap-staging/current/apps/api/dist/main.js`
+     - `pap-staging-web.service`: `/opt/pap-runtime/current/bin/node /var/www/pap-staging/current/apps/web/node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3100`
 2. **Brak wpływu na inne aplikacje:** Skrypt `/var/www/pap-staging/bin/pap-deploy-release.sh` operuje wyłącznie na katalogu `/var/www/pap-staging/` i jednostkach `pap-staging-api.service` oraz `pap-staging-web.service`.
 3. **Procedura Rollbacku (`/var/www/pap-staging/bin/pap-rollback.sh`):**
    - Jeżeli po przełączeniu symlinka `current` i restarcie usług test `/var/www/pap-staging/bin/pap-smoke-test.sh --local-only` nie zwróci `0`, skrypt automatycznie przepina symlink `current` z powrotem na `/var/www/pap-staging/previous` i restartuje wyłącznie usługi `pap-staging-*`.

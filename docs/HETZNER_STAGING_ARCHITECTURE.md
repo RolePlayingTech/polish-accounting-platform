@@ -83,7 +83,8 @@ flowchart TD
    - Proces Next.js (`127.0.0.1:3100`) odpytuje API o status systemu po stronie serwera.
    - **Nie wprowadzamy w Nginx żadnych wyjątków wyłączających `auth_basic` dla `/api/v1/system/status`** — cały vhost w Etapie A pozostaje jednolicie chroniony przed nieautoryzowanym dostępem z zewnątrz.
    - W [PR #23](https://github.com/RolePlayingTech/polish-accounting-platform/pull/23) w `apps/web/lib/read-system-status.ts` wprowadzono zamkniętą allowlistę originów dla `NODE_ENV=production`:
-     - Akceptowany jest **wyłącznie dokładny origin** `http://127.0.0.1:4100` (dla wewnętrznych wywołań serwerowych Web -> API na tym samym hoście) oraz kanoniczny origin `https://ksiegowosc.roleplayingtech.com` (z założeniem zaufanego DNS właściciela; dowolne inne hosty HTTPS są odrzucane, by wykluczyć DNS rebinding / SSRF).
+     - W prywatnym Etapie A SSR używa **wyłącznie dokładnego originu** `http://127.0.0.1:4100` (`API_BASE_URL=http://127.0.0.1:4100` w `/etc/pap/pap-staging-web.env`), ponieważ publiczny origin `https://ksiegowosc.roleplayingtech.com` jest za bramką Basic Auth i zwróciłby `401 Unauthorized` dla żądania bez poświadczeń.
+     - Kanoniczny origin `https://ksiegowosc.roleplayingtech.com` jest dopuszczony na allowliście tylko dla zaufanej konfiguracji DNS domeny właściciela w środowiskach bez Basic Auth na `/api/v1/system/status` (sama walidacja tekstu nazwy hosta nie zastępuje weryfikacji docelowego adresu IP w warstwie sieciowej).
      - Dowolny inny port loopback lub prywatny adres IP jest odrzucany, a `fetch` używa `redirect: 'error'`, by nigdy nie podążać za przekierowaniami HTTP.
 3. **Przyszłe OIDC (`6D-2`) i MCP (`@pap/mcp`):**
    - Konfiguracja przyszłego OIDC (`Origin`, `redirect_uri`, `post_logout_redirect_uri` oraz ciasteczka `__Host-`) operuje wyłącznie na kanonicznym adresie ASCII `https://ksiegowosc.roleplayingtech.com`.
@@ -97,22 +98,25 @@ flowchart TD
 
 | Ścieżka | Dysk | Właściciel / Uprawnienia | Przeznaczenie |
 | --- | --- | --- | --- |
-| `/opt/pap-runtime/` | `/dev/sda1` (`/`) | `root:root` (`0755`) | Izolowane binaria `node` (`v24.22.1`) oraz `pnpm` (`12.15.0`) — brak ingerencji w `/usr/bin/node` (`v20.20.2`) |
+| `/opt/pap-runtime/` | `/dev/sda1` (`/`) | `root:root` (`0755`) | Izolowane środowisko wykonawcze: symlink `/opt/pap-runtime/current -> /opt/pap-runtime/node-v24.22.1-linux-x64` (`node v24.22.1`), `/opt/pap-runtime/pnpm/pnpm` (`pnpm 12.15.0`) oraz `/opt/pap-runtime/corepack-home` — brak ingerencji w `/usr/bin/node` (`v20.20.2`) |
 | `/var/www/pap-staging/` | `/dev/sda1` (`/`) | `root:pap` (`0750`) | Katalog główny wdrożeń aplikacji (`releases/`, `shared/`, `bin/`) |
-| `/var/www/pap-staging/releases/<id>/` | `/dev/sda1` (`/`) | `root:pap` (`0750`, tylko do odczytu dla `pap`) | Niezmienialne drzewo konkretnego wydania |
-| `/var/www/pap-staging/current` | `/dev/sda1` (`/`) | symlink `root:root` | Atomowy dowiąznik wskazujący na aktywne wydanie |
-| `/etc/pap/pap-staging-web.env` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Zmienne środowiskowe dla procesu Web |
-| `/etc/pap/pap-staging-api.env` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Zmienne środowiskowe dla procesu API |
-| `/etc/pap/pap-staging-migrate.env.example` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Szablon zmiennych migratora DB (`PAP_DATABASE_ENV=staging`, konto `pap_staging_migrator`) |
-| `/var/lib/pap-acme/` | `/dev/sda1` (`/`) | **`root:www-data` (`0750`)** | Izolowany katalog ACME HTTP-01 webroot (`/.well-known/acme-challenge/`). Certbot (`root`) ma prawo zapisu, a worker Nginx (`www-data`) wyłącznie prawo przejścia i odczytu (`r-x`), **bez prawa zapisu**. |
+| `/var/www/pap-staging/releases/<id>/` | `/dev/sda1` (`/`) | `root:pap` (`0750`, tylko do odczytu dla `pap`) | Niezmienialne drzewo konkretnego wydania (`ReadOnlyPaths=/var/www/pap-staging/releases`) |
+| `/var/www/pap-staging/shared/next-cache/` | `/dev/sda1` (`/`) | `pap:pap` (`0750`) | Współdzielony katalog cache Next.js podlinkowany z `apps/web/.next/cache` (`ReadWritePaths=/var/www/pap-staging/shared`) |
+| `/var/www/pap-staging/current` | `/dev/sda1` (`/`) | symlink `root:root` | Atomowy dowiąznik wskazujący na aktywne wydanie (tworzony podczas pierwszego wykonania `pap-deploy-release.sh`) |
+| `/etc/pap/pap-staging-web.env` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Zmienne środowiskowe dla procesu Web (`EnvironmentFile=/etc/pap/pap-staging-web.env`) |
+| `/etc/pap/pap-staging-api.env` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Zmienne środowiskowe dla procesu API (`EnvironmentFile=/etc/pap/pap-staging-api.env`) |
+| `/etc/pap/pap-staging-db-runtime.env.example` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Szablon zmiennych połączenia DB runtime (`NODE_ENV=production`, `PAP_DATABASE_ENV=staging`, konto `pap_staging_app`) |
+| `/etc/pap/pap-staging-migrate.env.example` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Szablon zmiennych migratora DB (`NODE_ENV=production`, `PAP_DATABASE_ENV=staging`, konto `pap_staging_migrator`) |
+| `/var/lib/pap-acme/` | `/dev/sda1` (`/`) | **`root:www-data` (`0750`)** | Izolowany katalog ACME HTTP-01 webroot (`/.well-known/acme-challenge/`, `root /var/lib/pap-acme;` w Nginx). Certbot (`root`) ma prawo zapisu, a worker Nginx (`www-data`) wyłącznie prawo przejścia i odczytu (`r-x`), **bez prawa zapisu**. |
+| `/etc/nginx/pap-staging.htpasswd` | `/dev/sda1` (`/`) | `root:www-data` (`0640`, tworzony przy starcie Etapu A) | Plik haseł HTTP Basic Auth wskazany w `auth_basic_user_file /etc/nginx/pap-staging.htpasswd;` w `/etc/nginx/sites-available/pap-staging.https.conf` |
 | `/mnt/HC_Volume_<REDACTED>/pap-staging/` | `/dev/sdb` (Wolumen) | `root:root` (`0700`) | Katalog danych PostgreSQL 18 (`postgres/data`), lokalnych zrzutów (`backups/daily`, `backups/pre-deploy`) oraz konfiguracji Compose/SQL (`compose`, `sql`) |
 
 ### 4.2. Nazewnictwo kont, usług systemowych i limity zasobów
 
 - **Konto systemowe aplikacji:** `pap` (`uid=999(pap) gid=987(pap)`, `/usr/sbin/nologin`, bez członkostwa w grupie `docker` i bez uprawnień `sudo`).
 - **Jednostki `systemd` i twarde limity cgroups v2 (przygotowane w stanie `disabled` / `inactive`):**
-  - `pap-staging-web.service` — proces Next.js (`@pap/web`): `MemoryHigh=256M`, `MemoryMax=384M`, `MemorySwapMax=64M`, `CPUQuota=50%`, `IOWeight=50`, `TasksMax=64`.
-  - `pap-staging-api.service` — proces NestJS/Fastify (`@pap/api`): `MemoryHigh=256M`, `MemoryMax=384M`, `MemorySwapMax=64M`, `CPUQuota=50%`, `IOWeight=50`, `TasksMax=64`.
+  - `pap-staging-web.service` — proces Next.js (`@pap/web`, `ExecStart=/opt/pap-runtime/current/bin/node /var/www/pap-staging/current/apps/web/node_modules/next/dist/bin/next start --hostname 127.0.0.1 --port 3100`, `EnvironmentFile=/etc/pap/pap-staging-web.env`): `MemoryHigh=256M`, `MemoryMax=384M`, `MemorySwapMax=64M`, `CPUQuota=50%`, `IOWeight=50`, `TasksMax=64`.
+  - `pap-staging-api.service` — proces NestJS/Fastify (`@pap/api`, `ExecStart=/opt/pap-runtime/current/bin/node /var/www/pap-staging/current/apps/api/dist/main.js`, `EnvironmentFile=/etc/pap/pap-staging-api.env`): `MemoryHigh=256M`, `MemoryMax=384M`, `MemorySwapMax=64M`, `CPUQuota=50%`, `IOWeight=50`, `TasksMax=64`.
   - `pap-staging-postgres` (`/mnt/HC_Volume_<REDACTED>/pap-staging/compose/docker-compose.postgres.yml`) — instancja PostgreSQL 18.6 z limitem kontenera `mem_limit: 384m`, `memswap_limit: 384m`, `cpus: 0.50` oraz parametrami `shared_buffers=96MB`, `work_mem=4MB`, `maintenance_work_mem=32MB`, `max_connections=40`.
   - `pap-staging-backup.service` + `pap-staging-backup.timer` — codzienny backup bazy danych o `03:15 UTC`.
   - `pap-staging-healthcheck.service` + `pap-staging-healthcheck.timer` — kontrola zdrowia usług co 5 minut.
@@ -150,7 +154,7 @@ Projektujemy trzy poziomy ról w bazie `pap_staging` (`/mnt/HC_Volume_<REDACTED>
    - `CREATE EXTENSION IF NOT EXISTS btree_gist;` i weryfikację przynależności `btree_gist` do bieżącego schematu danych (`public`),
    - utworzenie 5 tabel modelu `6B` (`tenant`, `legal_entity`, `tenant_membership`, `entityProfileVersion`, `company_access_grant`), złożonych kluczy obcych oraz ograniczenia `EXCLUDE USING gist (... tstzrange(valid_from, valid_until, '[)') WITH &&)`,
    - utworzenie tabeli audytu `access_management_event` oraz funkcji i triggerów strażniczych (`protect_grant_revocation`, `revoke_grants_on_membership_transition`, `protect_access_management_event`).
-2. W [PR #24](https://github.com/RolePlayingTech/polish-accounting-platform/pull/24) rozszerzono `packages/db/src/database-config.ts` o jawny profil `PAP_DATABASE_ENV=staging` z rozdziałem `roleScope: 'runtime'` (`pap_staging_app`) i `roleScope: 'migrator'` (`pap_staging_migrator`) na adresach IP loopback (`127.0.0.1` / `::1`).
+2. W [PR #24](https://github.com/RolePlayingTech/polish-accounting-platform/pull/24) rozszerzono `packages/db/src/database-config.ts` o jawny profil `PAP_DATABASE_ENV=staging` (wymagający fail-closed `NODE_ENV=production`) z rozdziałem `roleScope: 'runtime'` (`pap_staging_app`) i `roleScope: 'migrator'` (`pap_staging_migrator`) na adresach IP loopback (`127.0.0.1` / `::1`). Walidacja nazwy użytkownika w `DATABASE_URL` jest kontrolą konfiguracji klienta przed otwarciem połączenia; faktyczne uprawnienia `GRANT`/`REVOKE`, `NOBYPASSRLS` oraz polityki RLS w PostgreSQL należą do inicjalizacji bazy w Etapie A.2 oraz zadania `6D-3`.
 
 ---
 

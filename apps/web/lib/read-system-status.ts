@@ -10,11 +10,12 @@ interface ReadStatusOptions {
 
 /**
  * Closed allowlist of API origins permitted when NODE_ENV=production:
- * - http://127.0.0.1:4100 — exact same-host loopback used by SSR on Hetzner staging
+ * - http://127.0.0.1:4100 — exact same-host loopback used by SSR in Stage A on Hetzner
  *   so the entire public Nginx vhost remains protected by Basic Auth without exceptions.
- * - https://ksiegowosc.roleplayingtech.com — canonical ASCII HTTPS origin of PAP
- *   (assumes owner-controlled DNS record; arbitrary HTTPS hosts are rejected so
- *   untrusted domains cannot be used for DNS rebinding / SSRF).
+ * - https://ksiegowosc.roleplayingtech.com — canonical ASCII HTTPS origin of PAP for
+ *   environments without an edge Basic Auth gate on /api/v1/system/status. Requires trusted
+ *   DNS configuration for the domain; hostname string matching does not by itself verify
+ *   the resolved target IP at the network layer.
  */
 const ALLOWED_PRODUCTION_API_ORIGINS = new Set([
   'http://127.0.0.1:4100',
