@@ -65,7 +65,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
             .where(
               and(
                 grantsTarget,
-                sql`(${companyAccessGrant.revokedAt} IS NULL OR ${companyAccessGrant.revokedAt} > ${now})`,
+                sql`(${companyAccessGrant.revokedAt} IS NULL OR ${companyAccessGrant.revokedAt} > ${now.toISOString()})`,
               ),
             )
             .returning({ id: companyAccessGrant.grantId });
@@ -132,7 +132,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
                   eq(companyAccessGrant.action, command.action),
                   isNull(companyAccessGrant.revokedAt),
                   command.validFrom === null
-                    ? sql`${companyAccessGrant.validFrom} <= ${now}`
+                    ? sql`${companyAccessGrant.validFrom} <= ${now.toISOString()}`
                     : eq(companyAccessGrant.validFrom, validFrom),
                   validUntil === null
                     ? isNull(companyAccessGrant.validUntil)
