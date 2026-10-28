@@ -1,5 +1,7 @@
 # 20. Strategia testów i aktualna walidacja
 
+**Aktualizacja 6D-R (2026-10-28):** [nowe testy lifecycle](24-bezpieczny-cykl-dostepu-6dr.md) obejmują cztery operacje, atomowy audyt, rollback błędów audytu/SQL, idempotencję, odmowy i ochronę cofnięcia w SQL. Regresja z PR #20 wymaga teraz odmowy po reaktywacji; wcześniejszy opis wykrywanej podatności poniżej dotyczy samego 6D-1. Wyścigi używają kontrolowanej bariery na blokadzie wiersza i `pg_blocking_pids`, w obu kolejnościach operacji. Test sprawdza również niezależność blokad różnych członkostw. Migracje pokrywają upgrade 0000/0001 → 0002 z danymi. Wszystkie dotychczasowe testy PostgreSQL pozostają w zestawie CI. Nie ma lokalnej usługi PostgreSQL, więc walidacja integracyjna jest obowiązkowa w izolowanej `pap_test` na GitHub Actions.
+
 ## Polecenia automatyczne
 
 CI uruchamia na pull requestach i pushach do `main`:

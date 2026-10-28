@@ -1,5 +1,7 @@
 # 18. Model zagrożeń i uprawnień
 
+**Stan implementacji 6D-R (2026-10-28):** [cykl dostępu](24-bezpieczny-cykl-dostepu-6dr.md) dodaje osobny port autoryzacji administracyjnej, cztery transakcyjne komendy, audyt fail-closed i ochronę przed wznowieniem historycznych grantów. `read`/`write` i role administratora nadal nie dają samodzielnie prawa zarządzania dostępem. Brak wiarygodnego aktora/autoryzatora blokuje zapis. Produkcyjny adapter tożsamości/autoryzatora, ograniczona rola DB i RLS pozostają blockerami; testowy aktor nie jest uwierzytelnianiem OIDC.
+
 **Status:** kontrakt projektowy proponowany w PR do Issue #3; nie jest implementacją autoryzacji ani audytem penetracyjnym.  
 **Zakres:** UI, REST API, przyszły MCP Gateway, zadania w tle i przyszłe powierzchnie administracyjne.  
 **Jurysdykcja:** Polska. Przykłady danych są syntetyczne.
