@@ -28,7 +28,7 @@
 - [ ] `E1-07` Bank CSV/MT940/CAMT importowany i bezpiecznie dopasowywany do dokumentów.
 - [ ] `E1-08` Pulpit, zadania, kalendarz, podstawowe eksporty, UX testy dostępności.
 
-Zakres [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) obejmuje scaloną czystą politykę grantów (6C, PR #16), scalony fundament PostgreSQL/Drizzle (6A, PR #17) i pakiet 6B: schemat tenantów, firm, członkostw, wersji profilu oraz jawnych grantów z testami integralności ([model 6B](22-schemat-tenantow-6b.md)). Nie oznacza to ukończenia `E1-02` ani `E1-03`: OIDC, zaufany adapter DB, egzekwowanie polityki w API/MCP, audyt, RLS i izolacja odczytów end-to-end pozostają kolejnymi etapami. Issue #6 pozostaje otwarte; nie ma obsługi firm w UI ani wdrożenia produkcyjnego.
+Zakres [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) obejmuje scaloną czystą politykę grantów (6C, PR #16), scalony fundament PostgreSQL/Drizzle (6A, PR #17) i schemat 6B (PR #18): tenanty, firmy, członkostwa, wersje profilu oraz jawne granty z testami integralności ([model 6B](22-schemat-tenantow-6b.md)). [6D-1](23-adapter-autoryzacji-6d1.md) dodaje adapter DB portu autoryzacji, testy decyzji i propozycję kontraktu tożsamości. Nie oznacza to ukończenia `E1-02` ani `E1-03`: OIDC, egzekwowanie polityki w API/MCP, bezpieczny cykl reaktywacji członkostwa, audyt, RLS i izolacja odczytów end-to-end pozostają kolejnymi etapami. Issue #6 pozostaje otwarte; nie ma obsługi firm w UI ani wdrożenia produkcyjnego.
 
 **Bramka:** syntetyczne faktury różnych firm nie przeciekają między kontami; żaden ekstraktor nie zmienia oryginałów; backup odtwarzalny.
 

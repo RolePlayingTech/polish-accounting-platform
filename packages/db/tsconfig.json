@@ -8,5 +8,6 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/db.tsbuildinfo"
   },
+  "references": [{ "path": "../application" }, { "path": "../domain" }],
   "include": ["src/**/*.ts"]
 }

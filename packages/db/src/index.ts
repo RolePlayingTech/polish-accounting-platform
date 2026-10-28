@@ -1,4 +1,5 @@
 export { connectDatabase } from './client.js';
+export { PostgresTenantAuthorizationDataSource } from './tenant-authorization.js';
 export {
   tenant,
   legalEntity,

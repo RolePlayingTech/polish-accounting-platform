@@ -165,7 +165,7 @@ Opis scenariuszy i zakresu walidacji znajduje się w [20 — strategii testów](
 - `/app` prezentuje stan techniczny szkieletu. Moduły księgowe są oznaczone jako niedostępne.
 - `/settings` i `/platform` są statycznymi placeholderami bez operacji administracyjnych.
 - Nie ma kont, logowania, sesji, obsługi tenantów/firm w aplikacji ani egzekwowania polityki przez API/MCP.
-- Pakiet DB ma lokalne połączenia, migracje i schemat 6B z constraints relacji. Nie ma adaptera autoryzacji, RLS, audytu, tabel ksiąg/faktur, integracji KSeF/MF, workerów ani produkcyjnych połączeń MCP. Schemat nie chroni SELECT przed nieuprawnionym dostępem.
+- Pakiet DB ma lokalne połączenia, migracje, schemat 6B z constraints relacji i [adapter źródła autoryzacji 6D-1](23-adapter-autoryzacji-6d1.md). Adapter nie jest podłączony do API/MCP; nie ma OIDC, RLS, audytu, tabel ksiąg/faktur, integracji KSeF/MF, workerów ani produkcyjnych połączeń MCP. Sam schemat nie chroni SELECT przed nieuprawnionym dostępem. Przed samodzielnym `pnpm test:integration` po czystej instalacji zbuduj zależności przez `pnpm --filter @pap/application... build` (pełne `pnpm build` również je buduje); CI wykonuje ten krok jawnie.
 - W pakietach i testach używaj wyłącznie danych syntetycznych. Nie dodawaj danych osobowych, faktur, tokenów, certyfikatów ani sekretów.
 
 Przed wdrażaniem nowych funkcji kieruj się [modelem zagrożeń i uprawnień](18-model-zagrozen-i-uprawnien.md), [zasadami architektury](16-zasady-architektoniczne.md) oraz roadmapą.

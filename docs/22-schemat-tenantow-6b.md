@@ -2,7 +2,7 @@
 
 **Data:** 2026-10-28. **Powiązanie:** [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6), PR #16 (polityka 6C), PR #17 (fundament 6A).
 
-To minimalny schemat PostgreSQL/Drizzle i testy integralności relacyjnej. Nie jest ukończoną izolacją danych użytkowników: SELECT bez autoryzacji nadal może odczytać cudze rekordy. OIDC, zaufany adapter portu autoryzacji, egzekwowanie w API/MCP, RLS i audyt pozostają w 6D. Issue #6 pozostaje otwarte.
+To minimalny schemat PostgreSQL/Drizzle i testy integralności relacyjnej. Nie jest ukończoną izolacją danych użytkowników: SELECT bez autoryzacji nadal może odczytać cudze rekordy. [6D-1](23-adapter-autoryzacji-6d1.md) dodaje zaufany adapter portu autoryzacji bez zmiany tego schematu; OIDC, egzekwowanie w API/MCP, RLS i audyt pozostają kolejnymi etapami 6D. Issue #6 pozostaje otwarte.
 
 ## Tabele i granice
 

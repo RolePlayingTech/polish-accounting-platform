@@ -27,7 +27,7 @@ export interface TenantAuthorizationFacts {
 }
 
 /**
- * Port for an authoritative server-side source (future database adapter).
+ * Port for an authoritative server-side source (implemented by infrastructure adapters).
  * Request selectors must never be treated as authorization facts by an implementation.
  */
 export interface TenantAuthorizationDataSource {
