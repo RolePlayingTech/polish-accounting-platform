@@ -34,6 +34,8 @@ Zakres [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/
 
 ## Etap 2 — MCP oraz kontrola działań
 
+**Aktualizacja #6 / 6D-R (2026-10-28):** [bezpieczny cykl dostępu](24-bezpieczny-cykl-dostepu-6dr.md) dostarcza do review cztery operacje lifecycle z blokadą członkostwa, trwałe cofnięcie dawnych grantów, atomowy audyt i addytywne guardy SQL. Zastępuje powyższy status „bezpieczny cykl reaktywacji pozostaje kolejnym etapem”. Test regresji PR #20 wymaga odmowy po reaktywacji. OIDC, autoryzacja administracyjna przy wykonaniu, ograniczona rola DB, RLS, audyt decyzji i izolacja API/MCP end-to-end nadal blokują pierwszy dostęp użytkowników. Issue #6 pozostaje otwarte; nie ma deploymentu.
+
 - [ ] `E2-01` Serwer MCP Streamable HTTP, discovery/auth, scope’y, logowanie i limity.
 - [ ] `E2-02` Narzędzia read-only `entities`, `documents`, `invoices`, `calendar`.
 - [ ] `E2-03` `prepare_*` / draft / idempotency; zatwierdzanie w UI z TTL i hashem.

@@ -1,4 +1,6 @@
 export { connectDatabase } from './client.js';
+export { PostgresAccessManagementStore } from './access-management.js';
+export { accessManagementEvent } from './schema.js';
 export { PostgresTenantAuthorizationDataSource } from './tenant-authorization.js';
 export {
   tenant,

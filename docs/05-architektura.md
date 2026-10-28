@@ -1,5 +1,7 @@
 # 05. Architektura techniczna
 
+**Aktualizacja 6D-R (2026-10-28):** [cykl dostępu](24-bezpieczny-cykl-dostepu-6dr.md) dodaje przypadki użycia i porty administracji w application oraz transakcje, blokady i audyt w db. Nie zmienia granic domain/application ani nie wprowadza publicznego API. Nieaktualne wzmianki o braku bezpiecznej reaktywacji/audytu poniżej opisują stan 6D-1; audyt decyzji, OIDC, ograniczona rola DB, RLS i izolacja end-to-end pozostają do wdrożenia.
+
 **Decyzja techniczna:** [ADR-002 — stos i wdrożenia](adr/002-stos-technologiczny-i-wdrozenia.md). **Wymagania obowiązkowe:** [16 — zasady architektoniczne](16-zasady-architektoniczne.md). **Układ katalogów:** [17 — repo i standardy](17-struktura-repo-i-standardy.md).
 
 ## Styl

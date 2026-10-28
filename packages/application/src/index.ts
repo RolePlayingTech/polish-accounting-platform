@@ -1,4 +1,5 @@
 export { getSystemStatus } from './system-status.js';
+export * from './access-management.js';
 export { authorizeCompanyAction, systemClock } from './tenant-authorization.js';
 export type {
   Clock,

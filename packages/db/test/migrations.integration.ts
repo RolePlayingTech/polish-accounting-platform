@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { applyMigrations } from '../src/migrations.js';
@@ -8,6 +12,7 @@ import { createTestDatabase, expectDatabaseError } from './integration-database.
 const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const expectedTables = [
   '__drizzle_migrations',
+  'access_management_event',
   'company_access_grant',
   'entity_profile_version',
   'legal_entity',
@@ -15,13 +20,13 @@ const expectedTables = [
   'tenant_membership',
 ];
 
-describe('Migracje PostgreSQL 6A → 6B', () => {
-  it('stosuje od zera dokładnie dwie migracje w kolejności i nie powiela obiektów', async () => {
+describe('Migracje PostgreSQL 6A → 6B → 6D-R', () => {
+  it('stosuje od zera dokładnie trzy migracje w kolejności i nie powiela obiektów', async () => {
     const database = await createTestDatabase();
     const { client: sql, db, dataSchema } = database;
     try {
       const migrations = readMigrationFiles({ migrationsFolder });
-      expect(migrations).toHaveLength(2);
+      expect(migrations).toHaveLength(3);
       expect(
         readFileSync(new URL('../drizzle/0000_technical-baseline.sql', import.meta.url), 'utf8'),
       ).toContain('SELECT 1;');
@@ -103,12 +108,58 @@ describe('Migracje PostgreSQL 6A → 6B', () => {
       ]);
       expect(await sql`SELECT 1 FROM pg_extension WHERE extname = 'btree_gist'`).toHaveLength(0);
 
-      // Usuwamy wyłącznie własną tabelę konfliktową; ponowienie naprawdę stosuje oba pliki.
+      // Usuwamy wyłącznie własną tabelę konfliktową; ponowienie stosuje cały łańcuch.
       await sql`DROP TABLE tenant`;
       await applyMigrations(db, dataSchema);
-      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(2);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(3);
     } finally {
       await database.cleanup();
+    }
+  }, 30_000);
+
+  it('addytywne 0002 zachowuje dane i hashe 0000/0001; reaktywacja starego revoked nie wznawia grantu', async () => {
+    const database = await createTestDatabase();
+    const prefix = join(tmpdir(), 'pap-6d-r-');
+    const folder = await mkdtemp(prefix);
+    const { client: sql, db, dataSchema } = database;
+    try {
+      await mkdir(join(folder, 'meta'));
+      const journal = JSON.parse(
+        readFileSync(join(migrationsFolder, 'meta', '_journal.json'), 'utf8'),
+      );
+      await writeFile(
+        join(folder, 'meta', '_journal.json'),
+        JSON.stringify({ ...journal, entries: journal.entries.slice(0, 2) }),
+      );
+      for (const name of ['0000_technical-baseline.sql', '0001_tenant-schema.sql'])
+        await writeFile(join(folder, name), readFileSync(join(migrationsFolder, name)));
+      await migrate(db, { migrationsFolder: folder, migrationsSchema: dataSchema });
+      const registry = await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations ORDER BY id`;
+      const tenant = '00000000-0000-4000-8000-000000000001';
+      const user = '00000000-0000-4000-8000-000000000002';
+      const entity = '00000000-0000-4000-8000-000000000003';
+      await sql`INSERT INTO tenant (id, name) VALUES (${tenant}, 'Dane syntetyczne sprzed 0002')`;
+      await sql`INSERT INTO legal_entity (id, tenant_id, display_name) VALUES (${entity}, ${tenant}, 'Firma syntetyczna')`;
+      await sql`INSERT INTO tenant_membership (tenant_id, user_id, role, status, valid_from) VALUES (${tenant}, ${user}, 'tenant_member', 'revoked', '2026-01-01')`;
+      await sql`INSERT INTO company_access_grant (grant_id, tenant_id, user_id, legal_entity_id, action, valid_from) VALUES ('00000000-0000-4000-8000-000000000004', ${tenant}, ${user}, ${entity}, 'read', '2026-01-01')`;
+      await applyMigrations(db, dataSchema);
+      expect(
+        Array.from(
+          await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations ORDER BY id`,
+        ).slice(0, 2),
+      ).toEqual(Array.from(registry));
+      expect(await sql`SELECT name FROM tenant WHERE id = ${tenant}`).toMatchObject([
+        { name: 'Dane syntetyczne sprzed 0002' },
+      ]);
+      expect(await sql`SELECT * FROM company_access_grant`).toHaveLength(1);
+      await sql`UPDATE tenant_membership SET status = 'active' WHERE tenant_id = ${tenant} AND user_id = ${user}`;
+      expect(
+        (await sql`SELECT revoked_at FROM company_access_grant`)[0]?.revoked_at,
+      ).not.toBeNull();
+    } finally {
+      await database.cleanup();
+      // Wyłącznie losowy katalog utworzony przez ten test, z kontrolą przed rekurencją.
+      if (folder.startsWith(prefix)) await rm(folder, { recursive: true });
     }
   }, 30_000);
 });

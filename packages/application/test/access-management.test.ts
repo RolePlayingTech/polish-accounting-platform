@@ -1,0 +1,115 @@
+import { describe, expect, it, vi } from 'vitest';
+import { legalEntityId, tenantId, userId } from '@pap/domain';
+import { manageAccess, type AccessManagementCommand } from '../src/access-management.js';
+
+const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
+const command: AccessManagementCommand = {
+  kind: 'revoke_membership',
+  operationId: id(1),
+  tenantId: tenantId(id(2)),
+  userId: userId(id(3)),
+};
+const actor = { userId: userId(id(4)) };
+function setup() {
+  return {
+    store: { execute: vi.fn().mockResolvedValue({ ok: true }) },
+    actors: { getVerifiedActor: vi.fn().mockResolvedValue(actor) },
+    authorizer: { authorize: vi.fn().mockResolvedValue(true) },
+  };
+}
+describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
+  it.each(['actors', 'authorizer'] as const)('bez %s odmawia przed mutacją', async (key) => {
+    const deps = setup();
+    expect(await manageAccess(command, { ...deps, [key]: undefined })).toEqual({
+      ok: false,
+      reason: 'access_management_denied',
+    });
+    expect(deps.store.execute).not.toHaveBeenCalled();
+  });
+  it('brak zweryfikowanego aktora blokuje mutację', async () => {
+    const deps = setup();
+    deps.actors.getVerifiedActor.mockResolvedValue(null);
+    expect(await manageAccess(command, deps)).toEqual({
+      ok: false,
+      reason: 'access_management_denied',
+    });
+    expect(deps.authorizer.authorize).not.toHaveBeenCalled();
+    expect(deps.store.execute).not.toHaveBeenCalled();
+  });
+  it.each([false, undefined, 'true'])(
+    'tylko jawne true autoryzatora pozwala; wynik %s odmawia',
+    async (decision) => {
+      const deps = setup();
+      deps.authorizer.authorize.mockResolvedValue(decision);
+      expect(await manageAccess(command, deps)).toEqual({
+        ok: false,
+        reason: 'access_management_denied',
+      });
+      expect(deps.store.execute).not.toHaveBeenCalled();
+    },
+  );
+  it('przekazuje konkretny zakres i serwerowego aktora do autoryzatora oraz portu', async () => {
+    const deps = setup();
+    await manageAccess(command, deps);
+    expect(deps.authorizer.authorize).toHaveBeenCalledWith(actor, command);
+    expect(deps.store.execute).toHaveBeenCalledWith(command, actor);
+  });
+  it('nie ufa actorId/roli w komendzie; kopia jest zamrożona przed await', async () => {
+    const deps = setup();
+    const malicious = { ...command, actorId: id(99), role: 'tenant_owner' };
+    deps.authorizer.authorize.mockImplementation(async (_actor, scoped) => {
+      expect(Object.isFrozen(scoped)).toBe(true);
+      malicious.tenantId = tenantId(id(99));
+      return true;
+    });
+    await manageAccess(malicious, deps);
+    expect(deps.store.execute).toHaveBeenCalledWith(command, actor);
+  });
+  it.each(['actors', 'authorizer', 'store'] as const)(
+    'awaria %s jest fail-closed bez surowego wyjątku',
+    async (key) => {
+      const deps = setup();
+      const fn =
+        key === 'actors'
+          ? deps.actors.getVerifiedActor
+          : key === 'authorizer'
+            ? deps.authorizer.authorize
+            : deps.store.execute;
+      fn.mockRejectedValue(new Error('SQL token synthetic-secret'));
+      expect(await manageAccess(command, deps)).toEqual({
+        ok: false,
+        reason: 'access_management_unavailable',
+      });
+    },
+  );
+  it.each([
+    { ...command, operationId: 'błędny' },
+    { ...command, kind: 'unknown' },
+    {
+      ...command,
+      kind: 'grant',
+      grantId: id(5),
+      legalEntityId: legalEntityId(id(6)),
+      action: 'tenant_admin',
+      validFrom: null,
+      validUntil: null,
+    },
+    { ...command, kind: 'reactivate_membership', validUntil: 'nie data' },
+    {
+      ...command,
+      kind: 'grant',
+      grantId: id(5),
+      legalEntityId: legalEntityId(id(6)),
+      action: 'read',
+      validFrom: '2026-02-01',
+      validUntil: '2026-01-01',
+    },
+  ])('odrzuca niepoprawną komendę %# przed autoryzacją', async (input) => {
+    const deps = setup();
+    expect(await manageAccess(input as AccessManagementCommand, deps)).toEqual({
+      ok: false,
+      reason: 'invalid_command',
+    });
+    expect(deps.store.execute).not.toHaveBeenCalled();
+  });
+});

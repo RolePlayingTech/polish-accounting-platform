@@ -284,17 +284,13 @@ describe('PostgreSQL → port autoryzacji → wspólna polityka (dane syntetyczn
     expect(await authorize()).toEqual(allow);
   });
 
-  it('dokumentuje ryzyko: sama reaktywacja członkostwa przywraca historyczny grant', async () => {
+  it('regresja PR #20: także SQL active → revoked → active nie przywraca historycznego grantu', async () => {
     expect(await authorize()).toEqual(allow);
     await updateMember({ status: 'revoked' });
     expect(await authorize()).toEqual(denyMembership);
     await updateMember({ status: 'active', validFrom: now });
-    // Oczekiwane według obecnej polityki, ale blokuje obsługę użytkowników.
-    // Adapter nie zmienia po cichu semantyki; wymagany mechanizm opisano w docs/23.
-    expect(await authorize()).toEqual(allow);
-    expect((await source.getFacts(query)).grants[0]?.validFrom).toEqual(from);
-    // Trwałe cofnięcie grantu zapobiega jego odnowieniu po reaktywacji.
-    await updateGrant({ revokedAt: now });
+    // Guard migracji 0002 trwale odwołuje grant przy zmianie statusu.
     expect(await authorize()).toEqual(denyGrant);
+    expect((await source.getFacts(query)).grants[0]?.validFrom).toEqual(from);
   });
 });

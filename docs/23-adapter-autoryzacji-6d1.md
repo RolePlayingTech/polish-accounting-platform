@@ -19,7 +19,9 @@ Adapter używa wyłącznie `tenant_membership` i `company_access_grant` z [6B](2
 
 Nie potrzeba migracji ani zmiany polityki. Migracje `0000`/`0001`, schemat 6B i ich metadane pozostają bez zmian. Wycofanie adaptera oznacza wycofanie kodu/kompozycji, bez usuwania danych.
 
-## Ryzyko reaktywacji historycznych grantów — blokada obsługi użytkowników
+## Historyczne ryzyko reaktywacji i naprawa 6D-R
+
+**Aktualizacja 6D-R (2026-10-28):** [bezpieczny cykl dostępu](24-bezpieczny-cykl-dostepu-6dr.md) implementuje poniższy wariant transakcyjny, atomowy audyt mutacji i guardy migracji 0002. Regresja PR #20 wymaga teraz odmowy po reaktywacji, także przez zwykły SQL. Poniższy opis ryzyka i propozycji dokumentuje stan samego 6D-1 sprzed naprawy. Ograniczona rola DB, wiarygodny aktor/autoryzator oraz TOCTOU operacji na danych pozostają jawnymi blockerami pierwszego dostępu. Nie ma jeszcze logowania, RLS ani audytu decyzji; Issue #6 pozostaje otwarte.
 
 **Ryzyko jest potwierdzone testem regresyjnym na PostgreSQL:** aktywne członkostwo + nieodwołany grant A1 → zezwolenie; zmiana statusu członkostwa na `revoked` → odmowa; powrót do `active` (nawet z nowym `validFrom`) → ponowne zezwolenie z tego samego historycznego grantu. Grant ma FK do pary tenant/użytkownik, nie do konkretnego okresu członkostwa. Polityka sprawdza niezależnie obie ważności. Nie wymaga początku grantu późniejszego od początku członkostwa. Adapter celowo nie zmienia tego kontraktu po cichu.
 

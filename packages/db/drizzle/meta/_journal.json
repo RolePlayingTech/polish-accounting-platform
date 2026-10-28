@@ -15,6 +15,13 @@
       "when": 1793168092791,
       "tag": "0001_tenant-schema",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1793184165862,
+      "tag": "0002_access-lifecycle",
+      "breakpoints": true
     }
   ]
 }

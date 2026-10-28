@@ -11,13 +11,14 @@ describe('Kontrakt plików migracji', () => {
     const baseline = readJson('0000_snapshot.json');
     const schema = readJson('0001_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(2);
+    expect(migrations).toHaveLength(3);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
     expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual([
       '0000_technical-baseline',
       '0001_tenant-schema',
+      '0002_access-lifecycle',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -26,6 +27,9 @@ describe('Kontrakt plików migracji', () => {
       'public.tenant',
       'public.tenant_membership',
     ]);
+    const lifecycle = readJson('0002_snapshot.json');
+    expect(lifecycle.prevId).toBe(schema.id);
+    expect(lifecycle.tables['public.access_management_event']).toBeDefined();
   });
 
   it('nie kieruje SQL do public z pominięciem namespace testowego i zawiera jawny EXCLUDE', () => {

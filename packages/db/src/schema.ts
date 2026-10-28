@@ -3,6 +3,7 @@ import {
   check,
   foreignKey,
   index,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -13,6 +14,35 @@ import {
 
 // Chwile czasu, z precyzją Date (milisekundy); okresy mają postać [od, do).
 const instant = (name: string) => timestamp(name, { withTimezone: true, precision: 3 });
+
+export const accessManagementEvent = pgTable(
+  'access_management_event',
+  {
+    operationId: uuid('operation_id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    userId: uuid('user_id').notNull(),
+    actorId: uuid('actor_id').notNull(),
+    kind: text('kind', {
+      enum: ['revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant'],
+    }).notNull(),
+    grantId: uuid('grant_id'),
+    occurredAt: instant('occurred_at').notNull(),
+    requestKey: text('request_key').notNull(),
+    // Wyłącznie jawne pola stanu; bez HTTP, tokenów i dokumentów.
+    stateChange: jsonb('state_change')
+      .$type<{ before: string; after: string; revokedGrants: number }>()
+      .notNull(),
+    receipt: jsonb('receipt').$type<import('@pap/application').AccessManagementReceipt>().notNull(),
+  },
+  (table) => [
+    index('access_management_event_target_idx').on(table.tenantId, table.userId, table.occurredAt),
+    check(
+      'access_management_event_kind_check',
+      sql`${table.kind} IN ('revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant')`,
+    ),
+    check('access_management_event_time_check', sql`isfinite(${table.occurredAt})`),
+  ],
+);
 
 export const tenant = pgTable(
   'tenant',
