@@ -25,8 +25,8 @@ Aby możliwie najszybciej udostępnić właścicielowi działającą wersję apl
   - **Brak rzeczywistych danych księgowych:** wyłącznie syntetyczny status techniczny szkieletu.
 - **Co już pozwala to zrobić dzisiaj (**[Potwierdzone w repo]**):**
   - `@pap/web` i `@pap/api` budują się przez `pnpm build` i działają produkcyjnie bez wymagania połączenia z bazą danych podczas startu.
-  - W `apps/web/lib/read-system-status.ts` przy `NODE_ENV=production` wystarczy podać `API_BASE_URL=https://xn--ksigowo-c5a1nq1a.roleplayingtech.com` (z wyłączeniem `auth_basic` dla wewnętrznego adresu loopback `127.0.0.1` na ścieżce `/api/v1/system/status`) albo w drobnym PR dopuścić loopback `http://127.0.0.1:4100`.
-  - Do podetapu A.2 (uruchomienie migracji Drizzle na `pap_staging`) wymagany jest jeden wąski PR rozszerzający `packages/db/src/database-config.ts` o środowisko `PAP_DATABASE_ENV=staging`.
+  - Komunikacja SSR pomiędzy `@pap/web` (`127.0.0.1:3100`) a `@pap/api` (`127.0.0.1:4100`) wymaga jednego wąskiego, przetestowanego PR w `apps/web/lib/read-system-status.ts`, który przy `NODE_ENV=production` dopuści wyłącznie dokładny lokalny adres loopback `http://127.0.0.1:4100` (z `redirect: 'error'`, bez `username`/`password` i z testami `allow`/`deny` odrzucającymi inne hosty `http://`). Dzięki temu **nie otwieramy żadnego wyjątku od Basic Auth w Nginx dla `/api/v1/system/status`**.
+  - Do podetapu A.2 (uruchomienie pełnego łańcucha migracji Drizzle `0000–0002` na `pap_staging`) wymagany jest wąski PR rozszerzający `packages/db/src/database-config.ts` o środowisko `PAP_DATABASE_ENV=staging`.
 
 ### Etap B — Funkcjonalny staging (dopiero po zamknięciu bramek bezpieczeństwa Issue #6)
 
@@ -43,8 +43,9 @@ Aby możliwie najszybciej udostępnić właścicielowi działającą wersję apl
 | Cecha | Etap A: Prywatny staging techniczny | Etap B: Funkcjonalny staging (syntetyczny) | Przyszła Produkcja |
 | --- | --- | --- | --- |
 | **Odbiorcy** | Wyłącznie właściciel projektu | Właściciel / testerzy wewnętrzni | Rzeczywiste firmy i księgowi |
-| **Ochrona brzegu** | Bramka Nginx Basic Auth / IP allowlist | Bramka Nginx + logowanie OIDC z MFA | Publiczny brzeg z WAF/rate-limit + OIDC z MFA |
-| **Baza danych** | Brak w API (w A.2: tylko techniczna migracja `0000`/`0001` na `pap_staging`) | `pap_staging` z rolą `NOBYPASSRLS`, RLS, `SET LOCAL` i audytem | Dedykowany serwer DB w UE/EOG z szyfrowaniem, PITR i KMS |
+| **Ochrona brzegu** | Bramka Nginx Basic Auth (cały vhost bez wyjątków) / IP allowlist | Bramka Nginx + logowanie OIDC z MFA | Publiczny brzeg z WAF/rate-limit + OIDC z MFA |
+| **Baza danych** | Brak w API (w A.2: pełny łańcuch migracji `0000–0002` na `pap_staging`) | `pap_staging` z rolą `NOBYPASSRLS`, RLS, `SET LOCAL` i audytem | Dedykowany serwer DB w UE/EOG z szyfrowaniem, PITR i KMS |
+| **Kopie zapasowe (Backup)** | Lokalny `pg_dump` na drugim wolumenie hosta + test restore (wystarczający wyłącznie dla danych syntetycznych) | Lokalny `pg_dump` + szyfrowany backup off-host (przed utrzymywaniem trwałych środowisk testowych) | Szyfrowany backup off-host (append-only w innej lokalizacji UE/EOG) + PITR + cykliczny restore drill |
 | **Dozwolone dane** | Wyłącznie stałe metadane statusu modułów | **Wyłącznie dane syntetyczne** (fikcyjne NIP/firmy/dokumenty) | Dane rzeczywiste (po przeglądzie prawnym, RODO i eksperckim) |
 | **Połączenia z MF / KSeF** | Brak | Brak (lub wyłącznie testowe stuby/sandbox) | Tylko jawnie zatwierdzone adaptery po odbiorze profilu |
 
@@ -77,27 +78,41 @@ Na wzór działającego na serwerze `/opt/durnoty-runtime` (**[Potwierdzone na s
    ```bash
    sudo useradd --system --user-group --home-dir /var/lib/pap-staging --create-home --shell /usr/sbin/nologin pap
    ```
-2. Utworzyć strukturę katalogów:
+2. Utworzyć strukturę katalogów (z wyraźnym oddzieleniem katalogów sekretów/backupów `0700` od katalogu ACME webroot `0750 root:www-data`, do którego proces roboczy Nginx `www-data` musi mieć prawo wejścia i odczytu `r-x`, ale **zero prawa zapisu**):
    ```bash
    sudo install -d -m 0755 -o root -g root /opt/pap-runtime
    sudo install -d -m 0750 -o root -g pap /var/www/pap-staging /var/www/pap-staging/releases /etc/pap
-   sudo install -d -m 0700 -o root -g root /var/lib/pap-acme
-   sudo install -d -m 0700 -o root -g root /mnt/HC_Volume_<REDACTED>/pap-staging/backups
+   sudo install -d -m 0700 -o root -g root /mnt/HC_Volume_<REDACTED>/pap-staging /mnt/HC_Volume_<REDACTED>/pap-staging/backups
+   sudo install -d -m 0750 -o root -g www-data /var/lib/pap-acme /var/lib/pap-acme/.well-known /var/lib/pap-acme/.well-known/acme-challenge
    ```
 3. Zainstalować oficjalne wydanie Node.js `v24.22.1` (`linux-x64`) oraz `pnpm@12.15.0` wyłącznie w `/opt/pap-runtime` (ze sprawdzeniem oficjalnej sumy `SHASUMS256.txt`).
 
-### Krok 3: Wydanie certyfikatu TLS (tryb `webroot`, bez naruszania innych vhostów)
+### Krok 3: Wydanie certyfikatu TLS (tryb `webroot`, test challenge i weryfikacja odnowień)
 
 Aby uniknąć problemów z wtyczką `--nginx` Certbota (która obecnie zawodzi przy globalnym `certbot renew` z powodu historycznych domen `app.mumro.io` i `roleplayingtech.com-0001` **[Potwierdzone na serwerze]**):
 1. Dodać vhost HTTP (`:80`) dla `xn--ksigowo-c5a1nq1a.roleplayingtech.com` (oraz opcjonalnie `ksiegowosc.roleplayingtech.com`) obsługujący `/.well-known/acme-challenge/` z katalogu `/var/lib/pap-acme` (identycznie jak działający vhost `durnoty.pl`).
 2. Przetestować konfigurację przez `sudo nginx -t` i przeładować bez przerywania połączeń: `sudo systemctl reload nginx`.
-3. Wydać certyfikat przez:
+3. **Przeprowadzić obowiązkowy test odczytu pliku challenge przez Nginx (`www-data`) przed uruchomieniem Certbota:**
+   ```bash
+   sudo sh -c 'printf "acme-challenge-read-ok\n" > /var/lib/pap-acme/.well-known/acme-challenge/healthcheck.txt'
+   sudo chown root:www-data /var/lib/pap-acme/.well-known/acme-challenge/healthcheck.txt
+   sudo chmod 0640 /var/lib/pap-acme/.well-known/acme-challenge/healthcheck.txt
+   curl --fail --silent --show-error http://xn--ksigowo-c5a1nq1a.roleplayingtech.com/.well-known/acme-challenge/healthcheck.txt
+   sudo rm -f /var/lib/pap-acme/.well-known/acme-challenge/healthcheck.txt
+   ```
+4. Wydać certyfikat z jawnym hookiem przeładowania Nginx:
    ```bash
    sudo certbot certonly --webroot -w /var/lib/pap-acme \
+     --cert-name xn--ksigowo-c5a1nq1a.roleplayingtech.com \
      -d xn--ksigowo-c5a1nq1a.roleplayingtech.com \
-     -d ksiegowosc.roleplayingtech.com
+     -d ksiegowosc.roleplayingtech.com \
+     --deploy-hook "systemctl reload nginx"
    ```
-   *(Dzięki `authenticator = webroot` odnowienie tego certyfikatu nie zależy od parsera wszystkich plików Nginx).*
+5. **Zweryfikować proces odnawiania tego konkretnego certyfikatu (`--dry-run`) i skonfigurować monitoring ważności:**
+   ```bash
+   sudo certbot renew --cert-name xn--ksigowo-c5a1nq1a.roleplayingtech.com --dry-run
+   ```
+   *Ważne:* samo użycie `--webroot` dla nowej domeny **nie naprawia globalnego stanu `failed` jednostki `certbot.service`**, dopóki w `/etc/letsencrypt/renewal/` znajdują się nieaktualne pliki `app.mumro.io.conf` i `roleplayingtech.com-0001.conf` należące do innych projektów (których nie modyfikujemy bez osobnej zgody właściciela). Dlatego niezależnie od `certbot.timer` należy monitorować rzeczywistą datę wygaśnięcia certyfikatu prezentowanego na porcie `443` (`openssl s_client ... -checkend $((21 * 86400))`).
 
 ### Krok 4: Konfiguracja jednostek `systemd` i reverse proxy Nginx z bramką autoryzacji
 
@@ -187,8 +202,8 @@ Zgodnie z wymaganiem w [Issue #19](https://github.com/RolePlayingTech/polish-acc
 | Zadanie | Typ pracy | Szacowany czas realizacji (po zgodzie właściciela) |
 | --- | --- | --- |
 | 1. Dodanie rekordu DNS `A` (i opcjonalnie `AAAA`) dla `xn--ksigowo-c5a1nq1a.roleplayingtech.com` | Konfiguracja DNS (właściciel) | ~5–10 min (+ propagacja TTL 600s) |
-| 2. Wąski PR konfiguracyjny w repozytorium (obsługa loopback HTTP w `readPublicSystemStatus` + profil `PAP_DATABASE_ENV=staging` w `@pap/db`) | Kod + testy jednostkowe + PR | ~1–2 godz. |
-| 3. Przygotowanie `/opt/pap-runtime` (Node 24.22.1 + pnpm 12.15.0), konta `pap`, katalogów `/var/www/pap-staging` i jednostek `systemd` | Konfiguracja serwera Hetzner | ~30–45 min |
-| 4. Wydanie certyfikatu Let's Encrypt (`webroot`) i konfiguracja vhosta Nginx z bramką Basic Auth | Konfiguracja Nginx / TLS | ~20–30 min |
-| 5. Opcjonalny podetap A.2: uruchomienie `postgres:18.6-alpine` na `127.0.0.1:5432`, inicjalizacja ról `pap_staging_migrator`/`pap_staging_app`, migracje `0000`/`0001` i test `pap-staging-backup.service` | Konfiguracja DB + Restore Drill | ~45–60 min |
+| 2. Wąski PR konfiguracyjny w repozytorium (wyjątek wyłącznie dla `http://127.0.0.1:4100` z testami SSRF/allow/deny w `readPublicSystemStatus` + profil `PAP_DATABASE_ENV=staging` w `@pap/db`) | Kod + testy jednostkowe + PR | ~1–2 godz. |
+| 3. Przygotowanie `/opt/pap-runtime` (Node 24.22.1 + pnpm 12.15.0), konta `pap`, katalogów `/var/www/pap-staging` i jednostek `systemd` z limitami `MemoryMax`/`CPUQuota` | Konfiguracja serwera Hetzner | ~30–45 min |
+| 4. Wydanie certyfikatu Let's Encrypt (`webroot` z testem challenge i `--dry-run`) i konfiguracja vhosta Nginx z bramką Basic Auth | Konfiguracja Nginx / TLS | ~20–30 min |
+| 5. Opcjonalny podetap A.2: uruchomienie `postgres:18.6-alpine` na `127.0.0.1:5432`, inicjalizacja ról `pap_staging_migrator`/`pap_staging_app`, pełny łańcuch migracji `0000–0002` i test `pap-staging-backup.service` | Konfiguracja DB + Restore Drill | ~45–60 min |
 | **Łącznie do uruchomienia Etapu A:** | — | **ok. 2,5 – 4 godzin pracy inżynieryjnej** |

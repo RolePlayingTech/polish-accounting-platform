@@ -10,14 +10,15 @@
 
 Na podstawie odczytowego audytu serwera `hetz-1` (**[Potwierdzone na serwerze]**) architektura stagingu musi respektować następujące warunki brzegowe:
 
-1. **Ograniczona pamięć RAM (`3.7 GiB` łącznie, `~2.3 GiB` dostępne) i 2 vCPU:**
-   - Budowanie aplikacji (`pnpm build`, kompilacja TypeScript i bundlowanie Next.js) **nie może odbywać się na serwerze**, ponieważ szczytowe zużycie pamięci podczas `next build` mogłoby wypchnąć inne działające usługi do pliku wymiany (`swap`) lub wywołać `OOM Killer`.
-   - Serwer otrzymuje wyłącznie gotowy, zbudowany i przetestowany w GitHub Actions artefakt wydania.
+1. **Ograniczona pamięć RAM (`3.7 GiB` łącznie, `~2.3 GiB` dostępne), `1.7 GiB` używanego swapu i 2 vCPU:**
+   - Host zużywa już `1.7 GiB` pamięci swap na wolumenie sieciowym (**[Potwierdzone na serwerze]**). Budowanie aplikacji (`pnpm build`, kompilacja TypeScript i bundlowanie Next.js) **nie może odbywać się na serwerze**, ponieważ szczytowe zużycie pamięci podczas `next build` mogłoby wypchnąć inne działające usługi do pliku wymiany (`swap`) lub wywołać `OOM Killer`.
+   - Serwer otrzymuje wyłącznie gotowy, zbudowany i przetestowany w GitHub Actions artefakt wydania, a każda usługa PAP działa pod twardymi limitami `MemoryHigh`/`MemoryMax`, `CPUQuota` oraz `IOWeight`.
 2. **Współistnienie z 9 aktywnymi usługami i 14 vhostami Nginx:**
    - Globalne binarium `/usr/bin/node` (`v20.20.2`) jest wykorzystywane przez `mumro-articles`, `swiadek-dziejow-articles`, `historia-technologii` oraz `mfc-backend` — **nie wolno go aktualizować globalnie**.
    - Wszystkie nowe procesy i bazy muszą działać pod dedykowanymi nazwami, na nieużywanych portach loopback i w wydzielonych katalogach.
 3. **Brak aktywnego firewalla pakietowego na wejściu hosta (`ufw inactive`, `INPUT ACCEPT`):**
-   - Żaden proces aplikacji ani bazy danych nie może nasłuchiwać na `0.0.0.0` lub `[::]`. Wszystkie gniazda wewnętrzne są bindowane wyłącznie do `127.0.0.1`.
+   - Cztery istniejące procesy innych projektów (`3001`, `3002`, `3003`, `5174`) nasłuchują na `0.0.0.0`/`*` (**[Potwierdzone na serwerze]**), co wymaga pilnego sprawdzenia statusu zewnętrznego **Hetzner Cloud Firewall** przez właściciela (**[Do sprawdzenia]**), bez automatycznej ingerencji w te procesy.
+   - Żaden proces aplikacji ani bazy danych Polish Accounting Platform nie może nasłuchiwać na `0.0.0.0` lub `[::]`. Wszystkie gniazda wewnętrzne są bindowane wyłącznie do `127.0.0.1`.
    - Jedynym punktem wejścia z sieci publicznej jest istniejący serwer Nginx na porcie `443` (HTTPS).
 
 ---
@@ -28,7 +29,7 @@ Zgodnie z wymaganiami zadania nie zakładamy z góry wyższości kontenerów. Po
 
 | Kryterium | Wariant 1: Pełny Docker Compose (Web + API + PG 18 w kontenerach) | Wariant 2: Czysty `systemd` (Web + API + pakiet PGDG `postgresql-18` na hoście) | Wariant 3 (REKOMENDOWANY): `systemd` dla Web/API + izolowany kontener `postgres:18.6-alpine` (lub PGDG `postgresql-18`) |
 | --- | --- | --- | --- |
-| **Zużycie RAM w spoczynku** | Wyższe (`~450–650 MiB` przez narzut osobnych runtime w kontenerach i procesów `containerd-shim`) | Najniższe (`~220–320 MiB` łącznie) | Niskie (`~240–350 MiB` łącznie: Web `~90 MiB`, API `~70 MiB`, `postgres:18.6-alpine` `~50 MiB`) |
+| **Szacowane zużycie RAM w spoczynku (`[Założenie]` — hipoteza do weryfikacji pomiarami RSS)** | Wyższe (`~450–650 MiB` przez narzut osobnych runtime w kontenerach i procesów `containerd-shim`) | Najniższe (`~220–320 MiB` łącznie, przed obciążeniem) | Niskie (`~240–350 MiB` w spoczynku / `~350–500 MiB` pod umiarkowanym ruchem; ograniczane twardymi limitami `MemoryMax`: Web `384 MiB`, API `256 MiB`, PG `384 MiB`) |
 | **Spójność z istniejącym hostem** | Częściowa (`shorts-api` i `reels-api` są w Dockerze, ale aplikacje webowe Node są w `systemd`) | Wysoka — powiela sprawdzony na tym serwerze wzorzec `durnoty.service` (`/opt/durnoty-runtime` + `systemd` sandboxing) | **Najwyższa** — Web/API używają wzorca `durnoty.service` z Node 24 w `/opt/pap-runtime`, a baza nie wymaga modyfikacji systemowych repozytoriów `apt` |
 | **Dostępność PostgreSQL 18 na Ubuntu 24.04** | Natychmiastowa — oficjalny obraz `postgres:18.6-alpine` (identyczny SHA256 jak w `.github/workflows/ci.yml`) | Wymaga dodania zewnętrznego klucza GPG i repozytorium `apt.postgresql.org` (PGDG) do systemu hosta, gdyż Ubuntu 24.04 posiada tylko `postgresql-16` | Natychmiastowa dzięki `postgres:18.6-alpine` (100% zgodności z CI, w tym `btree_gist`), bez dodawania repozytoriów `apt` na hoście |
 | **Bezpieczeństwo sieciowe przy `ufw inactive`** | Wymaga szczególnej ostrożności (błędne `-p 3100:3100` zamiast `127.0.0.1:3100:3100` otwiera port na świat przez łańcuch `DOCKER`) | Procesy Node z `HOST=127.0.0.1` i `systemd` (`PrivateTmp`, `ProtectSystem=strict`, `NoNewPrivileges`) nigdy nie modyfikują `iptables` | Web i API działają bez uprawnień root i bez `iptables`, a jedyny kontener DB ma sztywny binding `127.0.0.1:5432:5432` chroniony regułą `nftables raw PREROUTING` (`iifname != "lo" drop`) |
@@ -88,12 +89,14 @@ flowchart TD
    - W **Etapie A (prywatny staging techniczny)** Nginx weryfikuje uwierzytelnienie brzegowe właściciela (`auth_basic` z plikiem `/etc/nginx/pap-staging.htpasswd` i/lub allowlistą IP) **zanim** przekaże jakiekolwiek żądanie do procesów Node.js.
    - Ścieżki `/api/v1/*` oraz `/health` (lub `/api/health`) są kierowane do `http://127.0.0.1:4100`.
    - Pozostałe ścieżki (`/`, `/app`, `/settings`, `/platform`, `/_next/*`) są kierowane do `http://127.0.0.1:3100`.
-2. **Komunikacja Server-Side Rendering (Web -> API):**
-   - Proces Next.js (`127.0.0.1:3100`) odpytuje API o status systemu.
+2. **Komunikacja Server-Side Rendering (Web -> API) — wyłącznie przez jawny loopback bez wyjątków w Basic Auth:**
+   - Proces Next.js (`127.0.0.1:3100`) odpytuje API o status systemu po stronie serwera.
    - Obecnie w `apps/web/lib/read-system-status.ts` (**[Potwierdzone w repo]**) przy `NODE_ENV=production` wymagany jest protokół `https:` dla `API_BASE_URL`.
-   - Rekomendujemy dwie opcje (do decyzji w małym PR konfiguracyjnym):
-     - **Opcja 1 (zalecana technicznie):** dopuścić w `read-system-status.ts` jawny adres loopback `http://127.0.0.1:<port>` również przy `NODE_ENV=production` (komunikacja wewnątrz jądra Linux bez wychodzenia na interfejs sieciowy i bez zależności od brzegowego Basic Auth na Nginx), odrzucając jednocześnie każde zdalne `http://`.
-     - **Opcja 2 (bez zmian w `read-system-status.ts`):** ustawić `API_BASE_URL=https://xn--ksigowo-c5a1nq1a.roleplayingtech.com` i wyłączyć `auth_basic` w Nginx wyłącznie dla żądań pochodzących z `127.0.0.1` (`satisfy any; allow 127.0.0.1; allow ::1; deny all; auth_basic ...`) do ścieżki `/api/v1/system/status`.
+   - **Nie wprowadzamy w Nginx żadnych wyjątków wyłączających `auth_basic` dla `/api/v1/system/status`** — cały vhost w Etapie A musi pozostać jednolicie chroniony przed nieautoryzowanym dostępem z zewnątrz.
+   - Zamiast tego w osobnym, wąskim PR przed wdrożeniem wprowadzamy w `apps/web/lib/read-system-status.ts` ściśle ograniczony, przetestowany wyjątek dla komunikacji serwerowej przy `NODE_ENV=production`:
+     - Akceptowany jest jawny adres loopback `http://127.0.0.1:4100` (lub zwalidowany origin loopback `http://127.0.0.1:<port>` bez `username`/`password`, bez ścieżki bazowej, query i fragmentu), przy jednoczesnym ustawieniu `redirect: 'error'` w `fetch` (ochrona przed SSRF przez przekierowanie HTTP).
+     - Nadal bezwzględnie odrzucane są wszystkie inne niezaszyfrowane adresy `http://` przy `NODE_ENV=production` (w tym zewnętrzne hosty, nazwy DNS mogące podlegać DNS rebindingowi, `0.0.0.0`, adresy sieci prywatnych `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` oraz adresy link-local/metadata `169.254.169.254`).
+     - Zmiana musi posiadać testy jednostkowe `allow`/`deny` weryfikujące protokół, host, port, odrzucanie poświadczeń w URL oraz blokadę przekierowań.
 3. **Przyszłe MCP (`@pap/mcp`):**
    - W **Etapie A** serwer MCP (`apps/mcp`) **nie jest uruchamiany na serwerze**, ponieważ w repozytorium obsługuje wyłącznie transport `STDIO` (**[Potwierdzone w repo]**).
    - Po implementacji `Issue #8` (`E2-01`: Streamable HTTP + OAuth resource server) otrzyma osobny proces `pap-staging-mcp.service` na `127.0.0.1:4110`, komunikujący się wyłącznie z API (`127.0.0.1:4100`), nigdy bezpośrednio z bazą PostgreSQL (zgodnie z [ADR-001](adr/001-rdzen-i-mcp.md)).
@@ -115,18 +118,19 @@ flowchart TD
 | `/var/lib/pap-staging/` | `/dev/sda1` (`/`) | `pap:pap` (`0750`) | Katalog roboczy zapisu (np. cache Next.js `.next/cache`), jedyny katalog w `ReadWritePaths=` dla Web |
 | `/etc/pap/staging-web.env` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Zmienne środowiskowe dla procesu Web |
 | `/etc/pap/staging-api.env` | `/dev/sda1` (`/`) | `root:pap` (`0640`) | Zmienne środowiskowe dla procesu API (rola runtime DB) |
-| `/etc/pap/staging-migrate.env` | `/dev/sda1` (`/`) | `root:root` (`0600`) | Poświadczenia konta migracyjnego DB (niedostępne dla użytkownika `pap`!) |
+| `/etc/pap/staging-migrate.env` | `/dev/sda1` (`/`) | `root:root` (`0600`) | Poświadczenia konta migracyjnego DB (niedostępne dla użytkownika `pap` i `www-data`!) |
+| `/var/lib/pap-acme/` | `/dev/sda1` (`/`) | **`root:www-data` (`0750`)** | Izolowany katalog ACME HTTP-01 webroot (`/.well-known/acme-challenge/`). Certbot (`root`) ma prawo zapisu, a worker Nginx (`www-data`) wyłącznie prawo przejścia i odczytu (`r-x`), **bez prawa zapisu**. Oddzielony od katalogów sekretów `0700`. |
 | `/mnt/HC_Volume_<REDACTED>/pap-staging/postgres/` | `/dev/sdb` (Wolumen) | `root` / UID kontenera PG (`0700`) | Trwały wolumen danych PostgreSQL 18 |
-| `/mnt/HC_Volume_<REDACTED>/pap-staging/backups/` | `/dev/sdb` (Wolumen) | `root:root` (`0700`) | Zaszyfrowane / weryfikowane sumą SHA-256 zrzuty `pg_dump` |
+| `/mnt/HC_Volume_<REDACTED>/pap-staging/backups/` | `/dev/sdb` (Wolumen) | `root:root` (`0700`) | Lokalne archiwa `pg_dump` z sumą SHA-256 (tylko dla `root`) |
 
-### 4.2. Nazewnictwo kont i usług systemowych
+### 4.2. Nazewnictwo kont, usług systemowych i limity zasobów
 
 - **Konto systemowe aplikacji:** `pap` (użytkownik systemowy bez powłoki logowania `/usr/sbin/nologin`, bez członkostwa w grupie `docker` i bez uprawnień `sudo`).
-- **Jednostki `systemd`:**
-  - `pap-staging-web.service` — proces Next.js (`@pap/web`).
-  - `pap-staging-api.service` — proces NestJS/Fastify (`@pap/api`).
-  - `pap-staging-db.service` (lub `docker compose` w `/opt/pap-runtime/db/compose.yaml`) — instancja PostgreSQL 18.6.
-  - `pap-staging-backup.service` + `pap-staging-backup.timer` — codzienny backup bazy danych o `03:45 UTC` (z przesunięciem względem `durnoty-backup.timer` o `03:15 UTC`).
+- **Jednostki `systemd` i twarde limity cgroups v2 (ochrona przed wyczerpaniem RAM/swap na współdzielonym hoście):**
+  - `pap-staging-web.service` — proces Next.js (`@pap/web`): `MemoryHigh=300M`, `MemoryMax=384M`, `MemorySwapMax=0`, `CPUQuota=50%`, `IOWeight=50`, `TasksMax=128`.
+  - `pap-staging-api.service` — proces NestJS/Fastify (`@pap/api`): `MemoryHigh=200M`, `MemoryMax=256M`, `MemorySwapMax=0`, `CPUQuota=50%`, `IOWeight=50`, `TasksMax=128`.
+  - `pap-staging-db.service` (lub `docker compose` w `/opt/pap-runtime/db/compose.yaml`) — instancja PostgreSQL 18.6 z limitem kontenera `mem_limit: 384m`, `memswap_limit: 384m`, `cpus: 0.5` oraz parametrami `shared_buffers=64MB`, `work_mem=4MB`, `maintenance_work_mem=32MB`, `max_connections=20`.
+  - `pap-staging-backup.service` + `pap-staging-backup.timer` — codzienny backup bazy danych o `03:45 UTC` (z przesunięciem względem `durnoty-backup.timer` o `03:15 UTC`, `Nice=10`, `IOSchedulingClass=best-effort`, `IOSchedulingPriority=6`).
 - **Plik vhosta Nginx:** `/etc/nginx/sites-available/ksiegowosc.roleplayingtech.com` (podlinkowany w `/etc/nginx/sites-enabled/`).
 
 ### 4.3. Alokacja portów
@@ -145,7 +149,7 @@ flowchart TD
    - `NODE_ENV=production`
    - `HOST=127.0.0.1`
    - `PORT=3100`
-   - `API_BASE_URL` (np. `http://127.0.0.1:4100` po rozszerzeniu walidatora o loopback lub `https://xn--ksigowo-c5a1nq1a.roleplayingtech.com`)
+   - `API_BASE_URL=http://127.0.0.1:4100` (wyłącznie wewnętrzny adres loopback obsługiwany po rozszerzeniu walidatora w `read-system-status.ts`)
    - `NEXT_TELEMETRY_DISABLED=1`
 2. **`/etc/pap/staging-api.env`:**
    - `NODE_ENV=production`
@@ -227,26 +231,40 @@ Zgodnie z [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md) i [ADR-004](adr/
 
 ---
 
-## 7. Logi, monitoring i kopie zapasowe (Backup & Restore)
+## 7. Logi, monitoring, kontrola odnawiania TLS i kopie zapasowe (Backup & Restore)
 
-### 7.1. Logi i podstawowy monitoring
+### 7.1. Logi, pomiary zasobów i monitoring TLS
 
 - **Zbieranie logów:** Procesy `pap-staging-web.service` i `pap-staging-api.service` zapisują standardowe wyjście i błędy do `systemd-journald` z identyfikatorem `SyslogIdentifier=pap-staging-web` oraz `pap-staging-api`.
-- **Ochrona przed wyciekiem PII i sekretów:** Zgodnie z obecnym kodem (`packages/db/src/migrate.ts`, `packages/db/src/tenant-authorization.ts` **[Potwierdzone w repo]**) wyjątki bazy danych i konfiguracji nie wypisują `DATABASE_URL` ani parametrów zapytań. Logi Nginx dla vhosta stagingowego nie mogą logować nagłówka `Authorization` ani ciasteczek sesyjnych.
-- **Health checks:**
-  - Lokalny timer lub skrypt wdrożeniowy odpytuje `http://127.0.0.1:4100/health` (`{"status":"ok"}`), `http://127.0.0.1:4100/api/v1/system/status` oraz `http://127.0.0.1:3100/app`.
+- **Ochrona przed wyciekiem PII i sekretów:** Zgodnie z obecnym kodem (`packages/db/src/migrate.ts`, `packages/db/src/tenant-authorization.ts`, `packages/db/src/access-management.ts` **[Potwierdzone w repo]**) wyjątki bazy danych i konfiguracji nie wypisują `DATABASE_URL` ani parametrów zapytań. Logi Nginx dla vhosta stagingowego nie mogą logować nagłówka `Authorization` ani ciasteczek sesyjnych.
+- **Health checks i pomiary RSS/CPU/I/O/swap:**
+  - Lokalny skrypt weryfikacyjny sprawdza `http://127.0.0.1:4100/health` (`{"status":"ok"}`), `http://127.0.0.1:4100/api/v1/system/status` oraz `http://127.0.0.1:3100/app`.
+  - Przed i po uruchomieniu usług zbierane są rzeczywiste metryki zużycia zasobów: `systemctl show -p MemoryCurrent,CPUUsageNSec pap-staging-web pap-staging-api`, `docker stats --no-stream` (dla PG 18), `free -m` (`MemAvailable`, `SwapUsed`) oraz `vmstat 1 5` (aktywność wymiany stron `si`/`so` oraz `wa` I/O wait).
+- **Kontrola odnawiania TLS w warunkach globalnego błędu `certbot.service`:**
+  - Na serwerze timer `certbot.timer` działa, ale `certbot.service` kończy się kodem błędu `1` z powodu historycznych certyfikatów `app.mumro.io` oraz `roleplayingtech.com-0001` (**[Potwierdzone na serwerze]**). Samo użycie `--webroot` dla `xn--ksigowo-c5a1nq1a.roleplayingtech.com` nie usuwa globalnego stanu `failed` jednostki `certbot.service` (nie modyfikujemy certyfikatów innych projektów bez zgody właściciela).
+  - W konsekwencji:
+    1. Konfiguracja odnawiania dla `xn--ksigowo-c5a1nq1a.roleplayingtech.com` musi zawierać `deploy_hook = systemctl reload nginx`, aby po odnowieniu certyfikatu Nginx załadował nowy klucz bez czekania na ręczny restart.
+    2. Po wydaniu certyfikatu obowiązkowy jest celowany test odnowienia wyłącznie tej domeny: `sudo certbot renew --cert-name xn--ksigowo-c5a1nq1a.roleplayingtech.com --dry-run`.
+    3. Monitoring nie może polegać na statusie `systemctl is-failed certbot.service`; musi bezpośrednio sprawdzać datę wygaśnięcia certyfikatu prezentowanego przez Nginx na porcie `443`:
+       ```bash
+       echo | openssl s_client -connect 127.0.0.1:443 -servername xn--ksigowo-c5a1nq1a.roleplayingtech.com 2>/dev/null | openssl x509 -noout -subject -dates -checkend $((21 * 86400))
+       ```
+       (kod wyjścia `!= 0` oznacza, że do wygaśnięcia pozostało mniej niż 21 dni i wymaga alarmu).
 
-### 7.2. Strategia backupu i testu odtworzenia (Restore Drill)
+### 7.2. Strategia backupu i testu odtworzenia (Lokalny wolumen vs. Backup Off-Host)
 
-Na wzór działającego na serwerze `durnoty-backup.service` (**[Potwierdzone na serwerze]**):
-1. **Mechanizm:** Jednostka `pap-staging-backup.service` wyzwalana codziennie o `03:45 UTC` przez `pap-staging-backup.timer` oraz obowiązkowo **przed każdą migracją bazy danych**.
-2. **Przebieg backupu:**
+1. **Rozróżnienie poziomów ochrony kopii zapasowych:**
+   - **Etap A (wyłącznie dane syntetyczne, odtwarzalne z migracji `0000–0002` i seedów):** kopia na dodatkowym wolumenie blokowym `/mnt/HC_Volume_<REDACTED>/pap-staging/backups/` chroni przed błędem logicznym migracji lub przypadkowym uszkodzeniem struktur DB podczas testów i pozwala zweryfikować automatyzację `pg_dump` / `pg_restore`.
+   - **Ograniczenie lokalnego wolumenu (`[Potwierdzone na serwerze]`):** wolumen `/dev/sdb` (`/mnt/HC_Volume_<REDACTED>`) jest zamontowany bezpośrednio na tym samym hoście `hetz-1` i w tej samej lokalizacji Hetzner. **Nie jest to backup off-host** — w razie kompromitacji konta `root` na hoście, błędu jądra/systemu plików lub awarii strefy serwerowej kopia lokalna może zostać utracona razem z bazą źródłową.
+   - **Wymóg przed danymi trwałymi / rzeczywistymi (Etap B+ / Produkcja):** przed dopuszczeniem jakichkolwiek danych niebędących czysto ulotną fikcją testową obowiązkowe jest wdrożenie szyfrowanego po stronie klienta (`age` / `restic`) **backupu off-host** wysyłanego do zewnętrznego magazynu obiektowego S3 / Hetzner Storage Box w innym regionie UE/EOG w modelu append-only (z poświadczeniami niepozwalającymi na kasowanie historycznych snapshotów z poziomu hosta aplikacyjnego).
+2. **Mechanizm lokalnego backupu w Etapie A.2:** Jednostka `pap-staging-backup.service` wyzwalana codziennie o `03:45 UTC` przez `pap-staging-backup.timer` oraz obowiązkowo **przed każdą migracją bazy danych**.
+3. **Przebieg backupu:**
    - Wykonanie spójnego transakcyjnie zrzutu `pg_dump --format=custom --no-owner --no-privileges` bazy `pap_staging` do pliku `/mnt/HC_Volume_<REDACTED>/pap-staging/backups/pap_staging_<YYYYMMDDTHHMMSSZ>.dump` z `UMask=0077`.
    - Weryfikacja czytelności archiwum przez `pg_restore --list <plik.dump> > /dev/null`.
    - Wygenerowanie sumy kontrolnej `sha256sum`.
    - Retencja: przechowywanie 14 ostatnich kopii dziennych oraz 4 tygodniowych na wolumenie `/mnt/HC_Volume_<REDACTED>`.
-3. **Procedura testu odtworzenia (Restore Drill):**
+4. **Procedura testu odtworzenia (Restore Drill):**
    - Utworzenie tymczasowej bazy weryfikacyjnej `pap_staging_restore_verify` wewnątrz tej samej instancji PostgreSQL 18.
    - Odtworzenie zrzutu przez `pg_restore --dbname=pap_staging_restore_verify --exit-on-error`.
-   - Sprawdzenie obecności wpisów w `drizzle.__drizzle_migrations`, tabel schematu `6B` oraz ograniczenia `entity_profile_version_no_overlap` (`btree_gist`).
+   - Sprawdzenie obecności wszystkich trzech wpisów migracji (`0000`–`0002`) w `drizzle.__drizzle_migrations`, tabel schematu `6B` i `6D-R` (`access_management_event`), ograniczenia `entity_profile_version_no_overlap` (`btree_gist`) oraz triggerów strażniczych z `0002_access-lifecycle.sql`.
    - Usunięcie tymczasowej bazy `DROP DATABASE pap_staging_restore_verify;`.
