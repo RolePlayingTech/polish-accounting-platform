@@ -1,13 +1,18 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema.js';
-import { DatabaseConfigError, loadDatabaseConfig } from './database-config.js';
+import {
+  DatabaseConfigError,
+  loadDatabaseConfig,
+  type LoadDatabaseConfigOptions,
+} from './database-config.js';
 
 export function connectDatabase(
   env: Readonly<Record<string, string | undefined>> = process.env,
   dataSchema = 'public',
+  options: LoadDatabaseConfigOptions = {},
 ) {
-  const config = loadDatabaseConfig(env);
+  const config = loadDatabaseConfig(env, options);
   // Namespace testowy dotyczy wszystkich połączeń puli, także transakcji migratora.
   // Nie jest kontekstem tenanta ani mechanizmem autoryzacji/RLS.
   if (

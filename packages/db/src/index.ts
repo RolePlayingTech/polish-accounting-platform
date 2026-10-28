@@ -14,4 +14,6 @@ export {
   loadDatabaseConfig,
   type DatabaseConfig,
   type DatabaseEnvironment,
+  type DatabaseRoleScope,
+  type LoadDatabaseConfigOptions,
 } from './database-config.js';
