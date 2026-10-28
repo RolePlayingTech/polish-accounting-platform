@@ -52,20 +52,20 @@ describe('readPublicSystemStatus', () => {
     );
   });
 
-  it('allows a public HTTPS origin without path or credentials in NODE_ENV=production', async () => {
+  it('allows the canonical ASCII HTTPS origin in NODE_ENV=production', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     const fetcher = vi
       .fn<typeof fetch>()
       .mockResolvedValue(new Response(JSON.stringify(status), { status: 200 }));
 
     const result = await readPublicSystemStatus({
-      apiBaseUrl: 'https://xn--ksigowo-c5a1nq1a.roleplayingtech.com',
+      apiBaseUrl: 'https://ksiegowosc.roleplayingtech.com',
       fetcher,
     });
 
     expect(result).toEqual({ state: 'available', status });
     expect(fetcher).toHaveBeenCalledWith(
-      new URL('https://xn--ksigowo-c5a1nq1a.roleplayingtech.com/api/v1/system/status'),
+      new URL('https://ksiegowosc.roleplayingtech.com/api/v1/system/status'),
       expect.objectContaining({
         cache: 'no-store',
         redirect: 'error',
@@ -90,7 +90,15 @@ describe('readPublicSystemStatus', () => {
     'http://172.16.0.1:4100',
     'http://192.168.1.1:4100',
     'http://169.254.169.254',
-    'http://xn--ksigowo-c5a1nq1a.roleplayingtech.com',
+    'http://ksiegowosc.roleplayingtech.com',
+    'https://ksiegowosc.roleplayingtech.com/',
+    'https://ksiegowosc.roleplayingtech.com/prefix',
+    'https://ksiegowosc.roleplayingtech.com?env=prod',
+    'https://ksiegowosc.roleplayingtech.com#frag',
+    'https://user:secret@ksiegowosc.roleplayingtech.com',
+    'https://xn--ksigowo-c5a1nq1a.roleplayingtech.com',
+    'https://księgowość.roleplayingtech.com',
+    'https://evil.example.com',
     'https://localhost:4100',
     'https://sub.localhost:4100',
     'https://internal.local',
@@ -100,9 +108,6 @@ describe('readPublicSystemStatus', () => {
     'https://10.0.0.1:4100',
     'https://192.168.1.1:4100',
     'https://169.254.169.254',
-    'https://user:secret@xn--ksigowo-c5a1nq1a.roleplayingtech.com',
-    'https://xn--ksigowo-c5a1nq1a.roleplayingtech.com/prefix',
-    'https://xn--ksigowo-c5a1nq1a.roleplayingtech.com?env=prod',
   ])('rejects disallowed production API_BASE_URL %s before calling fetch', async (apiBaseUrl) => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('API_BASE_URL', '');

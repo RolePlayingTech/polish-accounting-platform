@@ -8,23 +8,18 @@ interface ReadStatusOptions {
   fetcher?: typeof fetch;
 }
 
-const PRODUCTION_LOOPBACK_API_URL = 'http://127.0.0.1:4100';
-
-function isForbiddenProductionHttpsHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase().replace(/\.$/, '');
-  if (
-    normalized.length === 0 ||
-    normalized === 'localhost' ||
-    normalized.endsWith('.localhost') ||
-    normalized.endsWith('.local') ||
-    normalized.startsWith('[') ||
-    normalized.includes(':')
-  ) {
-    return true;
-  }
-
-  return /^\d+(?:\.\d+){0,3}$/.test(normalized) || /^0x[0-9a-f]+/i.test(normalized);
-}
+/**
+ * Closed allowlist of API origins permitted when NODE_ENV=production:
+ * - http://127.0.0.1:4100 — exact same-host loopback used by SSR on Hetzner staging
+ *   so the entire public Nginx vhost remains protected by Basic Auth without exceptions.
+ * - https://ksiegowosc.roleplayingtech.com — canonical ASCII HTTPS origin of PAP
+ *   (assumes owner-controlled DNS record; arbitrary HTTPS hosts are rejected so
+ *   untrusted domains cannot be used for DNS rebinding / SSRF).
+ */
+const ALLOWED_PRODUCTION_API_ORIGINS = new Set([
+  'http://127.0.0.1:4100',
+  'https://ksiegowosc.roleplayingtech.com',
+]);
 
 function resolveAllowedApiBaseUrl(configuredUrl: string, isProduction: boolean): URL | undefined {
   if (configuredUrl !== configuredUrl.trim()) {
@@ -50,18 +45,7 @@ function resolveAllowedApiBaseUrl(configuredUrl: string, isProduction: boolean):
   }
 
   if (isProduction) {
-    const isExactProductionLoopback =
-      configuredUrl === PRODUCTION_LOOPBACK_API_URL &&
-      baseUrl.origin === PRODUCTION_LOOPBACK_API_URL &&
-      baseUrl.protocol === 'http:' &&
-      baseUrl.hostname === '127.0.0.1' &&
-      baseUrl.port === '4100';
-
-    if (isExactProductionLoopback) {
-      return baseUrl;
-    }
-
-    if (baseUrl.protocol !== 'https:' || isForbiddenProductionHttpsHost(baseUrl.hostname)) {
+    if (!ALLOWED_PRODUCTION_API_ORIGINS.has(configuredUrl) || baseUrl.origin !== configuredUrl) {
       return undefined;
     }
   }
