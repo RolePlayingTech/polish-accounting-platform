@@ -94,7 +94,7 @@ flowchart TD
    - Obecnie w `apps/web/lib/read-system-status.ts` (**[Potwierdzone w repo]**) przy `NODE_ENV=production` wymagany jest protokół `https:` dla `API_BASE_URL`.
    - **Nie wprowadzamy w Nginx żadnych wyjątków wyłączających `auth_basic` dla `/api/v1/system/status`** — cały vhost w Etapie A musi pozostać jednolicie chroniony przed nieautoryzowanym dostępem z zewnątrz.
    - Zamiast tego w osobnym, wąskim PR przed wdrożeniem wprowadzamy w `apps/web/lib/read-system-status.ts` ściśle ograniczony, przetestowany wyjątek dla komunikacji serwerowej przy `NODE_ENV=production`:
-     - Akceptowany jest jawny adres loopback `http://127.0.0.1:4100` (lub zwalidowany origin loopback `http://127.0.0.1:<port>` bez `username`/`password`, bez ścieżki bazowej, query i fragmentu), przy jednoczesnym ustawieniu `redirect: 'error'` w `fetch` (ochrona przed SSRF przez przekierowanie HTTP).
+     - Akceptowany jest **wyłącznie dokładny origin** `http://127.0.0.1:4100` (bez `username`/`password`, ścieżki bazowej, query ani fragmentu). Dowolny inny port loopback jest odrzucany, ponieważ na tym samym hoście działają inne aplikacje. Żądanie używa `redirect: 'error'` w `fetch`, by nie podążać za przekierowaniami HTTP na inne adresy.
      - Nadal bezwzględnie odrzucane są wszystkie inne niezaszyfrowane adresy `http://` przy `NODE_ENV=production` (w tym zewnętrzne hosty, nazwy DNS mogące podlegać DNS rebindingowi, `0.0.0.0`, adresy sieci prywatnych `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` oraz adresy link-local/metadata `169.254.169.254`).
      - Zmiana musi posiadać testy jednostkowe `allow`/`deny` weryfikujące protokół, host, port, odrzucanie poświadczeń w URL oraz blokadę przekierowań.
 3. **Przyszłe MCP (`@pap/mcp`):**
