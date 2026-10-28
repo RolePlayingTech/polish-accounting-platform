@@ -57,7 +57,7 @@ const rows: Record<string, Record<string, string | null>> = {
   },
 };
 
-describe.sequential('Integralność tenantów, firm i jawnych grantów PostgreSQL', () => {
+describe('Integralność tenantów, firm i jawnych grantów PostgreSQL', () => {
   let database: TestDatabase | undefined;
   const connection = () => {
     if (!database) throw new Error('Brak izolowanej bazy testowej.');

@@ -15,7 +15,7 @@ const expectedTables = [
   'tenant_membership',
 ];
 
-describe.sequential('Migracje PostgreSQL 6A → 6B', () => {
+describe('Migracje PostgreSQL 6A → 6B', () => {
   it('stosuje od zera dokładnie dwie migracje w kolejności i nie powiela obiektów', async () => {
     const database = await createTestDatabase();
     const { client: sql, db, dataSchema } = database;
