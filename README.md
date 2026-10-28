@@ -114,6 +114,14 @@ Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operat
 | [ADR-005](docs/adr/005-rozwoj-lokalny.md) | Bieżący rozwój wyłącznie lokalny, bez Dockera i przygotowywania deploymentu |
 | [19 — Przewodnik developera](docs/19-przewodnik-developera.md) | Wymagania środowiska, instalacja, uruchamianie web/API/MCP |
 | [20 — Strategia testów](docs/20-strategia-testow.md) | Działające polecenia, testowane granice i ograniczenia pokrycia |
+| [22 — Schemat tenantów 6B](docs/22-schemat-tenantow-6b.md) | Schemat PostgreSQL/Drizzle dla tenantów, firm, członkostw, profili i grantów |
+| [23 — Adapter autoryzacji 6D-1](docs/23-adapter-autoryzacji-6d1.md) | Adapter PostgreSQL źródła autoryzacji i zakres odczytu |
+| [24 — Bezpieczny cykl dostępu 6D-R](docs/24-bezpieczny-cykl-dostepu-6dr.md) | Transakcyjny cykl członkostw i grantów, audyt i guardy SQL |
+| [ADR-006](docs/adr/006-prywatny-staging-hetzner.md) | Propozycja przejścia do prywatnego stagingu na serwerze Hetzner |
+| [Audyt serwera Hetzner](docs/HETZNER_SERVER_AUDIT_2026-10-28.md) | Odczytowa inwentaryzacja hosta, usług, portów i domeny IDN (bez sekretów) |
+| [Architektura stagingu Hetzner](docs/HETZNER_STAGING_ARCHITECTURE.md) | Rekomendowany model uruchomienia Web, API, PostgreSQL 18, TLS i backupów |
+| [Plan wdrożenia Hetzner](docs/HETZNER_DEPLOYMENT_PLAN.md) | Procedura pierwszej publikacji (Etap A i Etap B), CI/CD i ochrona `main` |
+| [Checklista gotowości Hetzner](docs/HETZNER_READINESS_CHECKLIST.md) | Kryteria Go/No-Go, lista decyzji właściciela i warunki zatrzymania |
 
 ## Status funkcji i bezpieczeństwa
 
