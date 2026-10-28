@@ -1,6 +1,6 @@
 # 19. Przewodnik developera
 
-Ten dokument opisuje szkielet z Issue #5 i fundament bazy z pakietu 6A Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Pakiet 6A nie jest modułem firm ani księgowości.
+Ten dokument opisuje szkielet z Issue #5 i pakiety DB 6A/6B Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B nie jest działającą obsługą firm ani autoryzacją użytkowników; decyzje i ograniczenia opisuje [model 6B](22-schemat-tenantow-6b.md).
 
 ## Wymagania
 
@@ -107,11 +107,11 @@ pnpm db:migrate
 pnpm db:migrate
 ```
 
-`db:generate` działa bez DB: tworzy SQL i metadane po zmianie schematu Drizzle; dla niezmienionego schematu nie powinien dodać migracji. `db:migrate` wymaga działającej bazy i zapisuje wykonane wersje w `drizzle.__drizzle_migrations`. Ponowne wykonanie nie powiela migracji. Migracja 6A wykonuje tylko `SELECT 1`; jedyną tabelą techniczną jest rejestr Drizzle. Migracje uruchamiaj pojedynczo i reviewuj SQL oraz metadane w `packages/db/drizzle`. Nie wykonują się przy `pnpm dev`.
+`db:generate` działa bez DB: tworzy SQL i metadane po zmianie schematu Drizzle; dla niezmienionego schematu nie powinien dodać migracji. `db:migrate` zapisuje wykonane wersje w `drizzle.__drizzle_migrations`. Ponowne wykonanie nie powiela migracji. Migracja 6A wykonuje `SELECT 1`, a nowa 6B tworzy w `public` pięć tabel: `tenant`, `legal_entity`, `tenant_membership`, `entity_profile_version` i `company_access_grant`. Instaluje też dostarczone z PostgreSQL rozszerzenie `btree_gist` w schemacie danych; konto migracji potrzebuje CREATE do bazy. Jeśli rozszerzenie istnieje w innym schemacie, migracja odmawia bez przenoszenia go. Zakaz nakładania profili jest jawnym SQL, którego snapshot Drizzle nie modeluje. Reviewuj SQL i metadane w `packages/db/drizzle`, w tym usunięcie kwalifikatora `public` z wygenerowanych FK na potrzeby testowego namespace ([wyjaśnienie](22-schemat-tenantow-6b.md#migracje-i-izolacja-testów)). Migracje uruchamiaj pojedynczo; nie wykonują się przy `pnpm dev`.
 
 Walidator wymaga `PAP_DATABASE_ENV=local` z kontem i bazą `pap_local` albo `PAP_DATABASE_ENV=test` z kontem i bazą `pap_test` oraz hosta `127.0.0.1`, `localhost` lub `::1`. `NODE_ENV=production`, inne środowisko, zdalny host, inne konto lub baza, niepoprawny URL i parametry/fragmenty URL są odrzucane przed utworzeniem klienta PostgreSQL. DB nie podejmuje decyzji o uprawnieniach księgowych; polityka z PR #16 pozostaje w `domain`/`application`.
 
-### Test integracyjny na pustej pap_test
+### Testy integracyjne na pap_test
 
 W `.env` wybierz komentowany wariant `test`: ustaw jednocześnie `PAP_DATABASE_ENV=test`, konto/bazę `pap_test` i jej hasło zamiast `UZUPELNIJ_HASLO_TEST`. Sprawdź pustość bazy, łącząc się kontem testowym:
 
@@ -126,15 +126,15 @@ WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
 \q
 ```
 
-Oczekiwane jest zero wierszy. Nie wykonuj wcześniej `db:migrate` na `pap_test`, bo test wymaga pustej bazy. Następnie:
+W świeżej bazie oczekiwane jest zero wierszy. Jeśli istnieją obiekty, ustal ich przeznaczenie i nie usuwaj ich. Testy mają własne namespace, lecz odmawiają uruchomienia, gdy zastana baza ma już `btree_gist`. Nie wykonuj wcześniej `db:migrate` na `pap_test`; nie czyść ani nie odtwarzaj zastanej bazy na potrzeby testu. Następnie:
 
 ```powershell
 pnpm test:integration
 ```
 
-Test odmawia użycia środowiska `local` i niepustej bazy. Wykonuje migrację dwukrotnie, sprawdza pojedynczy wpis rejestru i brak tabel biznesowych. Sprząta wyłącznie własny losowo nazwany schemat migracji; nie usuwa bazy ani istniejących tabel. Jeśli baza nie jest pusta, wyjaśnij jej przeznaczenie zamiast ją czyścić. Po teście przywróć wariant `local` w `.env`, jeśli chcesz wykonywać lokalne migracje. Bez PostgreSQL raportuj test integracyjny jako niewykonany lokalnie; CI uruchamia go na izolowanej usłudze PostgreSQL.
+Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują dwa wpisy rejestru w kolejności 6A → 6B, dokładnie oczekiwane tabele, ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili (także współbieżnie) i rollback zapisu danych. Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Nie usuwają bazy ani cudzych tabel. Zestawy działają kolejno, ponieważ rozszerzenie ma jedną nazwę w bazie. Po teście przywróć wariant `local` w `.env`, jeśli chcesz wykonywać lokalne migracje. Bez PostgreSQL raportuj testy integracyjne jako niewykonane lokalnie; CI uruchamia je na świeżej izolowanej usłudze PostgreSQL.
 
-W 6B należy dodać kolejną migrację bez zmieniania zastosowanej migracji 6A. Brak automatycznego rollbacku i poleceń usuwających istniejące dane. Starsze `compose.yaml` i `Dockerfile.dev` pozostają w wersji z `main`, poza bieżącym trybem pracy; 6A nie dodaje infrastruktury Docker ani wymagań weryfikacji na serwerze.
+Historia 6A pozostaje bez zmian; 6B dodaje kolejną migrację. Brak automatycznej migracji w dół: po udanej migracji nie kasuj tabel jako rollbacku kodu; korekta wymaga nowej migracji. Starsze `compose.yaml` i `Dockerfile.dev` pozostają w wersji z `main`, poza bieżącym trybem pracy. Pakiety DB nie dodają infrastruktury Docker ani weryfikacji na serwerze.
 
 ## MCP lokalne STDIO
 
@@ -164,8 +164,8 @@ Opis scenariuszy i zakresu walidacji znajduje się w [20 — strategii testów](
 
 - `/app` prezentuje stan techniczny szkieletu. Moduły księgowe są oznaczone jako niedostępne.
 - `/settings` i `/platform` są statycznymi placeholderami bez operacji administracyjnych.
-- Nie ma kont, logowania, sesji, tenantów, firm ani egzekwowania polityki autoryzacji przez API/MCP.
-- Pakiet DB ma lokalne połączenia i techniczne migracje, ale nie zawiera tabel tenantów, firm, ksiąg ani faktur. Nie ma integracji KSeF/MF, workerów ani produkcyjnych połączeń MCP.
+- Nie ma kont, logowania, sesji, obsługi tenantów/firm w aplikacji ani egzekwowania polityki przez API/MCP.
+- Pakiet DB ma lokalne połączenia, migracje i schemat 6B z constraints relacji. Nie ma adaptera autoryzacji, RLS, audytu, tabel ksiąg/faktur, integracji KSeF/MF, workerów ani produkcyjnych połączeń MCP. Schemat nie chroni SELECT przed nieuprawnionym dostępem.
 - W pakietach i testach używaj wyłącznie danych syntetycznych. Nie dodawaj danych osobowych, faktur, tokenów, certyfikatów ani sekretów.
 
 Przed wdrażaniem nowych funkcji kieruj się [modelem zagrożeń i uprawnień](18-model-zagrozen-i-uprawnien.md), [zasadami architektury](16-zasady-architektoniczne.md) oraz roadmapą.

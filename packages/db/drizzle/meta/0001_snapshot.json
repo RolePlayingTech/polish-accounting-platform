@@ -1,0 +1,436 @@
+{
+  "id": "c0c8af71-5e93-48c7-bb94-539883c700bd",
+  "prevId": "fa65914a-ac9c-46a4-8bd8-2a63d425612b",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.company_access_grant": {
+      "name": "company_access_grant",
+      "schema": "",
+      "columns": {
+        "grant_id": {
+          "name": "grant_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "legal_entity_id": {
+          "name": "legal_entity_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "action": {
+          "name": "action",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_from": {
+          "name": "valid_from",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_until": {
+          "name": "valid_until",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revoked_at": {
+          "name": "revoked_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "company_access_grant_lookup_idx": {
+          "name": "company_access_grant_lookup_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "legal_entity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "action",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "company_access_grant_entity_idx": {
+          "name": "company_access_grant_entity_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "legal_entity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "company_access_grant_membership_fk": {
+          "name": "company_access_grant_membership_fk",
+          "tableFrom": "company_access_grant",
+          "tableTo": "tenant_membership",
+          "columnsFrom": ["tenant_id", "user_id"],
+          "columnsTo": ["tenant_id", "user_id"],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        },
+        "company_access_grant_entity_fk": {
+          "name": "company_access_grant_entity_fk",
+          "tableFrom": "company_access_grant",
+          "tableTo": "legal_entity",
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "company_access_grant_action_check": {
+          "name": "company_access_grant_action_check",
+          "value": "\"company_access_grant\".\"action\" IN ('read', 'write')"
+        },
+        "company_access_grant_validity_check": {
+          "name": "company_access_grant_validity_check",
+          "value": "isfinite(\"company_access_grant\".\"valid_from\") AND (\"company_access_grant\".\"valid_until\" IS NULL OR (isfinite(\"company_access_grant\".\"valid_until\") AND \"company_access_grant\".\"valid_until\" > \"company_access_grant\".\"valid_from\"))"
+        },
+        "company_access_grant_revoked_at_check": {
+          "name": "company_access_grant_revoked_at_check",
+          "value": "\"company_access_grant\".\"revoked_at\" IS NULL OR isfinite(\"company_access_grant\".\"revoked_at\")"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.entity_profile_version": {
+      "name": "entity_profile_version",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "legal_entity_id": {
+          "name": "legal_entity_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "profile_code": {
+          "name": "profile_code",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_from": {
+          "name": "valid_from",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_until": {
+          "name": "valid_until",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "entity_profile_version_lookup_idx": {
+          "name": "entity_profile_version_lookup_idx",
+          "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "legal_entity_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "valid_from",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "entity_profile_version_entity_fk": {
+          "name": "entity_profile_version_entity_fk",
+          "tableFrom": "entity_profile_version",
+          "tableTo": "legal_entity",
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "entity_profile_version_code_not_blank": {
+          "name": "entity_profile_version_code_not_blank",
+          "value": "btrim(\"entity_profile_version\".\"profile_code\") <> ''"
+        },
+        "entity_profile_version_validity_check": {
+          "name": "entity_profile_version_validity_check",
+          "value": "isfinite(\"entity_profile_version\".\"valid_from\") AND (\"entity_profile_version\".\"valid_until\" IS NULL OR (isfinite(\"entity_profile_version\".\"valid_until\") AND \"entity_profile_version\".\"valid_until\" > \"entity_profile_version\".\"valid_from\"))"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.legal_entity": {
+      "name": "legal_entity",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "display_name": {
+          "name": "display_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "legal_entity_tenant_id_tenant_id_fk": {
+          "name": "legal_entity_tenant_id_tenant_id_fk",
+          "tableFrom": "legal_entity",
+          "tableTo": "tenant",
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "legal_entity_tenant_id_id_unique": {
+          "name": "legal_entity_tenant_id_id_unique",
+          "nullsNotDistinct": false,
+          "columns": ["tenant_id", "id"]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "legal_entity_name_not_blank": {
+          "name": "legal_entity_name_not_blank",
+          "value": "btrim(\"legal_entity\".\"display_name\") <> ''"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.tenant": {
+      "name": "tenant",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "tenant_name_not_blank": {
+          "name": "tenant_name_not_blank",
+          "value": "btrim(\"tenant\".\"name\") <> ''"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.tenant_membership": {
+      "name": "tenant_membership",
+      "schema": "",
+      "columns": {
+        "tenant_id": {
+          "name": "tenant_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "uuid",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "role": {
+          "name": "role",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status": {
+          "name": "status",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_from": {
+          "name": "valid_from",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "valid_until": {
+          "name": "valid_until",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "tenant_membership_tenant_id_tenant_id_fk": {
+          "name": "tenant_membership_tenant_id_tenant_id_fk",
+          "tableFrom": "tenant_membership",
+          "tableTo": "tenant",
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
+          "onDelete": "restrict",
+          "onUpdate": "restrict"
+        }
+      },
+      "compositePrimaryKeys": {
+        "tenant_membership_pk": {
+          "name": "tenant_membership_pk",
+          "columns": ["tenant_id", "user_id"]
+        }
+      },
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "tenant_membership_role_check": {
+          "name": "tenant_membership_role_check",
+          "value": "\"tenant_membership\".\"role\" IN ('tenant_owner', 'tenant_admin', 'tenant_member')"
+        },
+        "tenant_membership_status_check": {
+          "name": "tenant_membership_status_check",
+          "value": "\"tenant_membership\".\"status\" IN ('active', 'revoked')"
+        },
+        "tenant_membership_validity_check": {
+          "name": "tenant_membership_validity_check",
+          "value": "isfinite(\"tenant_membership\".\"valid_from\") AND (\"tenant_membership\".\"valid_until\" IS NULL OR (isfinite(\"tenant_membership\".\"valid_until\") AND \"tenant_membership\".\"valid_until\" > \"tenant_membership\".\"valid_from\"))"
+        }
+      },
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}

@@ -6,6 +6,7 @@ const MIGRATIONS_FOLDER = fileURLToPath(new URL('../drizzle', import.meta.url));
 
 type Database = ReturnType<typeof connectDatabase>['db'];
 
+/** migrationsSchema wybiera wyłącznie rejestr; namespace tabel ustala connectDatabase. */
 export async function applyMigrations(db: Database, migrationsSchema = 'drizzle'): Promise<void> {
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER, migrationsSchema });
 }

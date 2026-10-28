@@ -28,7 +28,7 @@
 - [ ] `E1-07` Bank CSV/MT940/CAMT importowany i bezpiecznie dopasowywany do dokumentów.
 - [ ] `E1-08` Pulpit, zadania, kalendarz, podstawowe eksporty, UX testy dostępności.
 
-Dotychczasowy zakres [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) obejmuje scaloną czystą politykę grantów (6C, PR #16) i proponowany w PR #17 techniczny fundament PostgreSQL/Drizzle z testem migracji (6A). Pakiet 6A nie jest działającym modułem firm ani księgowości; jego review nie zależy od uruchomienia Compose lub przyszłego serwera. Nie oznacza to ukończenia `E1-02` ani `E1-03`: logowanie/OIDC, źródło danych polityki, egzekwowanie w API, audyt, schemat i migracje firm (6B), RLS oraz testy izolacji integracyjne i end-to-end pozostają do realizacji w kolejnych PR-ach. Issue #6 pozostaje otwarte; 6B rozpoczynamy osobno po scaleniu 6A.
+Zakres [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6) obejmuje scaloną czystą politykę grantów (6C, PR #16), scalony fundament PostgreSQL/Drizzle (6A, PR #17) i pakiet 6B: schemat tenantów, firm, członkostw, wersji profilu oraz jawnych grantów z testami integralności ([model 6B](22-schemat-tenantow-6b.md)). Nie oznacza to ukończenia `E1-02` ani `E1-03`: OIDC, zaufany adapter DB, egzekwowanie polityki w API/MCP, audyt, RLS i izolacja odczytów end-to-end pozostają kolejnymi etapami. Issue #6 pozostaje otwarte; nie ma obsługi firm w UI ani wdrożenia produkcyjnego.
 
 **Bramka:** syntetyczne faktury różnych firm nie przeciekają między kontami; żaden ekstraktor nie zmienia oryginałów; backup odtwarzalny.
 

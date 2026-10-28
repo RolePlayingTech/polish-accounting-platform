@@ -15,7 +15,7 @@ polish-accounting-platform/
 │   ├── application/            # use case statusu i port polityki autoryzacji
 │   ├── contracts/              # ścisły kontrakt statusu
 │   ├── ui/                     # współdzielone komponenty interfejsu
-│   └── db/                     # Drizzle i techniczne migracje, bez tabel domenowych
+│   └── db/                     # Drizzle, migracje 6A/6B i constraints tenant/firma/grant
 ├── .github/workflows/ci.yml
 ├── compose.yaml                # wcześniejszy scaffold; poza bieżącym trybem pracy
 ├── pnpm-workspace.yaml
@@ -23,9 +23,9 @@ polish-accounting-platform/
 └── turbo.json
 ```
 
-Szkielet zawiera techniczny pakiet `db` dla opcjonalnego PostgreSQL zainstalowanego lokalnie, ale nie ma jeszcze tabel tenantów, firm ani innych danych domenowych, OIDC, RLS, workerów, integracji zewnętrznych ani księgowania. Bieżący tryb pracy nie wymaga Dockera i nie obejmuje serwera ani deploymentu ([ADR-005](adr/005-rozwoj-lokalny.md)). `domain` zawiera czystą funkcję decyzji dla aktywnego członkostwa i jawnego grantu do konkretnej firmy oraz akcji. `application` udostępnia port zaufanego źródła tych danych i wspólny use case; źródło in-memory jest wyłącznie testowym adapterem. Identyfikatory firm z pakietu `domain` nie nadają dostępu, a role administratora tenanta i operatora platformy nie dają domyślnego dostępu do ksiąg.
+Pakiet `db` dla opcjonalnego PostgreSQL zainstalowanego lokalnie zawiera migracje 6A/6B: tabele tenantów, firm, członkostw, wersji profilu i jawnych grantów z constraints i testami integralności ([opis](22-schemat-tenantow-6b.md)). Nie ma OIDC, RLS, workerów, integracji zewnętrznych ani księgowania. Bieżący tryb pracy nie wymaga Dockera i nie obejmuje serwera ani deploymentu ([ADR-005](adr/005-rozwoj-lokalny.md)). `domain` zawiera czystą funkcję decyzji dla aktywnego członkostwa i jawnego grantu do konkretnej firmy oraz akcji. `application` udostępnia port zaufanego źródła tych danych i wspólny use case; źródło in-memory jest wyłącznie testowym adapterem. Identyfikatory firm z pakietu `domain` nie nadają dostępu, a role administratora tenanta i operatora platformy nie dają domyślnego dostępu do ksiąg.
 
-**Ograniczenie bieżącego etapu Issue #6:** polityka nie jest jeszcze podłączona do uwierzytelniania ani do API/MCP. Nie ma rzeczywistych użytkowników, bazodanowego źródła grantów, audytu decyzji, migracji tabel firmowych ani testów izolacji end-to-end. `userId` przekazany do application service musi pochodzić z uwierzytelnionej tożsamości ustalonej po stronie serwera; taki mechanizm jeszcze nie istnieje.
+**Ograniczenie bieżącego etapu Issue #6:** polityka nie jest jeszcze podłączona do uwierzytelniania ani do API/MCP. Schemat grantów nie jest implementacją portu źródła danych. Nie ma rzeczywistych użytkowników, bazodanowego adaptera autoryzacji, audytu decyzji ani testów izolacji end-to-end. `userId` przekazany do application service musi pochodzić z uwierzytelnionej tożsamości ustalonej po stronie serwera; taki mechanizm jeszcze nie istnieje. Constraints 6B chronią relacje zapisów, nie autoryzują SELECT.
 
 ## Struktura monorepo
 

@@ -1,10 +1,21 @@
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import * as schema from './schema.js';
-import { loadDatabaseConfig } from './database-config.js';
+import { DatabaseConfigError, loadDatabaseConfig } from './database-config.js';
 
-export function connectDatabase(env: Readonly<Record<string, string | undefined>> = process.env) {
+export function connectDatabase(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  dataSchema = 'public',
+) {
   const config = loadDatabaseConfig(env);
+  // Namespace testowy dotyczy wszystkich połączeń puli, także transakcji migratora.
+  // Nie jest kontekstem tenanta ani mechanizmem autoryzacji/RLS.
+  if (
+    dataSchema !== 'public' &&
+    !(config.environment === 'test' && /^pap_test_[a-f0-9]{32}$/.test(dataSchema))
+  ) {
+    throw new DatabaseConfigError('Niedozwolony schemat danych; własny namespace wymaga testu.');
+  }
   const url = new URL(config.url);
   const host = url.hostname.replace(/^\[|\]$/g, '');
   const client = postgres(config.url, {
@@ -16,6 +27,7 @@ export function connectDatabase(env: Readonly<Record<string, string | undefined>
     connect_timeout: 5,
     idle_timeout: 20,
     max: 5,
+    connection: { search_path: `${dataSchema},pg_catalog` },
   });
 
   return { client, db: drizzle(client, { schema }) };

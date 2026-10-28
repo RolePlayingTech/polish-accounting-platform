@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   db-integration:
-    name: PostgreSQL migration integration test
+    name: PostgreSQL migrations and tenant schema constraints
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -47,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run PostgreSQL migration integration test
+      - name: Run PostgreSQL migrations and schema constraint tests
         run: pnpm test:integration
 
   checks:

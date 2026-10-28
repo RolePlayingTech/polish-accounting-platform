@@ -8,6 +8,13 @@
       "when": 1793102401374,
       "tag": "0000_technical-baseline",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1793168092791,
+      "tag": "0001_tenant-schema",
+      "breakpoints": true
     }
   ]
 }
