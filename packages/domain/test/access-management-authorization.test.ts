@@ -221,6 +221,21 @@ describe('decideAccessManagementAuthorization (polityka administracji dostępem)
         validUntil: laterFuture,
       },
     ],
+    [
+      'nadanie bezterminowego grantu, gdy grant delegującego admina ma zaplanowane cofnięcie w przyszłości (revokedAt > now)',
+      [grant({ revokedAt: future })],
+      { legalEntityId: ENTITY_A1, action: 'read' as const, validFrom: null, validUntil: null },
+    ],
+    [
+      'nadanie grantu wykraczającego poza zaplanowane cofnięcie grantu delegującego admina (validUntil > revokedAt)',
+      [grant({ revokedAt: future })],
+      {
+        legalEntityId: ENTITY_A1,
+        action: 'read' as const,
+        validFrom: null,
+        validUntil: laterFuture,
+      },
+    ],
   ])('odmawia tenant_admin delegacji spoza zakresu: %s', (_label, actorGrants, grantScope) => {
     expect(
       decideAccessManagementAuthorization(
@@ -232,6 +247,52 @@ describe('decideAccessManagementAuthorization (polityka administracji dostępem)
     ).toEqual({
       allowed: false,
       reason: 'grant_scope_not_delegable',
+    });
+  });
+
+  it('odrzuca niepoprawne przedziały czasowe grantu lub reaktywacji jako authorization_context_invalid', () => {
+    expect(
+      decideAccessManagementAuthorization(
+        baseInput({
+          grantScope: {
+            legalEntityId: ENTITY_A1,
+            action: 'read',
+            validFrom,
+            validUntil: future,
+          },
+        }),
+      ),
+    ).toEqual({
+      allowed: false,
+      reason: 'authorization_context_invalid',
+    });
+
+    expect(
+      decideAccessManagementAuthorization(
+        baseInput({
+          grantScope: {
+            legalEntityId: ENTITY_A1,
+            action: 'read',
+            validFrom: future,
+            validUntil: future,
+          },
+        }),
+      ),
+    ).toEqual({
+      allowed: false,
+      reason: 'authorization_context_invalid',
+    });
+
+    expect(
+      decideAccessManagementAuthorization(
+        baseInput({
+          commandKind: 'reactivate_membership',
+          requestedValidUntil: now,
+        }),
+      ),
+    ).toEqual({
+      allowed: false,
+      reason: 'authorization_context_invalid',
     });
   });
 

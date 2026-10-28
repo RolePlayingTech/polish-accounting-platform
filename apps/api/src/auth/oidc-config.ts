@@ -1,3 +1,5 @@
+import { isIP } from 'node:net';
+
 export type OidcEnvironment = 'local' | 'test' | 'staging';
 
 export type AsymmetricJwsAlgorithm =
@@ -21,6 +23,7 @@ export interface OidcVerifierConfig {
   readonly issuer: string;
   readonly jwksUri: string;
   readonly audience: string;
+  readonly audiences?: readonly string[] | undefined;
   readonly allowedAlgorithms: readonly AsymmetricJwsAlgorithm[];
   readonly allowedTokenHeaderTypes: readonly string[];
   readonly allowedAuthorizedParties: readonly string[] | null;
@@ -41,34 +44,69 @@ export class OidcConfigError extends Error {
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
 
+function isPrivateOrReservedIpv4Octets(octets: readonly number[]): boolean {
+  if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) {
+    return true;
+  }
+  const [a, b, c] = octets as [number, number, number, number];
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
+    a >= 224
+  );
+}
+
 function isPrivateOrLinkLocalHost(hostname: string): boolean {
   const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase();
   if (
+    normalized.length === 0 ||
     LOOPBACK_HOSTS.has(normalized) ||
+    normalized.endsWith('.') ||
     normalized.endsWith('.local') ||
     normalized.endsWith('.internal') ||
-    normalized === '0.0.0.0' ||
-    normalized.startsWith('fe80:') ||
-    normalized.startsWith('fc') ||
-    normalized.startsWith('fd')
+    normalized.endsWith('.localhost') ||
+    normalized.endsWith('.home.arpa')
   ) {
     return true;
   }
 
-  const ipv4Match = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(normalized);
-  if (!ipv4Match) {
+  const ipVersion = isIP(normalized);
+  if (ipVersion === 4) {
+    const octets = normalized.split('.').map(Number);
+    return isPrivateOrReservedIpv4Octets(octets);
+  }
+
+  if (ipVersion === 6) {
+    if (
+      normalized === '::' ||
+      normalized === '::1' ||
+      normalized === '0:0:0:0:0:0:0:0' ||
+      normalized === '0:0:0:0:0:0:0:1' ||
+      normalized.startsWith('::ffff:') ||
+      /^f[cd][0-9a-f]{2}:/i.test(normalized) ||
+      /^fe[89ab][0-9a-f]:/i.test(normalized) ||
+      normalized.startsWith('ff')
+    ) {
+      return true;
+    }
     return false;
   }
-  const octets = ipv4Match.slice(1).map(Number);
-  const [a, b] = octets as [number, number, number, number];
-  return (
-    a === 10 ||
-    a === 127 ||
-    a === 0 ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
-  );
+
+  // Hosty jednoczłonowe bez kropki (np. nazwy kontenerów lub hostów w sieci lokalnej) nie są publicznymi domenami.
+  if (!normalized.includes('.')) {
+    return true;
+  }
+
+  return false;
 }
 
 function parseTrustedEndpointUrl(
@@ -197,12 +235,38 @@ export function loadOidcVerifierConfig(
     throw new OidcConfigError('PAP_OIDC_ISSUER nie może kończyć się ukośnikiem.');
   }
 
-  const audience = env.PAP_OIDC_AUDIENCE;
-  if (!audience || audience.trim() === '' || audience !== audience.trim()) {
+  const rawAudience = env.PAP_OIDC_AUDIENCE;
+  if (!rawAudience || rawAudience.trim() === '' || rawAudience !== rawAudience.trim()) {
     throw new OidcConfigError('PAP_OIDC_AUDIENCE musi być niepustym identyfikatorem odbiorcy.');
   }
 
-  const allowedAlgorithms = parseAllowedAlgorithms(env.PAP_OIDC_ALLOWED_ALGORITHMS);
+  const rawAudienceParts = rawAudience.split(',');
+  const audiences: string[] = [];
+  for (const part of rawAudienceParts) {
+    const trimmed = part.trim();
+    if (trimmed.length === 0 || /\s/.test(trimmed)) {
+      throw new OidcConfigError(
+        'PAP_OIDC_AUDIENCE musi zawierać niepuste identyfikatory odbiorców rozdzielone przecinkiem.',
+      );
+    }
+    if (!audiences.includes(trimmed)) {
+      audiences.push(trimmed);
+    }
+  }
+
+  if (
+    env.PAP_OIDC_ALLOWED_ALGORITHMS !== undefined &&
+    env.PAP_OIDC_ALLOWED_ALGS !== undefined &&
+    env.PAP_OIDC_ALLOWED_ALGORITHMS.trim() !== env.PAP_OIDC_ALLOWED_ALGS.trim()
+  ) {
+    throw new OidcConfigError(
+      'Podano sprzeczne wartości PAP_OIDC_ALLOWED_ALGORITHMS i PAP_OIDC_ALLOWED_ALGS.',
+    );
+  }
+
+  const allowedAlgorithms = parseAllowedAlgorithms(
+    env.PAP_OIDC_ALLOWED_ALGORITHMS ?? env.PAP_OIDC_ALLOWED_ALGS,
+  );
 
   const rawClockTolerance = env.PAP_OIDC_CLOCK_TOLERANCE_SECONDS ?? '30';
   const clockToleranceSeconds = Number(rawClockTolerance);
@@ -228,31 +292,47 @@ export function loadOidcVerifierConfig(
     );
   }
 
-  const allowedAuthorizedParties = env.PAP_OIDC_ALLOWED_AZP
-    ? Object.freeze(
-        env.PAP_OIDC_ALLOWED_AZP.split(',')
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0),
-      )
-    : null;
+  const allowedAuthorizedParties =
+    env.PAP_OIDC_ALLOWED_AZP !== undefined
+      ? Object.freeze(
+          env.PAP_OIDC_ALLOWED_AZP.split(',')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0),
+        )
+      : null;
 
   if (allowedAuthorizedParties !== null && allowedAuthorizedParties.length === 0) {
     throw new OidcConfigError('PAP_OIDC_ALLOWED_AZP nie może być pustą listą.');
   }
 
-  const requiredScopes = env.PAP_OIDC_REQUIRED_SCOPES
-    ? Object.freeze(
-        env.PAP_OIDC_REQUIRED_SCOPES.split(/[\s,]+/)
-          .map((item) => item.trim())
-          .filter((item) => item.length > 0),
-      )
-    : Object.freeze([] as const);
+  if (
+    allowedAuthorizedParties !== null &&
+    allowedAuthorizedParties.some((azp) => audiences.includes(azp))
+  ) {
+    throw new OidcConfigError(
+      'PAP_OIDC_AUDIENCE (odbiorca API) musi być rozłączny z PAP_OIDC_ALLOWED_AZP (klient OIDC), aby wykluczyć pomylenie ID Tokena z Access Tokenem.',
+    );
+  }
+
+  const requiredScopes =
+    env.PAP_OIDC_REQUIRED_SCOPES !== undefined
+      ? Object.freeze(
+          env.PAP_OIDC_REQUIRED_SCOPES.split(/[\s,]+/)
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0),
+        )
+      : Object.freeze(['openid'] as const);
+
+  if (requiredScopes.length === 0) {
+    throw new OidcConfigError('PAP_OIDC_REQUIRED_SCOPES nie może być pustą listą.');
+  }
 
   return Object.freeze({
     environment,
     issuer: rawIssuer,
     jwksUri: jwksUrl.toString(),
-    audience,
+    audience: audiences[0]!,
+    audiences: Object.freeze(audiences),
     allowedAlgorithms,
     allowedTokenHeaderTypes: Object.freeze(['at+jwt', 'jwt']),
     allowedAuthorizedParties,

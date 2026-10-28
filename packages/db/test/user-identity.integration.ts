@@ -193,6 +193,17 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
         subject: 'user-a-attempt-after-disable',
       }),
     ).toEqual({ ok: false, reason: 'user_disabled' });
+
+    // Triggery SQL na poziomie bazy odrzucają próbę ponownego włączenia wyłączonego konta lub dopisania mu aktywnej tożsamości
+    await expectDatabaseError(
+      sql`UPDATE app_user SET status = 'active', disabled_at = NULL WHERE id = ${USER_A}`,
+      '23514',
+    );
+    await expectDatabaseError(
+      sql`INSERT INTO user_oidc_identity (id, user_id, issuer, subject, status, linked_at)
+          VALUES (${id(114)}, ${USER_A}, ${ISSUER_2}, 'user-a-sql-bypass', 'active', '2026-01-01T00:00:00.000Z')`,
+      '23514',
+    );
   });
 
   it('wykonuje pełny łańcuch OIDC -> internal userId -> autoryzacja firmy i administracja dostępem na PostgreSQL', async () => {

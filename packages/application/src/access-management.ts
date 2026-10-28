@@ -126,29 +126,42 @@ export function createTenantAccessManagementAuthorizer(
       actor: AccessManagementActor,
       command: AccessManagementCommand,
     ): Promise<boolean> {
-      const facts = await source.getAuthorizationFacts(actor, command);
+      let canonicalActor: AccessManagementActor;
+      let canonicalCommand: AccessManagementCommand;
+      try {
+        canonicalActor = Object.freeze({ userId: userId(actor.userId) });
+        canonicalCommand = copyAccessManagementCommand(command);
+      } catch {
+        return false;
+      }
+
+      const facts = await source.getAuthorizationFacts(canonicalActor, canonicalCommand);
       const decision = decideAccessManagementAuthorization({
-        actorUserId: actor.userId,
-        targetUserId: command.userId,
-        tenantId: command.tenantId,
-        commandKind: command.kind,
+        actorUserId: canonicalActor.userId,
+        targetUserId: canonicalCommand.userId,
+        tenantId: canonicalCommand.tenantId,
+        commandKind: canonicalCommand.kind,
         actorMembership: facts.actorMembership,
         actorGrants: facts.actorGrants,
         targetMembership: facts.targetMembership,
         requestedValidUntil:
-          command.kind === 'reactivate_membership' && command.validUntil !== null
-            ? new Date(command.validUntil)
+          canonicalCommand.kind === 'reactivate_membership' && canonicalCommand.validUntil !== null
+            ? new Date(canonicalCommand.validUntil)
             : null,
         grantScope:
-          command.kind === 'grant'
+          canonicalCommand.kind === 'grant'
             ? {
-                legalEntityId: command.legalEntityId,
-                action: command.action,
-                validFrom: command.validFrom === null ? null : new Date(command.validFrom),
-                validUntil: command.validUntil === null ? null : new Date(command.validUntil),
+                legalEntityId: canonicalCommand.legalEntityId,
+                action: canonicalCommand.action,
+                validFrom:
+                  canonicalCommand.validFrom === null ? null : new Date(canonicalCommand.validFrom),
+                validUntil:
+                  canonicalCommand.validUntil === null
+                    ? null
+                    : new Date(canonicalCommand.validUntil),
               }
             : undefined,
-        revokedGrantScope: command.kind === 'revoke_grant' ? facts.targetGrant : undefined,
+        revokedGrantScope: canonicalCommand.kind === 'revoke_grant' ? facts.targetGrant : undefined,
         now: clock.now(),
       });
       return decision.allowed === true;

@@ -91,6 +91,37 @@ export type UserIdentityStoreResult =
         | 'identity_store_unavailable';
     };
 
+function extractPostgresUniqueConflictReason(
+  error: unknown,
+): 'user_already_exists' | 'identity_already_linked' | null {
+  const candidates = [
+    error,
+    typeof error === 'object' && error !== null && 'cause' in error
+      ? (error as { readonly cause?: unknown }).cause
+      : undefined,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate !== 'object' || candidate === null) {
+      continue;
+    }
+    const code = (candidate as { readonly code?: unknown }).code;
+    if (code !== '23505') {
+      continue;
+    }
+    const constraint = String(
+      (candidate as { readonly constraint_name?: unknown; readonly constraint?: unknown })
+        .constraint_name ??
+        (candidate as { readonly constraint?: unknown }).constraint ??
+        '',
+    );
+    if (constraint === 'app_user_pkey') {
+      return 'user_already_exists';
+    }
+    return 'identity_already_linked';
+  }
+  return null;
+}
+
 /**
  * Kontrolowany adapter provisioningu i wyłączania kont, całkowicie oddzielony od weryfikacji tokenów.
  */
@@ -162,7 +193,11 @@ export class PostgresUserIdentityStore {
 
         return { ok: true, userId: parsedUserId };
       });
-    } catch {
+    } catch (error) {
+      const uniqueConflict = extractPostgresUniqueConflictReason(error);
+      if (uniqueConflict) {
+        return { ok: false, reason: uniqueConflict };
+      }
       return { ok: false, reason: 'identity_store_unavailable' };
     }
   }
@@ -229,7 +264,11 @@ export class PostgresUserIdentityStore {
 
         return { ok: true, userId: parsedUserId };
       });
-    } catch {
+    } catch (error) {
+      const uniqueConflict = extractPostgresUniqueConflictReason(error);
+      if (uniqueConflict === 'identity_already_linked') {
+        return { ok: false, reason: 'identity_already_linked' };
+      }
       return { ok: false, reason: 'identity_store_unavailable' };
     }
   }

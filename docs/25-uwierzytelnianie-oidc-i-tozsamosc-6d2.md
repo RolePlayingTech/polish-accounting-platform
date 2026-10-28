@@ -73,41 +73,42 @@ sequenceDiagram
 
 ## 3. Zasady mapowania `(issuer, subject) -> userId`
 
-1. **Jednoznaczność pary `(issuer, subject)`:** Zgodnie z [OpenID Connect Core 1.0 §5.7](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability) zewnętrzną tożsamość identyfikuje wyłącznie para `(issuer, subject)`, zabezpieczona w bazie unikalnym ograniczeniem `user_oidc_identity_issuer_subject_uq`.
+1. **Jednoznaczność pary `(issuer, subject)`:** Zgodnie z [OpenID Connect Core 1.0 §5.7](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability) zewnętrzną tożsamość identyfikuje wyłącznie para `(issuer, subject)`, zabezpieczona w bazie unikalnym ograniczeniem `user_oidc_identity_issuer_subject_unique`.
 2. **Wrażliwość na wielkość liter i nieprzezroczystość:** Zarówno `issuer`, jak i `subject` są traktowane jako nieprzezroczyste, case-sensitive ciągi znaków (`text` w PostgreSQL, porównanie dokładne `=`). `Sub-User-1` oraz `sub-user-1` to dwie różne tożsamości.
 3. **Izolacja wystawców:** Ten sam `subject` od dwóch różnych wystawców (`issuer`) stanowi dwa odrębne wpisy i nigdy nie jest automatycznie łączony.
 4. **Wewnętrzny `userId`:** Aplikacja posługuje się własnym, stabilnym identyfikatorem UUID (`app_user.id`), niezależnym od formatu `sub` u dostawcy OIDC.
 5. **Zakaz łączenia kont po e-mailu lub nazwie:** Tabele `app_user` i `user_oidc_identity` celowo nie przechowują ani nie używają `email`, `preferred_username` ani nazwy wyświetlanej do rozpoznawania użytkownika. Zbieżność adresu e-mail w tokenie JWT nigdy nie powoduje powiązania ani przejęcia konta.
-6. **Wielu wystawców i migracja IdP:** Jeden rekord `app_user` może posiadać wiele jawnie utworzonych rekordów w `user_oidc_identity` (np. podczas kontrolowanej migracji z jednego klastra Keycloak na drugi), lecz każde powiązanie wymaga jawnego wywołania `PostgresUserIdentityStore.linkOidcIdentity` dla aktywnego konta.
-7. **Niezmienność powiązania (SQL trigger):** Trigger `protect_user_oidc_identity` blokuje zmianę `user_id`, `issuer`, `subject` oraz `created_at` istniejącego wpisu, a także zabrania wyczyszczenia `revoked_at` lub przesunięcia go w przyszłość.
+6. **Wielu wystawców i migracja IdP:** Jeden rekord `app_user` może posiadać wiele jawnie utworzonych rekordów w `user_oidc_identity` (np. podczas kontrolowanej migracji z jednego klastra Keycloak na drugi), lecz każde powiązanie wymaga jawnego wywołania `PostgresUserIdentityStore.linkAdditionalOidcIdentity` dla aktywnego konta.
+7. **Niezmienność powiązania (SQL trigger):** Trigger `protect_user_oidc_identity` blokuje zmianę `id`, `user_id`, `issuer`, `subject` oraz `linked_at` istniejącego wpisu, zabrania wyczyszczenia `revoked_at` lub przesunięcia go w przyszłość oraz blokuje dopięcie aktywnej tożsamości OIDC do wyłączonego konta `app_user`. Trigger `revoke_oidc_identities_on_user_disable` blokuje przywrócenie wyłączonego konta `app_user` oraz przesunięcie `disabled_at` w przyszłość.
 
 ## 4. Konfiguracja środowiska i sposób testowania lokalnego
 
 Konfiguracja weryfikatora OIDC jest wczytywana przez `loadOidcVerifierConfig(env)` (`apps/api/src/auth/oidc-config.ts`). Przykładowe zmienne opisano w głównym pliku `.env.example`:
 
-| Zmienna                            | Wymagalność                         | Opis                                                                                                                                                                                     |
-| ---------------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PAP_OIDC_ENV`                     | Wymagana przy używaniu weryfikatora | `local`, `test`, `staging` lub `production`. W `staging`/`production` wymusza `https://` i blokuje adresy loopback/prywatne.                                                             |
-| `PAP_OIDC_ISSUER`                  | Wymagana                            | Dokładny URL wystawcy (`iss`), bez query, fragmentu i końcowego `/`.                                                                                                                     |
-| `PAP_OIDC_JWKS_URI`                | Wymagana                            | Dokładny URL endpointu kluczy publicznych JWKS dostawcy OIDC.                                                                                                                            |
-| `PAP_OIDC_AUDIENCE`                | Wymagana                            | Oczekiwany odbiorca tokenu (`aud`), np. `pap-api` (lista po przecinku).                                                                                                                  |
-| `PAP_OIDC_ALLOWED_ALGS`            | Opcjonalna                          | Dozwolone algorytmy asymetryczne z listy `RS256,RS384,RS512,PS256,PS384,PS512,ES256,ES384,ES512,EdDSA` (domyślnie `RS256,ES256`). Algorytmy `none` oraz `HS*` są bezwzględnie odrzucane. |
-| `PAP_OIDC_ALLOWED_AZP`             | Opcjonalna                          | Dozwoleni klienci OAuth2 w claimie `azp` (gdy podano, claim `azp` jest obowiązkowy i musi należeć do listy).                                                                             |
-| `PAP_OIDC_REQUIRED_SCOPES`         | Opcjonalna                          | Scopes wymagane w każdym tokenie dostępu na poziomie weryfikatora.                                                                                                                       |
-| `PAP_OIDC_CLOCK_TOLERANCE_SECONDS` | Opcjonalna                          | Maksymalna tolerancja zegara w sekundach (`0..60`, domyślnie `30`).                                                                                                                      |
-| `PAP_OIDC_MAX_TOKEN_AGE_SECONDS`   | Opcjonalna                          | Maksymalny wiek tokenu względem `iat` (`60..86400`, domyślnie `3600`).                                                                                                                   |
+| Zmienna                            | Wymagalność                         | Opis                                                                                                                                                                                                                 |
+| ---------------------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAP_OIDC_ENV`                     | Wymagana przy używaniu weryfikatora | `local`, `test` albo `staging` (analogicznie do `PAP_DATABASE_ENV`). W `staging` wymaga `NODE_ENV=production`, wymusza `https://`, wspólny origin `issuer`/`jwksUri` i blokuje adresy loopback/prywatne/wewnętrzne. |
+| `PAP_OIDC_ISSUER`                  | Wymagana                            | Dokładny URL wystawcy (`iss`), bez poświadczeń, query, fragmentu i końcowego `/`.                                                                                                                                    |
+| `PAP_OIDC_JWKS_URI`                | Wymagana                            | Dokładny URL endpointu kluczy publicznych JWKS dostawcy OIDC (musi mieć ten sam origin co `PAP_OIDC_ISSUER`).                                                                                                        |
+| `PAP_OIDC_AUDIENCE`                | Wymagana                            | Oczekiwany odbiorca zasobu API (`aud`), np. `pap-api` (lub lista odbiorców po przecinku, rozłączna z `PAP_OIDC_ALLOWED_AZP`).                                                                                        |
+| `PAP_OIDC_ALLOWED_ALGORITHMS`      | Opcjonalna                          | Dozwolone algorytmy asymetryczne z listy `RS256,RS384,RS512,PS256,PS384,PS512,ES256,ES384,ES512,EdDSA` (domyślnie `RS256,ES256`; obsługiwany jest także alias `PAP_OIDC_ALLOWED_ALGS`). Algorytmy `none` oraz `HS*` są odrzucane. |
+| `PAP_OIDC_ALLOWED_AZP`             | Opcjonalna                          | Dozwoleni klienci OAuth2/OIDC w claimie `azp`/`client_id` (gdy podano, identyfikator klienta jest obowiązkowy, musi należeć do listy i być rozłączny z `PAP_OIDC_AUDIENCE`).                                        |
+| `PAP_OIDC_REQUIRED_SCOPES`         | Opcjonalna                          | Scopes wymagane w każdym tokenie dostępu na poziomie weryfikatora (domyślnie `openid`; pusta lista jest odrzucana).                                                                                                  |
+| `PAP_OIDC_CLOCK_TOLERANCE_SECONDS` | Opcjonalna                          | Maksymalna tolerancja zegara w sekundach (`0..60`, domyślnie `30`).                                                                                                                                                  |
+| `PAP_OIDC_MAX_TOKEN_AGE_SECONDS`   | Opcjonalna                          | Maksymalny wiek tokenu względem `iat` (`60..86400`, domyślnie `3600`).                                                                                                                                               |
 
 `pnpm dev`, `pnpm test`, `pnpm typecheck` i `pnpm build` **nie wymagają** uruchomionego serwera Keycloak ani zmiennych `PAP_OIDC_*` podczas startu publicznego szkieletu. Testy jednostkowe i pipeline'u API generują syntetyczne pary kluczy asymetrycznych (`RS256`, `ES256`) w pamięci.
 
 ## 5. Wymagane scopes, audiences i ochrona przed pomyleniem tokenów
 
-- **Audience (`aud`):** Token musi zawierać claim `aud` (jako string lub tablicę niepustych stringów) obejmujący skonfigurowane `PAP_OIDC_AUDIENCE` (np. `pap-api`).
-- **Authorized party (`azp`):** Jeśli skonfigurowano `PAP_OIDC_ALLOWED_AZP` lub token posiada wielu odbiorców w `aud`, weryfikator wymaga obecności `azp` zgodnego z listą dozwolonych klientów.
-- **Scopes (`scope`):** Weryfikator odczytuje claim `scope` (rozdzielany spacjami zgodnie z RFC 8693 / OAuth 2.0) i sprawdza zarówno scopes globalne weryfikatora, jak i scopes wymagane dla konkretnej operacji (`requiredScopes` w `@RequireCompanyAction` lub `authorizeAuthenticatedCompanyAction`, np. `pap:accounting`).
-- **Ochrona przed pomyleniem ID Token / Refresh Token / Logout Token z Access Tokenem:**
-  - Nagłówek `typ` (jeśli obecny) po normalizacji (usunięciu opcjonalnego prefiksu `application/`) musi należeć do dozwolonych typów (`at+jwt`, `jwt`) i jest natychmiast odrzucany dla `id+jwt`, `id`, `refresh+jwt`, `refresh`, `dpop+jwt`, `logout+jwt`, `secevent+jwt`.
-  - Payload zawierający `typ` równy `id`, `id_token`, `refresh` lub `refresh_token` (np. konwencja Keycloak `typ: "ID"` / `typ: "Refresh"`), claim `at_hash`, `c_hash` lub `events` (backchannel logout token) jest odrzucany jako `token_type_not_allowed`.
-  - Nagłówki JWS zawierające niezaufane referencje do kluczy (`jku`, `jwk`, `x5u`, `x5c`, `crit`) są bezwzględnie odrzucane przed weryfikacją podpisu.
+- **Audience (`aud`):** Token musi zawierać claim `aud` (jako string lub tablicę niepustych stringów) obejmujący przynajmniej jednego skonfigurowanego odbiorcę z `PAP_OIDC_AUDIENCE` (np. `pap-api`).
+- **Authorized party (`azp` / `client_id`):** Weryfikator sprawdza spójność `azp` oraz `client_id` (RFC 9068 §2.2), odrzuca kolizję identyfikatora klienta z odbiorcą zasobu (`PAP_OIDC_AUDIENCE`), a gdy skonfigurowano `PAP_OIDC_ALLOWED_AZP` lub token posiada wielu odbiorców w `aud`, wymaga obecności identyfikatora klienta zgodnego z listą dozwolonych klientów.
+- **Scopes (`scope`):** Każdy Access Token musi zawierać niepusty claim `scope` (rozdzielany spacjami zgodnie z RFC 8693 / RFC 9068 §2.2.3). Weryfikator sprawdza zarówno scopes globalne weryfikatora (domyślnie `openid`), jak i scopes wymagane dla konkretnej operacji (`requiredScopes` w `@RequireCompanyAction` lub `authorizeAuthenticatedCompanyAction`, np. `pap:accounting`).
+- **Ochrona przed pomyleniem ID Token / Refresh Token / Logout Token z Access Tokenem (RFC 9068, RFC 8725 §3.11, OIDC Core):**
+  - Nagłówek `typ` po normalizacji (usunięciu opcjonalnego prefiksu `application/`) musi należeć do dozwolonych typów (`at+jwt`, `jwt`) i jest natychmiast odrzucany dla `id+jwt`, `id`, `refresh+jwt`, `refresh`, `dpop+jwt`, `logout+jwt`, `secevent+jwt`.
+  - Dla jawnego nagłówka `at+jwt` (`application/at+jwt` wg RFC 9068 §2.1) opcjonalny claim `payload.typ` (jeśli występuje) musi mieć wartość `'Bearer'`. Dla nagłówka `jwt` (tryb kompatybilności z domyślnym profilem Keycloaka, dzielony ze standardowym OIDC ID Tokenem) weryfikator **bezwzględnie wymaga** `payload.typ === 'Bearer'` — standardowy OIDC ID Token (z nagłówkiem `typ: "JWT"` bez `payload.typ`) jest odrzucany jako `invalid_token_type`.
+  - Payload zawierający `typ` inny niż `'Bearer'` (np. konwencja Keycloak `typ: "ID"` / `typ: "Refresh"`), claim `at_hash`, `c_hash`, `s_hash`, `nonce` lub `events` (backchannel logout token) jest odrzucany jako `invalid_token_type`.
+  - Nagłówki JWS zawierające niezaufane referencje do kluczy (`jku`, `jwk`, `x5u`, `x5c`, `crit`) są bezwzględnie odrzucane przed weryfikacją podpisu (`untrusted_key_header`).
 
 ## 6. Model błędów i odmów (`401` vs `403` vs `400`)
 
@@ -116,9 +117,9 @@ Guard `CompanyActionAuthorizationGuard` rozdziela błędy uwierzytelniania od od
 - **`401 Unauthorized`** (z nagłówkiem `WWW-Authenticate: Bearer ...`):
   - brak nagłówka `Authorization: Bearer <token>` lub niepoprawny format nagłówka;
   - obecność zabronionych nagłówków spoofingu tożsamości (`x-user-id`, `x-authenticated-user`, `x-forwarded-user`, `x-auth-request-user`, `x-remote-user`, `x-pap-user-id`, `x-pap-actor-id`, `x-pap-tenant-role`, `x-pap-platform-role`) lub przekazanie `?access_token=` w query string;
-  - niepoprawny podpis, niedozwolony algorytm, wygasły token (`exp`), token jeszcze nieważny (`nbf`), token z przyszłości (`iat`), błędny `iss`, `aud` lub `azp`, pomylenie ID/Refresh tokenu z Access Tokenem, cofnięty token (`token_revoked`) albo niedostępność/błąd konfiguracji JWKS (`jwks_unavailable`, `verifier_not_configured`).
+  - niepoprawny podpis (`invalid_signature`), niedozwolony algorytm (`unsupported_algorithm`), wygasły token (`token_expired`), token jeszcze nieważny (`token_not_yet_valid`), token z przyszłości (`invalid_issued_at`), błędny `iss` (`invalid_issuer`), `aud` (`invalid_audience`) lub `azp`/`client_id` (`invalid_authorized_party`), pomylenie ID/Refresh/Logout tokenu z Access Tokenem (`invalid_token_type`), cofnięty token/sesja (`subject_revoked_or_disabled`) albo niedostępność/błąd konfiguracji JWKS (`jwks_unavailable`, `oidc_configuration_unavailable`).
 - **`403 Forbidden`** (jednolity komunikat `Brak uprawnień do wykonania operacji.`):
-  - poprawny kryptograficznie token OIDC, któremu brakuje wymaganego scope'u operacji;
+  - poprawny kryptograficznie token OIDC, któremu brakuje wymaganego scope'u operacji (`insufficient_scope`);
   - brak mapowania `(issuer, subject)` w `user_oidc_identity`, wyłączone konto wewnętrzne (`app_user.status = 'disabled'`) lub cofnięte powiązanie (`revoked_at IS NOT NULL`);
   - brak aktywnego członkostwa w żądanym tenancie, brak jawnego grantu do firmy/akcji (`read` vs `write`), rola `tenant_owner`/`tenant_admin`/`platform_operator` bez jawnego grantu księgowego, cofnięte lub wygasłe członkostwo/grant;
   - awaria źródła tożsamości lub źródła faktów autoryzacyjnych (fail-closed).
@@ -129,11 +130,11 @@ Guard `CompanyActionAuthorizationGuard` rozdziela błędy uwierzytelniania od od
 
 1. **Brak auto-provisioningu z tokenu:** Poprawny token OIDC dla nieznanej pary `(issuer, subject)` nigdy nie tworzy automatycznie rekordu w `app_user` ani w `user_oidc_identity`.
 2. **Jawny provisioning (`PostgresUserIdentityStore`):**
-   - `provisionUserWithIdentity({ userId, identityId, issuer, subject })` tworzy w jednej transakcji aktywne konto wewnętrzne i przypisuje mu pierwszą tożsamość OIDC.
-   - `linkOidcIdentity({ userId, identityId, issuer, subject })` blokuje wiersz `app_user` (`SELECT ... FOR UPDATE`), weryfikuje, że konto istnieje i ma status `active`, i dopina kolejną tożsamość OIDC (np. przy zmianie dostawcy tożsamości).
+   - `provisionUserWithOidcIdentity({ userId, identityId, issuer, subject })` tworzy w jednej transakcji aktywne konto wewnętrzne i przypisuje mu pierwszą tożsamość OIDC (współbieżne naruszenia `UNIQUE` PostgreSQL `23505` są deterministycznie mapowane na `user_already_exists` lub `identity_already_linked`).
+   - `linkAdditionalOidcIdentity({ userId, identityId, issuer, subject })` blokuje wiersz `app_user` (`SELECT ... FOR UPDATE`), weryfikuje, że konto istnieje i ma status `active`, i dopina kolejną tożsamość OIDC (np. przy zmianie dostawcy tożsamości).
 3. **Dezaktywacja i odwołanie:**
-   - `disableUser(userId)` ustawia `app_user.status = 'disabled'`, `disabled_at = clock_timestamp()` oraz trwale ustawia `revoked_at` na wszystkich powiązaniach OIDC tego użytkownika (dodatkowo egzekwowane przez trigger `revoke_oidc_identities_on_user_disable`).
-   - `revokeOidcIdentity(issuer, subject)` trwale unieważnia pojedyncze powiązanie zewnętrzne bez usuwania historii.
+   - `disableUserAccount({ userId })` ustawia `app_user.status = 'disabled'`, `disabled_at = clock_timestamp()` oraz trwale ustawia `revoked_at` na wszystkich powiązaniach OIDC tego użytkownika (egzekwowane przez trigger `revoke_oidc_identities_on_user_disable`).
+   - `revokeOidcIdentity({ userId, identityId })` trwale unieważnia pojedyncze powiązanie zewnętrzne bez usuwania historii.
 4. **Strategia dla cofniętych sesji i tokenów:**
    - Krótki czas życia Access Tokenu (`PAP_OIDC_MAX_TOKEN_AGE_SECONDS`, docelowo 5–15 minut w Keycloak) oraz walidacja `iat`/`exp` przy każdym żądaniu.
    - Wyłączenie konta w `app_user`, odwołanie powiązania w `user_oidc_identity` lub cofnięcie członkostwa/grantu w `manageAccess` działa **natychmiast przy kolejnym żądaniu**, nawet jeśli sam token JWT jeszcze nie wygasł.

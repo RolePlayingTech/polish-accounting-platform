@@ -120,14 +120,40 @@ describe('loadOidcVerifierConfig i JwksOidcAccessTokenVerifier (6D-2)', () => {
         PAP_OIDC_ENV: 'local',
         PAP_OIDC_ISSUER: 'http://127.0.0.1:8080/realms/pap',
         PAP_OIDC_JWKS_URI: 'http://127.0.0.1:8080/realms/pap/protocol/openid-connect/certs',
-        PAP_OIDC_AUDIENCE: AUDIENCE,
+        PAP_OIDC_AUDIENCE: 'pap-api,pap-mcp',
+        PAP_OIDC_ALLOWED_ALGS: 'ES256',
       });
       expect(local.environment).toBe('local');
+      expect(local.audience).toBe('pap-api');
+      expect(local.audiences).toEqual(['pap-api', 'pap-mcp']);
+      expect(local.allowedAlgorithms).toEqual(['ES256']);
+      expect(local.requiredScopes).toEqual(['openid']);
+
+      // Publiczna domena zaczynająca się od liter "fc" lub "fd" nie może być błędnie traktowana jako adres IPv6 ULA
+      const fdDomain = loadOidcVerifierConfig({
+        NODE_ENV: 'production',
+        PAP_OIDC_ENV: 'staging',
+        PAP_OIDC_ISSUER: 'https://fcorp.example.com/realms/pap',
+        PAP_OIDC_JWKS_URI: 'https://fcorp.example.com/realms/pap/certs',
+        PAP_OIDC_AUDIENCE: AUDIENCE,
+      });
+      expect(fdDomain.issuer).toBe('https://fcorp.example.com/realms/pap');
     });
 
     it.each([
       ['alg=none', { PAP_OIDC_ALLOWED_ALGORITHMS: 'none' }],
       ['alg=HS256', { PAP_OIDC_ALLOWED_ALGORITHMS: 'RS256,HS256' }],
+      ['alias PAP_OIDC_ALLOWED_ALGS=none', { PAP_OIDC_ALLOWED_ALGS: 'none' }],
+      [
+        'sprzeczne PAP_OIDC_ALLOWED_ALGORITHMS i PAP_OIDC_ALLOWED_ALGS',
+        { PAP_OIDC_ALLOWED_ALGORITHMS: 'RS256', PAP_OIDC_ALLOWED_ALGS: 'ES256' },
+      ],
+      ['puste PAP_OIDC_REQUIRED_SCOPES', { PAP_OIDC_REQUIRED_SCOPES: '   ' }],
+      [
+        'kolizja PAP_OIDC_AUDIENCE z PAP_OIDC_ALLOWED_AZP (ryzyko ID Token confusion)',
+        { PAP_OIDC_AUDIENCE: 'pap-api,pap-web-client', PAP_OIDC_ALLOWED_AZP: 'pap-web-client' },
+      ],
+      ['pusty element na liście PAP_OIDC_AUDIENCE', { PAP_OIDC_AUDIENCE: 'pap-api,' }],
       ['inny origin JWKS niż issuer', { PAP_OIDC_JWKS_URI: 'https://evil.example.test/jwks.json' }],
       [
         'http na stagingu',
@@ -145,6 +171,54 @@ describe('loadOidcVerifierConfig i JwksOidcAccessTokenVerifier (6D-2)', () => {
           PAP_OIDC_ENV: 'staging',
           PAP_OIDC_ISSUER: 'https://127.0.0.1/realms/pap',
           PAP_OIDC_JWKS_URI: 'https://127.0.0.1/realms/pap/certs',
+        },
+      ],
+      [
+        'IPv4-mapped IPv6 loopback na stagingu',
+        {
+          NODE_ENV: 'production',
+          PAP_OIDC_ENV: 'staging',
+          PAP_OIDC_ISSUER: 'https://[::ffff:127.0.0.1]/realms/pap',
+          PAP_OIDC_JWKS_URI: 'https://[::ffff:127.0.0.1]/realms/pap/certs',
+        },
+      ],
+      [
+        'IPv4-mapped IPv6 metadata link-local',
+        {
+          PAP_OIDC_ISSUER: 'https://[::ffff:169.254.169.254]/realms/pap',
+          PAP_OIDC_JWKS_URI: 'https://[::ffff:169.254.169.254]/realms/pap/certs',
+        },
+      ],
+      [
+        'adres IPv6 nieokreślony [::]',
+        {
+          PAP_OIDC_ISSUER: 'https://[::]/realms/pap',
+          PAP_OIDC_JWKS_URI: 'https://[::]/realms/pap/certs',
+        },
+      ],
+      [
+        'hostname z kropką końcową (localhost.)',
+        {
+          NODE_ENV: 'production',
+          PAP_OIDC_ENV: 'staging',
+          PAP_OIDC_ISSUER: 'https://localhost./realms/pap',
+          PAP_OIDC_JWKS_URI: 'https://localhost./realms/pap/certs',
+        },
+      ],
+      [
+        'jednoczłonowa wewnętrzna nazwa hosta bez kropki',
+        {
+          NODE_ENV: 'production',
+          PAP_OIDC_ENV: 'staging',
+          PAP_OIDC_ISSUER: 'https://keycloak/realms/pap',
+          PAP_OIDC_JWKS_URI: 'https://keycloak/realms/pap/certs',
+        },
+      ],
+      [
+        'adres CGNAT 100.64.0.0/10',
+        {
+          PAP_OIDC_ISSUER: 'https://100.64.0.1/realms/pap',
+          PAP_OIDC_JWKS_URI: 'https://100.64.0.1/realms/pap/certs',
         },
       ],
       [
@@ -290,6 +364,9 @@ describe('loadOidcVerifierConfig i JwksOidcAccessTokenVerifier (6D-2)', () => {
       ['payload typ=ID (Keycloak ID Token)', { typ: 'ID' }, { typ: 'JWT' }],
       ['payload typ=Refresh (Keycloak Refresh Token)', { typ: 'Refresh' }, { typ: 'JWT' }],
       ['payload z at_hash (ID Token)', { at_hash: 'xyz' }, { typ: 'JWT' }],
+      ['payload z c_hash (ID Token)', { c_hash: 'abc' }, { typ: 'at+jwt' }],
+      ['payload z s_hash (ID Token)', { s_hash: 'def' }, { typ: 'at+jwt' }],
+      ['payload z nonce (ID Token)', { nonce: 'n-123' }, { typ: 'at+jwt' }],
       [
         'payload z events (Logout Token)',
         { events: { 'http://schemas.openid.net/event/backchannel-logout': {} } },
@@ -311,12 +388,104 @@ describe('loadOidcVerifierConfig i JwksOidcAccessTokenVerifier (6D-2)', () => {
       },
     );
 
+    it('odrzuca standardowy OIDC Core ID Token (nagłówek typ=JWT bez at_hash, c_hash i bez payload typ=Bearer), a akceptuje RFC 9068 at+jwt oraz Keycloak Bearer', async () => {
+      const verifier = new JwksOidcAccessTokenVerifier(
+        baseConfig({
+          requiredScopes: ['openid'],
+        }),
+        {
+          clock: { now: () => NOW },
+          fetchJwks: async () => ({ keys: [rsaPublicJwk] }),
+        },
+      );
+
+      // 1. Standardowy OIDC Core 1.0 ID Token (np. z implicit/code flow bez at_hash/c_hash i bez niestandardowego payload.typ)
+      const standardIdToken = await new SignJWT({
+        iss: ISSUER,
+        sub: 'User-Sub-CaseSensitive-01',
+        aud: AUDIENCE,
+        azp: 'pap-web-client',
+        auth_time: NOW_SEC - 60,
+        iat: NOW_SEC - 60,
+        exp: NOW_SEC + 300,
+      })
+        .setProtectedHeader({ alg: 'RS256', typ: 'JWT', kid: 'kid-rsa-1' })
+        .sign(rsaPair1.privateKey);
+
+      await expect(verifier.verifyAccessToken(standardIdToken)).resolves.toEqual({
+        ok: false,
+        reason: 'invalid_token_type',
+      });
+
+      // 2. Nawet jeśli niestandardowy IdP dołączy claim scope do tokenu z nagłówkiem typ=JWT, brak payload.typ="Bearer" musi go odrzucić
+      const idTokenWithScopeClaim = await new SignJWT({
+        iss: ISSUER,
+        sub: 'User-Sub-CaseSensitive-01',
+        aud: AUDIENCE,
+        azp: 'pap-web-client',
+        scope: 'openid profile pap:accounting',
+        iat: NOW_SEC - 60,
+        exp: NOW_SEC + 300,
+      })
+        .setProtectedHeader({ alg: 'RS256', typ: 'JWT', kid: 'kid-rsa-1' })
+        .sign(rsaPair1.privateKey);
+
+      await expect(verifier.verifyAccessToken(idTokenWithScopeClaim)).resolves.toEqual({
+        ok: false,
+        reason: 'invalid_token_type',
+      });
+
+      // 3. RFC 9068 Access Token (nagłówek typ=at+jwt, bez payload.typ, z client_id zamiast azp) jest akceptowany
+      const expectedJti = 'jti-0000000002';
+      const rfc9068AccessToken = await new SignJWT({
+        iss: ISSUER,
+        sub: 'User-Sub-CaseSensitive-01',
+        aud: AUDIENCE,
+        client_id: 'pap-web-client',
+        scope: 'openid pap:accounting',
+        iat: NOW_SEC - 60,
+        exp: NOW_SEC + 300,
+        jti: expectedJti,
+      })
+        .setProtectedHeader({ alg: 'RS256', typ: 'at+jwt', kid: 'kid-rsa-1' })
+        .sign(rsaPair1.privateKey);
+
+      await expect(verifier.verifyAccessToken(rfc9068AccessToken)).resolves.toMatchObject({
+        ok: true,
+        identity: {
+          issuer: ISSUER,
+          subject: 'User-Sub-CaseSensitive-01',
+          tokenId: expectedJti,
+          scopes: ['openid', 'pap:accounting'],
+        },
+      });
+
+      // 4. Keycloak Access Token (nagłówek typ=JWT oraz jawny payload.typ="Bearer") jest akceptowany
+      const keycloakAccessToken = await signAccessToken(
+        { typ: 'Bearer', scope: 'openid pap:accounting' },
+        { typ: 'JWT' },
+      );
+      await expect(verifier.verifyAccessToken(keycloakAccessToken)).resolves.toMatchObject({
+        ok: true,
+      });
+    });
+
     it.each([
       ['błędny issuer', { iss: 'https://evil-idp.example.test/realms/pap' }, 'invalid_issuer'],
       ['issuer z ukośnikiem na końcu', { iss: `${ISSUER}/` }, 'invalid_issuer'],
       ['błędny audience', { aud: 'other-service' }, 'invalid_audience'],
       ['tablica audience bez pap-api', { aud: ['svc-a', 'svc-b'] }, 'invalid_audience'],
       ['błędny azp', { azp: 'untrusted-client' }, 'invalid_authorized_party'],
+      [
+        'sprzeczne azp oraz client_id',
+        { azp: 'pap-web-client', client_id: 'other-client' },
+        'invalid_authorized_party',
+      ],
+      [
+        'azp równe audience serwera zasobów (ryzyko pomylenia odbiorcy)',
+        { azp: AUDIENCE },
+        'invalid_authorized_party',
+      ],
       [
         'wielu odbiorców aud bez azp',
         { aud: [AUDIENCE, 'other-api'], azp: undefined },
@@ -330,6 +499,8 @@ describe('loadOidcVerifierConfig i JwksOidcAccessTokenVerifier (6D-2)', () => {
       ],
       ['iat w przyszłości poza clockTolerance', { iat: NOW_SEC + 31 }, 'invalid_issued_at'],
       ['brak wymaganego scope', { scope: 'openid profile' }, 'insufficient_scope'],
+      ['brak claimu scope', { scope: undefined }, 'missing_required_claim'],
+      ['pusty claim scope', { scope: '   ' }, 'missing_required_claim'],
       ['pusty sub', { sub: '   ' }, 'missing_required_claim'],
     ] as const)(
       'odrzuca token z niepoprawnym claimem (%s)',
@@ -416,6 +587,115 @@ describe('loadOidcVerifierConfig i JwksOidcAccessTokenVerifier (6D-2)', () => {
       currentTimeMs += 360_000;
       shouldFailJwks = true;
       await expect(verifier.verifyAccessToken(rotatedToken)).resolves.toEqual({
+        ok: false,
+        reason: 'jwks_unavailable',
+      });
+      expect(fetchJwks).toHaveBeenCalledTimes(3);
+
+      // Kolejne żądanie 1s po awarii (przed upływem cooldownu 10s) nie bombarduje niedostępnego IdP
+      currentTimeMs += 1_000;
+      await expect(verifier.verifyAccessToken(rotatedToken)).resolves.toEqual({
+        ok: false,
+        reason: 'jwks_unavailable',
+      });
+      expect(fetchJwks).toHaveBeenCalledTimes(3);
+    });
+
+    it('odświeża JWKS z poszanowaniem cooldownu, gdy IdP rotuje materiał klucza z ponownym użyciem tego samego kid', async () => {
+      let currentTimeMs = NOW.getTime();
+      const rsaPublicJwk2: JWK = {
+        ...(await exportJWK(rsaPair2.publicKey)),
+        kid: 'kid-rsa-1',
+        use: 'sig',
+        alg: 'RS256',
+      };
+      let jwksState: JWK[] = [rsaPublicJwk];
+      const fetchJwks = vi.fn(async () => ({ keys: jwksState }));
+
+      const verifier = new JwksOidcAccessTokenVerifier(baseConfig(), {
+        clock: { now: () => new Date(currentTimeMs) },
+        fetchJwks,
+      });
+
+      const tokenKey1 = await signAccessToken({}, { kid: 'kid-rsa-1' }, rsaPair1.privateKey);
+      await expect(verifier.verifyAccessToken(tokenKey1)).resolves.toMatchObject({ ok: true });
+      expect(fetchJwks).toHaveBeenCalledTimes(1);
+
+      // Po upływie cooldownu (15s) IdP podmienia klucz pod tym samym kid-rsa-1
+      currentTimeMs += 15_000;
+      jwksState = [rsaPublicJwk2];
+      const tokenKey2 = await signAccessToken({}, { kid: 'kid-rsa-1' }, rsaPair2.privateKey);
+      await expect(verifier.verifyAccessToken(tokenKey2)).resolves.toMatchObject({ ok: true });
+      expect(fetchJwks).toHaveBeenCalledTimes(2);
+    });
+
+    it('obsługuje wiele dozwolonych odbiorców (audiences) skonfigurowanych w OidcVerifierConfig', async () => {
+      const verifier = new JwksOidcAccessTokenVerifier(
+        baseConfig({
+          audience: 'pap-api',
+          audiences: ['pap-api', 'pap-mcp'],
+        }),
+        {
+          clock: { now: () => NOW },
+          fetchJwks: async () => ({ keys: [rsaPublicJwk] }),
+        },
+      );
+
+      const mcpToken = await signAccessToken({ aud: 'pap-mcp', azp: 'pap-web-client' });
+      await expect(verifier.verifyAccessToken(mcpToken)).resolves.toMatchObject({ ok: true });
+    });
+
+    it('przerywa strumieniowe pobieranie JWKS powyżej limitu 64 KiB bez buforowania całości w pamięci i odrzuca JWK z parametrami prywatnymi lub błędnym key_ops', async () => {
+      const token = await signAccessToken();
+      let streamCancelled = false;
+      const chunk = new Uint8Array(20_000).fill(0x61); // 'a'
+
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+        let pulls = 0;
+        const stream = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pulls += 1;
+            if (pulls <= 10) {
+              controller.enqueue(chunk);
+            } else {
+              controller.close();
+            }
+          },
+          cancel() {
+            streamCancelled = true;
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+
+      try {
+        const streamingVerifier = new JwksOidcAccessTokenVerifier(baseConfig(), {
+          clock: { now: () => NOW },
+        });
+        await expect(streamingVerifier.verifyAccessToken(token)).resolves.toEqual({
+          ok: false,
+          reason: 'jwks_unavailable',
+        });
+        expect(streamCancelled).toBe(true);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+
+      // Klucz zawierający prywatny parametr 'd' lub niedozwolone key_ops jest odrzucany
+      const verifierWithInvalidJwks = new JwksOidcAccessTokenVerifier(baseConfig(), {
+        clock: { now: () => NOW },
+        fetchJwks: async () => ({
+          keys: [
+            { ...rsaPublicJwk, d: 'private-exponent-leak' },
+            { ...ecPublicJwk, key_ops: ['encrypt'] },
+            { ...ecPublicJwk, kid: 'kid-ec-sign', key_ops: ['sign', 'verify'] },
+          ],
+        }),
+      });
+      await expect(verifierWithInvalidJwks.verifyAccessToken(token)).resolves.toEqual({
         ok: false,
         reason: 'jwks_unavailable',
       });

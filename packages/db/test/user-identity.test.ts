@@ -141,6 +141,46 @@ describe('Adaptery PostgreSQL tożsamości i autoryzacji administracyjnej (bez p
     );
   });
 
+  it('PostgresUserIdentityStore mapuje współbieżne naruszenia unikalności (23505) na deterministyczne kody odmowy zamiast błędu niedostępności', async () => {
+    const { client, db } = createTestClient();
+    const store = new PostgresUserIdentityStore(db);
+
+    vi.spyOn(client, 'begin').mockRejectedValueOnce(
+      Object.assign(new Error('duplicate key value violates unique constraint "app_user_pkey"'), {
+        code: '23505',
+        constraint_name: 'app_user_pkey',
+      }),
+    );
+    await expect(
+      store.provisionUserWithOidcIdentity({
+        userId: USER_A,
+        identityId: IDENTITY_1,
+        issuer: ISSUER_1,
+        subject: SUBJECT_1,
+      }),
+    ).resolves.toEqual({ ok: false, reason: 'user_already_exists' });
+
+    vi.spyOn(client, 'begin').mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          'duplicate key value violates unique constraint "user_oidc_identity_issuer_subject_unique"',
+        ),
+        {
+          code: '23505',
+          constraint_name: 'user_oidc_identity_issuer_subject_unique',
+        },
+      ),
+    );
+    await expect(
+      store.linkAdditionalOidcIdentity({
+        userId: USER_A,
+        identityId: IDENTITY_1,
+        issuer: ISSUER_1,
+        subject: SUBJECT_1,
+      }),
+    ).resolves.toEqual({ ok: false, reason: 'identity_already_linked' });
+  });
+
   it('PostgresAccessManagementAuthorizationDataSource pobiera fakty w obrębie tenanta i redaguje błędy DB', async () => {
     const { client, db } = createTestClient();
     const tenantA = tenantId(id(1));

@@ -103,7 +103,7 @@ export function decideAccessManagementAuthorization(
 
     case 'reactivate_membership': {
       const requestedEnd = input.requestedValidUntil ?? null;
-      if (requestedEnd !== null && !isValidDate(requestedEnd)) {
+      if (requestedEnd !== null && (!isValidDate(requestedEnd) || requestedEnd.getTime() <= now)) {
         return { allowed: false, reason: 'authorization_context_invalid' };
       }
       if (!isEndWithinDelegatorLimit(requestedEnd, actorMembership.validUntil)) {
@@ -114,12 +114,19 @@ export function decideAccessManagementAuthorization(
 
     case 'grant': {
       const scope = input.grantScope;
-      if (!scope) {
+      if (!scope || (scope.action !== 'read' && scope.action !== 'write')) {
         return { allowed: false, reason: 'authorization_context_invalid' };
       }
       if (
         (scope.validFrom !== null && !isValidDate(scope.validFrom)) ||
         (scope.validUntil !== null && !isValidDate(scope.validUntil))
+      ) {
+        return { allowed: false, reason: 'authorization_context_invalid' };
+      }
+      const effectiveStart = scope.validFrom === null ? now : scope.validFrom.getTime();
+      if (
+        effectiveStart < now ||
+        (scope.validUntil !== null && scope.validUntil.getTime() <= effectiveStart)
       ) {
         return { allowed: false, reason: 'authorization_context_invalid' };
       }
@@ -136,7 +143,8 @@ export function decideAccessManagementAuthorization(
             grant.action === scope.action &&
             isWithinValidity(grant.validFrom, grant.validUntil, now) &&
             isNotRevokedAt(grant.revokedAt, now) &&
-            isEndWithinDelegatorLimit(scope.validUntil, grant.validUntil),
+            isEndWithinDelegatorLimit(scope.validUntil, grant.validUntil) &&
+            isEndWithinDelegatorLimit(scope.validUntil, grant.revokedAt),
         );
         if (!hasDelegableGrant) {
           return { allowed: false, reason: 'grant_scope_not_delegable' };

@@ -37,6 +37,7 @@ interface CachedJwkEntry {
 
 const MAX_TOKEN_LENGTH = 8_192;
 const MAX_JWKS_RESPONSE_BYTES = 65_536;
+const MAX_JWKS_KEYS = 64;
 const FORBIDDEN_HEADER_FIELDS = ['jku', 'jwk', 'x5u', 'x5c', 'crit'] as const;
 const FORBIDDEN_HEADER_TYP_VALUES = new Set([
   'id+jwt',
@@ -47,6 +48,7 @@ const FORBIDDEN_HEADER_TYP_VALUES = new Set([
   'logout+jwt',
   'secevent+jwt',
 ]);
+const PRIVATE_JWK_FIELDS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'] as const;
 
 function isNonBlankExactString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value === value.trim();
@@ -74,6 +76,52 @@ function normalizeHeaderTyp(rawTyp: string): string {
   return lower.startsWith('application/') ? lower.slice('application/'.length) : lower;
 }
 
+async function readResponseTextWithLimit(response: Response, maxBytes: number): Promise<string> {
+  const contentLengthHeader = response.headers?.get('content-length');
+  if (contentLengthHeader !== null && contentLengthHeader !== undefined) {
+    const declaredLength = Number(contentLengthHeader);
+    if (!Number.isFinite(declaredLength) || declaredLength < 0 || declaredLength > maxBytes) {
+      if (response.body) {
+        await response.body.cancel().catch(() => undefined);
+      }
+      throw new Error('JWKS payload too large');
+    }
+  }
+
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) {
+      throw new Error('JWKS payload too large');
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new Error('JWKS payload too large');
+        }
+        chunks.push(value);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks, totalBytes).toString('utf8');
+}
+
 async function defaultFetchJwks(jwksUri: string, signal: AbortSignal): Promise<unknown> {
   const response = await fetch(jwksUri, {
     method: 'GET',
@@ -85,14 +133,24 @@ async function defaultFetchJwks(jwksUri: string, signal: AbortSignal): Promise<u
   });
 
   if (response.status !== 200) {
+    if (response.body) {
+      await response.body.cancel().catch(() => undefined);
+    }
     throw new Error('JWKS HTTP status not 200');
   }
 
-  const text = await response.text();
-  if (Buffer.byteLength(text, 'utf8') > MAX_JWKS_RESPONSE_BYTES) {
-    throw new Error('JWKS payload too large');
+  if (response.url) {
+    const requestedOrigin = new URL(jwksUri).origin;
+    const finalOrigin = new URL(response.url).origin;
+    if (finalOrigin !== requestedOrigin) {
+      if (response.body) {
+        await response.body.cancel().catch(() => undefined);
+      }
+      throw new Error('JWKS origin mismatch');
+    }
   }
 
+  const text = await readResponseTextWithLimit(response, MAX_JWKS_RESPONSE_BYTES);
   return JSON.parse(text) as unknown;
 }
 
@@ -202,7 +260,22 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
       });
       verifiedPayloadBytes = verified.payload;
     } catch {
-      return { ok: false, reason: 'invalid_signature' };
+      // Jeśli klucz pochodził z bufora, a minął już cooldown odświeżania JWKS, dostawca OIDC mógł
+      // zrotować materiał klucza z zachowaniem tego samego identyfikatora kid.
+      const rotatedKey = !keyResolution.fetchedNow
+        ? await this.tryRefreshKeyOnSignatureFailure(kid, alg as AsymmetricJwsAlgorithm)
+        : null;
+      if (!rotatedKey) {
+        return { ok: false, reason: 'invalid_signature' };
+      }
+      try {
+        const verified = await compactVerify(rawBearerToken, rotatedKey, {
+          algorithms: [alg],
+        });
+        verifiedPayloadBytes = verified.payload;
+      } catch {
+        return { ok: false, reason: 'invalid_signature' };
+      }
     }
 
     let payload: Record<string, unknown>;
@@ -216,23 +289,36 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
       return { ok: false, reason: 'malformed_token' };
     }
 
-    // Ochrona przed pomyleniem ID Token / Refresh Token / Logout Token z Access Tokenem
-    if ('typ' in payload) {
-      if (payload.typ !== 'Bearer') {
+    // Ochrona przed pomyleniem ID Token / Refresh Token / Logout Token z Access Tokenem (RFC 9068, RFC 8725 §3.11, OIDC Core):
+    // 1. Odrzucamy claimy właściwe dla ID Tokena, Session/Code Hash oraz Backchannel Logout Tokena.
+    if (
+      'events' in payload ||
+      'at_hash' in payload ||
+      'c_hash' in payload ||
+      's_hash' in payload ||
+      'nonce' in payload
+    ) {
+      return { ok: false, reason: 'invalid_token_type' };
+    }
+    // 2. Dla jawnego nagłówka RFC 9068 (at+jwt) opcjonalny claim payload.typ (jeśli występuje) musi mieć wartość 'Bearer'.
+    //    Dla nagłówka kompatybilności (jwt, dzielonego ze standardowym OIDC ID Tokenem) claim payload.typ === 'Bearer'
+    //    jest bezwzględnie wymagany (konwencja Keycloak Access Token).
+    if (normalizedHeaderTyp === 'at+jwt') {
+      if ('typ' in payload && payload.typ !== 'Bearer') {
         return { ok: false, reason: 'invalid_token_type' };
       }
-    }
-    if ('events' in payload || 'at_hash' in payload || 'c_hash' in payload) {
+    } else if (payload.typ !== 'Bearer') {
       return { ok: false, reason: 'invalid_token_type' };
     }
 
-    // Wymagane claimy standardowe: iss, sub, aud, exp, iat
+    // Wymagane claimy standardowe Access Tokena: iss, sub, aud, exp, iat, scope
     if (
       !('iss' in payload) ||
       !('sub' in payload) ||
       !('aud' in payload) ||
       !('exp' in payload) ||
-      !('iat' in payload)
+      !('iat' in payload) ||
+      !('scope' in payload)
     ) {
       return { ok: false, reason: 'missing_required_claim' };
     }
@@ -247,24 +333,44 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
       return { ok: false, reason: 'invalid_issuer' };
     }
 
+    const expectedAudiences =
+      this.config.audiences && this.config.audiences.length > 0
+        ? this.config.audiences
+        : [this.config.audience];
+
     const audiences = this.extractAudiences(payload.aud);
     if (!audiences) {
       return { ok: false, reason: 'invalid_audience' };
     }
-    if (!audiences.includes(this.config.audience)) {
+    if (!audiences.some((aud) => expectedAudiences.includes(aud))) {
       return { ok: false, reason: 'invalid_audience' };
     }
 
-    // Walidacja azp (Authorized Party)
+    // Walidacja azp (Authorized Party) oraz client_id (RFC 9068 §2.2) i ich separacji od odbiorcy API (aud)
     const azp = payload.azp;
+    const clientId = payload.client_id;
     if (azp !== undefined && !isNonBlankExactString(azp)) {
       return { ok: false, reason: 'invalid_authorized_party' };
     }
-    if (audiences.length > 1 && !isNonBlankExactString(azp)) {
+    if (clientId !== undefined && !isNonBlankExactString(clientId)) {
+      return { ok: false, reason: 'invalid_authorized_party' };
+    }
+    if (azp !== undefined && clientId !== undefined && azp !== clientId) {
+      return { ok: false, reason: 'invalid_authorized_party' };
+    }
+
+    const authorizedParty = azp ?? clientId;
+    if (authorizedParty !== undefined && expectedAudiences.includes(authorizedParty)) {
+      return { ok: false, reason: 'invalid_authorized_party' };
+    }
+    if (audiences.length > 1 && !isNonBlankExactString(authorizedParty)) {
       return { ok: false, reason: 'invalid_authorized_party' };
     }
     if (this.config.allowedAuthorizedParties !== null) {
-      if (!isNonBlankExactString(azp) || !this.config.allowedAuthorizedParties.includes(azp)) {
+      if (
+        !isNonBlankExactString(authorizedParty) ||
+        !this.config.allowedAuthorizedParties.includes(authorizedParty)
+      ) {
         return { ok: false, reason: 'invalid_authorized_party' };
       }
     }
@@ -309,10 +415,13 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
       return { ok: false, reason: 'token_expired' };
     }
 
-    // Walidacja scopes
+    // Walidacja scopes (Access Token musi zawierać niepusty claim scope)
     const scopes = this.extractScopes(payload.scope);
     if (scopes === null) {
       return { ok: false, reason: 'malformed_token' };
+    }
+    if (scopes.length === 0) {
+      return { ok: false, reason: 'missing_required_claim' };
     }
 
     const requiredScopes = new Set<string>([
@@ -380,9 +489,6 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
   }
 
   private extractScopes(rawScope: unknown): readonly string[] | null {
-    if (rawScope === undefined) {
-      return [];
-    }
     if (typeof rawScope !== 'string') {
       return null;
     }
@@ -395,25 +501,65 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
       .filter((s) => s.length > 0);
   }
 
+  private canAttemptJwksRefresh(nowMs: number): boolean {
+    const config = this.config!;
+    return (
+      this.lastRefreshAttemptAtMs === null ||
+      nowMs - this.lastRefreshAttemptAtMs >= config.jwksRefreshCooldownMs
+    );
+  }
+
+  private async tryRefreshKeyOnSignatureFailure(
+    kid: string,
+    alg: AsymmetricJwsAlgorithm,
+  ): Promise<CryptoKey | Uint8Array | null> {
+    const nowMs = this.clock.now().getTime();
+    if (!this.canAttemptJwksRefresh(nowMs)) {
+      return null;
+    }
+    try {
+      const keySet = await this.refreshJwks(nowMs);
+      const entry = keySet.get(kid);
+      if (!entry || (entry.jwk.alg !== undefined && entry.jwk.alg !== alg)) {
+        return null;
+      }
+      return await importJWK(entry.jwk, alg);
+    } catch {
+      return null;
+    }
+  }
+
   private async resolveVerificationKey(
     kid: string,
     alg: AsymmetricJwsAlgorithm,
   ): Promise<
-    | { readonly ok: true; readonly key: CryptoKey | Uint8Array }
+    | { readonly ok: true; readonly key: CryptoKey | Uint8Array; readonly fetchedNow: boolean }
     | { readonly ok: false; readonly reason: 'unknown_key' | 'jwks_unavailable' }
   > {
     const config = this.config!;
     const nowMs = this.clock.now().getTime();
 
     let keySet = this.cachedKeysByKid;
+    let fetchedNow = false;
     const isCacheExpired =
       keySet === null ||
       this.cacheFetchedAtMs === null ||
       nowMs - this.cacheFetchedAtMs >= config.jwksCacheTtlMs;
 
     if (isCacheExpired) {
+      // Jeśli poprzednia próba odświeżenia zakończyła się awarią przed chwilą (w oknie cooldownu),
+      // nie zalewamy niedostępnego dostawcy OIDC nowymi żądaniami HTTP.
+      const recentlyFailedRefresh =
+        this.lastRefreshAttemptAtMs !== null &&
+        (this.cacheFetchedAtMs === null || this.lastRefreshAttemptAtMs > this.cacheFetchedAtMs) &&
+        nowMs - this.lastRefreshAttemptAtMs < config.jwksRefreshCooldownMs;
+      if (recentlyFailedRefresh) {
+        return { ok: false, reason: 'jwks_unavailable' };
+      }
+
       try {
         keySet = await this.refreshJwks(nowMs);
+        fetchedNow = true;
       } catch {
         return { ok: false, reason: 'jwks_unavailable' };
       }
@@ -422,13 +568,10 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
     let entry = keySet!.get(kid);
     if (!entry && !isCacheExpired) {
       // Nieznany kid może oznaczać rotację kluczy u dostawcy OIDC — odświeżamy z uwzględnieniem cooldownu.
-      const canForceRefresh =
-        this.lastRefreshAttemptAtMs === null ||
-        nowMs - this.lastRefreshAttemptAtMs >= config.jwksRefreshCooldownMs;
-
-      if (canForceRefresh) {
+      if (this.canAttemptJwksRefresh(nowMs)) {
         try {
           keySet = await this.refreshJwks(nowMs);
+          fetchedNow = true;
           entry = keySet.get(kid);
         } catch {
           return { ok: false, reason: 'jwks_unavailable' };
@@ -446,7 +589,7 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
 
     try {
       const imported = await importJWK(entry.jwk, alg);
-      return { ok: true, key: imported };
+      return { ok: true, key: imported, fetchedNow };
     } catch {
       return { ok: false, reason: 'unknown_key' };
     }
@@ -480,7 +623,12 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
   }
 
   private parseJwksPayload(rawJwks: unknown): ReadonlyMap<string, CachedJwkEntry> {
-    if (!isPlainRecord(rawJwks) || !Array.isArray(rawJwks.keys) || rawJwks.keys.length === 0) {
+    if (
+      !isPlainRecord(rawJwks) ||
+      !Array.isArray(rawJwks.keys) ||
+      rawJwks.keys.length === 0 ||
+      rawJwks.keys.length > MAX_JWKS_KEYS
+    ) {
       throw new Error('Invalid JWKS document');
     }
 
@@ -492,13 +640,29 @@ export class JwksOidcAccessTokenVerifier implements OidcAccessTokenVerifier {
       const kid = rawKey.kid;
       const kty = rawKey.kty;
       const use = rawKey.use;
+      const keyOps = rawKey.key_ops;
 
       if (!isNonBlankExactString(kid) || !isNonBlankExactString(kty)) {
         continue;
       }
-      // Odrzucamy klucze symetryczne (oct), klucze szyfrowania (use !== 'sig') oraz klucze zawierające materiał prywatny ('d')
-      if (kty === 'oct' || 'd' in rawKey || (use !== undefined && use !== 'sig')) {
+      // Odrzucamy klucze symetryczne (oct), klucze szyfrowania (use !== 'sig'), klucze bez uprawnienia 'verify'
+      // w key_ops oraz klucze zawierające materiał prywatny lub symetryczny (d, p, q, dp, dq, qi, oth, k).
+      if (
+        kty === 'oct' ||
+        PRIVATE_JWK_FIELDS.some((field) => field in rawKey) ||
+        (use !== undefined && use !== 'sig')
+      ) {
         continue;
+      }
+      if (keyOps !== undefined) {
+        if (
+          !Array.isArray(keyOps) ||
+          !keyOps.every((op) => typeof op === 'string') ||
+          !keyOps.includes('verify') ||
+          keyOps.includes('sign')
+        ) {
+          continue;
+        }
       }
       if (map.has(kid)) {
         throw new Error('Duplicate kid in JWKS');
