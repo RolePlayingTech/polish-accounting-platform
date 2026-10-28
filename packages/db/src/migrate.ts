@@ -8,7 +8,7 @@ async function main(): Promise<void> {
 
   try {
     loadRootEnvFile();
-    connection = connectDatabase();
+    connection = connectDatabase(process.env, 'public', { roleScope: 'migrator' });
     await applyMigrations(connection.db);
     console.info('Migracje bazy zostały zastosowane.');
   } catch (error) {

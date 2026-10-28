@@ -8,6 +8,23 @@ const PASSWORD = 'synthetic-password-must-not-be-logged';
 describe('Runner migracji — odmowy i bezpieczne logi', () => {
   it.each([
     ['production', 'test', 'pap_test', '127.0.0.1', 'pap_test', 'NODE_ENV=production'],
+    [
+      'production',
+      'staging',
+      'pap_staging_app',
+      '127.0.0.1',
+      'pap_staging',
+      'pap_staging_migrator',
+    ],
+    [
+      'production',
+      'staging',
+      'pap_staging_migrator',
+      'database.example.invalid',
+      'pap_staging',
+      'loopback',
+    ],
+    ['production', 'staging', 'pap_staging_migrator', '127.0.0.1', 'pap_local', 'dedykowanej bazy'],
     ['test', 'test', 'pap_test', 'database.example.invalid', 'pap_test', 'loopback'],
     ['test', 'test', 'postgres', '127.0.0.1', 'pap_test', 'dedykowanego konta'],
     ['test', 'test', 'pap_test', '127.0.0.1', 'pap_local', 'dedykowanej bazy'],

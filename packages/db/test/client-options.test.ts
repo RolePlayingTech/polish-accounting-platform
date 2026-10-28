@@ -54,12 +54,23 @@ describe('Opcje klienta PostgreSQL (bez otwierania połączenia)', () => {
     },
   );
 
-  it('nie dopuszcza namespace testowego do konfiguracji local', () => {
+  it('nie dopuszcza namespace testowego do konfiguracji local ani staging', () => {
     expect(() =>
       connectDatabase(
         {
           PAP_DATABASE_ENV: 'local',
           DATABASE_URL: 'postgres://pap_local:test_only@127.0.0.1:5432/pap_local',
+        },
+        'pap_test_0123456789abcdef0123456789abcdef',
+      ),
+    ).toThrow('Niedozwolony schemat');
+
+    expect(() =>
+      connectDatabase(
+        {
+          NODE_ENV: 'production',
+          PAP_DATABASE_ENV: 'staging',
+          DATABASE_URL: 'postgres://pap_staging_app:test_only@127.0.0.1:5432/pap_staging',
         },
         'pap_test_0123456789abcdef0123456789abcdef',
       ),
