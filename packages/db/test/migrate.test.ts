@@ -9,6 +9,15 @@ describe('Runner migracji — odmowy i bezpieczne logi', () => {
   it.each([
     ['production', 'test', 'pap_test', '127.0.0.1', 'pap_test', 'NODE_ENV=production'],
     [
+      'staging',
+      'staging',
+      'pap_staging_migrator',
+      '127.0.0.1',
+      'pap_staging',
+      'NODE_ENV=production',
+    ],
+    ['', 'staging', 'pap_staging_migrator', '127.0.0.1', 'pap_staging', 'NODE_ENV=production'],
+    [
       'production',
       'staging',
       'pap_staging_app',

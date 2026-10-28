@@ -65,10 +65,8 @@ export function loadDatabaseConfig(
     );
   }
 
-  if (environment === 'staging' && (env.NODE_ENV === 'development' || env.NODE_ENV === 'test')) {
-    throw new DatabaseConfigError(
-      'Środowisko staging nie może być uruchamiane z NODE_ENV=development ani NODE_ENV=test.',
-    );
+  if (environment === 'staging' && env.NODE_ENV !== 'production') {
+    throw new DatabaseConfigError('Środowisko staging wymaga ustawienia NODE_ENV=production.');
   }
 
   const rawUrl = env.DATABASE_URL;

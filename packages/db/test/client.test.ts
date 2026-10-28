@@ -18,6 +18,15 @@ describe('connectDatabase', () => {
       DATABASE_URL: 'postgres://pap_staging_migrator:test_only@127.0.0.1/pap_staging',
     },
     {
+      PAP_DATABASE_ENV: 'staging',
+      DATABASE_URL: 'postgres://pap_staging_app:test_only@127.0.0.1/pap_staging',
+    },
+    {
+      NODE_ENV: 'staging',
+      PAP_DATABASE_ENV: 'staging',
+      DATABASE_URL: 'postgres://pap_staging_app:test_only@127.0.0.1/pap_staging',
+    },
+    {
       NODE_ENV: 'production',
       PAP_DATABASE_ENV: 'staging',
       DATABASE_URL: 'postgres://pap_staging_app:test_only@database.example.invalid/pap_staging',

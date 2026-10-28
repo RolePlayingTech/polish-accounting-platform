@@ -99,17 +99,29 @@ describe('loadDatabaseConfig', () => {
     }
   });
 
-  it('rejects staging when NODE_ENV is development or test to prevent local/test spoofing', () => {
-    for (const nodeEnv of ['development', 'test'] as const) {
+  it.each([undefined, '', 'staging', 'preview', 'development', 'test'])(
+    'rejects staging when NODE_ENV is not strictly production (%s)',
+    (nodeEnv) => {
       expect(() =>
         loadDatabaseConfig({
           NODE_ENV: nodeEnv,
           PAP_DATABASE_ENV: 'staging',
           DATABASE_URL: 'postgres://pap_staging_app:secret@127.0.0.1:5432/pap_staging',
         }),
-      ).toThrow(DatabaseConfigError);
-    }
-  });
+      ).toThrow('Środowisko staging wymaga ustawienia NODE_ENV=production.');
+
+      expect(() =>
+        loadDatabaseConfig(
+          {
+            NODE_ENV: nodeEnv,
+            PAP_DATABASE_ENV: 'staging',
+            DATABASE_URL: 'postgres://pap_staging_migrator:secret@127.0.0.1:5432/pap_staging',
+          },
+          { roleScope: 'migrator' },
+        ),
+      ).toThrow('Środowisko staging wymaga ustawienia NODE_ENV=production.');
+    },
+  );
 
   it('rejects production and unspecified environments before opening a connection', () => {
     for (const environment of ['production', undefined]) {
