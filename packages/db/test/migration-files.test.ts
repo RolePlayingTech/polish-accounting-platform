@@ -4,21 +4,26 @@ import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { describe, expect, it } from 'vitest';
 
 describe('Kontrakt plików migracji', () => {
-  it('zachowuje znacznik 6A i łańcuch snapshotów oraz journal 6A → 6B', () => {
+  it('zachowuje znacznik 6A i łańcuch snapshotów oraz journal 6A → 6B → 6D-R → 6D-2', () => {
     const folder = fileURLToPath(new URL('../drizzle', import.meta.url));
     const migrations = readMigrationFiles({ migrationsFolder: folder });
     const readJson = (name: string) => JSON.parse(readFileSync(`${folder}/meta/${name}`, 'utf8'));
     const baseline = readJson('0000_snapshot.json');
     const schema = readJson('0001_snapshot.json');
+    const lifecycle = readJson('0002_snapshot.json');
+    const identity = readJson('0003_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(3);
+    expect(migrations).toHaveLength(4);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
+    expect(lifecycle.prevId).toBe(schema.id);
+    expect(identity.prevId).toBe(lifecycle.id);
     expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual([
       '0000_technical-baseline',
       '0001_tenant-schema',
       '0002_access-lifecycle',
+      '0003_user-identity',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -27,20 +32,36 @@ describe('Kontrakt plików migracji', () => {
       'public.tenant',
       'public.tenant_membership',
     ]);
-    const lifecycle = readJson('0002_snapshot.json');
-    expect(lifecycle.prevId).toBe(schema.id);
     expect(lifecycle.tables['public.access_management_event']).toBeDefined();
+    expect(identity.tables['public.app_user']).toBeDefined();
+    expect(identity.tables['public.user_oidc_identity']).toBeDefined();
   });
 
-  it('nie kieruje SQL do public z pominięciem namespace testowego i zawiera jawny EXCLUDE', () => {
-    const migration = readFileSync(
+  it('nie kieruje SQL do public z pominięciem namespace testowego i zawiera jawny EXCLUDE oraz guardy tożsamości', () => {
+    for (const fileName of [
+      '0001_tenant-schema.sql',
+      '0002_access-lifecycle.sql',
+      '0003_user-identity.sql',
+    ]) {
+      const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
+      expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
+      expect(migration).not.toMatch(/\b(?:CREATE|DROP)\s+SCHEMA\b/i);
+    }
+
+    const schemaMigration = readFileSync(
       new URL('../drizzle/0001_tenant-schema.sql', import.meta.url),
       'utf8',
     );
-    expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
-    expect(migration).not.toMatch(/\b(?:CREATE|DROP)\s+SCHEMA\b/i);
-    expect(migration).toContain('CREATE EXTENSION IF NOT EXISTS btree_gist');
-    expect(migration).toContain('EXCLUDE USING gist');
-    expect(migration).toContain('tstzrange("valid_from", "valid_until", \'[)\') WITH &&');
+    expect(schemaMigration).toContain('CREATE EXTENSION IF NOT EXISTS btree_gist');
+    expect(schemaMigration).toContain('EXCLUDE USING gist');
+    expect(schemaMigration).toContain('tstzrange("valid_from", "valid_until", \'[)\') WITH &&');
+
+    const identityMigration = readFileSync(
+      new URL('../drizzle/0003_user-identity.sql', import.meta.url),
+      'utf8',
+    );
+    expect(identityMigration).toContain('user_oidc_identity_issuer_subject_unique');
+    expect(identityMigration).toContain('protect_user_oidc_identity');
+    expect(identityMigration).toContain('revoke_oidc_identities_on_user_disable');
   });
 });

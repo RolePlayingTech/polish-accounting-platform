@@ -13,20 +13,22 @@ const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const expectedTables = [
   '__drizzle_migrations',
   'access_management_event',
+  'app_user',
   'company_access_grant',
   'entity_profile_version',
   'legal_entity',
   'tenant',
   'tenant_membership',
+  'user_oidc_identity',
 ];
 
-describe('Migracje PostgreSQL 6A → 6B → 6D-R', () => {
-  it('stosuje od zera dokładnie trzy migracje w kolejności i nie powiela obiektów', async () => {
+describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2', () => {
+  it('stosuje od zera dokładnie cztery migracje w kolejności i nie powiela obiektów', async () => {
     const database = await createTestDatabase();
     const { client: sql, db, dataSchema } = database;
     try {
       const migrations = readMigrationFiles({ migrationsFolder });
-      expect(migrations).toHaveLength(3);
+      expect(migrations).toHaveLength(4);
       expect(
         readFileSync(new URL('../drizzle/0000_technical-baseline.sql', import.meta.url), 'utf8'),
       ).toContain('SELECT 1;');
@@ -111,13 +113,13 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R', () => {
       // Usuwamy wyłącznie własną tabelę konfliktową; ponowienie stosuje cały łańcuch.
       await sql`DROP TABLE tenant`;
       await applyMigrations(db, dataSchema);
-      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(3);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(4);
     } finally {
       await database.cleanup();
     }
   }, 30_000);
 
-  it('addytywne 0002 zachowuje dane i hashe 0000/0001; reaktywacja starego revoked nie wznawia grantu', async () => {
+  it('addytywne 0002 i 0003 zachowują dane i hashe wcześniejszych migracji; reaktywacja starego revoked nie wznawia grantu', async () => {
     const database = await createTestDatabase();
     const prefix = join(tmpdir(), 'pap-6d-r-');
     const folder = await mkdtemp(prefix);

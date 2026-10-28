@@ -267,9 +267,18 @@ importers:
       '@pap/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@pap/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@pap/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       fastify:
         specifier: 5.12.7
         version: 5.12.7
+      jose:
+        specifier: 6.2.13
+        version: 6.2.13
       reflect-metadata:
         specifier: 0.2.2
         version: 0.2.2

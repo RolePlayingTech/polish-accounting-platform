@@ -1,12 +1,20 @@
 import {
+  decideAccessManagementAuthorization,
   legalEntityId,
   tenantId,
   userId,
   type AccountingAction,
+  type CompanyAccessGrant,
   type LegalEntityId,
   type TenantId,
+  type TenantMembership,
   type UserId,
 } from '@pap/domain';
+import {
+  authenticateOidcActor,
+  type AuthenticateOidcActorDependencies,
+} from './oidc-authentication.js';
+import { systemClock, type Clock } from './tenant-authorization.js';
 
 interface AccessTarget {
   readonly operationId: string;
@@ -40,6 +48,24 @@ export interface AccessManagementActorSource {
 export interface AccessManagementAuthorizer {
   authorize(actor: AccessManagementActor, command: AccessManagementCommand): Promise<boolean>;
 }
+
+export interface AccessManagementAuthorizationFacts {
+  readonly actorMembership: TenantMembership | null;
+  readonly actorGrants: readonly CompanyAccessGrant[];
+  readonly targetMembership: TenantMembership | null;
+  readonly targetGrant: {
+    readonly legalEntityId: LegalEntityId;
+    readonly action: AccountingAction;
+  } | null;
+}
+
+export interface AccessManagementAuthorizationDataSource {
+  getAuthorizationFacts(
+    actor: AccessManagementActor,
+    command: AccessManagementCommand,
+  ): Promise<AccessManagementAuthorizationFacts>;
+}
+
 export interface AccessManagementReceipt {
   readonly operationId: string;
   readonly occurredAt: string;
@@ -67,6 +93,67 @@ export interface AccessManagementStore {
     command: AccessManagementCommand,
     actor: AccessManagementActor,
   ): Promise<AccessManagementResult>;
+}
+
+/**
+ * Serwerowe źródło aktora administracyjnego powiązane z pełną weryfikacją OIDC i wewnętrznym resolverem tożsamości.
+ */
+export function createOidcAccessManagementActorSource(
+  rawBearerToken: string | undefined | null,
+  dependencies: AuthenticateOidcActorDependencies,
+  options?: { readonly requiredScopes?: readonly string[] },
+): AccessManagementActorSource {
+  return {
+    async getVerifiedActor(): Promise<AccessManagementActor | null> {
+      const result = await authenticateOidcActor(rawBearerToken, dependencies, options);
+      if (!result.authenticated) {
+        return null;
+      }
+      return Object.freeze({ userId: result.userId });
+    },
+  };
+}
+
+/**
+ * Serwerowy autoryzator administracyjny egzekwujący domenową politykę delegacji i zakaz self-escalation.
+ */
+export function createTenantAccessManagementAuthorizer(
+  source: AccessManagementAuthorizationDataSource,
+  clock: Clock = systemClock,
+): AccessManagementAuthorizer {
+  return {
+    async authorize(
+      actor: AccessManagementActor,
+      command: AccessManagementCommand,
+    ): Promise<boolean> {
+      const facts = await source.getAuthorizationFacts(actor, command);
+      const decision = decideAccessManagementAuthorization({
+        actorUserId: actor.userId,
+        targetUserId: command.userId,
+        tenantId: command.tenantId,
+        commandKind: command.kind,
+        actorMembership: facts.actorMembership,
+        actorGrants: facts.actorGrants,
+        targetMembership: facts.targetMembership,
+        requestedValidUntil:
+          command.kind === 'reactivate_membership' && command.validUntil !== null
+            ? new Date(command.validUntil)
+            : null,
+        grantScope:
+          command.kind === 'grant'
+            ? {
+                legalEntityId: command.legalEntityId,
+                action: command.action,
+                validFrom: command.validFrom === null ? null : new Date(command.validFrom),
+                validUntil: command.validUntil === null ? null : new Date(command.validUntil),
+              }
+            : undefined,
+        revokedGrantScope: command.kind === 'revoke_grant' ? facts.targetGrant : undefined,
+        now: clock.now(),
+      });
+      return decision.allowed === true;
+    },
+  };
 }
 
 // Kanoniczna kopia przed pierwszym await: brak zmiany selektorów po autoryzacji.

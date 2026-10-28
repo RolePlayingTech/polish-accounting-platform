@@ -9,7 +9,10 @@
     "@nestjs/platform-fastify": "12.2.0",
     "@pap/application": "workspace:*",
     "@pap/contracts": "workspace:*",
+    "@pap/db": "workspace:*",
+    "@pap/domain": "workspace:*",
     "fastify": "5.12.7",
+    "jose": "6.2.13",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2"
   },
@@ -19,7 +22,7 @@
     "build": "tsc -b",
     "start": "node dist/main.js",
     "lint": "eslint src test",
-    "typecheck": "tsc -b --pretty false",
+    "typecheck": "tsc -b --pretty false && tsc -p test/tsconfig.json --pretty false",
     "test": "vitest run --config ../../vitest.config.ts",
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\""
   }

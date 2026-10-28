@@ -1,6 +1,6 @@
 # 19. Przewodnik developera
 
-Ten dokument opisuje szkielet z Issue #5 i pakiety DB 6A/6B Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B nie jest działającą obsługą firm ani autoryzacją użytkowników; decyzje i ograniczenia opisuje [model 6B](22-schemat-tenantow-6b.md).
+Ten dokument opisuje szkielet z Issue #5 oraz pakiety DB/autoryzacji 6A/6B/6C/6D-1/6D-R/6D-2 z Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B i warstwa serwerowa [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) nie wystawiają jeszcze publicznych operacji księgowych ani interaktywnego logowania w przeglądarce; decyzje i ograniczenia opisują [model 6B](22-schemat-tenantow-6b.md), [cykl 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) i [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md).
 
 ## Wymagania
 
@@ -27,9 +27,9 @@ Jeśli środowisko nie aktywuje pnpm globalnie, polecenia można wywoływać jak
 pnpm dev
 ```
 
-Polecenie uruchamia web i API w trybie developerskim. Web jest dostępny pod `http://127.0.0.1:3000/app`, API pod `http://127.0.0.1:4000`. Domyślnie procesy nasłuchują wyłącznie na loopback. Nie potrzebujesz PostgreSQL ani głównego pliku `.env`; migracje i połączenia DB nie uruchamiają się przy `pnpm dev`. Zakończ procesy przez `Ctrl+C`.
+Polecenie uruchamia web i API w trybie developerskim. Web jest dostępny pod `http://127.0.0.1:3000/app`, API pod `http://127.0.0.1:4000`. Domyślnie procesy nasłuchują wyłącznie na loopback. Nie potrzebujesz PostgreSQL, serwera Keycloak ani głównego pliku `.env`; migracje i połączenia DB nie uruchamiają się przy `pnpm dev`. Zakończ procesy przez `Ctrl+C`.
 
-API udostępnia:
+API udostępnia publicznie:
 
 - `GET /health` — minimalny health check procesu.
 - `GET /api/v1/system/status` — wersjonowany, walidowany kontraktem status modułów.
@@ -97,7 +97,7 @@ W katalogu głównym repozytorium utwórz `.env`, jeśli jeszcze go nie masz:
 if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
 ```
 
-Edytuj `.env`: ustaw `PAP_DATABASE_ENV=local` i adres z kontem/bazą `pap_local`. Zastąp `UZUPELNIJ_HASLO_LOCAL` swoim hasłem. Znaki specjalne w części hasła zakoduj jako percent-encoding URL (np. `@` jako `%40`, `#` jako `%23`, `%` jako `%25`). Nie dodawaj parametrów po `?`. Nie zapisuj hasła w historii terminala ani nie wypisuj `DATABASE_URL` w logach. `.env` jest ignorowany przez Git; `.env.example` zawiera wyłącznie placeholdery.
+Edytuj `.env`: ustaw `PAP_DATABASE_ENV=local` i adres z kontem/bazą `pap_local`. Zastąp `UZUPELNIJ_HASLO_LOCAL` swoim hasłem. Znaki specjalne w części hasła zakoduj jako percent-encoding URL (np. `@` jako `%40`, `#` jako `%23`, `%` jako `%25`). Nie dodawaj parametrów po `?`. Nie zapisuj hasła w historii terminala ani nie wypisuj `DATABASE_URL` w logach. `.env` jest ignorowany przez Git; `.env.example` zawiera wyłącznie placeholdery (w tym opcjonalne zmienne `PAP_OIDC_*` dla serwerowego weryfikatora OIDC z [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md)).
 
 Runner migracji i test integracyjny czytają główny `.env`; zmienne już ustawione w sesji mają pierwszeństwo. Sprawdź tę ewentualność, jeśli edycja pliku nie zmienia zachowania polecenia.
 
@@ -107,9 +107,9 @@ pnpm db:migrate
 pnpm db:migrate
 ```
 
-`db:generate` działa bez DB: tworzy SQL i metadane po zmianie schematu Drizzle; dla niezmienionego schematu nie powinien dodać migracji. `db:migrate` zapisuje wykonane wersje w `drizzle.__drizzle_migrations`. Ponowne wykonanie nie powiela migracji. Migracja 6A wykonuje `SELECT 1`, a nowa 6B tworzy w `public` pięć tabel: `tenant`, `legal_entity`, `tenant_membership`, `entity_profile_version` i `company_access_grant`. Instaluje też dostarczone z PostgreSQL rozszerzenie `btree_gist` w schemacie danych; konto migracji potrzebuje CREATE do bazy. Jeśli rozszerzenie istnieje w innym schemacie, migracja odmawia bez przenoszenia go. Zakaz nakładania profili jest jawnym SQL, którego snapshot Drizzle nie modeluje. Reviewuj SQL i metadane w `packages/db/drizzle`, w tym usunięcie kwalifikatora `public` z wygenerowanych FK na potrzeby testowego namespace ([wyjaśnienie](22-schemat-tenantow-6b.md#migracje-i-izolacja-testów)). Migracje uruchamiaj pojedynczo; nie wykonują się przy `pnpm dev`.
+`db:generate` działa bez DB: tworzy SQL i metadane po zmianie schematu Drizzle; dla niezmienionego schematu nie powinien dodać migracji. `db:migrate` zapisuje wykonane wersje w `drizzle.__drizzle_migrations`. Ponowne wykonanie nie powiela migracji. Łańcuch migracji obejmuje `0000` (6A), `0001` (6B: `tenant`, `legal_entity`, `tenant_membership`, `entity_profile_version`, `company_access_grant` oraz rozszerzenie `btree_gist`), `0002` (6D-R: `access_management_event` i guardy SQL cyklu dostępu) oraz `0003` (6D-2: `app_user`, `user_oidc_identity` i guardy SQL niezmienności tożsamości). Reviewuj SQL i metadane w `packages/db/drizzle`, w tym usunięcie kwalifikatora `public` z wygenerowanych FK na potrzeby testowego namespace ([wyjaśnienie](22-schemat-tenantow-6b.md#migracje-i-izolacja-testów)). Migracje uruchamiaj pojedynczo; nie wykonują się przy `pnpm dev`.
 
-Walidator wymaga `PAP_DATABASE_ENV=local` z kontem i bazą `pap_local` albo `PAP_DATABASE_ENV=test` z kontem i bazą `pap_test` oraz hosta `127.0.0.1`, `localhost` lub `::1`. `NODE_ENV=production`, inne środowisko, zdalny host, inne konto lub baza, niepoprawny URL i parametry/fragmenty URL są odrzucane przed utworzeniem klienta PostgreSQL. DB nie podejmuje decyzji o uprawnieniach księgowych; polityka z PR #16 pozostaje w `domain`/`application`.
+Walidator wymaga `PAP_DATABASE_ENV=local` z kontem i bazą `pap_local` albo `PAP_DATABASE_ENV=test` z kontem i bazą `pap_test` oraz hosta `127.0.0.1`, `localhost` lub `::1`. `NODE_ENV=production`, inne środowisko, zdalny host, inne konto lub baza, niepoprawny URL i parametry/fragmenty URL są odrzucane przed utworzeniem klienta PostgreSQL.
 
 ### Testy integracyjne na pap_test
 
@@ -132,9 +132,7 @@ W świeżej bazie oczekiwane jest zero wierszy. Jeśli istnieją obiekty, ustal 
 pnpm test:integration
 ```
 
-Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują dwa wpisy rejestru w kolejności 6A → 6B, dokładnie oczekiwane tabele, ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili (także współbieżnie) i rollback zapisu danych. Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Nie usuwają bazy ani cudzych tabel. Zestawy działają kolejno, ponieważ rozszerzenie ma jedną nazwę w bazie. Po teście przywróć wariant `local` w `.env`, jeśli chcesz wykonywać lokalne migracje. Bez PostgreSQL raportuj testy integracyjne jako niewykonane lokalnie; CI uruchamia je na świeżej izolowanej usłudze PostgreSQL.
-
-Historia 6A pozostaje bez zmian; 6B dodaje kolejną migrację. Brak automatycznej migracji w dół: po udanej migracji nie kasuj tabel jako rollbacku kodu; korekta wymaga nowej migracji. Starsze `compose.yaml` i `Dockerfile.dev` pozostają w wersji z `main`, poza bieżącym trybem pracy. Pakiety DB nie dodają infrastruktury Docker ani weryfikacji na serwerze.
+Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują cztery wpisy rejestru (`0000`–`0003`), osiem tabel modelu, ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter autoryzacji 6D-1, transakcyjny cykl dostępu 6D-R oraz mapowanie i provisioning tożsamości OIDC 6D-2. Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Bez PostgreSQL raportuj testy integracyjne jako niewykonane lokalnie; CI uruchamia je na świeżej izolowanej usłudze PostgreSQL.
 
 ## MCP lokalne STDIO
 
@@ -162,10 +160,10 @@ Opis scenariuszy i zakresu walidacji znajduje się w [20 — strategii testów](
 
 ## Granice obecnego działania
 
-- `/app` prezentuje stan techniczny szkieletu. Moduły księgowe są oznaczone jako niedostępne.
+- `/app` prezentuje stan techniczny szkieletu. Moduły księgowe i autoryzacja tenantów w publicznym statusie pozostają oznaczone jako `not_available`.
 - `/settings` i `/platform` są statycznymi placeholderami bez operacji administracyjnych.
-- Nie ma kont, logowania, sesji, obsługi tenantów/firm w aplikacji ani egzekwowania polityki przez API/MCP.
-- Pakiet DB ma lokalne połączenia, migracje, schemat 6B z constraints relacji i [adapter źródła autoryzacji 6D-1](23-adapter-autoryzacji-6d1.md). Adapter nie jest podłączony do API/MCP; nie ma OIDC, RLS, audytu, tabel ksiąg/faktur, integracji KSeF/MF, workerów ani produkcyjnych połączeń MCP. Sam schemat nie chroni SELECT przed nieuprawnionym dostępem. Przed samodzielnym `pnpm test:integration` po czystej instalacji zbuduj zależności przez `pnpm --filter @pap/application... build` (pełne `pnpm build` również je buduje); CI wykonuje ten krok jawnie.
+- Warstwa serwerowa [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) weryfikuje tokeny dostępu OIDC, rozwiązuje wewnętrzne `userId` i egzekwuje autoryzację w guardzie API oraz w `manageAccess`, lecz nie wystawia jeszcze publicznych endpointów księgowych ani mutujących i nie obejmuje interaktywnego logowania UI, RLS ani ograniczonej roli runtime DB.
+- Przed samodzielnym `pnpm test:integration` po czystej instalacji zbuduj zależności przez `pnpm --filter @pap/application... build` (pełne `pnpm build` również je buduje); CI wykonuje ten krok jawnie.
 - W pakietach i testach używaj wyłącznie danych syntetycznych. Nie dodawaj danych osobowych, faktur, tokenów, certyfikatów ani sekretów.
 
 Przed wdrażaniem nowych funkcji kieruj się [modelem zagrożeń i uprawnień](18-model-zagrozen-i-uprawnien.md), [zasadami architektury](16-zasady-architektoniczne.md) oraz roadmapą.

@@ -1,6 +1,6 @@
 # 24. Bezpieczny cykl członkostw i grantów — 6D-R
 
-**Data:** 2026-10-28. **Zakres:** [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6), kod do code/security review. Bez OIDC, UI, nowych endpointów, konfiguracji produkcyjnej, merge i deploymentu. Obowiązują ADR-002/003/004/005. Issue #6 pozostaje otwarte.
+**Data:** 2026-10-28. **Zakres:** [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6), kod do code/security review. Bez UI, nowych endpointów produkcyjnych, konfiguracji produkcyjnej, merge i deploymentu. Obowiązują ADR-002/003/004/005. Issue #6 pozostaje otwarte.
 
 ## Decyzja i invariant
 
@@ -10,13 +10,13 @@ Wybieramy **wariant A: transakcyjny lifecycle**, z dodatkowymi guardami SQL. Obe
 
 ## Warstwy i granica zaufania
 
-- `domain`: dotychczasowa polityka `decideAccountingAccess`, bez SQL/Drizzle i bez nowych praw administratora.
-- `application`: `manageAccess`, cztery komendy (`revoke_membership`, `reactivate_membership`, `grant`, `revoke_grant`), port magazynu, źródła zweryfikowanego aktora i osobnego autoryzatora administracyjnego.
-- `db`: `PostgresAccessManagementStore`, transakcja, blokady, kontrola stanu, idempotencja oraz zapis audytu; addytywne `0002_access-lifecycle.sql`.
+- `domain`: polityka `decideAccountingAccess` oraz (od [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md)) polityka autoryzacji administracyjnej `decideAccessManagementAuthorization`, bez SQL/Drizzle i bez automatycznych praw księgowych administratora.
+- `application`: `manageAccess`, cztery komendy (`revoke_membership`, `reactivate_membership`, `grant`, `revoke_grant`), port magazynu, źródła zweryfikowanego aktora i osobnego autoryzatora administracyjnego (od [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md): `createOidcAccessManagementActorSource` i `createTenantAccessManagementAuthorizer`).
+- `db`: `PostgresAccessManagementStore` oraz (od [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md)) `PostgresAccessManagementAuthorizationDataSource`, transakcja, blokady, kontrola stanu, idempotencja oraz zapis audytu; addytywne `0002_access-lifecycle.sql`.
 
 Źródło aktora jest zależnością zaufanej kompozycji serwerowej, a nie argumentem HTTP. Brak źródła, brak aktora, brak autoryzatora lub wynik inny niż jawne `true` blokuje mutację. Awarie są fail-closed, bez SQL, parametrów, poświadczeń i `cause`. Komenda jest walidowana, kopiowana i zamrażana przed pierwszym `await`; autoryzator i magazyn dostają ten sam zakres. `read`/`write` nie dają prawa do administracji. Adapter DB jest zaufaną implementacją portu i musi być wywoływany przez use case; sam interfejs TypeScript nie uwierzytelnia.
 
-Autoryzator **nie ma implementacji produkcyjnej**. Testy dostarczają syntetyczne źródło aktora i kontrolowaną decyzję dla konkretnego tenanta. Nie jest to OIDC. Przyszła kompozycja musi sprawdzać także ważność administracyjnego upoważnienia przy wykonaniu, włącznie ze współbieżnym cofnięciem prawa administratora; obecny port nie gwarantuje atomowości tego zewnętrznego sprawdzenia z transakcją DB. Bez tego nie wolno wystawić operacji użytkownikom.
+**Aktualizacja 6D-2 (2026-10-28):** [etap 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) dostarcza serwerową implementację `AccessManagementActorSource` (opartą na weryfikatorze OIDC i `PostgresUserIdentityResolver`) oraz `AccessManagementAuthorizer` (`createTenantAccessManagementAuthorizer` z `PostgresAccessManagementAuthorizationDataSource`). Nadal jednak sprawdzenie autoryzatora wykonuje się przed transakcją `PostgresAccessManagementStore.execute`, więc współbieżne cofnięcie prawa administratora (TOCTOU) oraz brak ograniczonej roli runtime DB pozostają jawnymi blockerami na etap 6D-3 przed wystawieniem mutujących endpointów HTTP użytkownikom.
 
 ## Transakcja, czas i kolejność blokad
 
@@ -65,9 +65,9 @@ Nie ma destrukcyjnego rollbacku. Błąd migracji wycofuje DDL; po sukcesie wycof
 
 W 6D-3 wymagana jest rola runtime bez ownera, DDL, TRUNCATE, BYPASSRLS i możliwości wyłączenia triggerów; brak dowolnego DML grantów/członkostw poza kontrolowaną ścieżką (np. osobno reviewowane procedury z wąskimi uprawnieniami i atomowym audytem). Bezpośredni INSERT eventu także nie może być źródłem dowolnie podanego aktora. Trzeba przetestować prawa ról, odporność na obejście przez SQL, RLS, `SET LOCAL` przy poolingu i audyt odmów. Nie dodajemy teraz nieprzetestowanej konfiguracji produkcyjnej ani pozornego administratora.
 
-**OIDC i autoryzacja administracyjna przy wykonaniu są blockerem.** 6D-2 musi dostarczyć wiarygodnego aktora, mapowanie tożsamości i testy odmów. Nie wystawiono żadnej nowej trasy API/MCP.
+**Serwerowe OIDC i autoryzator administracyjny dostarczono w [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md).** Mutujące endpointy pozostają jednak niewystawione w publicznym `AppModule` do czasu domknięcia atomowości transakcyjnej (TOCTOU) i ograniczonej roli runtime DB w 6D-3.
 
-**Pozostaje TOCTOU:** odczyt faktów przez `authorizeCompanyAction` nie jest atomowy z przyszłym odczytem/zapisem dokumentu. Inna transakcja może cofnąć prawa po decyzji. 6D-3 musi połączyć kontekst i operację na danych w odpowiedniej transakcji, egzekwować RLS i testować współbieżność. Ten pakiet nie udaje izolacji API/MCP end-to-end.
+**Pozostaje TOCTOU:** odczyt faktów przez `authorizeCompanyAction` oraz `createTenantAccessManagementAuthorizer` nie jest jeszcze atomowy z docelową operacją w jednej transakcji DB. 6D-3 połączy kontekst i operację na danych w odpowiedniej transakcji, wyegzekwuje RLS i przetestuje współbieżność.
 
 Wymagane są code/security review, rozstrzygnięcie powyższych blockerów i pozostałe bramki Issue #6. Naprawa pierwotnej sekwencji nie oznacza gotowości do publicznego użycia.
 

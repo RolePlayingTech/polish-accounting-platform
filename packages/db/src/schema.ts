@@ -15,6 +15,57 @@ import {
 // Chwile czasu, z precyzją Date (milisekundy); okresy mają postać [od, do).
 const instant = (name: string) => timestamp(name, { withTimezone: true, precision: 3 });
 
+export const appUser = pgTable(
+  'app_user',
+  {
+    id: uuid('id').primaryKey(),
+    status: text('status', { enum: ['active', 'disabled'] }).notNull(),
+    createdAt: instant('created_at').notNull().defaultNow(),
+    disabledAt: instant('disabled_at'),
+  },
+  (table) => [
+    check('app_user_status_check', sql`${table.status} IN ('active', 'disabled')`),
+    check('app_user_created_at_check', sql`isfinite(${table.createdAt})`),
+    check(
+      'app_user_disabled_state_check',
+      sql`(${table.status} = 'active' AND ${table.disabledAt} IS NULL) OR (${table.status} = 'disabled' AND ${table.disabledAt} IS NOT NULL AND isfinite(${table.disabledAt}) AND ${table.disabledAt} >= ${table.createdAt})`,
+    ),
+  ],
+);
+
+export const userOidcIdentity = pgTable(
+  'user_oidc_identity',
+  {
+    id: uuid('id').primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => appUser.id, { onDelete: 'restrict', onUpdate: 'restrict' }),
+    issuer: text('issuer').notNull(),
+    subject: text('subject').notNull(),
+    status: text('status', { enum: ['active', 'revoked'] }).notNull(),
+    linkedAt: instant('linked_at').notNull().defaultNow(),
+    revokedAt: instant('revoked_at'),
+  },
+  (table) => [
+    unique('user_oidc_identity_issuer_subject_unique').on(table.issuer, table.subject),
+    index('user_oidc_identity_user_idx').on(table.userId),
+    check(
+      'user_oidc_identity_issuer_check',
+      sql`btrim(${table.issuer}) <> '' AND ${table.issuer} = btrim(${table.issuer})`,
+    ),
+    check(
+      'user_oidc_identity_subject_check',
+      sql`btrim(${table.subject}) <> '' AND ${table.subject} = btrim(${table.subject})`,
+    ),
+    check('user_oidc_identity_status_check', sql`${table.status} IN ('active', 'revoked')`),
+    check('user_oidc_identity_linked_at_check', sql`isfinite(${table.linkedAt})`),
+    check(
+      'user_oidc_identity_revoked_state_check',
+      sql`(${table.status} = 'active' AND ${table.revokedAt} IS NULL) OR (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL AND isfinite(${table.revokedAt}) AND ${table.revokedAt} >= ${table.linkedAt})`,
+    ),
+  ],
+);
+
 export const accessManagementEvent = pgTable(
   'access_management_event',
   {
@@ -76,7 +127,7 @@ export const tenantMembership = pgTable(
     tenantId: uuid('tenant_id')
       .notNull()
       .references(() => tenant.id, { onDelete: 'restrict', onUpdate: 'restrict' }),
-    // Wewnętrzny UUID; mapowanie zweryfikowanej tożsamości OIDC powstanie w 6D.
+    // Wewnętrzny UUID; mapowanie zweryfikowanej tożsamości OIDC w user_oidc_identity -> app_user (6D-2).
     userId: uuid('user_id').notNull(),
     role: text('role', { enum: ['tenant_owner', 'tenant_admin', 'tenant_member'] }).notNull(),
     status: text('status', { enum: ['active', 'revoked'] }).notNull(),

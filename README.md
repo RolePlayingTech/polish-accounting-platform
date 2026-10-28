@@ -1,15 +1,15 @@
 # Polish Accounting Platform 🇵🇱
 
-> **Status: działający szkielet developerski; istnieje pierwsza, testowana polityka dostępu w kodzie domeny i aplikacji, ale logowanie, egzekwowanie jej przez API/MCP i izolacja danych firmowych nie są wdrożone.**
+> **Status: działający szkielet developerski; istnieje testowana polityka dostępu, cykl członkostw/grantów (6D-R) oraz serwerowa weryfikacja OIDC i mapowanie tożsamości (6D-2), ale interaktywne logowanie UI, RLS, rola runtime DB i publiczne endpointy firmowe nie są jeszcze wdrożone.**
 >
-> **Stan weryfikacji źródeł: 26 października 2026 r.**  
+> **Stan weryfikacji źródeł: 28 października 2026 r.**  
 > **Język dokumentacji: polski. Jurysdykcja: Polska.**
 
 **Polish Accounting Platform** to projekt otwartoźródłowej aplikacji webowej do prowadzenia i organizowania polskiej księgowości, obiegu dokumentów oraz obsługi obowiązków podatkowych — zarówno z poziomu przeglądarki, jak i bezpiecznych narzędzi **Model Context Protocol (MCP)**. Aplikacja ma obsługiwać wiele podmiotów, różne formy prawne i różne reżimy podatkowo-księgowe, bez błędnego założenia, że każda firma rozlicza się tak samo.
 
 ## Cel
 
-Jedno miejsce na faktury, rachunki, umowy, wyciągi bankowe, dowody księgowe, rozrachunki, ewidencje, terminy i dokumentację. Użytkownik powinien móc napisać agentowi: „Dodaj tę fakturę do spółki X, sprawdź jej poprawność i przygotuj propozycję dekretacji” — zobaczyć wynik z uzasadnieniem oraz **samodzielnie zatwierdzić** wykonanie operacji.
+Jedno miejsce na faktury, rachunki, umowy, wyciągi bankowe, dowody księgowe, rozrachunki, ewidencje, terminy i dokumentację. Użytkownik powinien napisać agentowi: „Dodaj tę fakturę do spółki X, sprawdź jej poprawność i przygotuj propozycję dekretacji” — zobaczyć wynik z uzasadnieniem oraz **samodzielnie zatwierdzić** wykonanie operacji.
 
 To nie jest wyłącznie „OCR do faktur”. Długoterminowym celem jest **silnik księgowy zgodny z polskimi wymaganiami, z weryfikowalnym źródłem każdej reguły**. Rozliczenia nie mogą opierać się na swobodnej interpretacji modelu językowego.
 
@@ -24,17 +24,17 @@ To nie jest wyłącznie „OCR do faktur”. Długoterminowym celem jest **silni
 
 ## Najważniejsze możliwości
 
-| Obszar | Planowane możliwości |
-| --- | --- |
-| Dokumenty | Drag & drop, PDF, XML KSeF, obrazy, e-mail (później), metadane, OCR/AI, wersje, wyszukiwanie, duplikaty, archiwizacja |
-| Faktury / KSeF | Import zakupów, wystawianie, korekty, zaliczki, statusy, numery KSeF, UPO, obsługa awarii i trybów szczególnych zgodnie z uprawnieniami |
-| Księgowość | KPiR, ewidencja przychodów, pełne księgi i podwójny zapis jako odrębne moduły, konta, rozrachunki, środki trwałe |
-| Podatki i raportowanie | VAT, JPK_V7, JPK_PD, PIT/CIT, wyliczenia i szkice deklaracji zależnie od profilu i wdrożonego zakresu |
-| Płatności | Import CSV/MT940/CAMT, dopasowanie przelewów, salda, przypomnienia; PSD2 tylko za zgodą i przez uprawnionego dostawcę |
-| ZUS i kadry | Obowiązki właściciela, składki, terminy; kadry i płace dopiero w rozszerzonym zakresie |
-| Prawo i zgodność | Wersjonowane reguły z datą obowiązywania, linkiem do podstawy, testami i ścieżką zatwierdzania zmian |
-| MCP | Odczyt dokumentów i rozrachunków, przygotowanie propozycji, wyszukiwanie, kontrolowane operacje zapisu, obowiązkowe potwierdzanie czynności krytycznych |
-| Wiele firm | Pełna izolacja danych firm, role, uprawnienia, historia zmian, audyt |
+| Obszar                 | Planowane możliwości                                                                                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dokumenty              | Drag & drop, PDF, XML KSeF, obrazy, e-mail (później), metadane, OCR/AI, wersje, wyszukiwanie, duplikaty, archiwizacja                                   |
+| Faktury / KSeF         | Import zakupów, wystawianie, korekty, zaliczki, statusy, numery KSeF, UPO, obsługa awarii i trybów szczególnych zgodnie z uprawnieniami                 |
+| Księgowość             | KPiR, ewidencja przychodów, pełne księgi i podwójny zapis jako odrębne moduły, konta, rozrachunki, środki trwałe                                        |
+| Podatki i raportowanie | VAT, JPK_V7, JPK_PD, PIT/CIT, wyliczenia i szkice deklaracji zależnie od profilu i wdrożonego zakresu                                                   |
+| Płatności              | Import CSV/MT940/CAMT, dopasowanie przelewów, salda, przypomnienia; PSD2 tylko za zgodą i przez uprawnionego dostawcę                                   |
+| ZUS i kadry            | Obowiązki właściciela, składki, terminy; kadry i płace dopiero w rozszerzonym zakresie                                                                  |
+| Prawo i zgodność       | Wersjonowane reguły z datą obowiązywania, linkiem do podstawy, testami i ścieżką zatwierdzania zmian                                                    |
+| MCP                    | Odczyt dokumentów i rozrachunków, przygotowanie propozycji, wyszukiwanie, kontrolowane operacje zapisu, obowiązkowe potwierdzanie czynności krytycznych |
+| Wiele firm             | Pełna izolacja danych firm, role, uprawnienia, historia zmian, audyt                                                                                    |
 
 ## Co jest szczególnie ważne w Polsce w 2026 r.
 
@@ -72,7 +72,7 @@ Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js
 
 **Bieżący tryb pracy: wyłącznie lokalny ([ADR-005](docs/adr/005-rozwoj-lokalny.md)).** `pnpm dev` uruchamia frontend i backend bez bazy. Opcjonalny PostgreSQL 18 instaluje się bezpośrednio na komputerze developera; Docker nie jest wymagany. Instrukcja Windows/PowerShell, oddzielne konta i bazy `pap_local`/`pap_test` oraz ręczne migracje są w [przewodniku developera](docs/19-przewodnik-developera.md#postgresql-lokalnie-bez-dockera). Pakiet 6A jest fundamentem technicznym, nie modułem firm ani księgowości. Nie przygotowujemy obecnie serwera, deploymentu ani infrastruktury kontenerowej.
 
-**Stan implementacji:** repozytorium zawiera monorepo pnpm/Turborepo, polski interfejs demonstracyjny `/app`, lokalne API statusu i lokalny serwer MCP STDIO z narzędziem tylko do odczytu. Pakiety `domain` i `application` zawierają pierwszą, deny-by-default politykę grantów tenant/firma/akcja oraz port zaufanego źródła. Pakiet `@pap/db` udostępnia Drizzle ORM, kontrolowane połączenia wyłącznie do lokalnych baz `pap_local` i `pap_test` oraz wersjonowany mechanizm migracji. Po technicznej migracji 6A pakiet 6B dodaje schemat tenantów, firm, członkostw, wersji profilu i jawnych grantów oraz testy constraints PostgreSQL. [Opis modelu 6B](docs/22-schemat-tenantow-6b.md) rozróżnia integralność relacji od ochrony odczytów. [Adapter 6D-1](docs/23-adapter-autoryzacji-6d1.md) łączy ten schemat z portem autoryzacji: odczytuje bieżące członkostwo i granty wyłącznie w żądanym zakresie, bez cache. Testy jednostkowe i PostgreSQL sprawdzają wspólną politykę z adapterem. To nie jest działająca autoryzacja użytkowników końcowych: brak OIDC/logowania, połączenia pakietu DB z API/MCP, egzekwowania polityki przez API/MCP, RLS, audytu decyzji i testów izolacji end-to-end. Ryzyko odnowienia historycznych grantów po reaktywacji członkostwa jest potwierdzone testem i wymaga osobnego mechanizmu przed obsługą użytkowników. Nie ma jeszcze obsługi tenantów ani firm w aplikacji, księgowania, integracji urzędowych ani wdrożenia produkcyjnego. Zatwierdzenie architektury nie jest zgodą na zakupy hostingu ani wdrożenie produkcyjne. Zakres działającego szkieletu opisują [przewodnik developera](docs/19-przewodnik-developera.md) i [strategia testów](docs/20-strategia-testow.md).
+**Stan implementacji:** repozytorium zawiera monorepo pnpm/Turborepo, polski interfejs demonstracyjny `/app`, lokalne API statusu i lokalny serwer MCP STDIO z narzędziem tylko do odczytu. Pakiety `domain` i `application` zawierają deny-by-default politykę grantów tenant/firma/akcja, politykę autoryzacji administracyjnej oraz porty tożsamości i zaufanego źródła. Pakiet `@pap/db` udostępnia Drizzle ORM, kontrolowane połączenia wyłącznie do lokalnych baz `pap_local` i `pap_test` oraz wersjonowany mechanizm migracji (`0000`–`0003`). Po technicznej migracji 6A pakiet 6B dodaje schemat tenantów, firm, członkostw, wersji profilu i jawnych grantów ([opis modelu 6B](docs/22-schemat-tenantow-6b.md)). [Adapter 6D-1](docs/23-adapter-autoryzacji-6d1.md) łączy ten schemat z portem autoryzacji, a [etap 6D-R](docs/24-bezpieczny-cykl-dostepu-6dr.md) zapewnia transakcyjny cykl cofania/reaktywowania członkostw i grantów z audytem i guardami SQL. [Etap 6D-2](docs/25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) dostarcza serwerową weryfikację tokenów dostępu OIDC/JWKS (`JwksOidcAccessTokenVerifier`), mapowanie wewnętrznej tożsamości `(issuer, subject) -> userId` (`PostgresUserIdentityResolver`), autoryzację operacji administracyjnych `manageAccess` oraz guard NestJS/Fastify (`CompanyActionAuthorizationGuard`) testowany w rzeczywistym pipeline HTTP. Nie jest to jeszcze pełny system logowania użytkowników końcowych: brak interaktywnego przepływu OIDC PKCE w UI, ograniczonej roli runtime DB, polityk PostgreSQL RLS, transakcyjnego powiązania decyzji z operacją na danych (TOCTOU) oraz publicznych endpointów księgowych. Zakres działającego szkieletu opisują [przewodnik developera](docs/19-przewodnik-developera.md) i [strategia testów](docs/20-strategia-testow.md).
 
 ## Administracja i przyszłe abonamenty
 
@@ -86,46 +86,47 @@ Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operat
 
 ## Dokumentacja
 
-| Dokument | Zawartość |
-| --- | --- |
-| [01 — Wizja i zakres](docs/01-wizja-i-zakres.md) | Cele, użytkownicy, granice produktu, miary sukcesu |
-| [02 — Formy prawne i profile](docs/02-profile-podmiotow.md) | Model rozdzielający podmiot, podatnika i sposób ewidencji |
-| [03 — Funkcje](docs/03-funkcjonalnosci.md) | Szczegółowy katalog funkcjonalności i priorytety |
-| [04 — Przepływy](docs/04-przeplywy-uzytkownika.md) | Przykłady procesów end-to-end |
-| [05 — Architektura](docs/05-architektura.md) | Komponenty, granice i przepływy danych |
-| [06 — Dane](docs/06-model-danych.md) | Model pojęciowy, spójność, rozliczenia, wersjonowanie |
-| [07 — MCP](docs/07-mcp.md) | Narzędzia, zasoby, autoryzacja i polityki zapisów |
-| [08 — Integracje](docs/08-integracje.md) | KSeF, MF, REGON, NBP, rejestry i banki |
-| [09 — Przepisy](docs/09-reguly-prawne.md) | Aktualizacja prawa, źródła, reguły, testy i kontrola |
-| [10 — Bezpieczeństwo](docs/10-bezpieczenstwo.md) | RODO, ryzyka finansowe, szyfrowanie i audyt |
-| [11 — UI/UX](docs/11-ui-ux.md) | Mapa ekranów, stany, dostępność |
-| [21 — Kierunek wizualny](docs/21-kierunek-wizualny.md) | Propozycje estetyki, charakter interfejsu, UX i proces walidacji |
-| [12 — Roadmapa](docs/12-roadmapa.md) | Fazy, zależności, zadania dla agentów |
-| [13 — Testy i odbiór](docs/13-kryteria-akceptacji.md) | Kryteria akceptacji i scenariusze testowe |
-| [14 — Źródła](docs/14-zrodla.md) | Oficjalne strony i dokumentacja techniczna |
-| [15 — Decyzje otwarte](docs/15-decyzje.md) | Decyzje projektowe do podjęcia |
-| [ADR-001](docs/adr/001-rdzen-i-mcp.md) | Oddzielenie księgowania od AI i MCP |
-| [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md) | Decyzja technologiczna, koszty, alternatywy i środowiska |
-| [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md) | Propozycja administracji, ról platformowych oraz abonamentów |
-| [16 — Standard architektury](docs/16-zasady-architektoniczne.md) | Zasady modułów, uprawnień, ksiąg, testów i skalowania |
-| [17 — Standard repo](docs/17-struktura-repo-i-standardy.md) | Docelowe pakiety, importy, CI i komendy |
-| [18 — Model zagrożeń i uprawnień](docs/18-model-zagrozen-i-uprawnien.md) | Granice zaufania, role, autoryzacja i testy negatywne (kontrakt projektowy) |
-| [ADR-004](docs/adr/004-model-zagrozen-i-autoryzacji.md) | Wspólna autoryzacja i granice zaufania (propozycja do przeglądu) |
-| [ADR-005](docs/adr/005-rozwoj-lokalny.md) | Bieżący rozwój wyłącznie lokalny, bez Dockera i przygotowywania deploymentu |
-| [19 — Przewodnik developera](docs/19-przewodnik-developera.md) | Wymagania środowiska, instalacja, uruchamianie web/API/MCP |
-| [20 — Strategia testów](docs/20-strategia-testow.md) | Działające polecenia, testowane granice i ograniczenia pokrycia |
-| [22 — Schemat tenantów 6B](docs/22-schemat-tenantow-6b.md) | Schemat PostgreSQL/Drizzle dla tenantów, firm, członkostw, profili i grantów |
-| [23 — Adapter autoryzacji 6D-1](docs/23-adapter-autoryzacji-6d1.md) | Adapter PostgreSQL źródła autoryzacji i zakres odczytu |
-| [24 — Bezpieczny cykl dostępu 6D-R](docs/24-bezpieczny-cykl-dostepu-6dr.md) | Transakcyjny cykl członkostw i grantów, audyt i guardy SQL |
-| [ADR-006](docs/adr/006-prywatny-staging-hetzner.md) | Propozycja przejścia do prywatnego stagingu na serwerze Hetzner |
-| [Audyt serwera Hetzner](docs/HETZNER_SERVER_AUDIT_2026-10-28.md) | Odczytowa inwentaryzacja hosta, usług, portów i domeny IDN (bez sekretów) |
-| [Architektura stagingu Hetzner](docs/HETZNER_STAGING_ARCHITECTURE.md) | Rekomendowany model uruchomienia Web, API, PostgreSQL 18, TLS i backupów |
-| [Plan wdrożenia Hetzner](docs/HETZNER_DEPLOYMENT_PLAN.md) | Procedura pierwszej publikacji (Etap A i Etap B), CI/CD i ochrona `main` |
-| [Checklista gotowości Hetzner](docs/HETZNER_READINESS_CHECKLIST.md) | Kryteria Go/No-Go, lista decyzji właściciela i warunki zatrzymania |
+| Dokument                                                                                        | Zawartość                                                                          |
+| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| [01 — Wizja i zakres](docs/01-wizja-i-zakres.md)                                                | Cele, użytkownicy, granice produktu, miary sukcesu                                 |
+| [02 — Formy prawne i profile](docs/02-profile-podmiotow.md)                                     | Model rozdzielający podmiot, podatnika i sposób ewidencji                          |
+| [03 — Funkcje](docs/03-funkcjonalnosci.md)                                                      | Szczegółowy katalog funkcjonalności i priorytety                                   |
+| [04 — Przepływy](docs/04-przeplywy-uzytkownika.md)                                              | Przykłady procesów end-to-end                                                      |
+| [05 — Architektura](docs/05-architektura.md)                                                    | Komponenty, granice i przepływy danych                                             |
+| [06 — Dane](docs/06-model-danych.md)                                                            | Model pojęciowy, spójność, rozliczenia, wersjonowanie                              |
+| [07 — MCP](docs/07-mcp.md)                                                                      | Narzędzia, zasoby, autoryzacja i polityki zapisów                                  |
+| [08 — Integracje](docs/08-integracje.md)                                                        | KSeF, MF, REGON, NBP, rejestry i banki                                             |
+| [09 — Przepisy](docs/09-reguly-prawne.md)                                                       | Aktualizacja prawa, źródła, reguły, testy i kontrola                               |
+| [10 — Bezpieczeństwo](docs/10-bezpieczenstwo.md)                                                | RODO, ryzyka finansowe, szyfrowanie i audyt                                        |
+| [11 — UI/UX](docs/11-ui-ux.md)                                                                  | Mapa ekranów, stany, dostępność                                                    |
+| [21 — Kierunek wizualny](docs/21-kierunek-wizualny.md)                                          | Propozycje estetyki, charakter interfejsu, UX i proces walidacji                   |
+| [12 — Roadmapa](docs/12-roadmapa.md)                                                            | Fazy, zależności, zadania dla agentów                                              |
+| [13 — Testy i odbiór](docs/13-kryteria-akceptacji.md)                                           | Kryteria akceptacji i scenariusze testowe                                          |
+| [14 — Źródła](docs/14-zrodla.md)                                                                | Oficjalne strony i dokumentacja techniczna                                         |
+| [15 — Decyzje otwarte](docs/15-decyzje.md)                                                      | Decyzje projektowe do podjęcia                                                     |
+| [ADR-001](docs/adr/001-rdzen-i-mcp.md)                                                          | Oddzielenie księgowania od AI i MCP                                                |
+| [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md)                                      | Decyzja technologiczna, koszty, alternatywy i środowiska                           |
+| [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md)                               | Propozycja administracji, ról platformowych oraz abonamentów                       |
+| [16 — Standard architektury](docs/16-zasady-architektoniczne.md)                                | Zasady modułów, uprawnień, ksiąg, testów i skalowania                              |
+| [17 — Standard repo](docs/17-struktura-repo-i-standardy.md)                                     | Docelowe pakiety, importy, CI i komendy                                            |
+| [18 — Model zagrożeń i uprawnień](docs/18-model-zagrozen-i-uprawnien.md)                        | Granice zaufania, role, autoryzacja i testy negatywne (kontrakt projektowy)        |
+| [ADR-004](docs/adr/004-model-zagrozen-i-autoryzacji.md)                                         | Wspólna autoryzacja i granice zaufania (propozycja do przeglądu)                   |
+| [ADR-005](docs/adr/005-rozwoj-lokalny.md)                                                       | Bieżący rozwój wyłącznie lokalny, bez Dockera i przygotowywania deploymentu        |
+| [19 — Przewodnik developera](docs/19-przewodnik-developera.md)                                  | Wymagania środowiska, instalacja, uruchamianie web/API/MCP                         |
+| [20 — Strategia testów](docs/20-strategia-testow.md)                                            | Działające polecenia, testowane granice i ograniczenia pokrycia                    |
+| [22 — Schemat tenantów 6B](docs/22-schemat-tenantow-6b.md)                                      | Schemat PostgreSQL/Drizzle dla tenantów, firm, członkostw, profili i grantów       |
+| [23 — Adapter autoryzacji 6D-1](docs/23-adapter-autoryzacji-6d1.md)                             | Adapter PostgreSQL źródła autoryzacji i zakres odczytu                             |
+| [24 — Bezpieczny cykl dostępu 6D-R](docs/24-bezpieczny-cykl-dostepu-6dr.md)                     | Transakcyjny cykl członkostw i grantów, audyt i guardy SQL                         |
+| [25 — Uwierzytelnianie OIDC i tożsamość 6D-2](docs/25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) | Serwerowa walidacja OIDC/JWKS, mapowanie tożsamości i integracja z autoryzacją API |
+| [ADR-006](docs/adr/006-prywatny-staging-hetzner.md)                                             | Propozycja przejścia do prywatnego stagingu na serwerze Hetzner                    |
+| [Audyt serwera Hetzner](docs/HETZNER_SERVER_AUDIT_2026-10-28.md)                                | Odczytowa inwentaryzacja hosta, usług, portów i domeny IDN (bez sekretów)          |
+| [Architektura stagingu Hetzner](docs/HETZNER_STAGING_ARCHITECTURE.md)                           | Rekomendowany model uruchomienia Web, API, PostgreSQL 18, TLS i backupów           |
+| [Plan wdrożenia Hetzner](docs/HETZNER_DEPLOYMENT_PLAN.md)                                       | Procedura pierwszej publikacji (Etap A i Etap B), CI/CD i ochrona `main`           |
+| [Checklista gotowości Hetzner](docs/HETZNER_READINESS_CHECKLIST.md)                             | Kryteria Go/No-Go, lista decyzji właściciela i warunki zatrzymania                 |
 
 ## Status funkcji i bezpieczeństwa
 
-Nie istnieją funkcje księgowe, konta użytkowników, działająca autoryzacja, izolacja danych firmowych, połączenie z KSeF ani zdalny serwer MCP. Sama polityka w pakietach nie jest używana przez API i nie chroni danych aplikacji. Lokalny MCP udostępnia wyłącznie publiczny status systemu. Trasy `/settings` i `/platform` są statycznymi stronami zastępczymi bez endpointów administracyjnych. Nie przesyłaj do tego repozytorium prawdziwych faktur, numerów PESEL, danych klientów, certyfikatów KSeF ani tokenów. Błędy bezpieczeństwa zgłaszaj zgodnie z [SECURITY.md](SECURITY.md).
+Nie istnieją jeszcze funkcje księgowe, interaktywne logowanie użytkowników w UI, pełna izolacja danych firmowych przez RLS, połączenie z KSeF ani zdalny serwer MCP. Publiczne `AppModule` wystawia wyłącznie `/health` oraz `/api/v1/system/status` (`tenantAuthorization: 'not_available'`), natomiast serwerowy pipeline OIDC i autoryzacji (`6D-2`) jest weryfikowany na dedykowanym kontrolerze testowym i testach integracyjnych PostgreSQL. Lokalny MCP udostępnia wyłącznie publiczny status systemu. Trasy `/settings` i `/platform` są statycznymi stronami zastępczymi bez endpointów administracyjnych. Nie przesyłaj do tego repozytorium prawdziwych faktur, numerów PESEL, danych klientów, certyfikatów KSeF ani tokenów. Błędy bezpieczeństwa zgłaszaj zgodnie z [SECURITY.md](SECURITY.md).
 
 ## Zasady open source
 
