@@ -2,15 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { DatabaseConfigError, loadDatabaseConfig } from '../src/database-config.js';
 
 describe('loadDatabaseConfig', () => {
+  it.each(['local', 'test'] as const)('rozdziela runtime i migratora także w %s', (environment) => {
+    const env = {
+      PAP_DATABASE_ENV: environment,
+      DATABASE_URL: `postgres://pap_${environment}:synthetic@127.0.0.1/pap_${environment}`,
+    };
+    expect(() => loadDatabaseConfig(env)).toThrow('dedykowanego konta');
+    expect(loadDatabaseConfig(env, { roleScope: 'migrator' }).environment).toBe(environment);
+  });
   it('accepts the dedicated local database on loopback', () => {
     expect(
       loadDatabaseConfig({
         PAP_DATABASE_ENV: 'local',
-        DATABASE_URL: 'postgres://pap_local:local_only@127.0.0.1:5432/pap_local',
+        DATABASE_URL: 'postgres://pap_local_app:local_only@127.0.0.1:5432/pap_local',
       }),
     ).toEqual({
       environment: 'local',
-      url: 'postgres://pap_local:local_only@127.0.0.1:5432/pap_local',
+      url: 'postgres://pap_local_app:local_only@127.0.0.1:5432/pap_local',
     });
   });
 
@@ -18,7 +26,7 @@ describe('loadDatabaseConfig', () => {
     expect(
       loadDatabaseConfig({
         PAP_DATABASE_ENV: 'test',
-        DATABASE_URL: 'postgresql://pap_test:test_only@localhost:5433/pap_test',
+        DATABASE_URL: 'postgresql://pap_test_app:test_only@localhost:5433/pap_test',
       }).environment,
     ).toBe('test');
   });
@@ -27,7 +35,7 @@ describe('loadDatabaseConfig', () => {
     expect(
       loadDatabaseConfig({
         PAP_DATABASE_ENV: 'test',
-        DATABASE_URL: `postgres://pap_test:test_only@${host}/pap_test`,
+        DATABASE_URL: `postgres://pap_test_app:test_only@${host}/pap_test`,
       }).url,
     ).toContain(':5432/pap_test');
   });
@@ -128,7 +136,7 @@ describe('loadDatabaseConfig', () => {
       expect(() =>
         loadDatabaseConfig({
           PAP_DATABASE_ENV: environment,
-          DATABASE_URL: 'postgres://pap_local:secret@127.0.0.1:5432/pap_local',
+          DATABASE_URL: 'postgres://pap_local_app:secret@127.0.0.1:5432/pap_local',
         }),
       ).toThrow(DatabaseConfigError);
     }
@@ -148,14 +156,14 @@ describe('loadDatabaseConfig', () => {
 
   it('rejects the wrong database, account, protocol, malformed URL, and connection options', () => {
     const cases = [
-      ['local', 'postgres://pap_local:secret@127.0.0.1:5432/pap_test'],
-      ['local', 'postgres://pap_local:secret@127.0.0.1:5432/pap_staging'],
+      ['local', 'postgres://pap_local_app:secret@127.0.0.1:5432/pap_test'],
+      ['local', 'postgres://pap_local_app:secret@127.0.0.1:5432/pap_staging'],
       ['local', 'postgres://pap_staging_app:secret@127.0.0.1:5432/pap_local'],
-      ['test', 'postgres://pap_local:secret@127.0.0.1:5432/pap_test'],
-      ['test', 'postgres://pap_test:secret@127.0.0.1:5432/pap_local'],
-      ['test', 'postgres://pap_test:secret@127.0.0.1:5432/pap_staging'],
-      ['staging', 'postgres://pap_local:secret@127.0.0.1:5432/pap_staging'],
-      ['staging', 'postgres://pap_test:secret@127.0.0.1:5432/pap_staging'],
+      ['test', 'postgres://pap_local_app:secret@127.0.0.1:5432/pap_test'],
+      ['test', 'postgres://pap_test_app:secret@127.0.0.1:5432/pap_local'],
+      ['test', 'postgres://pap_test_app:secret@127.0.0.1:5432/pap_staging'],
+      ['staging', 'postgres://pap_local_app:secret@127.0.0.1:5432/pap_staging'],
+      ['staging', 'postgres://pap_test_app:secret@127.0.0.1:5432/pap_staging'],
       ['staging', 'postgres://postgres:secret@127.0.0.1:5432/pap_staging'],
       ['staging', 'postgres://pap_staging_app:secret@127.0.0.1:5432/pap_local'],
       ['staging', 'postgres://pap_staging_app:secret@127.0.0.1:5432/pap_test'],
@@ -163,10 +171,10 @@ describe('loadDatabaseConfig', () => {
       ['staging', 'postgres://pap_staging_app:secret@127.0.0.1:5432/pap_staging?sslmode=disable'],
       ['test', 'https://pap_test:secret@127.0.0.1:5432/pap_test'],
       ['test', 'not-a-url'],
-      ['test', 'postgres://pap_test:secret@127.0.0.1:5432/%ZZ'],
+      ['test', 'postgres://pap_test_app:secret@127.0.0.1:5432/%ZZ'],
       ['test', 'postgres://pap_test@127.0.0.1:5432/pap_test'],
-      ['test', 'postgres://pap_test:secret@127.0.0.1:5432/pap_test?sslmode=require'],
-      ['test', 'postgres://pap_test:secret@127.0.0.1:5432/pap_test#fragment'],
+      ['test', 'postgres://pap_test_app:secret@127.0.0.1:5432/pap_test?sslmode=require'],
+      ['test', 'postgres://pap_test_app:secret@127.0.0.1:5432/pap_test#fragment'],
       ['test', undefined],
     ] as const;
 
@@ -186,7 +194,7 @@ describe('loadDatabaseConfig', () => {
     try {
       loadDatabaseConfig({
         PAP_DATABASE_ENV: 'local',
-        DATABASE_URL: 'postgres://pap_local:private-value@database.example.invalid/pap_local',
+        DATABASE_URL: 'postgres://pap_local_app:private-value@database.example.invalid/pap_local',
       });
     } catch (error) {
       expect(error).toBeInstanceOf(DatabaseConfigError);

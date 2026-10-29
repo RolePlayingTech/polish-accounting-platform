@@ -1422,7 +1422,10 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
 
   it('Scenariusz 11: po odmowie autoryzacji lub błędzie SQL połączenie z puli (maxConnections: 1) jest bezpiecznie reużywane bez wycieku kontekstu SET LOCAL', async () => {
     const { dataSchema } = connection();
-    const singlePool = connectDatabase(process.env, dataSchema, { maxConnections: 1 });
+    const singlePool = connectDatabase(process.env, dataSchema, {
+      maxConnections: 1,
+      roleScope: 'migrator',
+    });
 
     try {
       const store = new PostgresAccessManagementStore(singlePool.db);

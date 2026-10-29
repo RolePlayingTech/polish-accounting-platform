@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -14,6 +15,19 @@ import {
 
 // Chwile czasu, z precyzją Date (milisekundy); okresy mają postać [od, do).
 const instant = (name: string) => timestamp(name, { withTimezone: true, precision: 3 });
+
+export const securityContextKey = pgTable(
+  'security_context_key',
+  {
+    keyId: text('key_id').primaryKey(),
+    secretHex: text('secret_hex').notNull(),
+    runtimeRole: text('runtime_role').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+  },
+  (table) => [
+    check('security_context_key_secret_hex_check', sql`${table.secretHex} ~ '^[a-f0-9]{64}$'`),
+  ],
+).enableRLS();
 
 export const appUser = pgTable(
   'app_user',
@@ -31,7 +45,7 @@ export const appUser = pgTable(
       sql`(${table.status} = 'active' AND ${table.disabledAt} IS NULL) OR (${table.status} = 'disabled' AND ${table.disabledAt} IS NOT NULL AND isfinite(${table.disabledAt}) AND ${table.disabledAt} >= ${table.createdAt})`,
     ),
   ],
-);
+).enableRLS();
 
 export const userOidcIdentity = pgTable(
   'user_oidc_identity',
@@ -64,7 +78,7 @@ export const userOidcIdentity = pgTable(
       sql`(${table.status} = 'active' AND ${table.revokedAt} IS NULL) OR (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL AND isfinite(${table.revokedAt}) AND ${table.revokedAt} >= ${table.linkedAt})`,
     ),
   ],
-);
+).enableRLS();
 
 export const accessManagementEvent = pgTable(
   'access_management_event',
@@ -93,7 +107,7 @@ export const accessManagementEvent = pgTable(
     ),
     check('access_management_event_time_check', sql`isfinite(${table.occurredAt})`),
   ],
-);
+).enableRLS();
 
 export const tenant = pgTable(
   'tenant',
@@ -103,7 +117,7 @@ export const tenant = pgTable(
     createdAt: instant('created_at').notNull().defaultNow(),
   },
   (table) => [check('tenant_name_not_blank', sql`btrim(${table.name}) <> ''`)],
-);
+).enableRLS();
 
 export const legalEntity = pgTable(
   'legal_entity',
@@ -119,7 +133,7 @@ export const legalEntity = pgTable(
     unique('legal_entity_tenant_id_id_unique').on(table.tenantId, table.id),
     check('legal_entity_name_not_blank', sql`btrim(${table.displayName}) <> ''`),
   ],
-);
+).enableRLS();
 
 export const tenantMembership = pgTable(
   'tenant_membership',
@@ -146,7 +160,7 @@ export const tenantMembership = pgTable(
       sql`isfinite(${table.validFrom}) AND (${table.validUntil} IS NULL OR (isfinite(${table.validUntil}) AND ${table.validUntil} > ${table.validFrom}))`,
     ),
   ],
-);
+).enableRLS();
 
 export const entityProfileVersion = pgTable(
   'entity_profile_version',
@@ -180,7 +194,7 @@ export const entityProfileVersion = pgTable(
     // EXCLUDE USING gist dla tej firmy i tstzrange(..., '[)') jest w jawnym SQL 0001.
     // Drizzle 0.45 nie odwzorowuje exclusion constraints w snapshotach.
   ],
-);
+).enableRLS();
 
 export const companyAccessGrant = pgTable(
   'company_access_grant',
@@ -227,4 +241,25 @@ export const companyAccessGrant = pgTable(
     ),
     index('company_access_grant_entity_idx').on(table.tenantId, table.legalEntityId),
   ],
-);
+).enableRLS();
+
+/** Przypadek syntetyczny granicy transakcji, bez danych księgowych i bez endpointu. */
+export const companyOperationProbe = pgTable(
+  'company_operation_probe',
+  {
+    operationId: uuid('operation_id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    legalEntityId: uuid('legal_entity_id').notNull(),
+    actorId: uuid('actor_id').notNull(),
+    createdAt: instant('created_at')
+      .notNull()
+      .default(sql`clock_timestamp()`),
+  },
+  (table) => [
+    foreignKey({
+      name: 'company_operation_probe_company_fk',
+      columns: [table.tenantId, table.legalEntityId],
+      foreignColumns: [legalEntity.tenantId, legalEntity.id],
+    }),
+  ],
+).enableRLS();
