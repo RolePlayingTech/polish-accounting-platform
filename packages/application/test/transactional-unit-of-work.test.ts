@@ -77,7 +77,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
           {
             verifier: { verifyAccessToken },
             identityResolver: { resolveVerifiedIdentity },
-            unitOfWork: { runCompanyActionInTransaction },
+            unitOfWork: { runCompanyActionInTransaction, recordDeniedDecision: async () => {} },
           },
           operation,
         ),
@@ -112,7 +112,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         identityResolver: {
           resolveVerifiedIdentity: vi.fn(),
         },
-        unitOfWork: { runCompanyActionInTransaction },
+        unitOfWork: { runCompanyActionInTransaction, recordDeniedDecision: async () => {} },
       },
       operation,
     );
@@ -131,6 +131,9 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     let committed: boolean | undefined;
 
     const tx: CompanyActionTransactionContext = {
+      recordAuthorizationDecision: async () => {
+        events.push('audit:allow');
+      },
       verifyActorAccount: vi.fn(async (txActor) => {
         events.push(`verifyActorAccount:${txActor.userId}:${txActor.identity?.subject}`);
         return true;
@@ -168,6 +171,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     };
 
     const unitOfWork: CompanyActionUnitOfWork = {
+      recordDeniedDecision: async () => {},
       async runCompanyActionInTransaction(work, shouldCommit) {
         events.push('tx:begin');
         const result = await work(tx);
@@ -244,6 +248,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       'getLockedFacts',
       `applySessionContext:${TENANT_A}:${ENTITY_A1}`,
       'operation:write',
+      'audit:allow',
       'tx:commit',
     ]);
   });
@@ -253,6 +258,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     const decisionsCommitted: boolean[] = [];
 
     const makeUnitOfWork = (tx: CompanyActionTransactionContext): CompanyActionUnitOfWork => ({
+      recordDeniedDecision: async () => {},
       async runCompanyActionInTransaction(work, shouldCommit) {
         const result = await work(tx);
         decisionsCommitted.push(shouldCommit(result));
@@ -274,6 +280,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
 
     // 1) Konto wyłączone między resolveVerifiedIdentity a tx.verifyActorAccount
     const disabledTx: CompanyActionTransactionContext = {
+      recordAuthorizationDecision: async () => {},
       verifyActorAccount: vi.fn().mockResolvedValue(false),
       getLockedFacts: vi.fn(),
       applySessionContext: vi.fn(),
@@ -300,6 +307,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
 
     // 2) Grant cofnięty tuż przed pobraniem zablokowanych faktów w transakcji
     const revokedGrantTx: CompanyActionTransactionContext = {
+      recordAuthorizationDecision: async () => {},
       verifyActorAccount: vi.fn().mockResolvedValue(true),
       getLockedFacts: vi.fn().mockResolvedValue({
         membership: {
@@ -368,6 +376,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
           resolveVerifiedIdentity: async () => ({ userId: USER_A }),
         },
         unitOfWork: {
+          recordDeniedDecision: async () => {},
           async runCompanyActionInTransaction() {
             throw new Error('SELECT * FROM app_user password=synthetic-secret');
           },
@@ -381,5 +390,57 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       status: 'forbidden',
       reason: 'authorization_data_unavailable',
     });
+  });
+  it('zapisuje odmowę dopiero po rollbacku i blokuje odpowiedź przy awarii trwałego audytu', async () => {
+    const order: string[] = [];
+    const recordDeniedDecision = vi.fn(async (event) => {
+      expect(order.at(-1)).toBe('rollback');
+      expect(event).toMatchObject({ actorId: USER_A, decision: 'deny', outcome: 'denied' });
+      expect(JSON.stringify(event)).not.toContain('synthetic-secret-token');
+      order.push('durable-audit');
+    });
+    const tx: CompanyActionTransactionContext = {
+      verifyActorAccount: async () => false,
+      getLockedFacts: vi.fn(),
+      recordAuthorizationDecision: vi.fn(),
+    };
+    const unitOfWork: CompanyActionUnitOfWork = {
+      recordDeniedDecision,
+      async runCompanyActionInTransaction(work, commit) {
+        const result = await work(tx);
+        expect(commit(result)).toBe(false);
+        order.push('rollback');
+        return result;
+      },
+    };
+    const input = {
+      rawBearerToken: 'synthetic-secret-token',
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A1,
+      action: 'read' as const,
+    };
+    const dependencies = {
+      unitOfWork,
+      verifier: {
+        verifyAccessToken: async () => ({
+          ok: true as const,
+          identity: { issuer: 'https://idp.example.test', subject: 'subject' },
+        }),
+      },
+      identityResolver: { resolveVerifiedIdentity: async () => ({ userId: USER_A }) },
+    };
+    const operation = vi.fn();
+    expect(await executeAuthorizedCompanyAction(input, dependencies, operation)).toMatchObject({
+      allowed: false,
+      reason: 'identity_not_provisioned_or_disabled',
+    });
+    expect(order).toEqual(['rollback', 'durable-audit']);
+    recordDeniedDecision.mockRejectedValueOnce(new Error('SQL secret'));
+    expect(await executeAuthorizedCompanyAction(input, dependencies, operation)).toEqual({
+      allowed: false,
+      status: 'forbidden',
+      reason: 'authorization_audit_unavailable',
+    });
+    expect(operation).not.toHaveBeenCalled();
   });
 });

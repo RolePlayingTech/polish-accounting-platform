@@ -12,6 +12,8 @@ import {
 } from '../src/runtime-provisioning.js';
 import { PostgresContextSigner } from '../src/signed-context.js';
 import { recordCompanyOperationProbe } from '../src/company-operation-probe.js';
+import { and, eq } from 'drizzle-orm';
+import { companyOperationProbe } from '../src/schema.js';
 import {
   createTestDatabase,
   expectDatabaseError,
@@ -66,6 +68,8 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS i pula', () => {
     await sql`INSERT INTO tenant(id,name) VALUES (${tenantA},'Syntetyczny A'),(${tenantB},'Syntetyczny B')`;
     await sql`INSERT INTO legal_entity(id,tenant_id,display_name)
       VALUES (${entityA},${tenantA},'Firma A'),(${entityB},${tenantB},'Firma B')`;
+    await sql`INSERT INTO legal_entity(id,tenant_id,display_name)
+      VALUES (${id(9)},${tenantA},'Druga firma A')`;
     await sql`INSERT INTO app_user(id,status) VALUES (${actor},'active')`;
     await sql`INSERT INTO user_oidc_identity(id,user_id,issuer,subject,status)
       VALUES (${id(6)},${actor},'https://idp.example.test','synthetic-actor','active')`;
@@ -73,6 +77,8 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS i pula', () => {
       VALUES (${tenantA},${actor},'tenant_member','active','2026-01-01')`;
     await sql`INSERT INTO company_access_grant(grant_id,tenant_id,user_id,legal_entity_id,action,valid_from)
       VALUES (${id(7)},${tenantA},${actor},${entityA},'write','2026-01-01')`;
+    await sql`INSERT INTO company_access_grant(grant_id,tenant_id,user_id,legal_entity_id,action,valid_from)
+      VALUES (${id(10)},${tenantA},${actor},${id(9)},'write','2026-01-01')`;
     const url = new URL(process.env.DATABASE_URL!);
     url.username = runtimeRole;
     url.password = password;
@@ -162,6 +168,10 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS i pula', () => {
           );
           replay = row!;
           expect(
+            await tx.tx.execute(statement`SELECT * FROM company_access_grant
+        WHERE legal_entity_id = ${id(9)}`),
+          ).toHaveLength(0);
+          expect(
             await tx.tx.execute(statement`SELECT * FROM legal_entity WHERE tenant_id = ${tenantB}`),
           ).toHaveLength(0);
           return recordCompanyOperationProbe(context, tx, operationId);
@@ -194,5 +204,168 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS i pula', () => {
     await owner.client`UPDATE tenant_membership SET valid_until = clock_timestamp() - interval '1 second'
       WHERE tenant_id = ${tenantA} AND user_id = ${actor}`;
     expect(await execute()).toMatchObject({ allowed: false });
+  });
+
+  it('brak audytu na COMMIT i awaria jego INSERT wycofują zapis; rollback ma oddzielny ślad', async () => {
+    await owner.client`UPDATE tenant_membership SET valid_until = NULL
+      WHERE tenant_id = ${tenantA} AND user_id = ${actor}`;
+    const omitted = randomUUID();
+    await expectDatabaseError(
+      services.unitOfWork.runCompanyActionInTransaction(
+        async (tx) => {
+          expect(await tx.verifyActorAccount({ userId: actor })).toBe(true);
+          await tx.getLockedFacts({
+            userId: actor,
+            tenantId: tenantA,
+            legalEntityId: entityA,
+            action: 'write',
+          });
+          await tx.applySessionContext?.({
+            actorUserId: actor,
+            tenantId: tenantA,
+            legalEntityId: entityA,
+          });
+          await tx.tx.insert(companyOperationProbe).values({
+            operationId: omitted,
+            tenantId: tenantA,
+            legalEntityId: entityA,
+            actorId: actor,
+          });
+          return true;
+        },
+        (result) => result,
+      ),
+      '23514',
+    );
+    expect(
+      await owner.db
+        .select()
+        .from(companyOperationProbe)
+        .where(eq(companyOperationProbe.operationId, omitted)),
+    ).toHaveLength(0);
+
+    await owner.client
+      .unsafe(`CREATE FUNCTION reject_committed_audit() RETURNS trigger LANGUAGE plpgsql AS
+      $$ BEGIN IF NEW.outcome = 'committed' THEN RAISE EXCEPTION 'synthetic audit failure'; END IF;
+      RETURN NEW; END $$`);
+    await owner.client
+      .unsafe(`CREATE TRIGGER reject_committed_audit BEFORE INSERT ON security_decision_event
+      FOR EACH ROW EXECUTE FUNCTION reject_committed_audit()`);
+    const requestId = randomUUID(),
+      operationId = randomUUID();
+    try {
+      const result = await executeAuthorizedCompanyAction(
+        {
+          requestId,
+          operationId,
+          rawBearerToken: 'synthetic-token',
+          tenantId: tenantA,
+          legalEntityId: entityA,
+          action: 'write',
+        },
+        {
+          ...services,
+          verifier: {
+            verifyAccessToken: async () => ({
+              ok: true as const,
+              identity: { issuer: 'https://idp.example.test', subject: 'synthetic-actor' },
+            }),
+          },
+        },
+        (context, tx) => recordCompanyOperationProbe(context, tx, operationId),
+      );
+      expect(result).toMatchObject({ allowed: false, reason: 'authorization_audit_unavailable' });
+      expect(
+        await owner.db
+          .select()
+          .from(companyOperationProbe)
+          .where(
+            and(
+              eq(companyOperationProbe.operationId, operationId),
+              eq(companyOperationProbe.tenantId, tenantA),
+            ),
+          ),
+      ).toHaveLength(0);
+      expect(
+        await owner.client`SELECT decision, outcome, reason FROM security_decision_event
+        WHERE request_id = ${requestId}`,
+      ).toMatchObject([
+        {
+          decision: 'allow',
+          outcome: 'rolled_back',
+          reason: 'authorization_audit_unavailable',
+        },
+      ]);
+    } finally {
+      await owner.client.unsafe('DROP TRIGGER reject_committed_audit ON security_decision_event');
+      await owner.client.unsafe('DROP FUNCTION reject_committed_audit()');
+    }
+    for (const query of [
+      'UPDATE security_decision_event SET reason = reason',
+      'DELETE FROM security_decision_event',
+      'TRUNCATE security_decision_event',
+    ]) {
+      await expectDatabaseError(runtime.client.unsafe(query), '42501');
+    }
+    await expectDatabaseError(
+      runtime.client.unsafe(`INSERT INTO security_decision_event
+      (id,request_id,action,kind,decision,outcome,reason,decided_at) VALUES
+      (gen_random_uuid(),gen_random_uuid(),'read','transport','deny','denied','transport_rejected',clock_timestamp())`),
+      '42501',
+    );
+  });
+
+  it('runtime obsługuje autoryzowany grant/revoke i oba powiązane audyty atomowo, z idempotencją', async () => {
+    const target = userId(id(8));
+    await owner.client`UPDATE tenant_membership SET role = 'tenant_owner'
+      WHERE tenant_id = ${tenantA} AND user_id = ${actor}`;
+    await owner.client`INSERT INTO tenant_membership(tenant_id,user_id,role,status,valid_from)
+      VALUES (${tenantA},${target},'tenant_member','active','2026-01-01')`;
+    const command = {
+      kind: 'grant' as const,
+      operationId: randomUUID(),
+      tenantId: tenantA,
+      userId: target,
+      grantId: randomUUID(),
+      legalEntityId: entityA,
+      action: 'read' as const,
+      validFrom: null,
+      validUntil: null,
+    };
+    const store = services.accessManagementStore;
+    const verified = {
+      userId: actor,
+      identity: { issuer: 'https://idp.example.test', subject: 'synthetic-actor' },
+    };
+    // Factory zwraca port; bezpośrednie execute również przechodzi przez wspólny use case.
+    const first = await store.execute(command, verified);
+    expect(first).toMatchObject({ ok: true });
+    expect(await store.execute(command, verified)).toEqual(first);
+    expect(
+      await owner.client`SELECT 1 FROM access_management_event
+      WHERE operation_id = ${command.operationId}`,
+    ).toHaveLength(1);
+    expect(
+      await owner.client`SELECT 1 FROM security_decision_event
+      WHERE access_management_operation_id = ${command.operationId} AND outcome = 'committed'`,
+    ).toHaveLength(2);
+    expect(
+      await store.execute(
+        {
+          kind: 'revoke_grant',
+          operationId: randomUUID(),
+          tenantId: tenantA,
+          userId: target,
+          grantId: command.grantId,
+        },
+        verified,
+      ),
+    ).toMatchObject({ ok: true });
+    expect(
+      (
+        await owner.client`SELECT revoked_at FROM company_access_grant
+      WHERE grant_id = ${command.grantId}`
+      )[0]?.revoked_at,
+    ).not.toBeNull();
   });
 });

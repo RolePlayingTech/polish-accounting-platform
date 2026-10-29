@@ -14,6 +14,11 @@ import {
   type TenantAuthorizationDataSource,
   type TenantAuthorizationResult,
 } from './tenant-authorization.js';
+import {
+  auditIdentifier,
+  securityAuditReason,
+  type SecurityAuditRecorder,
+} from './security-audit.js';
 
 /**
  * Zweryfikowana tożsamość OIDC utworzona wyłącznie przez serwerowy adapter po pełnej weryfikacji kryptograficznej.
@@ -191,6 +196,9 @@ export interface AuthenticatedCompanyActionContext {
 }
 
 export interface AuthenticatedCompanyActionInput {
+  /** Serwerowy request ID; identyfikator nie poświadcza tożsamości ani uprawnień. */
+  readonly requestId?: string | undefined;
+  readonly operationId?: string | undefined;
   readonly rawBearerToken: string | undefined | null;
   readonly tenantId: string;
   readonly legalEntityId: string;
@@ -199,6 +207,7 @@ export interface AuthenticatedCompanyActionInput {
 }
 
 export interface AuthenticatedCompanyActionDependencies extends AuthenticateOidcActorDependencies {
+  readonly securityAudit: SecurityAuditRecorder;
   readonly authorizationDataSource: TenantAuthorizationDataSource;
   readonly clock?: Clock | undefined;
 }
@@ -214,6 +223,7 @@ export type AuthenticatedCompanyActionResult =
       readonly allowed: false;
       readonly status: 'unauthenticated' | 'forbidden' | 'invalid_selector';
       readonly reason:
+        | 'authorization_audit_unavailable'
         | AuthenticationFailureReason
         | Exclude<TenantAuthorizationResult, { readonly allowed: true }>['reason'];
     };
@@ -223,9 +233,10 @@ export type AuthenticatedCompanyActionResult =
  * Verified OIDC identity -> Internal userId -> TenantAuthorizationDataSource -> authorizeCompanyAction.
  * Selektory tenantId i legalEntityId służą wyłącznie do wskazania zasobu; userId pochodzi wyłącznie z serwera.
  */
-export async function authorizeAuthenticatedCompanyAction(
+async function authorizeAuthenticatedCompanyActionCore(
   input: AuthenticatedCompanyActionInput,
   dependencies: AuthenticatedCompanyActionDependencies,
+  onActor: (actorId: string) => void,
 ): Promise<AuthenticatedCompanyActionResult> {
   const actor = await authenticateOidcActor(
     input.rawBearerToken,
@@ -243,6 +254,7 @@ export async function authorizeAuthenticatedCompanyAction(
       reason: actor.reason,
     };
   }
+  onActor(actor.userId);
 
   let parsedTenantId: TenantId;
   let parsedLegalEntityId: LegalEntityId;
@@ -291,4 +303,40 @@ export async function authorizeAuthenticatedCompanyAction(
       identity: actor.identity,
     }),
   });
+}
+
+/** Audytowana bramka wstępna; jej allow nie zastępuje transakcyjnego use case. */
+export async function authorizeAuthenticatedCompanyAction(
+  input: AuthenticatedCompanyActionInput,
+  dependencies: AuthenticatedCompanyActionDependencies,
+): Promise<AuthenticatedCompanyActionResult> {
+  const snapshot = {
+    ...input,
+    requiredScopes: input.requiredScopes ? [...input.requiredScopes] : undefined,
+  };
+  let actorId: string | null = null;
+  const result = await authorizeAuthenticatedCompanyActionCore(
+    snapshot,
+    dependencies,
+    (verified) => {
+      actorId = verified;
+    },
+  );
+  try {
+    await dependencies.securityAudit.recordDecision({
+      requestId: auditIdentifier(snapshot.requestId),
+      actorId,
+      tenantId: auditIdentifier(snapshot.tenantId),
+      legalEntityId: auditIdentifier(snapshot.legalEntityId),
+      action:
+        snapshot.action === 'read' || snapshot.action === 'write' ? snapshot.action : 'unknown',
+      kind: 'preflight',
+      decision: result.allowed ? 'allow' : 'deny',
+      outcome: result.allowed ? 'preflight' : 'denied',
+      reason: securityAuditReason(result.reason),
+    });
+  } catch {
+    return { allowed: false, status: 'forbidden', reason: 'authorization_audit_unavailable' };
+  }
+  return result;
 }

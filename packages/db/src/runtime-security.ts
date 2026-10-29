@@ -4,6 +4,7 @@ import { PostgresContextSigner } from './signed-context.js';
 import { PostgresTransactionalUnitOfWork } from './transactional-unit-of-work.js';
 import { PostgresUserIdentityResolver } from './user-identity.js';
 import { PostgresTenantAuthorizationDataSource } from './tenant-authorization.js';
+import { PostgresSecurityAudit } from './security-audit.js';
 
 type Database = ReturnType<typeof connectDatabase>['db'];
 
@@ -12,17 +13,20 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
   const [state] = await db.execute<{ safe: boolean }>(sql`SELECT (
     current_user = session_user AND
     NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication) AND
+    NOT has_parameter_privilege('session_replication_role', 'SET') AND
     NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member = r.oid) AND
     NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = current_database() AND datdba = r.oid) AND
     NOT has_database_privilege(current_database(), 'CREATE,TEMP') AND
     NOT has_schema_privilege(current_schema(), 'CREATE') AND
     NOT has_schema_privilege('public', 'CREATE') AND
     NOT has_table_privilege('security_context_key', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
-    (SELECT count(*) = 10 AND bool_and(c.relrowsecurity AND c.relforcerowsecurity AND c.relowner <> r.oid)
+    NOT has_table_privilege('security_decision_event', 'SELECT,UPDATE,DELETE,TRUNCATE') AND
+    NOT has_table_privilege('access_management_event', 'UPDATE,DELETE,TRUNCATE') AND
+    (SELECT count(*) = 11 AND bool_and(c.relrowsecurity AND c.relforcerowsecurity AND c.relowner <> r.oid)
       FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace
         AND c.relname IN ('tenant','legal_entity','tenant_membership','entity_profile_version',
           'company_access_grant','access_management_event','app_user','user_oidc_identity',
-          'security_context_key','company_operation_probe')) AND
+          'security_context_key','company_operation_probe','security_decision_event')) AND
     NOT EXISTS (SELECT 1 FROM pg_proc p
       WHERE p.pronamespace = current_schema()::regnamespace AND p.proowner = r.oid)
     ) AS safe FROM pg_roles r WHERE r.rolname = current_user`);
@@ -46,5 +50,6 @@ export async function createPostgresSecurityServices(db: Database, signer: Postg
     identityResolver: new PostgresUserIdentityResolver(db, signer),
     authorizationDataSource: new PostgresTenantAuthorizationDataSource(db, signer),
     accessManagementStore: unitOfWork.createAccessManagementStore(),
+    securityAudit: new PostgresSecurityAudit(db, signer),
   });
 }

@@ -1,3 +1,4 @@
+import { PostgresSecurityAudit } from '../src/security-audit.js';
 import {
   authorizeAuthenticatedCompanyAction,
   createOidcAccessManagementActorSource,
@@ -65,7 +66,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
 
   beforeEach(async () => {
     const { db, client: sql } = connection();
-    await sql`TRUNCATE access_management_event`;
+    await sql`TRUNCATE security_decision_event, access_management_event`;
     await db.delete(companyAccessGrant);
     await db.delete(tenantMembership);
     await db.delete(userOidcIdentity);
@@ -369,6 +370,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
       {
         verifier: verifierFor('user-a-sub'),
         identityResolver,
+        securityAudit: new PostgresSecurityAudit(connection().db),
         authorizationDataSource: companyAuthSource,
       },
     );
@@ -389,6 +391,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
       {
         verifier: verifierFor('user-a-sub'),
         identityResolver,
+        securityAudit: new PostgresSecurityAudit(connection().db),
         authorizationDataSource: companyAuthSource,
       },
     );
@@ -410,6 +413,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
       {
         verifier: verifierFor('user-a-sub'),
         identityResolver,
+        securityAudit: new PostgresSecurityAudit(connection().db),
         authorizationDataSource: companyAuthSource,
       },
     );

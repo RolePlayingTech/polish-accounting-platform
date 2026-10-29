@@ -37,6 +37,8 @@ export {
   type LoadDatabaseConfigOptions,
 } from './database-config.js';
 export * from './signed-context.js';
+export { securityDecisionEvent } from './schema.js';
+export { PostgresSecurityAudit } from './security-audit.js';
 export { companyOperationProbe } from './schema.js';
 export { recordCompanyOperationProbe } from './company-operation-probe.js';
 export { configureRuntimePrivileges, provisionDatabaseContextKey } from './runtime-provisioning.js';

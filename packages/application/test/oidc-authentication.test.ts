@@ -74,6 +74,7 @@ describe('authenticateOidcActor i authorizeAuthenticatedCompanyAction', () => {
       {
         verifier,
         identityResolver,
+        securityAudit: { recordDecision: async () => {} },
         authorizationDataSource,
         clock: { now: () => now },
       },

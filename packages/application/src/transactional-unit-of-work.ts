@@ -20,6 +20,12 @@ import type {
   TenantAuthorizationQuery,
   TenantAuthorizationResult,
 } from './tenant-authorization.js';
+import {
+  auditIdentifier,
+  securityAuditReason,
+  SecurityAuditUnavailableError,
+  type SecurityAuditEvent,
+} from './security-audit.js';
 
 function isNonBlankExactString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value === value.trim();
@@ -85,6 +91,8 @@ export interface LockedTenantAuthorizationFacts extends TenantAuthorizationFacts
  * Kontekst pojedynczej otwartej transakcji dla operacji na danych firmy (odczyt/zapis dokumentów).
  */
 export interface CompanyActionTransactionContext {
+  /** Wymagany atomowy INSERT; błąd musi przerwać chronioną transakcję. */
+  recordAuthorizationDecision(event: SecurityAuditEvent): Promise<void>;
   /** Sprawdza i blokuje aktualny stan konta app_user (oraz powiązania OIDC, gdy obecne). */
   verifyActorAccount(actor: TransactionActor): Promise<boolean>;
 
@@ -101,6 +109,8 @@ export interface CompanyActionTransactionContext {
 export interface CompanyActionUnitOfWork<
   TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
 > {
+  /** Wykonywany dopiero PO rollbacku chronionej transakcji. */
+  recordDeniedDecision(event: SecurityAuditEvent): Promise<void>;
   runCompanyActionInTransaction<TResult>(
     work: (tx: TTx) => Promise<TResult>,
     shouldCommit: (result: TResult) => boolean,
@@ -125,6 +135,7 @@ export type ExecuteAuthorizedCompanyActionResult<TOutput> =
       readonly allowed: false;
       readonly status: 'unauthenticated' | 'forbidden' | 'invalid_selector';
       readonly reason:
+        | 'authorization_audit_unavailable'
         | AuthenticationFailureReason
         | Exclude<TenantAuthorizationResult, { readonly allowed: true }>['reason'];
     };
@@ -136,13 +147,23 @@ export type ExecuteAuthorizedCompanyActionResult<TOutput> =
  *    firmy i grantów, zegar DB po blokadach, decyzja decideAccountingAccess, opcjonalny kontekst sesji
  *    pod przyszłe RLS oraz wykonanie operacji biznesowej przed COMMIT.
  */
-export async function executeAuthorizedCompanyAction<
+async function executeAuthorizedCompanyActionCore<
   TOutput,
   TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
 >(
   input: AuthenticatedCompanyActionInput,
   dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
   operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+  audit: {
+    actorId: string | null;
+    authorized: boolean;
+    decidedAt: string | undefined;
+    event(
+      decision: 'allow' | 'deny',
+      outcome: SecurityAuditEvent['outcome'],
+      reason: string,
+    ): SecurityAuditEvent;
+  },
 ): Promise<ExecuteAuthorizedCompanyActionResult<TOutput>> {
   let parsedTenantId: TenantId;
   let parsedLegalEntityId: LegalEntityId;
@@ -182,6 +203,7 @@ export async function executeAuthorizedCompanyAction<
       reason: actor.reason,
     };
   }
+  audit.actorId = actor.userId;
 
   try {
     const txActor = freezeTransactionActor({
@@ -207,6 +229,7 @@ export async function executeAuthorizedCompanyAction<
         });
 
         const facts = await tx.getLockedFacts(query);
+        audit.decidedAt = facts.now.toISOString();
         const decision = decideAccountingAccess({
           ...query,
           membership: facts.membership,
@@ -238,7 +261,9 @@ export async function executeAuthorizedCompanyAction<
           identity: actor.identity,
         });
 
+        audit.authorized = true;
         const data = await operation(context, tx);
+        await tx.recordAuthorizationDecision(audit.event('allow', 'committed', decision.reason));
         return Object.freeze({
           allowed: true,
           status: 'allowed',
@@ -249,11 +274,71 @@ export async function executeAuthorizedCompanyAction<
       },
       (result) => result.allowed === true,
     );
-  } catch {
+  } catch (error) {
     return {
       allowed: false,
       status: 'forbidden',
-      reason: 'authorization_data_unavailable',
+      reason:
+        error instanceof SecurityAuditUnavailableError
+          ? 'authorization_audit_unavailable'
+          : 'authorization_data_unavailable',
     };
   }
+}
+
+/** Pełna granica bezpieczeństwa: sukces z audytem w TX, odmowa po jej rollbacku. */
+export async function executeAuthorizedCompanyAction<
+  TOutput,
+  TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
+>(
+  input: AuthenticatedCompanyActionInput,
+  dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
+  operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+): Promise<ExecuteAuthorizedCompanyActionResult<TOutput>> {
+  const snapshot = {
+    ...input,
+    requiredScopes: input.requiredScopes ? [...input.requiredScopes] : undefined,
+  };
+  const audit = {
+    actorId: null as string | null,
+    authorized: false,
+    decidedAt: undefined as string | undefined,
+    event(
+      decision: 'allow' | 'deny',
+      outcome: SecurityAuditEvent['outcome'],
+      reason: string,
+    ): SecurityAuditEvent {
+      return {
+        requestId: auditIdentifier(snapshot.requestId),
+        operationId: auditIdentifier(snapshot.operationId),
+        actorId: this.actorId,
+        tenantId: auditIdentifier(snapshot.tenantId),
+        legalEntityId: auditIdentifier(snapshot.legalEntityId),
+        action:
+          snapshot.action === 'read' || snapshot.action === 'write' ? snapshot.action : 'unknown',
+        kind: 'company',
+        decision,
+        outcome,
+        reason: securityAuditReason(reason),
+        ...(this.decidedAt ? { decidedAt: this.decidedAt } : {}),
+      };
+    },
+  };
+  const result = await executeAuthorizedCompanyActionCore(snapshot, dependencies, operation, audit);
+  if (!result.allowed) {
+    try {
+      await dependencies.unitOfWork.recordDeniedDecision(
+        audit.event(
+          audit.authorized ? 'allow' : 'deny',
+          audit.authorized ? 'rolled_back' : 'denied',
+          audit.authorized && result.reason !== 'authorization_audit_unavailable'
+            ? 'operation_failed'
+            : result.reason,
+        ),
+      );
+    } catch {
+      return { allowed: false, status: 'forbidden', reason: 'authorization_audit_unavailable' };
+    }
+  }
+  return result;
 }

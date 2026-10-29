@@ -25,6 +25,7 @@ function setup() {
   };
   return {
     store: {
+      recordDeniedDecision: vi.fn().mockResolvedValue(undefined),
       execute,
       runInTransaction: async (work: (value: typeof tx) => Promise<unknown>) => work(tx),
     },
@@ -198,6 +199,7 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
       executeAuthorized: execute,
     };
     const store = {
+      recordDeniedDecision: vi.fn().mockResolvedValue(undefined),
       execute,
       runInTransaction: async (work: (value: typeof tx) => Promise<unknown>) => work(tx),
     };
@@ -331,6 +333,7 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
     };
 
     const store = {
+      recordDeniedDecision: vi.fn().mockResolvedValue(undefined),
       runInTransaction: vi.fn(async (work) => {
         callOrder.push('store.runInTransaction:begin');
         const result = await work(tx);
@@ -426,6 +429,7 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
       executeAuthorized: vi.fn(),
     };
     const store = {
+      recordDeniedDecision: vi.fn().mockResolvedValue(undefined),
       runInTransaction: vi.fn(async (work) => work(tx)),
       execute: vi.fn(),
     };
