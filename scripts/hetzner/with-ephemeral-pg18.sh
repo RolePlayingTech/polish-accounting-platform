@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Bezpieczny, samooczyszczający się runner tymczasowego PostgreSQL 18.6 dla testów integracyjnych na Hetznerze.
 # Nie instaluje usług systemowych, nie dotyka bazy ani plików stagingu i działa wyłącznie na loopbacku 127.0.0.1.
-# Uwaga dot. sieci Docker: dedykowany bridge z enable_icc=false izoluje kontener od innych sieci Docker
-# i publikuje port wyłącznie na 127.0.0.1, ale sam w sobie nie blokuje ruchu wychodzącego (egress) z kontenera
-# ani połączeń z kontenera do gniazd 0.0.0.0 hosta (Docker 29 nie pozwala łączyć --internal z -p 127.0.0.1:PORT:5432).
+#
+# Gwarancje i ograniczenia sieci Docker (Docker 29, FirewallBackend=iptables):
+# - Gwarantowane: dedykowany mostek user-defined bridge (pap-ci-pg-net-<id>) izolowany od mostków innych projektów
+#   przez DOCKER-ISOLATION-STAGE-1/2, wyłączone ICC (enable_icc=false), publikacja portu wyłącznie na 127.0.0.1:${PORT}
+#   oraz brak dostępu z kontenera do usług 127.0.0.1 hosta dzięki osobnemu netns i net.ipv4.conf.all.route_localnet=0.
+# - Ograniczenia (bez zmian firewalla hosta): Docker 28/29 odrzuca łączenie --internal z -p 127.0.0.1:PORT:5432,
+#   dlatego mostek nie blokuje wychodzącego NAT egress z wnętrza kontenera (internet / 169.254.169.254) ani połączeń
+#   z kontenera do gniazd 0.0.0.0 hosta; na samym hoście port 127.0.0.1:${PORT} chroni jednorazowe 192-bitowe hasło SCRAM.
 
 set -euo pipefail
 set +x
@@ -22,6 +27,65 @@ readonly -a SCOPE_LIMIT_ARGS=(
   -p CPUQuota=50%
   -p TasksMax=128
 )
+
+# Strażnik wykonywany wewnątrz systemd-run --user --scope przed uruchomieniem właściwego polecenia:
+# potwierdza na poziomie jądra (/proc/self/cgroup + /sys/fs/cgroup), że proces trafił do docelowego *.scope
+# i ma faktycznie wymuszone limity pamięci, swapu, CPU oraz liczby zadań.
+readonly SCOPE_CGROUP_ENFORCER_SCRIPT='
+set -euo pipefail
+cg_root="$1"
+proc_cg="$2"
+expected_unit="$3"
+shift 3
+
+if [[ ! -r "${proc_cg}" ]]; then
+  echo "Brak odczytywalnego ${proc_cg} wewnątrz scope ${expected_unit}." >&2
+  exit 3
+fi
+
+rel_path="$(awk -F: '\''$1 == "0" { print $3; exit }'\'' "${proc_cg}")"
+if [[ -z "${rel_path}" || "${rel_path}" != *"/${expected_unit}.scope" ]]; then
+  echo "Proces nie działa w oczekiwanym cgroup scope (${expected_unit}.scope, wykryto: ${rel_path:-brak})." >&2
+  exit 3
+fi
+
+scope_dir="${cg_root%/}${rel_path}"
+for ctrl_file in memory.high memory.max memory.swap.max cpu.max pids.max; do
+  if [[ ! -r "${scope_dir}/${ctrl_file}" ]]; then
+    echo "Brak pliku kontrolnego cgroup v2: ${scope_dir}/${ctrl_file}." >&2
+    exit 3
+  fi
+done
+
+mem_high="$(tr -d '\''\n'\'' < "${scope_dir}/memory.high")"
+mem_max="$(tr -d '\''\n'\'' < "${scope_dir}/memory.max")"
+swap_max="$(tr -d '\''\n'\'' < "${scope_dir}/memory.swap.max")"
+cpu_max="$(tr -d '\''\n'\'' < "${scope_dir}/cpu.max")"
+pids_max="$(tr -d '\''\n'\'' < "${scope_dir}/pids.max")"
+
+if [[ ! "${mem_high}" =~ ^[0-9]+$ ]] || (( mem_high <= 0 )); then
+  echo "Limit MemoryHigh nie został wymuszony w ${scope_dir}/memory.high (${mem_high})." >&2
+  exit 3
+fi
+if [[ ! "${mem_max}" =~ ^[0-9]+$ ]] || (( mem_max <= 0 )); then
+  echo "Limit MemoryMax nie został wymuszony w ${scope_dir}/memory.max (${mem_max})." >&2
+  exit 3
+fi
+if [[ "${swap_max}" != "0" ]]; then
+  echo "Limit MemorySwapMax=0 nie został wymuszony w ${scope_dir}/memory.swap.max (${swap_max})." >&2
+  exit 3
+fi
+if [[ -z "${cpu_max}" || "${cpu_max}" == "max" || "${cpu_max}" == "max "* ]]; then
+  echo "Limit CPUQuota nie został wymuszony w ${scope_dir}/cpu.max (${cpu_max})." >&2
+  exit 3
+fi
+if [[ ! "${pids_max}" =~ ^[0-9]+$ ]] || (( pids_max <= 0 )); then
+  echo "Limit TasksMax nie został wymuszony w ${scope_dir}/pids.max (${pids_max})." >&2
+  exit 3
+fi
+
+exec "$@"
+'
 
 PREFLIGHT_ONLY=0
 PULL_IF_MISSING=0
@@ -57,8 +121,20 @@ get_proc_meminfo_path() {
   printf '%s' "/proc/meminfo"
 }
 
-get_user_cgroup_controllers_file() {
-  printf '/sys/fs/cgroup/user.slice/user-%s.slice/cgroup.controllers' "$(id -u)"
+get_cgroup_root_dir() {
+  printf '%s' "/sys/fs/cgroup"
+}
+
+get_proc_self_cgroup_path() {
+  printf '%s' "/proc/self/cgroup"
+}
+
+get_user_slice_controllers_file() {
+  printf '%s/user.slice/user-%s.slice/cgroup.controllers' "$(get_cgroup_root_dir)" "$(id -u)"
+}
+
+get_user_manager_cgroup_dir() {
+  printf '%s/user.slice/user-%s.slice/user@%s.service' "$(get_cgroup_root_dir)" "$(id -u)" "$(id -u)"
 }
 
 usage() {
@@ -75,7 +151,7 @@ Użycie:
     -- <polecenie-testowe...>
 
 Opcje:
-  --preflight-only          Wyłącznie odczytowa kontrola zasobów, cgroups v2, Dockera, scope użytkownika i portu.
+  --preflight-only          Wyłącznie odczytowa kontrola zasobów, cgroups v2, wolumenu, Dockera i portu.
   --work-root <katalog>     Zatwierdzony katalog testowy /mnt/HC_Volume_<ID>/pap-ci-ephemeral (lub jego podkatalog)
                             na wydzielonym wolumenie blokowym poza partycją / i poza zasobami innych usług.
   --port <15432..60999>     Lokalny port loopback 127.0.0.1 (domyślnie 55432; port 5432 stagingu jest zablokowany).
@@ -90,12 +166,12 @@ EOF
 is_forbidden_cwd() {
   local candidate="$1"
   case "${candidate}" in
-    ""|"/"|"/etc"|"/etc/"*|"/var/www/pap-staging"|"/var/www/pap-staging/"*|"/opt/pap-runtime"|"/opt/pap-runtime/"*|"/var/lib/pap-acme"|"/var/lib/pap-acme/"*|"/var/www/mumro"|"/var/www/mumro/"*|"/home/admin/stacks"|"/home/admin/stacks/"*)
+    ""|"/"|"/etc"|"/etc/"*|"/var/www/pap-staging"|"/var/www/pap-staging/"*|"/opt/pap-runtime"|"/opt/pap-runtime/"*|"/var/lib/pap-acme"|"/var/lib/pap-acme/"*|"/var/www/mumro"|"/var/www/mumro/"*|"/var/www/durnoty"|"/var/www/durnoty/"*|"/var/www/swiadek-dziejow"*|"/home/admin/stacks"|"/home/admin/stacks/"*)
       return 0
       ;;
   esac
   case "${candidate}" in
-    */pap-staging|*/pap-staging/*|*/mumro-backups|*/mumro-backups/*|*/mumro-temp-ci|*/mumro-temp-ci/*|*/mumro-release-quarantine*|*/reels-api|*/reels-api/*|*/social-admin|*/social-admin/*|*/roleplayingtech.com|*/roleplayingtech.com/*)
+    */pap-staging|*/pap-staging/*|*/mumro-backups|*/mumro-backups/*|*/mumro-temp-ci|*/mumro-temp-ci/*|*/mumro-release-quarantine*|*/reels-api|*/reels-api/*|*/shorts-api|*/shorts-api/*|*/social-admin|*/social-admin/*|*/roleplayingtech.com|*/roleplayingtech.com/*|*/durnoty|*/durnoty/*|*/historia-technologii*|*/mfc-backend*)
       return 0
       ;;
   esac
@@ -124,11 +200,16 @@ assert_no_symlink_components() {
 is_disallowed_fstype() {
   local fstype="$1"
   case "${fstype}" in
-    ""|"tmpfs"|"devtmpfs"|"ramfs"|"overlay"|"squashfs"|"proc"|"sysfs"|"cgroup"|"cgroup2")
+    ""|"tmpfs"|"devtmpfs"|"ramfs"|"overlay"|"squashfs"|"proc"|"sysfs"|"cgroup"|"cgroup2"|"nfs"|"nfs4"|"cifs"|"smb3"|fuse*)
       return 0
       ;;
   esac
   return 1
+}
+
+read_df_entry() {
+  local target="$1"
+  df -PT "${target}" | awk 'NR==2 { print $1, $2, $7 }'
 }
 
 validate_work_root() {
@@ -158,13 +239,21 @@ validate_work_root() {
   mnt_parent="$(get_volume_mount_parent)"
   mnt_parent="${mnt_parent%/}"
 
-  local allowed_regex="^${mnt_parent}/HC_Volume_[0-9]+/pap-ci-ephemeral(/[A-Za-z0-9._-]+)*$"
+  local allowed_regex="^${mnt_parent}/HC_Volume_[0-9]+/pap-ci-ephemeral(/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
   if [[ ! "${trimmed}" =~ ${allowed_regex} ]]; then
     log_error "Katalog --work-root (${raw_work_root}) musi leżeć wyłącznie pod zatwierdzonym katalogiem ${mnt_parent}/HC_Volume_<ID>/pap-ci-ephemeral."
     exit 2
   fi
 
   assert_no_symlink_components "${trimmed}"
+
+  local canonical_nonexist logical_nonexist
+  canonical_nonexist="$(realpath -m -- "${trimmed}")"
+  logical_nonexist="$(realpath -s -m -- "${trimmed}")"
+  if [[ "${canonical_nonexist}" != "${trimmed}" || "${logical_nonexist}" != "${trimmed}" ]]; then
+    log_error "Ścieżka --work-root (${raw_work_root}) zawiera niedozwolone dowiązanie symboliczne lub przekierowanie (${canonical_nonexist})."
+    exit 2
+  fi
 
   local rel_after_mnt="${trimmed#"${mnt_parent}/"}"
   local volume_name="${rel_after_mnt%%/*}"
@@ -177,8 +266,8 @@ validate_work_root() {
   fi
 
   local real_mnt_parent real_volume_mount
-  real_mnt_parent="$(realpath -e "${mnt_parent}")"
-  real_volume_mount="$(realpath -e "${volume_mount}")"
+  real_mnt_parent="$(realpath -e -- "${mnt_parent}")"
+  real_volume_mount="$(realpath -e -- "${volume_mount}")"
   if [[ "${real_mnt_parent}" != "${mnt_parent}" || "${real_volume_mount}" != "${volume_mount}" ]]; then
     log_error "Wykryto niedozwolone przekierowanie ścieżki punktu montowania wolumenu (${volume_mount} -> ${real_volume_mount})."
     exit 2
@@ -193,21 +282,29 @@ validate_work_root() {
     exit 2
   fi
 
-  local vol_fstype
-  vol_fstype="$(df -PT "${volume_mount}" | awk 'NR==2 { print $2 }')"
+  local root_src root_fstype root_mnt vol_src vol_fstype vol_mnt
+  read -r root_src root_fstype root_mnt < <(read_df_entry /)
+  read -r vol_src vol_fstype vol_mnt < <(read_df_entry "${volume_mount}")
+
   if is_disallowed_fstype "${vol_fstype}"; then
     log_error "Wolumen ${volume_mount} używa niedozwolonego systemu plików (${vol_fstype:-nieznany}); wymagany dyskowy wolumen blokowy."
+    exit 2
+  fi
+
+  if [[ "${vol_src}" != /dev/* || "${vol_src}" == "${root_src}" || "${vol_mnt}" != "${volume_mount}" || "${vol_mnt}" == "/" || "${vol_mnt}" == "${root_mnt}" ]]; then
+    log_error "Katalog ${volume_mount} nie jest punktem montowania wydzielonego wolumenu blokowego (dev=${vol_src:-brak}, mount=${vol_mnt:-brak})."
     exit 2
   fi
 
   if [[ ! -d "${ephemeral_base}" || ! -d "${trimmed}" ]]; then
     if (( preflight_mode == 1 )); then
       if [[ -d "${ephemeral_base}" ]]; then
-        local preflight_base_real preflight_base_dev
-        preflight_base_real="$(realpath -e "${ephemeral_base}")"
+        local preflight_base_real preflight_base_dev pf_src pf_fstype pf_mnt
+        preflight_base_real="$(realpath -e -- "${ephemeral_base}")"
         preflight_base_dev="$(stat -c '%d' "${preflight_base_real}")"
-        if [[ "${preflight_base_real}" != "${ephemeral_base}" || "${preflight_base_dev}" != "${vol_dev}" ]]; then
-          log_error "Katalog bazowy ${ephemeral_base} narusza spójność wolumenu blokowego."
+        read -r pf_src pf_fstype pf_mnt < <(read_df_entry "${preflight_base_real}")
+        if [[ "${preflight_base_real}" != "${ephemeral_base}" || "${preflight_base_dev}" != "${vol_dev}" || "${pf_src}" != "${vol_src}" || "${pf_mnt}" != "${volume_mount}" ]] || is_disallowed_fstype "${pf_fstype}"; then
+          log_error "Katalog bazowy ${ephemeral_base} narusza spójność wolumenu blokowego (wykryto obcy mount lub przekierowanie)."
           exit 2
         fi
       fi
@@ -221,8 +318,8 @@ validate_work_root() {
   fi
 
   local resolved_base resolved_work
-  resolved_base="$(realpath -e "${ephemeral_base}")"
-  resolved_work="$(realpath -e "${trimmed}")"
+  resolved_base="$(realpath -e -- "${ephemeral_base}")"
+  resolved_work="$(realpath -e -- "${trimmed}")"
   if [[ "${resolved_base}" != "${ephemeral_base}" || "${resolved_work}" != "${trimmed}" ]]; then
     log_error "Katalog --work-root (${trimmed}) nie zgadza się ze ścieżką kanoniczną (${resolved_work})."
     exit 2
@@ -232,7 +329,7 @@ validate_work_root() {
     exit 2
   fi
 
-  local base_dev work_dev work_fstype
+  local base_dev work_dev base_src base_fstype base_mnt work_src work_fstype work_mnt
   base_dev="$(stat -c '%d' "${resolved_base}")"
   work_dev="$(stat -c '%d' "${resolved_work}")"
   if [[ "${base_dev}" != "${vol_dev}" || "${work_dev}" != "${vol_dev}" ]]; then
@@ -240,14 +337,26 @@ validate_work_root() {
     exit 2
   fi
 
-  work_fstype="$(df -PT "${resolved_work}" | awk 'NR==2 { print $2 }')"
-  if is_disallowed_fstype "${work_fstype}"; then
+  read -r base_src base_fstype base_mnt < <(read_df_entry "${resolved_base}")
+  read -r work_src work_fstype work_mnt < <(read_df_entry "${resolved_work}")
+  if is_disallowed_fstype "${base_fstype}" || is_disallowed_fstype "${work_fstype}"; then
     log_error "Katalog --work-root (${resolved_work}) używa niedozwolonego systemu plików (${work_fstype:-nieznany})."
     exit 2
   fi
+  if [[ "${base_src}" != "${vol_src}" || "${work_src}" != "${vol_src}" || "${base_mnt}" != "${volume_mount}" || "${work_mnt}" != "${volume_mount}" ]]; then
+    log_error "Katalog --work-root (${resolved_work}) ma odrębny punkt montowania (${work_mnt:-brak}) zamiast wolumenu ${volume_mount} (bind-mount jest zabroniony)."
+    exit 2
+  fi
 
-  if [[ ! -w "${resolved_work}" ]]; then
-    log_error "Wydzielony katalog --work-root (${resolved_work}) nie jest zapisywalny dla bieżącego użytkownika."
+  if [[ ! -O "${resolved_work}" || ! -w "${resolved_work}" ]]; then
+    log_error "Wydzielony katalog --work-root (${resolved_work}) musi należeć do bieżącego użytkownika i być zapisywalny."
+    exit 2
+  fi
+
+  local work_perm
+  work_perm="$(stat -c '%a' "${resolved_work}")"
+  if [[ "${work_perm}" == *[2367] ]]; then
+    log_error "Katalog --work-root (${resolved_work}) ma niebezpieczne uprawnienia zapisu dla innych użytkowników (mode=${work_perm}); oczekiwano np. 0700."
     exit 2
   fi
 
@@ -272,37 +381,53 @@ validate_port() {
   fi
 }
 
+assert_controllers_present_in_file() {
+  local file_path="$1"
+  local label="$2"
+  if [[ ! -r "${file_path}" ]]; then
+    log_error "Brak odczytywalnego pliku delegacji cgroups v2 (${label}: ${file_path}). Odmowa uruchomienia bez limitów cgroups."
+    exit 3
+  fi
+
+  local controllers padded required_ctrl
+  controllers="$(tr '\n' ' ' < "${file_path}")"
+  padded=" ${controllers} "
+  for required_ctrl in cpu memory pids; do
+    if [[ "${padded}" != *" ${required_ctrl} "* ]]; then
+      log_error "Brak wymaganej delegacji kontrolera cgroups v2 '${required_ctrl}' w ${file_path} (dostępne: ${controllers})."
+      exit 3
+    fi
+  done
+}
+
 verify_user_systemd_readonly() {
   if ! systemctl --user show-environment >/dev/null 2>&1; then
     log_error "Menedżer użytkownika systemd (systemctl --user) jest niedostępny — uruchomienie procesu testowego bez limitów cgroups jest zablokowane."
     exit 3
   fi
 
-  local controllers_file
-  controllers_file="$(get_user_cgroup_controllers_file)"
-  if [[ ! -r "${controllers_file}" ]]; then
-    log_error "Brak odczytywalnego pliku delegacji cgroups v2 użytkownika (${controllers_file}). Odmowa uruchomienia bez limitów cgroups."
-    exit 3
-  fi
+  local slice_controllers_file manager_dir
+  slice_controllers_file="$(get_user_slice_controllers_file)"
+  manager_dir="$(get_user_manager_cgroup_dir)"
 
-  local controllers
-  controllers="$(tr '\n' ' ' < "${controllers_file}")"
-  local padded=" ${controllers} "
-  local required_ctrl
-  for required_ctrl in cpu memory pids; do
-    if [[ "${padded}" != *" ${required_ctrl} "* ]]; then
-      log_error "Brak wymaganej delegacji kontrolera cgroups v2 '${required_ctrl}' w ${controllers_file} (dostępne: ${controllers})."
-      exit 3
-    fi
-  done
+  assert_controllers_present_in_file "${slice_controllers_file}" "user-slice"
+  assert_controllers_present_in_file "${manager_dir}/cgroup.controllers" "user-manager-controllers"
+  assert_controllers_present_in_file "${manager_dir}/cgroup.subtree_control" "user-manager-subtree_control"
 }
 
 verify_user_systemd_scope_active() {
-  local probe_unit
+  local probe_unit cgroup_root proc_cgroup_file probe_output
   probe_unit="pap-ci-probe-$(openssl rand -hex 6)"
-  if ! systemd-run --user --scope --quiet --unit="${probe_unit}" "${SCOPE_LIMIT_ARGS[@]}" -- true >/dev/null 2>&1; then
+  cgroup_root="$(get_cgroup_root_dir)"
+  proc_cgroup_file="$(get_proc_self_cgroup_path)"
+
+  if ! probe_output="$(
+    systemd-run --user --scope --quiet --unit="${probe_unit}" "${SCOPE_LIMIT_ARGS[@]}" -- \
+      bash -euo pipefail -c "${SCOPE_CGROUP_ENFORCER_SCRIPT}" bash \
+      "${cgroup_root}" "${proc_cgroup_file}" "${probe_unit}" printf 'SCOPE_OK' 2>&1
+  )" || [[ "${probe_output}" != "SCOPE_OK" ]]; then
     systemctl --user reset-failed "${probe_unit}.scope" >/dev/null 2>&1 || true
-    log_error "Nie udało się utworzyć transient scope przez systemd-run --user --scope z wymaganymi limitami cgroups (CPU/RAM/Swap/pids). Odmowa uruchomienia."
+    log_error "Nie udało się utworzyć i zweryfikować transient scope przez systemd-run --user --scope z wymaganymi limitami cgroups (CPU/RAM/Swap/pids): ${probe_output:-brak szczegółów}. Odmowa uruchomienia."
     exit 3
   fi
 }
@@ -314,14 +439,17 @@ cleanup() {
   fi
   CLEANUP_DONE=1
   set +e
-  trap - EXIT HUP INT TERM
+  # Ignoruj kolejne sygnały HUP/INT/TERM w trakcie sprzątania, aby powtórzony sygnał
+  # nie przerwał usuwania kontenera, katalogu tymczasowego ani sieci Docker.
+  trap '' HUP INT TERM
+  trap - EXIT
 
   if [[ -n "${TEST_CHILD_PID}" ]]; then
     kill -TERM "${TEST_CHILD_PID}" >/dev/null 2>&1 || true
   fi
 
   if [[ "${SCOPE_UNIT}" =~ ^pap-ci-scope-[0-9a-f]{12}$ ]]; then
-    systemctl --user stop "${SCOPE_UNIT}.scope" >/dev/null 2>&1 || true
+    timeout --signal=KILL 5s systemctl --user stop "${SCOPE_UNIT}.scope" >/dev/null 2>&1 || true
   fi
 
   if [[ -n "${TEST_CHILD_PID}" ]]; then
@@ -348,12 +476,18 @@ cleanup() {
   if [[ "${CONTAINER_NAME}" =~ ^pap-ci-pg18-[0-9a-f]{12}$ ]]; then
     docker exec -u 0 "${CONTAINER_NAME}" sh -c 'rm -rf /var/lib/postgresql/* /var/lib/postgresql/.[!.]* /var/lib/postgresql/..?* 2>/dev/null || true' >/dev/null 2>&1 || true
     docker rm -fv "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+    if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
+      log_error "Nie udało się usunąć kontenera tymczasowego ${CONTAINER_NAME}."
+      if (( exit_code == 0 )); then
+        exit_code=5
+      fi
+    fi
   fi
 
   local mnt_parent
   mnt_parent="$(get_volume_mount_parent)"
   mnt_parent="${mnt_parent%/}"
-  local safe_run_dir_regex="^${mnt_parent}/HC_Volume_[0-9]+/pap-ci-ephemeral(/[A-Za-z0-9._-]+)*/run-[0-9a-f]{12}$"
+  local safe_run_dir_regex="^${mnt_parent}/HC_Volume_[0-9]+/pap-ci-ephemeral(/[A-Za-z0-9][A-Za-z0-9._-]*)*\/run-[0-9a-f]{12}$"
 
   if [[ -n "${RUN_DIR}" && ! -L "${RUN_DIR}" && "${RUN_DIR}" =~ ${safe_run_dir_regex} ]]; then
     if [[ -d "${RUN_DIR}/pgdata" && ! -L "${RUN_DIR}/pgdata" ]]; then
@@ -367,14 +501,14 @@ cleanup() {
           --security-opt no-new-privileges:true \
           -v "${RUN_DIR}/pgdata:/cleanup" \
           --entrypoint sh "${PG_IMAGE}" \
-          -c 'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?* 2>/dev/null || true' >/dev/null 2>&1 || true
+          -c 'rm -rf /cleanup/* /cleanup/.[!.]* /cleanup/..?* 2>/dev/null || true; chmod 0700 /cleanup 2>/dev/null || true' >/dev/null 2>&1 || true
     fi
 
     if [[ -d "${RUN_DIR}" ]]; then
       rm -rf --one-file-system "${RUN_DIR}" >/dev/null 2>&1 || true
     fi
 
-    if [[ -e "${RUN_DIR}" ]]; then
+    if [[ -e "${RUN_DIR}" || -L "${RUN_DIR}" ]]; then
       log_error "Nie udało się całkowicie usunąć katalogu tymczasowego ${RUN_DIR}."
       if (( exit_code == 0 )); then
         exit_code=5
@@ -384,6 +518,12 @@ cleanup() {
 
   if [[ "${NET_NAME}" =~ ^pap-ci-pg-net-[0-9a-f]{12}$ ]]; then
     docker network rm "${NET_NAME}" >/dev/null 2>&1 || true
+    if docker network inspect "${NET_NAME}" >/dev/null 2>&1; then
+      log_error "Nie udało się usunąć tymczasowej sieci Docker ${NET_NAME}."
+      if (( exit_code == 0 )); then
+        exit_code=5
+      fi
+    fi
   fi
 
   exit "${exit_code}"
@@ -505,7 +645,7 @@ main() {
   done
 
   local current_dir
-  current_dir="$(realpath -e "${PWD}")"
+  current_dir="$(realpath -e -- "${PWD}")"
   if is_forbidden_cwd "${current_dir}"; then
     log_error "Bieżący katalog (${current_dir}) należy do chronionej ścieżki usługowej. Użyj oddzielnego klonu testowego."
     exit 2
@@ -614,7 +754,12 @@ main() {
 
   local run_id
   run_id="$(openssl rand -hex 6)"
-  RUN_DIR="${RESOLVED_WORK_ROOT}/run-${run_id}"
+  local candidate_run_dir="${RESOLVED_WORK_ROOT}/run-${run_id}"
+  if [[ -e "${candidate_run_dir}" || -L "${candidate_run_dir}" ]]; then
+    log_error "Kolizja jednorazowego katalogu uruchomieniowego (${candidate_run_dir})."
+    exit 4
+  fi
+  RUN_DIR="${candidate_run_dir}"
   mkdir -m 0700 "${RUN_DIR}"
   mkdir -m 0700 "${RUN_DIR}/pgdata"
 
@@ -625,9 +770,8 @@ main() {
   # a 0444 umożliwia odczyt pliku sekretu przez użytkownika postgres (uid 70) wewnątrz kontenera.
   chmod 0444 "${RUN_DIR}/pg_pass.secret"
 
-  NET_NAME="pap-ci-pg-net-${run_id}"
-  CONTAINER_NAME="pap-ci-pg18-${run_id}"
   SCOPE_UNIT="pap-ci-scope-${run_id}"
+  NET_NAME="pap-ci-pg-net-${run_id}"
 
   docker network create \
     --driver bridge \
@@ -641,6 +785,7 @@ main() {
     init_db="postgres"
   fi
 
+  CONTAINER_NAME="pap-ci-pg18-${run_id}"
   log_info "Uruchamianie izolowanego kontenera ${CONTAINER_NAME} na 127.0.0.1:${PORT} (RAM<=384MiB, CPU=0.50, mode=${MODE})..."
   docker run \
     --detach \
@@ -755,12 +900,19 @@ SQL
     export COREPACK_DEFAULT_TO_LATEST=0
   fi
 
-  # Obowiązkowe limity cgroups v2 na całe drzewo procesu testowego — brak fallbacku na sam timeout.
+  local cgroup_root proc_cgroup_file
+  cgroup_root="$(get_cgroup_root_dir)"
+  proc_cgroup_file="$(get_proc_self_cgroup_path)"
+
+  # Obowiązkowe limity cgroups v2 na całe drzewo procesu testowego + weryfikacja wewnątrz scope'a przed exec —
+  # brak jakiegokolwiek fallbacku na sam timeout.
   local -a runner_prefix=(
     systemd-run --user --scope --quiet
     --unit="${SCOPE_UNIT}"
     "${SCOPE_LIMIT_ARGS[@]}"
     --
+    bash -euo pipefail -c "${SCOPE_CGROUP_ENFORCER_SCRIPT}" bash
+    "${cgroup_root}" "${proc_cgroup_file}" "${SCOPE_UNIT}"
     timeout --signal=TERM --kill-after=15s "${TIMEOUT_SEC}s"
   )
 
