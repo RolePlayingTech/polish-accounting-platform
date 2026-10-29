@@ -39,7 +39,7 @@ Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający 
 - Działające Web/API nie dowodzą uruchomienia PostgreSQL. Najpierw sprawdź usługi i zasoby.
 - Testy wymagające serwera można wykonywać na uprzednio wydzielonych, izolowanych zasobach testowych Hetznera. Nie używaj bazy działającego stagingu ani danych innych usług.
 - Nie wymagamy lokalnej instalacji bazy na komputerze właściciela. Rozwój lokalny bez DB pozostaje dostępny; ADR-005 opisuje również historyczny etap local-only, rozszerzony przez ADR-006.
-- Przed obciążającą operacją sprawdź limity ADR-006. Pełne buildy wykonuje CI, nie współdzielony Hetzner. Nie instaluj automatycznie usług systemowych.
+- Przed obciążającą operacją sprawdź limity ADR-006. Pełne buildy uruchamiaj tylko w zatwierdzonym, izolowanym środowisku CI z limitami zasobów na Hetznerze, nigdy w działającym stagingu ani bezpośrednio na współdzielonym hoście. Gdy brak takiego środowiska, oznacz build jako niewykonany. Nie instaluj automatycznie usług systemowych.
 
 ## Polityka pracy agentów
 
