@@ -14,16 +14,11 @@ import {
   type AccessManagementTransaction,
 } from '@pap/application';
 import { legalEntityId, tenantId, userId, type TenantMembership } from '@pap/domain';
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import type { PostgresContextSigner } from './signed-context.js';
 import { appendSecurityDecision, PostgresSecurityAudit } from './security-audit.js';
-import {
-  accessManagementEvent,
-  companyAccessGrant,
-  legalEntity,
-  tenantMembership,
-} from './schema.js';
+import { companyAccessGrant, legalEntity, tenantMembership } from './schema.js';
 import {
   applyLocalRlsSessionContext,
   readTransactionClockNow,
@@ -546,7 +541,6 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         }
       }
 
-      const requestKey = JSON.stringify(command);
       // Niezależnie od wstrzykniętego autoryzatora wymuszamy wspólną politykę domenową.
       if (
         !(await createTenantAccessManagementAuthorizer().authorize(actor, command, {
@@ -563,254 +557,14 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         decisionAt: lockedSnapshot!.now.toISOString(),
         ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
       });
-      const target = and(
-        eq(tenantMembership.tenantId, command.tenantId),
-        eq(tenantMembership.userId, command.userId),
+      // Wyłącznie funkcja DB wykonuje komendę i tworzy receipt z rzeczywistymi OLD/NEW.
+      // Runtime zachowuje uprawnienia blokowania wierszy, ale nie ma ścieżki surowego DML.
+      const [row] = await tx.execute<{ result: AccessManagementResult }>(
+        sql`SELECT pap_execute_access() AS result`,
       );
-
-      const snapshotMatches =
-        lockedSnapshot !== null &&
-        lockedSnapshot.requestKey === requestKey &&
-        lockedSnapshot.actorKey === currentActorKey;
-
-      let member: MembershipRow | null;
-      if (snapshotMatches) {
-        member = lockedSnapshot!.targetMembershipRow;
-      } else {
-        // Także bezpośredni adapter transakcji nie może ominąć zablokowanej polityki.
-        if (
-          !(await createTenantAccessManagementAuthorizer().authorize(actor, command, {
-            getAuthorizationFacts,
-          }))
-        )
-          return { ok: false, reason: 'access_management_denied' };
-        member = lockedSnapshot?.targetMembershipRow ?? null;
-      }
-
-      if (!member) {
-        return { ok: false, reason: 'membership_unavailable' };
-      }
-
-      const [previous] = await tx
-        .select()
-        .from(accessManagementEvent)
-        .where(eq(accessManagementEvent.operationId, command.operationId));
-
-      if (previous) {
-        if (
-          previous.tenantId !== command.tenantId ||
-          previous.userId !== command.userId ||
-          previous.actorId !== actor.userId ||
-          previous.requestKey !== requestKey
-        ) {
-          return { ok: false, reason: 'operation_conflict' };
-        }
-        await recordAccessAllow(command, actor, lockedSnapshot!.now);
-        return { ok: true, receipt: previous.receipt };
-      }
-
-      const now = snapshotMatches ? lockedSnapshot!.now : await readTransactionClockNow(tx);
-
-      const grantsTarget = and(
-        eq(companyAccessGrant.tenantId, command.tenantId),
-        eq(companyAccessGrant.userId, command.userId),
-      );
-      const revokeAllGrants = async () => {
-        const revoked = await tx
-          .update(companyAccessGrant)
-          .set({ revokedAt: now })
-          .where(
-            and(
-              grantsTarget,
-              sql`(${companyAccessGrant.revokedAt} IS NULL OR ${companyAccessGrant.revokedAt} > ${now.toISOString()})`,
-            ),
-          )
-          .returning({ id: companyAccessGrant.grantId });
-        return revoked.length;
-      };
-
-      let before: string = member.status;
-      let after: string = member.status;
-      let revokedGrants = 0;
-      let changed = false;
-      let grantId: string | null = null;
-
-      switch (command.kind) {
-        case 'revoke_membership': {
-          revokedGrants = await revokeAllGrants();
-          await tx.update(tenantMembership).set({ status: 'revoked' }).where(target);
-          after = 'revoked';
-          changed = member.status !== 'revoked' || revokedGrants > 0;
-          break;
-        }
-        case 'reactivate_membership': {
-          if (member.status !== 'revoked') {
-            return { ok: false, reason: 'membership_not_revoked' };
-          }
-          const validUntil = command.validUntil === null ? null : new Date(command.validUntil);
-          if (validUntil !== null && validUntil <= now) {
-            return { ok: false, reason: 'invalid_command' };
-          }
-          // Także rekord revoked sprzed 0002 może zawierać nieodwołane granty.
-          // Nigdy nie czyścimy cofnięcia; wcześniejsze pozostaje bez zmian.
-          revokedGrants = await revokeAllGrants();
-          await tx
-            .update(tenantMembership)
-            .set({ status: 'active', validFrom: now, validUntil })
-            .where(target);
-          after = 'active';
-          changed = true;
-          break;
-        }
-        case 'grant': {
-          if (
-            member.status !== 'active' ||
-            member.validFrom > now ||
-            (member.validUntil !== null && member.validUntil <= now)
-          ) {
-            return { ok: false, reason: 'membership_inactive' };
-          }
-          const validFrom = command.validFrom === null ? now : new Date(command.validFrom);
-          const validUntil = command.validUntil === null ? null : new Date(command.validUntil);
-          if (validFrom < now || (validUntil !== null && validUntil <= validFrom)) {
-            return { ok: false, reason: 'invalid_command' };
-          }
-
-          let entityAvailable: boolean;
-          if (snapshotMatches && lockedSnapshot!.entityExists !== undefined) {
-            entityAvailable = lockedSnapshot!.entityExists;
-          } else {
-            const [entity] = await tx
-              .select({ id: legalEntity.id })
-              .from(legalEntity)
-              .where(
-                and(
-                  eq(legalEntity.tenantId, command.tenantId),
-                  eq(legalEntity.id, command.legalEntityId),
-                ),
-              )
-              .for('share');
-            entityAvailable = Boolean(entity);
-          }
-          if (!entityAvailable) {
-            return { ok: false, reason: 'grant_unavailable' };
-          }
-
-          // Równoległe żądania tego samego okresu/uprawnienia nie mnożą grantów.
-          const [existing] = await tx
-            .select()
-            .from(companyAccessGrant)
-            .where(
-              and(
-                grantsTarget,
-                eq(companyAccessGrant.legalEntityId, command.legalEntityId),
-                eq(companyAccessGrant.action, command.action),
-                isNull(companyAccessGrant.revokedAt),
-                command.validFrom === null
-                  ? sql`${companyAccessGrant.validFrom} <= ${now.toISOString()}`
-                  : eq(companyAccessGrant.validFrom, validFrom),
-                validUntil === null
-                  ? isNull(companyAccessGrant.validUntil)
-                  : eq(companyAccessGrant.validUntil, validUntil),
-              ),
-            );
-          if (existing) {
-            grantId = existing.grantId;
-            before = 'granted';
-            after = 'granted';
-            break;
-          }
-          const [usedId] = await tx
-            .select({ id: companyAccessGrant.grantId })
-            .from(companyAccessGrant)
-            .where(eq(companyAccessGrant.grantId, command.grantId));
-          if (usedId) {
-            return { ok: false, reason: 'operation_conflict' };
-          }
-          await tx.insert(companyAccessGrant).values({
-            grantId: command.grantId,
-            tenantId: command.tenantId,
-            userId: command.userId,
-            legalEntityId: command.legalEntityId,
-            action: command.action,
-            validFrom,
-            validUntil,
-          });
-          grantId = command.grantId;
-          before = 'absent';
-          after = 'granted';
-          changed = true;
-          break;
-        }
-        case 'revoke_grant': {
-          let grant: GrantRow | null;
-          if (snapshotMatches && lockedSnapshot!.targetGrantRow !== undefined) {
-            grant = lockedSnapshot!.targetGrantRow;
-          } else {
-            const [lockedGrant] = await tx
-              .select()
-              .from(companyAccessGrant)
-              .where(and(grantsTarget, eq(companyAccessGrant.grantId, command.grantId)))
-              .for('update');
-            grant = lockedGrant ?? null;
-          }
-          if (!grant) {
-            return { ok: false, reason: 'grant_unavailable' };
-          }
-          grantId = grant.grantId;
-          before = grant.revokedAt?.toISOString() ?? 'not_revoked';
-          const revokedAt =
-            grant.revokedAt !== null && grant.revokedAt < now ? grant.revokedAt : now;
-          changed = grant.revokedAt === null || grant.revokedAt > now;
-          if (changed) {
-            await tx
-              .update(companyAccessGrant)
-              .set({ revokedAt })
-              .where(and(grantsTarget, eq(companyAccessGrant.grantId, grantId)));
-          }
-          after = revokedAt.toISOString();
-          revokedGrants = changed ? 1 : 0;
-          break;
-        }
-      }
-
-      const receipt = {
-        operationId: command.operationId,
-        occurredAt: now.toISOString(),
-        changed,
-        grantId,
-      };
-      // Wymagany INSERT, bez catch wewnątrz transakcji: błąd audytu wycofuje wszystkie zmiany.
-      const event = {
-        operationId: command.operationId,
-        tenantId: command.tenantId,
-        userId: command.userId,
-        actorId: actor.userId,
-        kind: command.kind,
-        grantId,
-        occurredAt: now,
-        requestKey,
-        stateChange: { before, after, revokedGrants },
-        receipt,
-      };
-      await this.signer?.apply(tx, {
-        purpose: 'access_event',
-        accessEvent: {
-          operation_id: event.operationId,
-          tenant_id: event.tenantId,
-          user_id: event.userId,
-          actor_id: event.actorId,
-          kind: event.kind,
-          grant_id: event.grantId,
-          occurred_at: now.toISOString(),
-          request_key: event.requestKey,
-          state_change: event.stateChange,
-          receipt: event.receipt,
-        },
-      });
-      await tx.insert(accessManagementEvent).values(event);
-      await recordAccessAllow(command, actor, now);
-      return { ok: true, receipt };
+      if (!row) throw new Error('Brak wyniku kontrolowanej operacji dostępu.');
+      if (row.result.ok) await recordAccessAllow(command, actor, lockedSnapshot!.now);
+      return row.result;
     };
 
     const adapter: AccessManagementTransaction = {

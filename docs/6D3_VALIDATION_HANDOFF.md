@@ -5,6 +5,17 @@ Data: 2026-10-29. Status: kompletna implementacja kandydacka w Draft PR,
 Issue #6 pozostaje otwarte. Nie dopuszczać danych rzeczywistych ani endpointów firm
 przed wymaganymi testami PostgreSQL i niezależnym code/security review.
 
+**Rewizja SEC-01/02 — 2026-10-29:** wspólna naprawa jest opisana w
+[docs/29](29-sec01-sec02-kontrakt-efektow.md): kontrolowany executor dostępu,
+rzeczywiste OLD/NEW w receipt z TX, dokładne daty, retry bez DML i związana
+operacja firmowa. W tej sesji **nie uruchomiono żadnych testów, typechecków,
+lintów, buildów, migracji, E2E ani Actions**. Historyczne PASS poniżej nie dotyczą
+tej rewizji. SHA odbioru i Draft PR znajdują się w aktualnym przekazaniu Issue #6.
+QA ma najpierw dostosować fixture i zaimplementować macierz docs/29, zintegrować
+SEC-03 z #35 (`a01ae68dd30919a95f2549b3d4e24e5c421629b8`) zachowując
+outcome_unknown, następnie wykonać całość na dokładnym połączonym SHA.
+SEC-04/05 oraz H1/H2 nadal są odrębnymi bramkami. Stan: **NO-GO / NO-MERGE**.
+
 ## Repozytorium i zależności
 
 | Część | PR / gałąź | Stan |

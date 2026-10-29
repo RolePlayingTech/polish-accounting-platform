@@ -261,6 +261,7 @@ export async function executeHttpAuthorizedCompanyAction<
   metadata: RequireCompanyActionMetadata,
   dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
   operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+  options?: { readonly operationId?: string },
 ): Promise<TOutput> {
   if (hasUntrustedIdentitySignal(request)) {
     await auditTransportDenial(
@@ -301,6 +302,7 @@ export async function executeHttpAuthorizedCompanyAction<
     {
       rawBearerToken,
       requestId: serverRequestId(request, reply),
+      operationId: options?.operationId,
       tenantId: rawTenantId,
       legalEntityId: rawLegalEntityId,
       action: metadata.action,

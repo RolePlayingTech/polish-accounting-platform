@@ -1,7 +1,9 @@
 # 28. Audyt bezpieczeństwa — kandydat 6D-3C
 
 Kontrakt: [ADR-009](adr/009-atomowy-audyt-decyzji.md). Migracja 0005 rozszerza
-0004; historyczne 0000–0003 i opublikowane 0004 nie są zmienione.
+0004; historyczne 0000–0003 nie są zmienione. Rewizja SEC-01/02 zmienia kandydackie
+0004/0005 i wymaga wspólnej wersji SQL/application/ACL. Rzeczywiste OLD/NEW w receipt,
+retry bez DML oraz scenariusze QA **NOT RUN**: [docs/29](29-sec01-sec02-kontrakt-efektow.md).
 
 | Ścieżka | Audyt | Awaria |
 | --- | --- | --- |
@@ -28,7 +30,7 @@ Macierz uzupełniająca do docs/27:
 | security_decision_event | INSERT tylko pod podpisem dokładnych metadanych; brak odczytu/zmiany/usuwania/TRUNCATE |
 | pap_stamp_security_event | Bez bezpośredniego EXECUTE, BEFORE INSERT nadaje czas i txid |
 | pap_require_security_audit | Bez bezpośredniego EXECUTE; mały definer z pinowanym search_path, kontrola przy COMMIT |
-| access_management_event INSERT | Osobny podpis state_change/receipt, nie sama asercja komendy |
+| access_management_event INSERT | Wyłącznie executor SQL z podpisanej komendy; runtime nie dostarcza receipt/state_change |
 
 Audyt nie przechowuje FK do tenanta/aktora dla odmów: próba obcej lub nieistniejącej
 firmy także wymaga śladu, a czasowa niedostępność konta nie może go skasować.

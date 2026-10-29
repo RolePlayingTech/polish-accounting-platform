@@ -77,6 +77,8 @@ export function freezeTransactionActor(input: TransactionActor): TransactionActo
  * W 6D-3A przekazanie tego kontekstu nie oznacza jeszcze włączonych polityk RLS ani roli runtime DB.
  */
 export interface TransactionSessionContext {
+  readonly operationId?: string | undefined;
+  readonly decisionAt?: string | undefined;
   readonly actorUserId: UserId;
   readonly tenantId: TenantId;
   readonly legalEntityId?: LegalEntityId | undefined;
@@ -169,6 +171,7 @@ async function executeAuthorizedCompanyActionCore<
   let parsedLegalEntityId: LegalEntityId;
   // Kopia wszystkich selektorów przed pierwszym await, także akcji i zakresów.
   const action = input.action;
+  const operationId = auditIdentifier(input.operationId);
   const rawBearerToken = input.rawBearerToken;
   const requiredScopes = input.requiredScopes
     ? Object.freeze([...input.requiredScopes])
@@ -176,6 +179,9 @@ async function executeAuthorizedCompanyActionCore<
   try {
     if (action !== 'read' && action !== 'write') {
       throw new Error('Niepoprawna akcja księgowa.');
+    }
+    if (action === 'write' && operationId === null) {
+      throw new Error('Zapis wymaga identyfikatora operacji.');
     }
     parsedTenantId = tenantId(input.tenantId);
     parsedLegalEntityId = legalEntityId(input.legalEntityId);
@@ -247,6 +253,8 @@ async function executeAuthorizedCompanyActionCore<
 
         if (tx.applySessionContext) {
           await tx.applySessionContext({
+            operationId: operationId ?? undefined,
+            decisionAt: facts.now.toISOString(),
             actorUserId: txActor.userId,
             tenantId: parsedTenantId,
             legalEntityId: parsedLegalEntityId,
@@ -254,6 +262,8 @@ async function executeAuthorizedCompanyActionCore<
         }
 
         const context: AuthenticatedCompanyActionContext = Object.freeze({
+          operationId: operationId ?? undefined,
+          decisionAt: facts.now.toISOString(),
           userId: txActor.userId,
           tenantId: parsedTenantId,
           legalEntityId: parsedLegalEntityId,

@@ -188,6 +188,9 @@ export async function authenticateOidcActor(
 }
 
 export interface AuthenticatedCompanyActionContext {
+  /** Tylko transakcyjny use case; zapis wymaga kanonicznej operacji i zegara DB. */
+  readonly operationId?: string | undefined;
+  readonly decisionAt?: string | undefined;
   readonly userId: UserId;
   readonly tenantId: TenantId;
   readonly legalEntityId: LegalEntityId;
@@ -198,6 +201,7 @@ export interface AuthenticatedCompanyActionContext {
 export interface AuthenticatedCompanyActionInput {
   /** Serwerowy request ID; identyfikator nie poświadcza tożsamości ani uprawnień. */
   readonly requestId?: string | undefined;
+  /** Obowiązkowy dla transakcyjnego write, stabilny przy jawnym retry. */
   readonly operationId?: string | undefined;
   readonly rawBearerToken: string | undefined | null;
   readonly tenantId: string;
