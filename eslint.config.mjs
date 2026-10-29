@@ -46,9 +46,53 @@ export default defineConfig([
                 'postgres',
                 'postgres/*',
                 '@modelcontextprotocol/*',
+                'jose',
+                'jose/*',
               ],
               message:
                 'Domena pozostaje niezależna od frameworków, HTTP, bazy danych, ORM i transportu MCP.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
+    files: ['packages/application/**/*.{js,jsx,ts,tsx}'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: [
+                'next',
+                'next/*',
+                '@nestjs/*',
+                'fastify',
+                '@fastify/*',
+                'http',
+                'node:http',
+                'https',
+                'node:https',
+                '@pap/db',
+                '@pap/db/*',
+                '../db',
+                '../db/**',
+                '**/../db',
+                '**/../db/**',
+                '**/packages/db',
+                '**/packages/db/**',
+                'drizzle-orm',
+                'drizzle-orm/*',
+                'postgres',
+                'postgres/*',
+                '@modelcontextprotocol/*',
+                'jose',
+                'jose/*',
+              ],
+              message:
+                'Warstwa aplikacji pozostaje niezależna od frameworków HTTP, bazy danych, ORM, bibliotek kryptograficznych OIDC i transportu MCP.',
             },
           ],
         },

@@ -66,6 +66,7 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     'postgres',
     'postgres/cjs',
     '@modelcontextprotocol/server',
+    'jose',
   ])('blocks %s imports in packages/domain', async (forbiddenSource) => {
     const result = await lintImport('packages/domain/src/boundary-check.ts', forbiddenSource);
 
@@ -74,6 +75,29 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
       expect.objectContaining({
         ruleId: 'no-restricted-imports',
         severity: 2,
+      }),
+    ]);
+  });
+
+  it.each([
+    '@nestjs/common',
+    'fastify',
+    '@pap/db',
+    'drizzle-orm',
+    'postgres',
+    '@modelcontextprotocol/server',
+    'jose',
+  ])('blocks %s imports in packages/application', async (forbiddenSource) => {
+    const result = await lintImport('packages/application/src/boundary-check.ts', forbiddenSource);
+
+    expect(result.errorCount).toBe(1);
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        ruleId: 'no-restricted-imports',
+        severity: 2,
+        message: expect.stringContaining(
+          'Warstwa aplikacji pozostaje niezależna od frameworków HTTP, bazy danych, ORM, bibliotek kryptograficznych OIDC i transportu MCP.',
+        ),
       }),
     ]);
   });

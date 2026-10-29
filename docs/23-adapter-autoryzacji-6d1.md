@@ -23,7 +23,7 @@ Nie potrzeba migracji ani zmiany polityki. Migracje `0000`/`0001`, schemat 6B i 
 
 **Aktualizacja 6D-R (2026-10-28):** [bezpieczny cykl dostępu](24-bezpieczny-cykl-dostepu-6dr.md) implementuje poniższy wariant transakcyjny, atomowy audyt mutacji i guardy migracji 0002. Regresja PR #20 wymaga teraz odmowy po reaktywacji, także przez zwykły SQL. Poniższy opis ryzyka i propozycji dokumentuje stan samego 6D-1 sprzed naprawy. Ograniczona rola DB, wiarygodny aktor/autoryzator oraz TOCTOU operacji na danych pozostają jawnymi blockerami pierwszego dostępu. Nie ma jeszcze logowania, RLS ani audytu decyzji; Issue #6 pozostaje otwarte.
 
-**Ryzyko jest potwierdzone testem regresyjnym na PostgreSQL:** aktywne członkostwo + nieodwołany grant A1 → zezwolenie; zmiana statusu członkostwa na `revoked` → odmowa; powrót do `active` (nawet z nowym `validFrom`) → ponowne zezwolenie z tego samego historycznego grantu. Grant ma FK do pary tenant/użytkownik, nie do konkretnego okresu członkostwa. Polityka sprawdza niezależnie obie ważności. Nie wymaga początku grantu późniejszego od początku członkostwa. Adapter celowo nie zmienia tego kontraktu po cichu.
+**Ryzyko jest potwierdzone testem regresyjnym na PostgreSQL:** aktywne członkostwo + nieodwołany grant A1 → zezwolenie; zmiana statusu członkostwa na `revoked` → odmowa; powrót do `active` (nawet z nowym `validFrom`) → ponowne zezwolenie z tego samego historycznego grantu. Grant ma FK do pary tenant/użytkownik, nie do konkretnego okresu członkostwa. Polityka sprawdza niezależnie obie ważności. Nie wymaga początku grantu późniejsniejszego od początku członkostwa. Adapter celowo nie zmienia tego kontraktu po cichu.
 
 **Przed obsługą użytkowników wymagany jest osobny, testowany i reviewowany mechanizm cyklu dostępu.** Minimalna propozycja dla obecnego schematu:
 
@@ -34,7 +34,9 @@ Nie potrzeba migracji ani zmiany polityki. Migracje `0000`/`0001`, schemat 6B i 
 
 Jeśli nie da się wymusić wspólnej ścieżki mutacji, potrzebna będzie osobno zaprojektowana migracja z niezmiennym identyfikatorem/generacją okresu członkostwa i grantami powiązanymi z tą generacją; nigdy ponowne użycie dawnej generacji. To alternatywa wymagająca zmiany kontraktu i review. 6D-1 nie implementuje żadnej ścieżki mutacji dostępu i nie rozwiązuje powyższego ryzyka samym adapterem. **Dopuszczenie realnych użytkowników pozostaje zablokowane do wdrożenia mechanizmu.**
 
-## Propozycja kontraktu tożsamości dla 6D-2 (bez implementacji OIDC)
+## Kontrakt tożsamości (zrealizowany w 6D-2)
+
+**Aktualizacja 6D-2 (2026-10-28):** kontrakt opisany poniżej został zaimplementowany i rozwinięty w [etapie 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) (`packages/application/src/oidc-authentication.ts`, `packages/db/src/user-identity.ts`, `apps/api/src/auth/`).
 
 ```ts
 // Tworzony wyłącznie przez serwerowy adapter po weryfikacji tokenu/sesji.
@@ -44,13 +46,15 @@ interface VerifiedOidcIdentity {
 }
 
 interface UserIdentityResolver {
-  resolveVerifiedIdentity(identity: VerifiedOidcIdentity): Promise<{ readonly userId: UserId } | null>;
+  resolveVerifiedIdentity(
+    identity: VerifiedOidcIdentity,
+  ): Promise<{ readonly userId: UserId } | null>;
 }
 ```
 
-To propozycja, nie nowy działający port ani gwarancja bezpieczeństwa samego typu TS. Serwerowy adapter OIDC powinien weryfikować podpis/algorytm i klucze z zaufanej konfiguracji, dokładne `iss` z allowlisty, właściwe `aud`, `exp`, `nbf` (gdy występuje), wymagane scopes, stan konta i sesji/odwołania. Dla przepływu logowania również PKCE, state i nonce. Nie pobieramy kluczy z dowolnego URL wskazanego przez niezaufany token. Po tej weryfikacji resolver odczytuje jedyne mapowanie `(issuer, subject)` → losowy wewnętrzny UUID aktywnego konta.
+Serwerowy adapter OIDC weryfikuje podpis/algorytm i klucze z zaufanej konfiguracji, dokładne `iss` z allowlisty, właściwe `aud`, `exp`, `nbf` (gdy występuje), wymagane scopes, stan konta i sesji/odwołania. Dla przyszłego przepływu logowania również PKCE, state i nonce. Nie pobieramy kluczy z dowolnego URL wskazanego przez niezaufany token. Po tej weryfikacji resolver odczytuje jedyne mapowanie `(issuer, subject)` → losowy wewnętrzny UUID aktywnego konta.
 
-Przyszła tabela tożsamości potrzebuje UNIQUE dokładnej, czułej na wielkość liter pary `(issuer, subject)` i FK do wewnętrznego użytkownika. `subject` jest nieprzezroczystym tekstem, nie musi być UUID. Nie normalizujemy go, nie łączymy kont po e-mailu/nazwie i nie traktujemy `sub` z dwóch wystawców jako tej samej osoby. Rejestracja/powiązanie kont to osobna kontrolowana operacja; brak/wyłączenie mapowania daje odmowę, awaria źródła bezpieczny błąd bez danych tokenu. Podstawa: [OIDC Core 1.0, §5.7 Claim Stability and Uniqueness](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability) i [§3.1.3.7 walidacja ID Token](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation).
+Tabela tożsamości (`user_oidc_identity` w migracji `0003`) posiada UNIQUE dokładnej, czułej na wielkość liter pary `(issuer, subject)` i FK do wewnętrznego użytkownika (`app_user`). `subject` jest nieprzezroczystym tekstem, nie musi być UUID. Nie normalizujemy go, nie łączymy kont po e-mailu/nazwie i nie traktujemy `sub` z dwóch wystawców jako tej samej osoby. Rejestracja/powiązanie kont to osobna kontrolowana operacja; brak/wyłączenie mapowania daje odmowę, awaria źródła bezpieczny błąd bez danych tokenu. Podstawa: [OIDC Core 1.0, §5.7 Claim Stability and Uniqueness](https://openid.net/specs/openid-connect-core-1_0.html#ClaimStability) i [§3.1.3.7 walidacja ID Token](https://openid.net/specs/openid-connect-core-1_0.html#IDTokenValidation).
 
 Wyłącznie serwer wpisuje rozwiązany `userId` do `TenantAuthorizationQuery`. UUID podany w body/path/MCP może być selektorem zasobu, ale **nie tożsamością wykonującego**: jego format ani istnienie członkostwa nie dowodzą posiadania zweryfikowanej sesji. Adapter 6D-1 ufa wywołującej go kompozycji serwerowej i sam nie uwierzytelnia. Nie należy wystawiać `getFacts` jako publicznego API ani zwracać szczegółów faktów do klienta.
 
@@ -58,10 +62,8 @@ Wyłącznie serwer wpisuje rozwiązany `userId` do `TenantAuthorizationQuery`. U
 
 Testy jednostkowe uruchamiają rzeczywisty builder i mapowanie Drizzle z transportem sterownika zastąpionym syntetycznymi wierszami: jeden SELECT, parametry i wszystkie predykaty zakresu, NULL, milisekundy, status/daty, wiele grantów, brak domyślnych ról, nowy odczyt po cofnięciu i redakcja awarii. Nie wymagają DB.
 
-`packages/db/test/tenant-authorization.integration.ts` wykonuje migracje 6A/6B na prawdziwym PostgreSQL i wywołuje istniejący application service z adapterem. Pokrywa zezwolenie A/read/A1; odmowy A2, B1, zmiany tenanta, innej akcji/użytkownika, administratora bez grantu, braku/cofnięcia/przyszłego/wygaśnięcia członkostwa; daty/cofnięcie/wygaśnięcie grantu i granice `[od, do)`; świeży odczyt, równoległe wielokrotne zapytania różnych tenantów (także ten sam użytkownik w A i B), rzeczywistą awarię tabeli oraz ryzyko reaktywacji. Sprawdza też zawartość faktów, więc odmowa nie maskuje pobrania cudzych grantów. Używa istniejącego helpera bezpiecznej `pap_test`, własnego losowego namespace i sprzątania/inwentaryzacji. CI uruchamia cały zestaw `pnpm test:integration` obowiązkowo; przed nim buduje zależności application/domain.
+`packages/db/test/tenant-authorization.integration.ts` wykonuje migracje na prawdziwym PostgreSQL i wywołuje istniejący application service z adapterem. Pokrywa zezwolenie A/read/A1; odmowy A2, B1, zmiany tenanta, innej akcji/użytkownika, administratora bez grantu, braku/cofnięcia/przyszłego/wygaśnięcia członkostwa; daty/cofnięcie/wygaśnięcie grantu i granice `[od, do)`; świeży odczyt, równoległe wielokrotne zapytania różnych tenantów (także ten sam użytkownik w A i B), rzeczywistą awarię tabeli oraz ochronę przed reaktywacją. Sprawdza też zawartość faktów, więc odmowa nie maskuje pobrania cudzych grantów. Używa istniejącego helpera bezpiecznej `pap_test`, własnego losowego namespace i sprzątania/inwentaryzacji. CI uruchamia cały zestaw `pnpm test:integration` obowiązkowo; przed nim buduje zależności application/domain.
 
-To dowód zakresu odczytu adaptera i decyzji application/domain, nie izolacji API/MCP end-to-end. Nie ma logowania, RLS, ograniczonej roli runtime ani audytu decyzji/mutacji. Nie ma gwarancji atomowości pomiędzy decyzją i przyszłą operacją na danych: ta kompozycja wymaga kolejnego projektu i testów. Nadal nie ma autoryzacji SELECT przy dowolnym bezpośrednim dostępie do DB. Wyniki lokalne i CI dla końcowego SHA należy odczytać z opisu PR; brak lokalnego PostgreSQL oznacza test integracyjny niewykonany lokalnie, nie zaliczony.
+## Następne etapy (6D-2 zrealizowane, pozostaje 6D-3)
 
-## Następny mały etap 6D-2
-
-Serwerowy adapter tożsamości OIDC i resolver powyższej pary z testami podpisu, wystawcy/odbiorcy/czasu, wyłączonego konta, kolizji `sub` między wystawcami oraz podmienionego `userId` z body. Kompozycję z `authorizeCompanyAction` sprawdzić w testach serwera przed udostępnieniem operacji firmowych; bez publicznych endpointów księgowych. Mechanizm bezpiecznej reaktywacji jest osobną obowiązkową bramką przed dopuszczeniem użytkowników. RLS/rola runtime, pooling i audyt pozostają wydzielonym 6D-3 z security review.
+Etap [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) dostarczył serwerowy adapter tożsamości OIDC, resolver `(issuer, subject) -> userId`, autoryzację administracyjną `manageAccess` oraz kompozycję z `authorizeCompanyAction` w pipeline API. RLS/rola runtime, atomowość transakcyjna decyzji z operacją na danych i audyt decyzji pozostają wydzielonym etapem 6D-3 z security review.

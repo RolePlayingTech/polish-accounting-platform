@@ -1,11 +1,14 @@
 import {
   copyAccessManagementCommand,
   type AccessManagementActor,
+  type AccessManagementAuthorizationDataSource,
+  type AccessManagementAuthorizationFacts,
   type AccessManagementCommand,
   type AccessManagementResult,
   type AccessManagementStore,
 } from '@pap/application';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { legalEntityId, tenantId, userId } from '@pap/domain';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import {
   accessManagementEvent,
@@ -15,6 +18,93 @@ import {
 } from './schema.js';
 
 type Database = ReturnType<typeof connectDatabase>['db'];
+
+/**
+ * Autorytatywne źródło faktów dla serwerowego autoryzatora administracyjnego (createTenantAccessManagementAuthorizer).
+ * Pobiera bieżące członkostwo aktora, jego własne granty oraz członkostwo docelowe w żądanym tenancie.
+ */
+export class PostgresAccessManagementAuthorizationDataSource implements AccessManagementAuthorizationDataSource {
+  constructor(private readonly db: Pick<Database, 'select'>) {}
+
+  async getAuthorizationFacts(
+    actor: AccessManagementActor,
+    command: AccessManagementCommand,
+  ): Promise<AccessManagementAuthorizationFacts> {
+    try {
+      const memberships = await this.db
+        .select()
+        .from(tenantMembership)
+        .where(
+          and(
+            eq(tenantMembership.tenantId, command.tenantId),
+            inArray(tenantMembership.userId, [actor.userId, command.userId]),
+          ),
+        );
+
+      const actorMembershipRow = memberships.find((row) => row.userId === actor.userId);
+      const targetMembershipRow = memberships.find((row) => row.userId === command.userId);
+
+      const actorGrantsRows = await this.db
+        .select()
+        .from(companyAccessGrant)
+        .where(
+          and(
+            eq(companyAccessGrant.tenantId, command.tenantId),
+            eq(companyAccessGrant.userId, actor.userId),
+          ),
+        );
+
+      let targetGrant: AccessManagementAuthorizationFacts['targetGrant'] = null;
+      if (command.kind === 'revoke_grant') {
+        const [grantRow] = await this.db
+          .select({
+            legalEntityId: companyAccessGrant.legalEntityId,
+            action: companyAccessGrant.action,
+          })
+          .from(companyAccessGrant)
+          .where(
+            and(
+              eq(companyAccessGrant.tenantId, command.tenantId),
+              eq(companyAccessGrant.userId, command.userId),
+              eq(companyAccessGrant.grantId, command.grantId),
+            ),
+          );
+        if (grantRow) {
+          targetGrant = {
+            legalEntityId: legalEntityId(grantRow.legalEntityId),
+            action: grantRow.action,
+          };
+        }
+      }
+
+      return {
+        actorMembership: actorMembershipRow
+          ? {
+              ...actorMembershipRow,
+              tenantId: tenantId(actorMembershipRow.tenantId),
+              userId: userId(actorMembershipRow.userId),
+            }
+          : null,
+        actorGrants: actorGrantsRows.map((grantRow) => ({
+          ...grantRow,
+          tenantId: tenantId(grantRow.tenantId),
+          userId: userId(grantRow.userId),
+          legalEntityId: legalEntityId(grantRow.legalEntityId),
+        })),
+        targetMembership: targetMembershipRow
+          ? {
+              ...targetMembershipRow,
+              tenantId: tenantId(targetMembershipRow.tenantId),
+              userId: userId(targetMembershipRow.userId),
+            }
+          : null,
+        targetGrant,
+      };
+    } catch {
+      throw new Error('Źródło danych autoryzacji administracyjnej jest niedostępne.');
+    }
+  }
+}
 
 /** Zaufany adapter serwerowy; wywoływać przez manageAccess, nigdy bezpośrednio z transportu. */
 export class PostgresAccessManagementStore implements AccessManagementStore {

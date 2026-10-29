@@ -12,3 +12,11 @@ export type {
   TenantMembership,
   TenantRole,
 } from './tenant-authorization.js';
+export { decideAccessManagementAuthorization } from './access-management-authorization.js';
+export type {
+  AccessManagementAuthorizationDecision,
+  AccessManagementCommandKind,
+  AccessManagementGrantScope,
+  AccessManagementRevokedGrantScope,
+  DecideAccessManagementAuthorizationInput,
+} from './access-management-authorization.js';
