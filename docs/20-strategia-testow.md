@@ -7,11 +7,11 @@
 - testy jednostkowe i integracyjne PostgreSQL dla migracji `0003_user-identity.sql`, `PostgresUserIdentityResolver`, `PostgresUserIdentityStore` i `PostgresAccessManagementAuthorizationDataSource` w `packages/db`,
 - testy kryptograficznego weryfikatora `JwksOidcAccessTokenVerifier` (RS256/ES256, algorytmy `none`/`HS256`, nagłówki `jku`/`jwk`/`x5u`/`x5c`/`crit`, pomylenie ID/Refresh/Logout Token z Access Tokenem, `iss`, `sub`, `aud`, `azp`, `exp`, `nbf`, `iat`, `scope`, rotacja JWKS z cooldownem, cofnięcie tokenu, redakcja błędów) oraz pełnego pipeline'u NestJS/Fastify z `CompanyActionAuthorizationGuard` w `apps/api`.
 
-Wszystkie testy PostgreSQL uruchamiają się obowiązkowo w izolowanej usłudze `pap_test` na GitHub Actions (`db-integration`).
+**Obowiązujący od 2026-10-29 tryb CI:** wszystkie testy integracyjne PostgreSQL i migracji uruchamiamy na serwerze Hetzner w odizolowanym, tymczasowym środowisku testowym, z limitami zasobów i bez dostępu do baz aplikacji. Automatyczne GitHub Actions jest czasowo wstrzymane. Zobacz [ADR-006](adr/006-tymczasowe-ci-hetzner.md) i [AGENTS.md](../AGENTS.md).
 
 ## Polecenia automatyczne
 
-CI uruchamia na pull requestach i pushach do `main`:
+Dostępne polecenia kontroli (dobierane do ryzyka zmiany; nie uruchamiać pełnego zestawu po każdej drobnej edycji):
 
 ```bash
 pnpm install --frozen-lockfile
@@ -25,7 +25,7 @@ pnpm test:e2e
 pnpm audit --audit-level high
 ```
 
-Osobny job skanuje pełną historię repozytorium pod kątem sekretów. Workflow ma minimalne uprawnienia odczytu i przypięte akcje GitHub do SHA.
+Przed odbiorem zmian wrażliwych można wykonać skan repozytorium pod kątem sekretów na izolowanym Hetznerze; dotychczasowy job GitHub Actions pozostaje zachowany jako konfiguracja do późniejszego przywrócenia, nie uruchamia się automatycznie.
 
 ## Zakres testów w szkielecie
 
@@ -40,7 +40,7 @@ Osobny job skanuje pełną historię repozytorium pod kątem sekretów. Workflow
 - **Web → API E2E:** przeglądarka sprawdza działające połączenie z lokalnym Nest/Fastify API, stan UI po zatrzymaniu API oraz styl komponentu współdzielonego z `packages/ui`.
 - **MCP:** test klient-serwer przez transport in-memory i potwierdzenie, że serwer udostępnia wyłącznie narzędzie `system_status`; osobny proces uruchamia serwer przez STDIO.
 - **Granice architektoniczne (`pnpm test:arch`, uruchamiane także w `pnpm test`):** programowy test ESLint weryfikujący reguły `no-restricted-imports` z `eslint.config.mjs` — blokowanie niedozwolonych zależności (m.in. `@nestjs/common`, `drizzle-orm` i `jose` w `packages/domain` oraz `packages/application`, `@pap/db` w `apps/web` oraz `apps/mcp`) oraz akceptację dozwolonych importów.
-- **PostgreSQL/migracje (`pnpm test:integration`):** osobny job CI używa świeżej `pap_test` w PostgreSQL 18. Lokalnie wymagany jest bezpośrednio zainstalowany PostgreSQL, bez Dockera. Każdy zestaw tworzy własny namespace danych, rozszerzenia i rejestru; samo `migrationsSchema` nie izoluje tabel. Testy sprawdzają kolejność i hashe `0000` → `0003`, osiem tabel modelu i rejestr, ponowienie bez zmiany obiektów, rollback migracji, upgrade `0000`–`0002` → `0003`, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter 6D-1, transakcyjny cykl dostępu 6D-R (w tym wyścigi na blokadach wiersza z `pg_blocking_pids`) oraz mapowanie tożsamości OIDC 6D-2 (case-sensitivity `sub`, izolacja wystawców, brak auto-provisioningu, wyłączenie konta i triggery ochronne SQL).
+- **PostgreSQL/migracje (`pnpm test:integration`):** izolowane CI na Hetznerze używa świeżej bazy testowej PostgreSQL 18. Lokalnie wymagany jest bezpośrednio zainstalowany PostgreSQL, bez Dockera. Każdy zestaw tworzy własny namespace danych, rozszerzenia i rejestru; samo `migrationsSchema` nie izoluje tabel. Testy sprawdzają kolejność i hashe `0000` → `0003`, osiem tabel modelu i rejestr, ponowienie bez zmiany obiektów, rollback migracji, upgrade `0000`–`0002` → `0003`, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter 6D-1, transakcyjny cykl dostępu 6D-R (w tym wyścigi na blokadach wiersza z `pg_blocking_pids`) oraz mapowanie tożsamości OIDC 6D-2 (case-sensitivity `sub`, izolacja wystawców, brak auto-provisioningu, wyłączenie konta i triggery ochronne SQL).
 - **DB bez PostgreSQL (`pnpm test`):** konfiguracja odrzuca `production`, hosty zdalne, niewłaściwe konta/bazy i błędne adresy; testy namespace, CLI, łańcucha migracji `0000`–`0003` oraz jednostkowe testy builderów Drizzle dla `PostgresTenantAuthorizationDataSource`, `PostgresAccessManagementStore` i `PostgresUserIdentityResolver` / `PostgresUserIdentityStore`.
 
 Testy 6D-2 potwierdzają serwerową weryfikację tokenów OIDC, mapowanie tożsamości i egzekwowanie autoryzacji w pipeline HTTP, lecz nie obejmują jeszcze interaktywnego logowania w przeglądarce (PKCE/sesja), ograniczonej roli runtime DB, polityk PostgreSQL RLS ani atomowego powiązania decyzji z operacją na danych biznesowych (zakres 6D-3).
@@ -49,8 +49,8 @@ Testy 6D-2 potwierdzają serwerową weryfikację tokenów OIDC, mapowanie tożsa
 
 `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm test`, `pnpm build`, testy granic i `pnpm test:e2e` nie wymagają PostgreSQL. E2E uruchamia wyłącznie lokalny frontend/backend. Także `pnpm dev` i `pnpm db:generate` działają bez bazy; migracje nie są zależnością startu aplikacji.
 
-Tylko `pnpm db:migrate` oraz `pnpm test:integration` wymagają działającego PostgreSQL. Przygotowanie oddzielnych kont/baz i instrukcja Windows/PowerShell: [19 — przewodnik developera](19-przewodnik-developera.md#postgresql-lokalnie-bez-dockera). Testów integracyjnych nie poprzedzaj ręczną migracją `pap_test`: wymagają bazy bez zastanego `btree_gist` i nie usuwają go na potrzeby testu. W CI baza jest świeża.
+Tylko `pnpm db:migrate` oraz `pnpm test:integration` wymagają działającego PostgreSQL. Przygotowanie oddzielnych kont/baz i instrukcja Windows/PowerShell: [19 — przewodnik developera](19-przewodnik-developera.md#postgresql-lokalnie-bez-dockera). Testów integracyjnych nie poprzedzaj ręczną migracją `pap_test`: wymagają bazy bez zastanego `btree_gist` i nie usuwają go na potrzeby testu. W CI na Hetznerze wymagana jest świeża baza testowa; nigdy nie używaj istniejącej bazy aplikacji.
 
-Uruchom dostępne kontrole przed review. W opisie PR podaj oddzielnie wyniki lokalne i CI dla konkretnego commita. Jeśli PostgreSQL lokalnie nie jest dostępny, nie instaluj go automatycznie i nie oznaczaj testu integracyjnego jako lokalnie zaliczonego. Izolowana usługa PostgreSQL w CI jest dozwolona przez [ADR-005](adr/005-rozwoj-lokalny.md).
+Przed review uruchom minimalne celowane kontrole. Przed scaleniem zmian krytycznych (autoryzacja, migracje, RLS) wymagaj odpowiedniej walidacji na Hetznerze, którą może wykonać osobny agent testowy. W opisie PR podaj oddzielnie faktyczne wyniki lokalne i wyniki CI Hetzner dla konkretnego SHA; nie oznaczaj niewykonanych testów jako zaliczonych. Użycie Hetznera do izolowanego CI opisuje [ADR-006](adr/006-tymczasowe-ci-hetzner.md).
 
 Każda zmiana reguł prawnych wymaga osobnych testów referencyjnych, dat obowiązywania, źródła urzędowego i przeglądu eksperta — sam szkielet nie implementuje takich reguł.
