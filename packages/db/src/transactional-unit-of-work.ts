@@ -89,6 +89,8 @@ export class PostgresTransactionalUnitOfWork implements CompanyActionUnitOfWork<
                 ? { legalEntityId: sessionContext.legalEntityId }
                 : {}),
               action,
+              ...(sessionContext.operationId ? { operationId: sessionContext.operationId } : {}),
+              ...(sessionContext.decisionAt ? { decisionAt: sessionContext.decisionAt } : {}),
             });
             await applyLocalRlsSessionContext(tx, sessionContext);
           },

@@ -21,7 +21,14 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     NOT has_schema_privilege('public', 'CREATE') AND
     NOT has_table_privilege('security_context_key', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
     NOT has_table_privilege('security_decision_event', 'SELECT,UPDATE,DELETE,TRUNCATE') AND
-    NOT has_table_privilege('access_management_event', 'UPDATE,DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('access_management_event', 'INSERT,UPDATE') AND
+    NOT has_table_privilege('access_management_event', 'DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('company_access_grant', 'INSERT') AND
+    NOT has_column_privilege('company_access_grant', 'revoked_at', 'UPDATE') AND
+    NOT has_column_privilege('tenant_membership', 'status', 'UPDATE') AND
+    NOT has_column_privilege('tenant_membership', 'valid_from', 'UPDATE') AND
+    NOT has_column_privilege('tenant_membership', 'valid_until', 'UPDATE') AND
+    has_function_privilege('pap_execute_access()', 'EXECUTE') AND
     (SELECT count(*) = 11 AND bool_and(c.relrowsecurity AND c.relforcerowsecurity AND c.relowner <> r.oid)
       FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace
         AND c.relname IN ('tenant','legal_entity','tenant_membership','entity_profile_version',
