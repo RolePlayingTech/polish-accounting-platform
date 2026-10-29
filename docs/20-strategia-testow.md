@@ -1,5 +1,7 @@
 # 20. Strategia testów i aktualna walidacja
 
+> Polityka implementacji 6D-3 (2026-10-29): agent implementacyjny uruchamia celowane testy i kontrolę typów po logicznym fragmencie pracy. Pełny odbiór regresji, PostgreSQL/RLS i współbieżności wykonuje osobny agent walidacyjny przed merge krytycznych Draft PR. Nie powtarzamy pełnego zestawu po drobnych zmianach ani ręcznie zestawu już wykonywanego przez CI. Obowiązuje nowsza decyzja właściciela z PR #29: tymczasowe CI na izolowanym Hetznerze, bez uruchamiania GitHub Actions. Niewykonane testy są nieweryfikowane. Nie wymagamy lokalnej instalacji DB: można użyć uprzednio odizolowanych zasobów Hetznera (`ssh hetzner`), po kontroli usług, zasobów i limitów ADR-006; baza uruchomionego stagingu jest wykluczona. Bez izolowanego PostgreSQL testy integracyjne pozostają do późniejszej walidacji na izolowanym Hetznerze.
+
 **Aktualizacja 6D-2 (2026-10-28):** po [testach lifecycle 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) [etap 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) rozszerza walidację o:
 
 - testy czystej polityki autoryzacji administracyjnej `decideAccessManagementAuthorization` w `packages/domain` (izolacja tenanta, zakaz self-escalation dla każdej roli, hierarchia ról i granice delegacji `tenant_admin`),

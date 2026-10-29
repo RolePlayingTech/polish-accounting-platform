@@ -1,5 +1,7 @@
 # 19. Przewodnik developera
 
+> Aktualny model pracy (2026-10-29): rozwój lokalny bez DB oraz prywatny staging techniczny `https://ksiegowosc.roleplayingtech.com` przez `ssh hetzner`, zgodnie z ADR-006. Historyczne wzmianki „wyłącznie lokalnie” poniżej dotyczą etapu ADR-005. Nie wymagamy PostgreSQL na komputerze właściciela. Testy serwerowe wykonujemy tylko na już wydzielonych zasobach testowych, nigdy na bazie działającego stagingu. Brak takich zasobów oznacza test nieweryfikowany i przekazanie do etapu walidacji na izolowanym Hetznerze. Osobna zgoda obowiązuje dla migracji, administracji i deploymentu stagingu. Buildy na współdzielonym Hetznerze są zabronione; obowiązują limity ADR-006. Nie instalujemy automatycznie usług.
+
 Ten dokument opisuje szkielet z Issue #5 oraz pakiety DB/autoryzacji 6A/6B/6C/6D-1/6D-R/6D-2 z Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B i warstwa serwerowa [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) nie wystawiają jeszcze publicznych operacji księgowych ani interaktywnego logowania w przeglądarce; decyzje i ograniczenia opisują [model 6B](22-schemat-tenantow-6b.md), [cykl 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) i [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md).
 
 ## Wymagania

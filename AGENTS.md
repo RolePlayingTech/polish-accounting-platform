@@ -31,6 +31,30 @@ Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający 
 8. W API, UI i MCP obowiązuje jedna i ta sama autoryzacja; każdy tenant jest izolowany.
 9. Dokumentacja to plan, nie dowód, że system realizuje daną funkcję.
 
+## Środowiska pracy
+
+- Istnieje prywatny staging techniczny na Hetznerze, dostęp przez `ssh hetzner`.
+- Kanoniczna domena: `https://ksiegowosc.roleplayingtech.com`, HTTPS i HTTP Basic Auth.
+- To nie jest produkcja księgowa; wyłącznie prywatny użytek i dane syntetyczne, bez prawdziwych rozliczeń.
+- Działające Web/API nie dowodzą uruchomienia PostgreSQL. Najpierw sprawdź usługi i zasoby.
+- Testy wymagające serwera można wykonywać na uprzednio wydzielonych, izolowanych zasobach testowych Hetznera. Nie używaj bazy działającego stagingu ani danych innych usług.
+- Nie wymagamy lokalnej instalacji bazy na komputerze właściciela. Rozwój lokalny bez DB pozostaje dostępny; ADR-005 opisuje również historyczny etap local-only, rozszerzony przez ADR-006.
+- Przed obciążającą operacją sprawdź limity ADR-006. Pełne buildy uruchamiaj tylko w zatwierdzonym, izolowanym środowisku CI z limitami zasobów na Hetznerze, nigdy w działającym stagingu ani bezpośrednio na współdzielonym hoście. Gdy brak takiego środowiska, oznacz build jako niewykonany. Nie instaluj automatycznie usług systemowych.
+
+## Polityka pracy agentów
+
+- Agent implementacyjny wykonuje minimalne testy celowane zmienionego modułu, scenariusze negatywne, kontrolę typów i statyczny przegląd migracji.
+- Osobny etap/agenta walidacyjnego obowiązuje pełna kontrola regresji, integracji i bezpieczeństwa. Nie uruchamiaj pełnego zestawu wielokrotnie po drobnych zmianach.
+- Niewykonany test oznaczaj jako **nieweryfikowany**, nigdy jako zaliczony. Podaj komendy i wymagania środowiska w przekazaniu.
+- Krytyczne PR-y pozostają Draft do pełnego odbioru przed scaleniem. Zgodnie z nowszą decyzją właściciela (#29) CI wykonujemy na izolowanym Hetznerze; nie uruchamiaj, nie wznawiaj ani nie zmieniaj wyzwalaczy GitHub Actions bez odrębnej decyzji.
+
+## Granice operacyjne
+
+- Zakaz ingerencji w produkcję i w usługi innych projektów.
+- Brak automatycznego deploymentu. Wdrożenia, migracje i administracja działającego stagingu wymagają osobnej zgody właściciela.
+- Nie wykonuj destrukcyjnych zmian istniejących danych, nie zmieniaj firewalla, Nginx, DNS ani certyfikatów bez odrębnej zgody.
+- Zgoda na odczytową kontrolę lub izolowany test nie jest zgodą na deployment ani migrację stagingu.
+
 ## Zasady projektowania interfejsu
 - Przed tworzeniem wielu nowych ekranów pokaż 2–3 warianty i wyjaśnij rekomendację; masz swobodę zaproponowania innego, lepszego kierunku.
 - Priorytetem są zadania użytkownika, czytelność tabel/kwot, prosty język polski, dostępność i stany błędów, a nie dekoracje lub marketing AI.
