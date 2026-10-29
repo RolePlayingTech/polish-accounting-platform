@@ -491,6 +491,58 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
           reason: 'membership_inactive',
         }),
       ]);
+
+      // Potwierdzony rollback z odroczonego constraint triggera na COMMIT (np. 23514 w SEC-01/02)
+      recordedAudit.length = 0;
+      const deferredRollbackStore: AccessManagementStore = {
+        recordDeniedDecision: async (event) => {
+          recordedAudit.push(event);
+        },
+        execute: vi.fn(),
+        async runInTransaction(work) {
+          const tx: AccessManagementTransaction = {
+            verifyActorAccount: async () => true,
+            getAuthorizationFacts: vi.fn(),
+            applySessionContext: async () => {},
+            executeAuthorized: async (cmd) => ({
+              ok: true,
+              receipt: {
+                operationId: cmd.operationId,
+                occurredAt: '2026-10-29T12:00:00.000Z',
+                changed: true,
+                grantId: null,
+              },
+            }),
+          };
+          await work(tx);
+          throw new ConfirmedTransactionRollbackError(
+            Object.assign(new Error('Niezgodny receipt lub brak audytu'), { code: '23514' }),
+          );
+        },
+      };
+
+      expect(
+        await manageAccess(command, {
+          store: deferredRollbackStore,
+          actors: { getVerifiedActor: async () => actor },
+          authorizer: { authorize: async () => true },
+        }),
+      ).toEqual({
+        ok: false,
+        reason: 'access_management_unavailable',
+      });
+      expect(recordedAudit).toEqual([
+        expect.objectContaining({
+          operationId: command.operationId,
+          actorId: actor.userId,
+          targetUserId: command.userId,
+          tenantId: command.tenantId,
+          kind: 'access',
+          decision: 'allow',
+          outcome: 'rolled_back',
+          reason: 'access_management_unavailable',
+        }),
+      ]);
     });
 
     it('nie zapisuje fałszywego rolled_back po utracie potwierdzenia COMMIT i zachowuje idempotencję przy ponowieniu z tym samym operationId', async () => {

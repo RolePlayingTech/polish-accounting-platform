@@ -562,6 +562,64 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
           reason: 'authorization_audit_unavailable',
         }),
       ]);
+
+      // 3) Potwierdzony rollback z odroczonego constraint triggera na COMMIT (np. 23514 SEC-01/02)
+      persistedAudit.length = 0;
+      const uowDeferredConstraintRollback: CompanyActionUnitOfWork = {
+        recordDeniedDecision: async (event) => {
+          persistedAudit.push(event);
+        },
+        async runCompanyActionInTransaction(work) {
+          const stagedTxAudit: SecurityAuditEvent[] = [];
+          const tx: CompanyActionTransactionContext = {
+            verifyActorAccount: async () => true,
+            getLockedFacts: async () => activeFacts(),
+            applySessionContext: async () => {},
+            recordAuthorizationDecision: async (event) => {
+              stagedTxAudit.push(event);
+            },
+          };
+          await work(tx);
+          // Serwer PG wycofał zarówno stagedTxAudit jak i efekt biznesowy przed RecordTransactionCommit (23514)
+          stagedTxAudit.length = 0;
+          stagedEffect = false;
+          throw new ConfirmedTransactionRollbackError(
+            Object.assign(new Error('Brak atomowego audytu operacji'), { code: '23514' }),
+          );
+        },
+      };
+
+      const deferredFailResult = await executeAuthorizedCompanyAction(
+        {
+          requestId: id(203),
+          operationId: id(303),
+          rawBearerToken: 'valid-jwt',
+          tenantId: TENANT_A,
+          legalEntityId: ENTITY_A1,
+          action: 'write',
+        },
+        { ...validAuthDeps(), unitOfWork: uowDeferredConstraintRollback },
+        async () => {
+          stagedEffect = true;
+          return { ok: true };
+        },
+      );
+
+      expect(stagedEffect).toBe(false);
+      expect(deferredFailResult).toEqual({
+        allowed: false,
+        status: 'forbidden',
+        reason: 'authorization_data_unavailable',
+      });
+      expect(persistedAudit).toEqual([
+        expect.objectContaining({
+          requestId: id(203),
+          operationId: id(303),
+          decision: 'allow',
+          outcome: 'rolled_back',
+          reason: 'operation_failed',
+        }),
+      ]);
     });
 
     it('przy utracie potwierdzenia po skutecznym COMMIT nie tworzy fałszywego rolled_back, nie ponawia callbacku i obsługuje ponowienie idempotentnie', async () => {

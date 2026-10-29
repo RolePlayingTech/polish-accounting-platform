@@ -9,6 +9,7 @@ import {
 } from '@pap/application';
 import { legalEntityId, tenantId, userId } from '@pap/domain';
 import { and, asc, eq, sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import type { connectDatabase } from './client.js';
 import {
   appUser,
@@ -68,12 +69,28 @@ function isPreCommitAbortCarrier(error: unknown): error is PreCommitAbortCarrier
 }
 
 /**
+ * Serwer PostgreSQL wykonuje odroczone triggery i więzy integralności (`23xxx`, w tym `23514`
+ * z `DEFERRABLE INITIALLY DEFERRED` audytu w 0005 / SEC-01/02) oraz walidację serializacji (`40xxx`)
+ * PRZED `RecordTransactionCommit()`, a `postgres.js` konstruuje `PostgresError` wyłącznie po
+ * odebraniu protokołowego `ErrorResponse` + `ReadyForQuery('I')`. Dla błędów transportowych oraz
+ * klas bez gwarancji wycofania przed zapisem WAL (`08xxx`, `53xxx`, `57xxx`, `58xxx`, `XXxxx`)
+ * zwraca `false`, zachowując fail-closed `TransactionOutcomeUnknownError`.
+ */
+function isServerConfirmedCommitRollback(error: unknown): boolean {
+  return (
+    error instanceof postgres.PostgresError &&
+    typeof error.code === 'string' &&
+    /^(?:23|40)[0-9A-Z]{3}$/.test(error.code)
+  );
+}
+
+/**
  * Wykonuje pracę w jednej transakcji PostgreSQL i rozróżnia trzy stany zakończenia (SEC-03):
  * 1) potwierdzony COMMIT (`db.transaction` rozwiązało się po `commitRequested = true`),
- * 2) potwierdzony ROLLBACK przed fazą COMMIT (zwraca `result` przy `shouldCommit(result) === false`
- *    lub rzuca `ConfirmedTransactionRollbackError` dla wyjątku z `work`),
- * 3) niepewny wynik zakończenia transakcji (`TransactionOutcomeUnknownError`), m.in. gdy błąd
- *    wystąpił po wejściu w fazę `COMMIT` albo gdy `ROLLBACK` nie został potwierdzony.
+ * 2) potwierdzony ROLLBACK (przed fazą COMMIT z potwierdzonym `ROLLBACK` albo odrzucenie `COMMIT`
+ *    przez odroczony constraint/serializację `23xxx`/`40xxx` potwierdzone przez `ErrorResponse` + `ReadyForQuery`),
+ * 3) niepewny wynik zakończenia transakcji (`TransactionOutcomeUnknownError`), m.in. gdy połączenie
+ *    lub potwierdzenie zostało utracone w fazie `COMMIT` albo `ROLLBACK`.
  */
 export async function runManagedTransaction<TResult>(
   db: Pick<Database, 'transaction'>,
@@ -104,6 +121,9 @@ export async function runManagedTransaction<TResult>(
         return error.originalError.value;
       }
       throw new ConfirmedTransactionRollbackError(error.originalError);
+    }
+    if (commitRequested && isServerConfirmedCommitRollback(error)) {
+      throw new ConfirmedTransactionRollbackError(error);
     }
     throw new TransactionOutcomeUnknownError(
       isPreCommitAbortCarrier(error) ? error.originalError : error,

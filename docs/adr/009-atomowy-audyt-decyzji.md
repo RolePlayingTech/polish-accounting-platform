@@ -10,10 +10,14 @@ Rollback chronionej operacji usuwa także jej zwykły INSERT audytu. Dlatego:
 - Deny oraz allow zakończone **potwierdzonym** rollbackiem (`rolled_back`) zapisujemy
   osobną krótką TX dopiero po zwolnieniu połączenia/blokad poprzedniej. Działa także z pulą max=1.
 - Nie wolno utożsamiać dowolnego odrzucenia Promise transakcji po autoryzacji z potwierdzonym
-  rollbackiem (SEC-03). Jeśli błąd wystąpił po wejściu w fazę `COMMIT` albo baza nie
-  potwierdziła wykonania `ROLLBACK`, wynik zakończenia transakcji jest niepewny:
+  rollbackiem (SEC-03). Jeśli połączenie lub potwierdzenie zostało utracone po wejściu w fazę
+  `COMMIT`, wystąpił błąd bez gwarancji wycofania przed zapisem WAL albo baza nie potwierdziła
+  wykonania `ROLLBACK`, wynik zakończenia transakcji jest niepewny:
   aplikacja zwraca fail-closed `transaction_outcome_unknown` (HTTP 503), nie ponawia
   automatycznie callbacku biznesowego i nie zapisuje fałszywego `allow/rolled_back`.
+  Wyjątkiem w fazie `COMMIT` jest wyłącznie protokołowy `PostgresError` klas `23xxx`/`40xxx`
+  (m.in. `23514` z odroczonych triggerów integralności audytu), który PostgreSQL podnosi przed
+  `RecordTransactionCommit()` po deterministycznym wycofaniu transakcji (`allow/rolled_back`).
   Gdy DB jest dostępna na świeżym połączeniu, utrwala jawny wpis `allow/outcome_unknown`
   (`reason = 'transaction_outcome_unknown'`, bez FK `access_management_operation_id`).
   Jeżeli serwer PostgreSQL zdążył wykonać `COMMIT` przed utratą potwierdzenia, w bazie

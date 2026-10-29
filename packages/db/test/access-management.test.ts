@@ -401,6 +401,40 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A — rzeczywisty builder i k
             () => true,
           ),
         ).rejects.toBeInstanceOf(TransactionOutcomeUnknownError);
+
+        // 4) Odroczony constraint trigger PostgreSQL na COMMIT (23514 PostgresError) -> ConfirmedTransactionRollbackError
+        const PostgresErrorCtor = client.PostgresError as unknown as new (fields: {
+          message: string;
+          code: string;
+        }) => Error;
+        onCommit = async () => {
+          throw new PostgresErrorCtor({
+            message: 'Brak atomowego audytu operacji',
+            code: '23514',
+          });
+        };
+        await expect(
+          runManagedTransaction(
+            db,
+            async () => ({ ok: true }),
+            () => true,
+          ),
+        ).rejects.toBeInstanceOf(ConfirmedTransactionRollbackError);
+
+        // 5) Błąd serwera na COMMIT bez gwarancji wycofania przed zapisem WAL (57P01) -> TransactionOutcomeUnknownError
+        onCommit = async () => {
+          throw new PostgresErrorCtor({
+            message: 'terminating connection due to administrator command',
+            code: '57P01',
+          });
+        };
+        await expect(
+          runManagedTransaction(
+            db,
+            async () => ({ ok: true }),
+            () => true,
+          ),
+        ).rejects.toBeInstanceOf(TransactionOutcomeUnknownError);
       } finally {
         vi.restoreAllMocks();
         await client.end({ timeout: 1 });

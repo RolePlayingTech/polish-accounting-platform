@@ -362,7 +362,7 @@ async function manageAccessCore(
       };
     }
 
-    if (!audit.commitPhaseEntered && isConfirmedTransactionRollbackError(error)) {
+    if (isConfirmedTransactionRollbackError(error)) {
       audit.resolution = 'rolled_back';
       return {
         ok: false,
