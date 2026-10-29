@@ -112,6 +112,9 @@ describe('Kontrakt plików migracji', () => {
       'FOR byte_index IN 0..31',
       'pap_access_event_insert',
       'access_management_operation_id',
+      "'outcome_unknown'",
+      "'transaction_outcome_unknown'",
+      'access_management_operation_id IS NULL',
     ]) {
       expect(migration).toContain(fragment);
     }

@@ -1,5 +1,7 @@
 import {
+  ConfirmedTransactionRollbackError,
   freezeTransactionActor,
+  TransactionOutcomeUnknownError,
   type LockedTenantAuthorizationFacts,
   type TenantAuthorizationQuery,
   type TransactionActor,
@@ -7,6 +9,7 @@ import {
 } from '@pap/application';
 import { legalEntityId, tenantId, userId } from '@pap/domain';
 import { and, asc, eq, sql } from 'drizzle-orm';
+import postgres from 'postgres';
 import type { connectDatabase } from './client.js';
 import {
   appUser,
@@ -20,6 +23,7 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 export type PostgresTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 const ROLLBACK_BRAND = Symbol('pap.rollback_with_value');
+const PRE_COMMIT_ABORT_BRAND = Symbol('pap.pre_commit_abort');
 
 class RollbackTransactionWithValue<T> extends Error {
   readonly [ROLLBACK_BRAND] = true;
@@ -27,6 +31,15 @@ class RollbackTransactionWithValue<T> extends Error {
   constructor(readonly value: T) {
     super('Transakcja wycofana po kontrolowanej odmowie.');
     this.name = 'RollbackTransactionWithValue';
+  }
+}
+
+class PreCommitAbortCarrier extends Error {
+  readonly [PRE_COMMIT_ABORT_BRAND] = true;
+
+  constructor(readonly originalError: unknown) {
+    super('Przerwanie transakcji przed wysłaniem COMMIT.');
+    this.name = 'PreCommitAbortCarrier';
   }
 }
 
@@ -39,33 +52,104 @@ function isRollbackWithValue<T>(error: unknown): error is RollbackTransactionWit
   );
 }
 
+function isPreCommitAbortCarrier(error: unknown): error is PreCommitAbortCarrier {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    PRE_COMMIT_ABORT_BRAND in error &&
+    (error as { readonly [PRE_COMMIT_ABORT_BRAND]?: unknown })[PRE_COMMIT_ABORT_BRAND] === true
+  );
+}
+
+/**
+ * Kody SQLSTATE, dla których serwerowy `ErrorResponse` o `severity === 'ERROR'` podczas `COMMIT`
+ * potwierdza wycofanie transakcji przez PostgreSQL przed zapisem rekordu COMMIT (np. odroczony
+ * constraint trigger `DEFERRABLE INITIALLY DEFERRED` lub konflikt serializacji `40001`).
+ * Świadomie wyklucza `40003` (`statement_completion_unknown`), klasę `08***` (w tym `08007`
+ * `transaction_resolution_unknown`), `57***`, `58***`, `XX***` oraz poziomy `FATAL`/`PANIC`.
+ */
+const CONFIRMED_SERVER_ROLLBACK_SQLSTATES = new Set<string>([
+  '23000',
+  '23001',
+  '23502',
+  '23503',
+  '23505',
+  '23514',
+  '23P01',
+  '25P02',
+  '2D000',
+  '40000',
+  '40001',
+  '40002',
+  '40P01',
+  '42501',
+  'P0001',
+]);
+
+function isServerConfirmedCommitAbort(error: unknown): boolean {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current !== null && typeof current === 'object'; depth += 1) {
+    if (
+      current instanceof postgres.PostgresError &&
+      (current as { readonly severity?: unknown }).severity === 'ERROR' &&
+      typeof current.code === 'string' &&
+      CONFIRMED_SERVER_ROLLBACK_SQLSTATES.has(current.code)
+    ) {
+      return true;
+    }
+    current = 'cause' in current ? (current as { readonly cause?: unknown }).cause : null;
+  }
+  return false;
+}
+
 /**
  * Wykonuje pracę w jednej transakcji PostgreSQL i wymusza fizyczny ROLLBACK,
  * gdy predykat `shouldCommit(result)` zwróci `false` (np. odmowa autoryzacji lub walidacji).
  * Zwalnia wszystkie blokady wierszowe, czyści lokalne zmienne GUC (`set_config(..., true)`)
  * i zwraca połączenie do puli w czystym stanie bez wycieku mutacji.
+ * Rozróżnia potwierdzony ROLLBACK od niepewnego wyniku zakończenia transakcji (np. utrata
+ * potwierdzenia po wysłaniu COMMIT lub zerwanie połączenia przed potwierdzeniem ROLLBACK).
  */
 export async function runManagedTransaction<TResult>(
   db: Pick<Database, 'transaction'>,
   work: (tx: PostgresTransaction) => Promise<TResult>,
   shouldCommit: (result: TResult) => boolean,
 ): Promise<TResult> {
+  let workEntered = false;
+  let commitRequested = false;
   try {
     return await db.transaction(
       async (tx) => {
-        const result = await work(tx);
-        if (!shouldCommit(result)) {
-          throw new RollbackTransactionWithValue(result);
+        workEntered = true;
+        let result: TResult;
+        try {
+          result = await work(tx);
+        } catch (workError) {
+          throw new PreCommitAbortCarrier(workError);
         }
+        if (!shouldCommit(result)) {
+          throw new PreCommitAbortCarrier(new RollbackTransactionWithValue(result));
+        }
+        commitRequested = true;
         return result;
       },
       { isolationLevel: 'read committed' },
     );
   } catch (error) {
-    if (isRollbackWithValue<TResult>(error)) {
-      return error.value;
+    if (!workEntered) {
+      throw new ConfirmedTransactionRollbackError(error);
     }
-    throw error;
+    if (!commitRequested && isPreCommitAbortCarrier(error)) {
+      if (isRollbackWithValue<TResult>(error.originalError)) {
+        return error.originalError.value;
+      }
+      throw new ConfirmedTransactionRollbackError(error.originalError);
+    }
+    if (commitRequested && isServerConfirmedCommitAbort(error)) {
+      throw new ConfirmedTransactionRollbackError(error);
+    }
+    const cause = isPreCommitAbortCarrier(error) ? error.originalError : error;
+    throw new TransactionOutcomeUnknownError(cause);
   }
 }
 

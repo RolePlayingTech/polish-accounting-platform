@@ -6,7 +6,13 @@ import {
   manageAccess,
   type AccessManagementAuthorizationDataSource,
   type AccessManagementCommand,
+  type AccessManagementReceipt,
 } from '../src/access-management.js';
+import {
+  ConfirmedTransactionRollbackError,
+  TransactionOutcomeUnknownError,
+} from '../src/transactional-unit-of-work.js';
+import { SecurityAuditUnavailableError, type SecurityAuditEvent } from '../src/security-audit.js';
 
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
 const command: AccessManagementCommand = {
@@ -81,21 +87,38 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
     await manageAccess(malicious, deps);
     expect(deps.store.execute).toHaveBeenCalledWith(command, actor);
   });
-  it.each(['actors', 'authorizer', 'store'] as const)(
-    'awaria %s jest fail-closed bez surowego wyjątku',
+  it.each(['actors', 'authorizer', 'store_rolled_back', 'store_unconfirmed'] as const)(
+    'awaria %s jest fail-closed bez surowego wyjątku i bez fałszywego rolled_back',
     async (key) => {
       const deps = setup();
-      const fn =
-        key === 'actors'
-          ? deps.actors.getVerifiedActor
-          : key === 'authorizer'
-            ? deps.authorizer.authorize
-            : deps.store.execute;
-      fn.mockRejectedValue(new Error('SQL token synthetic-secret'));
+      if (key === 'actors') {
+        deps.actors.getVerifiedActor.mockRejectedValue(new Error('SQL token synthetic-secret'));
+      } else if (key === 'authorizer') {
+        deps.authorizer.authorize.mockRejectedValue(new Error('SQL token synthetic-secret'));
+      } else if (key === 'store_rolled_back') {
+        deps.store.execute.mockRejectedValue(
+          new ConfirmedTransactionRollbackError(new Error('SQL token synthetic-secret')),
+        );
+      } else {
+        deps.store.execute.mockRejectedValue(new Error('SQL token synthetic-secret'));
+      }
+
       expect(await manageAccess(command, deps)).toEqual({
         ok: false,
-        reason: 'access_management_unavailable',
+        reason:
+          key === 'store_unconfirmed'
+            ? 'transaction_outcome_unknown'
+            : 'access_management_unavailable',
       });
+      if (key === 'store_unconfirmed') {
+        expect(deps.store.recordDeniedDecision).toHaveBeenCalledWith(
+          expect.objectContaining({
+            decision: 'allow',
+            outcome: 'outcome_unknown',
+            reason: 'transaction_outcome_unknown',
+          }),
+        );
+      }
     },
   );
   it.each([
@@ -447,5 +470,192 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
 
     // Bez fallbackSource wywołanie autoryzatora poza transakcją jest fail-closed
     await expect(authorizer.authorize(actor, command)).resolves.toBe(false);
+  });
+
+  it('SEC-03: rozróżnia potwierdzony rollback od utraty potwierdzenia COMMIT i obsługuje idempotentne ponowienie z tym samym operationId', async () => {
+    const persistedEvents = new Map<string, AccessManagementReceipt>();
+    const auditLog: SecurityAuditEvent[] = [];
+    let simulateLostCommitAck = false;
+    let simulateServerDeferredAbort = false;
+    let failDiagnosticAuditOnce = false;
+    let executeCalls = 0;
+
+    const actors = { getVerifiedActor: vi.fn().mockResolvedValue(actor) };
+    const authorizer = { authorize: vi.fn().mockResolvedValue(true) };
+
+    const store = {
+      recordDeniedDecision: vi.fn(async (event: SecurityAuditEvent) => {
+        if (failDiagnosticAuditOnce) {
+          failDiagnosticAuditOnce = false;
+          throw new SecurityAuditUnavailableError();
+        }
+        auditLog.push(event);
+      }),
+      execute: vi.fn(),
+      runInTransaction: vi.fn(async (work) => {
+        let stagedReceipt: AccessManagementReceipt | null = null;
+        let stagedAllowEvent: SecurityAuditEvent | null = null;
+        const tx = {
+          verifyActorAccount: async () => true,
+          getAuthorizationFacts: vi.fn(),
+          executeAuthorized: async (cmd: AccessManagementCommand) => {
+            executeCalls += 1;
+            const existing = persistedEvents.get(cmd.operationId);
+            if (existing) {
+              stagedAllowEvent = {
+                requestId: cmd.operationId,
+                operationId: cmd.operationId,
+                accessManagementOperationId: cmd.operationId,
+                actorId: actor.userId,
+                targetUserId: cmd.userId,
+                tenantId: cmd.tenantId,
+                legalEntityId: null,
+                action: cmd.kind,
+                kind: 'access',
+                decision: 'allow',
+                outcome: 'committed',
+                reason: 'authorized_tenant_administration',
+              };
+              return { ok: true as const, receipt: existing };
+            }
+            stagedReceipt = {
+              operationId: cmd.operationId,
+              occurredAt: '2026-10-29T12:00:00.000Z',
+              changed: true,
+              grantId: null,
+            };
+            stagedAllowEvent = {
+              requestId: cmd.operationId,
+              operationId: cmd.operationId,
+              accessManagementOperationId: cmd.operationId,
+              actorId: actor.userId,
+              targetUserId: cmd.userId,
+              tenantId: cmd.tenantId,
+              legalEntityId: null,
+              action: cmd.kind,
+              kind: 'access',
+              decision: 'allow',
+              outcome: 'committed',
+              reason: 'authorized_tenant_administration',
+            };
+            return { ok: true as const, receipt: stagedReceipt };
+          },
+        };
+
+        const result = await work(tx);
+        if (!result.ok) {
+          return result;
+        }
+
+        if (simulateServerDeferredAbort) {
+          simulateServerDeferredAbort = false;
+          throw new ConfirmedTransactionRollbackError(
+            Object.assign(new Error('Brak atomowego audytu zmiany dostępu'), { code: '23514' }),
+          );
+        }
+
+        // COMMIT na serwerze utrwala receipt oraz atomowy allow/committed:
+        if (stagedReceipt) {
+          persistedEvents.set(stagedReceipt.operationId, stagedReceipt);
+        }
+        if (stagedAllowEvent) {
+          auditLog.push(stagedAllowEvent);
+        }
+
+        if (simulateLostCommitAck) {
+          simulateLostCommitAck = false;
+          throw new TransactionOutcomeUnknownError(
+            Object.assign(new Error('CONNECTION_CLOSED podczas COMMIT'), {
+              code: 'CONNECTION_CLOSED',
+            }),
+          );
+        }
+        return result;
+      }),
+    };
+
+    // 1) Odroczony błąd na COMMIT potwierdzony przez serwer -> allow/rolled_back
+    simulateServerDeferredAbort = true;
+    const deferredRollbackRes = await manageAccess(
+      { ...command, operationId: id(701) },
+      { store, actors, authorizer },
+    );
+    expect(deferredRollbackRes).toEqual({
+      ok: false,
+      reason: 'access_management_unavailable',
+    });
+    expect(persistedEvents.size).toBe(0);
+    expect(auditLog).toEqual([
+      expect.objectContaining({
+        operationId: id(701),
+        decision: 'allow',
+        outcome: 'rolled_back',
+        reason: 'access_management_unavailable',
+      }),
+    ]);
+
+    auditLog.length = 0;
+    executeCalls = 0;
+
+    // 2) Skuteczny COMMIT na serwerze + utrata potwierdzenia u klienta -> brak rolled_back, brak auto-replay
+    const opId = id(702);
+    simulateLostCommitAck = true;
+    const lostAckRes = await manageAccess(
+      { ...command, operationId: opId },
+      { store, actors, authorizer },
+    );
+    expect(executeCalls).toBe(1);
+    expect(lostAckRes).toEqual({
+      ok: false,
+      reason: 'transaction_outcome_unknown',
+    });
+    expect(persistedEvents.has(opId)).toBe(true);
+    expect(auditLog.some((e) => e.outcome === 'rolled_back')).toBe(false);
+    expect(auditLog).toEqual([
+      expect.objectContaining({
+        operationId: opId,
+        accessManagementOperationId: opId,
+        decision: 'allow',
+        outcome: 'committed',
+      }),
+      expect.objectContaining({
+        operationId: opId,
+        decision: 'allow',
+        outcome: 'outcome_unknown',
+        reason: 'transaction_outcome_unknown',
+      }),
+    ]);
+    expect(auditLog[1]!.accessManagementOperationId).toBeUndefined();
+
+    // 3) Jawne ponowienie tej samej operacji z tym samym operationId -> zwraca pierwotny receipt bez duplikacji mutacji
+    const retryRes = await manageAccess(
+      { ...command, operationId: opId },
+      { store, actors, authorizer },
+    );
+    expect(executeCalls).toBe(2);
+    expect(retryRes).toEqual({
+      ok: true,
+      receipt: {
+        operationId: opId,
+        occurredAt: '2026-10-29T12:00:00.000Z',
+        changed: true,
+        grantId: null,
+      },
+    });
+    expect(persistedEvents.size).toBe(1);
+    expect(auditLog.some((e) => e.outcome === 'rolled_back')).toBe(false);
+
+    // 4) Utrata potwierdzenia przy jednoczesnej niedostępności DB dla audytu diagnostycznego -> zachowuje transaction_outcome_unknown
+    simulateLostCommitAck = true;
+    failDiagnosticAuditOnce = true;
+    const outageRes = await manageAccess(
+      { ...command, operationId: id(703) },
+      { store, actors, authorizer },
+    );
+    expect(outageRes).toEqual({
+      ok: false,
+      reason: 'transaction_outcome_unknown',
+    });
+    expect(auditLog.some((e) => e.outcome === 'rolled_back')).toBe(false);
   });
 });

@@ -2,9 +2,11 @@ import { Bind, Controller, Get, Inject, Module, Post, Req, Res, UseGuards } from
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
+  ConfirmedTransactionRollbackError,
   createOidcAccessManagementActorSource,
   createTenantAccessManagementAuthorizer,
   manageAccess,
+  TransactionOutcomeUnknownError,
   type AccessManagementActor,
   type AccessManagementAuthorizationDataSource,
   type AccessManagementAuthorizationFacts,
@@ -183,6 +185,7 @@ class ControlledAuthState
   platformRoles: PlatformRoleAssignment[] = [];
   failIdentityResolution = false;
   failAuthorizationDataSource = false;
+  simulateLostCommitConfirmation = false;
   onAfterResolveIdentity: (() => void) | null = null;
   txCounter = 0;
   committedTransactions = 0;
@@ -198,6 +201,7 @@ class ControlledAuthState
     this.platformRoles = [];
     this.failIdentityResolution = false;
     this.failAuthorizationDataSource = false;
+    this.simulateLostCommitConfirmation = false;
     this.onAfterResolveIdentity = null;
     this.txCounter = 0;
     this.committedTransactions = 0;
@@ -343,13 +347,22 @@ class ControlledAuthState
       if (shouldCommit(result)) {
         this.committedTransactions += 1;
         this.executedOperations += 1;
+        if (this.simulateLostCommitConfirmation) {
+          this.simulateLostCommitConfirmation = false;
+          throw new TransactionOutcomeUnknownError(
+            new Error('SELECT secret_hex FROM security_context_key -- ECONNRESET po COMMIT'),
+          );
+        }
       } else {
         this.rolledBackTransactions += 1;
       }
       return result;
     } catch (error) {
+      if (error instanceof TransactionOutcomeUnknownError) {
+        throw error;
+      }
       this.rolledBackTransactions += 1;
-      throw error;
+      throw new ConfirmedTransactionRollbackError(error);
     }
   }
 
@@ -1102,5 +1115,49 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
     expect(state.committedTransactions).toBe(0);
     expect(state.rolledBackTransactions).toBe(2);
     expect(state.executedOperations).toBe(0);
+  });
+
+  it('SEC-03: executeHttpAuthorizedCompanyAction zwraca 503 bez fałszywego rolled_back i bez wycieku SQL, gdy po skutecznym COMMIT utracono potwierdzenie', async () => {
+    state.grants.push({
+      grantId: id(115),
+      tenantId: TENANT_A,
+      userId: USER_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write',
+      validFrom: VALID_FROM,
+      validUntil: null,
+      revokedAt: null,
+    });
+    state.simulateLostCommitConfirmation = true;
+
+    const token = await issueToken({ sub: 'Sub-User-A' });
+    const response = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).not.toContain('secret_hex');
+    expect(response.body).not.toContain('SELECT');
+    expect(response.body).not.toContain(token);
+    expect(state.committedTransactions).toBe(1);
+    expect(state.rolledBackTransactions).toBe(0);
+    expect(state.executedOperations).toBe(1);
+    expect(state.auditEvents).toEqual([
+      expect.objectContaining({
+        decision: 'allow',
+        outcome: 'committed',
+        reason: 'explicit_company_grant',
+      }),
+      expect.objectContaining({
+        decision: 'allow',
+        outcome: 'outcome_unknown',
+        reason: 'transaction_outcome_unknown',
+      }),
+    ]);
   });
 });

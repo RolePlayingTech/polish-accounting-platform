@@ -181,8 +181,12 @@ Nie uruchamiać Actions. Wyniki zapisać z SHA, wersją PG, izolacją, komendą 
 9. Bezpośrednie execute/executeAuthorized nie omijają polityki. Fałszowanie kind,
    grantId, dat, roli, aktora i tenant/company w SQL nie zmienia zatwierdzonej komendy.
 10. Atomowość: brak audytu na COMMIT, awaria jego INSERT oraz awaria samej operacji
-    wycofują efekt. Deny i allow/rolled_back pozostają poza rollbackiem głównej TX.
-    Awaria osobnego audytu daje audit_unavailable, nigdy sukces.
+    wycofują efekt. Deny i potwierdzone allow/rolled_back pozostają poza rollbackiem głównej TX.
+    Utrata potwierdzenia po wysłaniu COMMIT (lub niepotwierdzony ROLLBACK) nie może zapisać
+    fałszywego `allow/rolled_back` ani automatycznie ponowić callbacku — zwraca fail-closed
+    `transaction_outcome_unknown` (HTTP 503) i best-effort zapisuje `allow/outcome_unknown`
+    obok atomowego `allow/committed` (gdy serwer rzeczywiście zatwierdził TX). Awaria osobnego
+    audytu odmowy/rollbacku daje audit_unavailable, nigdy sukces.
 11. Idempotencja: powtórzenie potwierdzenia, konflikt payload/aktora/firmy, retry po
     utracie uprawnień; jeden efekt/access_management_event i osobne decyzje.
 12. Audyt: realny serwerowy aktor, preflight vs committed vs denied/rolled_back,

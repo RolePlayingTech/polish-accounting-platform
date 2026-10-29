@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   auditIdentifier,
+  SECURITY_AUDIT_OUTCOMES,
   SECURITY_AUDIT_REASONS,
   SecurityAuditUnavailableError,
   type SecurityAuditEvent,
@@ -34,7 +35,11 @@ export async function appendSecurityDecision(
       !actions.includes(event.action) ||
       !['company', 'access', 'preflight', 'transport'].includes(event.kind) ||
       !['allow', 'deny'].includes(event.decision) ||
-      !['committed', 'denied', 'rolled_back', 'preflight'].includes(event.outcome)
+      !(SECURITY_AUDIT_OUTCOMES as readonly string[]).includes(event.outcome) ||
+      (event.decision === 'deny' && event.outcome !== 'denied') ||
+      (event.decision === 'allow' && event.outcome === 'denied') ||
+      (event.outcome === 'outcome_unknown' && event.reason !== 'transaction_outcome_unknown') ||
+      (event.reason === 'transaction_outcome_unknown' && event.outcome !== 'outcome_unknown')
     ) {
       throw new SecurityAuditUnavailableError();
     }
@@ -58,6 +63,30 @@ export async function appendSecurityDecision(
       reason: event.reason,
       decidedAt,
     };
+    if (
+      (row.outcome === 'committed' ||
+        row.outcome === 'rolled_back' ||
+        row.outcome === 'outcome_unknown') &&
+      (row.decision !== 'allow' ||
+        (row.kind !== 'company' && row.kind !== 'access') ||
+        row.actorId === null ||
+        row.tenantId === null)
+    ) {
+      throw new SecurityAuditUnavailableError();
+    }
+    if (
+      row.kind === 'access' &&
+      row.outcome === 'committed' &&
+      row.accessManagementOperationId === null
+    ) {
+      throw new SecurityAuditUnavailableError();
+    }
+    if (
+      (row.outcome === 'rolled_back' || row.outcome === 'outcome_unknown') &&
+      row.accessManagementOperationId !== null
+    ) {
+      throw new SecurityAuditUnavailableError();
+    }
     // Dokładny payload audytu jest osobno poświadczony; kontekst operacji nie daje INSERT do audytu.
     await signer?.apply(tx, {
       purpose: 'audit',
