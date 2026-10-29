@@ -2,7 +2,7 @@
 
 > Aktualny model pracy (2026-10-29): rozwój lokalny bez DB oraz prywatny staging techniczny `https://ksiegowosc.roleplayingtech.com` przez `ssh hetzner`, zgodnie z ADR-006. Historyczne wzmianki „wyłącznie lokalnie” poniżej dotyczą etapu ADR-005. Nie wymagamy PostgreSQL na komputerze właściciela. Testy serwerowe wykonujemy tylko na już wydzielonych zasobach testowych, nigdy na bazie działającego stagingu. Brak takich zasobów oznacza test nieweryfikowany i przekazanie do etapu walidacji na izolowanym Hetznerze. Osobna zgoda obowiązuje dla migracji, administracji i deploymentu stagingu. Buildy na współdzielonym Hetznerze są zabronione; obowiązują limity ADR-006. Nie instalujemy automatycznie usług.
 
-Ten dokument opisuje szkielet z Issue #5 oraz pakiety DB/autoryzacji 6A/6B/6C/6D-1/6D-R/6D-2 z Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B i warstwa serwerowa [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) nie wystawiają jeszcze publicznych operacji księgowych ani interaktywnego logowania w przeglądarce; decyzje i ograniczenia opisują [model 6B](22-schemat-tenantow-6b.md), [cykl 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) i [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md).
+Ten dokument opisuje szkielet z Issue #5 oraz wdrożone na `main` pakiety DB/autoryzacji `6A`/`6B`/`6C`/`6D-1`/`6D-R`/`6D-2` z Issue #6. Rozwój lokalny przez `pnpm dev` nadal działa bez bazy i bez Dockera ([ADR-005](adr/005-rozwoj-lokalny.md)), równolegle z prywatnym stagingiem technicznym Web/API ([ADR-006 — staging](adr/006-prywatny-staging-hetzner.md)) oraz izolowanym CI na serwerze Hetzner przy wstrzymanym GitHub Actions ([ADR-006 — CI](adr/006-tymczasowe-ci-hetzner.md)). Schemat 6B i warstwa serwerowa [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) nie wystawiają jeszcze publicznych operacji księgowych ani interaktywnego logowania w przeglądarce, a elementy `6D-3` (transakcyjny `UnitOfWork`, rola runtime DB, `FORCE RLS` i audyt decyzji) znajdują się w otwartych Draft PR-ach przed odbiorem QA ([plan QA 6D-3](6D3_SECURITY_QA_ACCEPTANCE_PLAN.md)); decyzje i ograniczenia na `main` opisują [model 6B](22-schemat-tenantow-6b.md), [cykl 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) i [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md).
 
 ## Wymagania
 
@@ -36,7 +36,7 @@ API udostępnia publicznie:
 - `GET /health` — minimalny health check procesu.
 - `GET /api/v1/system/status` — wersjonowany, walidowany kontraktem status modułów.
 
-Web pobiera status po stronie serwera. Opcjonalny adres API można ustawić przez `API_BASE_URL`; przykład znajduje się w `apps/web/.env.example`. W produkcyjnym `NODE_ENV` dozwolony jest wyłącznie adres HTTPS. Produkcyjne uruchomienie aplikacji nie jest obecnie wspierane ani skonfigurowane.
+Web pobiera status po stronie serwera. Opcjonalny adres API można ustawić przez `API_BASE_URL`; przykład znajduje się w `apps/web/.env.example`. W `NODE_ENV=production` klient akceptuje wyłącznie zamkniętą allowlistę originów ze scalonego PR #23 (`https://ksiegowosc.roleplayingtech.com` lub lokalny loopback `http://127.0.0.1:4100` dla SSR prywatnego stagingu technicznego). Produkcyjne uruchomienie księgowe aplikacji nie jest obecnie wspierane ani skonfigurowane.
 
 ## PostgreSQL lokalnie bez Dockera
 
@@ -111,7 +111,7 @@ pnpm db:migrate
 
 `db:generate` działa bez DB: tworzy SQL i metadane po zmianie schematu Drizzle; dla niezmienionego schematu nie powinien dodać migracji. `db:migrate` zapisuje wykonane wersje w `drizzle.__drizzle_migrations`. Ponowne wykonanie nie powiela migracji. Łańcuch migracji obejmuje `0000` (6A), `0001` (6B: `tenant`, `legal_entity`, `tenant_membership`, `entity_profile_version`, `company_access_grant` oraz rozszerzenie `btree_gist`), `0002` (6D-R: `access_management_event` i guardy SQL cyklu dostępu) oraz `0003` (6D-2: `app_user`, `user_oidc_identity` i guardy SQL niezmienności tożsamości). Reviewuj SQL i metadane w `packages/db/drizzle`, w tym usunięcie kwalifikatora `public` z wygenerowanych FK na potrzeby testowego namespace ([wyjaśnienie](22-schemat-tenantow-6b.md#migracje-i-izolacja-testów)). Migracje uruchamiaj pojedynczo; nie wykonują się przy `pnpm dev`.
 
-Walidator wymaga `PAP_DATABASE_ENV=local` z kontem i bazą `pap_local` albo `PAP_DATABASE_ENV=test` z kontem i bazą `pap_test` oraz hosta `127.0.0.1`, `localhost` lub `::1`. `NODE_ENV=production`, inne środowisko, zdalny host, inne konto lub baza, niepoprawny URL i parametry/fragmenty URL są odrzucane przed utworzeniem klienta PostgreSQL.
+Walidator `loadDatabaseConfig` akceptuje wyłącznie: `PAP_DATABASE_ENV=local` z kontem i bazą `pap_local`, `PAP_DATABASE_ENV=test` z kontem i bazą `pap_test` (oba na `127.0.0.1`, `localhost` lub `::1` poza `NODE_ENV=production`) albo jawny profil `PAP_DATABASE_ENV=staging` przy `NODE_ENV=production` na adresie loopback `127.0.0.1`/`::1` dla bazy `pap_staging` z rozdziałem ról konfiguracji klienta `pap_staging_migrator` i `pap_staging_app` (PR #24). Środowisko `production`, zdalny host, inne konto lub baza, niepoprawny URL oraz parametry/fragmenty URL są odrzucane przed utworzeniem klienta PostgreSQL.
 
 ### Testy integracyjne na pap_test
 
@@ -134,7 +134,7 @@ W świeżej bazie oczekiwane jest zero wierszy. Jeśli istnieją obiekty, ustal 
 pnpm test:integration
 ```
 
-Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują cztery wpisy rejestru (`0000`–`0003`), osiem tabel modelu, ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter autoryzacji 6D-1, transakcyjny cykl dostępu 6D-R oraz mapowanie i provisioning tożsamości OIDC 6D-2. Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Bez PostgreSQL raportuj testy integracyjne jako niewykonane lokalnie; CI uruchamia je na świeżej izolowanej usłudze PostgreSQL.
+Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują cztery wpisy rejestru (`0000`–`0003`), osiem tabel modelu, ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter autoryzacji 6D-1, transakcyjny cykl dostępu 6D-R oraz mapowanie i provisioning tożsamości OIDC 6D-2. Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Bez lokalnego PostgreSQL oznacz testy integracyjne jako nieweryfikowane lokalnie; bieżąca walidacja integracyjna odbywa się w odizolowanym środowisku testowym na Hetznerze ([ADR-006](adr/006-tymczasowe-ci-hetzner.md)).
 
 ## MCP lokalne STDIO
 
