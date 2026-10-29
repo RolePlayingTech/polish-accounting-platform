@@ -9,22 +9,27 @@ przed wymaganymi testami PostgreSQL i niezależnym code/security review.
 
 | Część | PR / gałąź | Stan |
 | --- | --- | --- |
-| Środowiska i AGENTS | #26, codex/6d3-environments, 2c8e2a24346f1bfa6b47db2fb2ffa0c9b0e2370d | Niezależny dokumentacyjny Draft, zsynchronizowany z #29/main |
-| Istniejąca transakcyjna implementacja | #27, feat/issue-6d3a-transactional-authz, 918b6c148cce77b13cb0ee2770f763e4bba42176 | Zastana praca, nie duplikować |
-| B: domknięcie ścieżek transakcyjnych | #28, codex/6d3b-transactional-authorization, 0d1c54c25504b1dea79e3c6fe51bd6578d94710c | Baza #27 + aktualny main |
-| A: role, podpis i RLS | #30, codex/6d3a-runtime-rls, 8a7d34635dcd8592479065267e3a085d5f213a42 | Baza #28 |
-| C: audyt i hardening | #31, codex/6d3c-security-audit, kod 23ed1b9f406d0cc14db235e1dbfa7deea07a4d3f | Baza #30; końcowy SHA z dokumentacją w PR i raporcie |
+| Polityka CI, środowiska i handoff | #29 (`00fb64f`), #26 (`566d9ad`), #32 (`9e62b9a`) → `main` (`9e62b9a5881cd38b2e2a9b874d73b44078f16bf3`) | Scalone do `main` |
+| Istniejąca transakcyjna implementacja | #27, `feat/issue-6d3a-transactional-authz`, `1281027a126b09f934894cde5fe43dc01a7b3e3b` (wcześniejszy: `918b6c148cce77b13cb0ee2770f763e4bba42176`) | Baza `main` (`9e62b9a`); konflikty z `main` rozwiązane |
+| B: domknięcie ścieżek transakcyjnych | #28, `codex/6d3b-transactional-authorization`, `5d2a4c5c4d37219988310c787544352f89c794b0` (wcześniejszy: `0d1c54c25504b1dea79e3c6fe51bd6578d94710c`, kod: `db31f508140cce2a9a1549bf54da44943acbebe9`) | Baza #27 (`1281027`) |
+| A: role, podpis i RLS | #30, `codex/6d3a-runtime-rls`, `edad9f7f0d1c67da4a57f47454295a0d459322ec` (wcześniejszy: `8a7d34635dcd8592479065267e3a085d5f213a42`) | Baza #28 (`5d2a4c5`) |
+| C: audyt i hardening | #31, `codex/6d3c-security-audit`, merge `d2bf07824d1f87c2fe6e1c6fc244b412ffb4ad26` (wcześniejszy: `f916385b1b06c29666267182fb70a1a425bc858a`, kod: `23ed1b9f406d0cc14db235e1dbfa7deea07a4d3f`) | Baza #30 (`edad9f7`); końcowy SHA z dokumentacją w opisie PR #31 |
 
 Numeracja istniejącego #27 jest historyczna: nazywa transakcje 6D-3A. W bieżącym
 poleceniu A oznacza role/RLS, B transakcje, C audyt.
 
-Podczas sesji main zmienił się z af641ca647fad44def882767126ebe2ab6d3cfaa na
-00fb64f0fcbbf18c7d6c47b651bb49245d106bcb (#29). Właściciel wyłączył automatyczne
-Actions i wskazał tymczasowe CI na Hetznerze. Nie uruchamiać workflow_dispatch/rerun
-i nie oczekiwać statusów GitHub. Stos B/A/C zsynchronizowano z tym main,
-zachowując politykę #29; diff workflow względem main jest pusty. Dokumentacyjne #26
-pozostaje osobnym PR. Po synchronizacji porównanie apps/packages/test/package.json/lockfile
-wykazało identyczny kod względem testowanego drzewa, dlatego nie powtarzano testów.
+Na `main` scalono kolejno #29 (`00fb64f` — tymczasowe CI na Hetznerze bez automatycznych
+GitHub Actions), #26 (`566d9ad` — środowiska Hetzner i polityka walidacji) oraz #32
+(`9e62b9a` — GitHub jako źródło prawdy i handoff). Nie uruchamiać `workflow_dispatch`/rerun
+i nie oczekiwać statusów GitHub. Cały stos `#27 → #28 → #30 → #31` zsynchronizowano
+bez force-push z `main` (`9e62b9a`), rozwiązując konflikty dokumentacyjne w
+`docs/19-przewodnik-developera.md` i `docs/20-strategia-testow.md` (w tym przywracając
+pełny opis zakresu 6D-3A z #27 obok polityki CI z #29/#26); diff `.github/workflows/ci.yml`
+względem `main` jest pusty na każdej gałęzi stosu. Porównanie drzew `apps/`, `packages/`,
+`test/`, `package.json`, `pnpm-lock.yaml` i `.env.example` potwierdziło zerowy diff kodu
+względem wcześniejszych SHA (`918b6c1`, `0d1c54c`, `8a7d346`, `f916385`); pełnych testów,
+buildów ani migracji nie uruchamiano podczas tej integracji. Równoległe review
+bezpieczeństwa może odnosić się do wcześniejszych SHA powyżej.
 
 Przeczytaj ADR-007/008/009, docs/27-runtime-security-6d3a.md i docs/28-security-audit-6d3c.md.
 Uchwyty tx i signer są zaufanym kodem serwera, nigdy wejściem REST/MCP.
