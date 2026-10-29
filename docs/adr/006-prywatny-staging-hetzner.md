@@ -1,5 +1,7 @@
 # ADR-006 — Przejście z rozwoju lokalnego do prywatnego stagingu na serwerze Hetzner
 
+> Aktualizacja faktów i procesu (2026-10-29): istnieje prywatny staging techniczny Web/API za HTTPS i HTTP Basic Auth pod `ksiegowosc.roleplayingtech.com`; dostęp administracyjny przez `ssh hetzner`. Nie jest to produkcja księgowa. Nie zakładamy uruchomienia PostgreSQL: kontrola odczytowa z tej sesji nie wykazała kontenera PG ani narzędzia psql. Testy serwerowe są dopuszczone wyłącznie na uprzednio wydzielonych zasobach developerskich/testowych, po sprawdzeniu zasobów i poniższych limitów. Bez izolowanej DB test integracyjny pozostaje nieweryfikowany; nie wymagamy DB na komputerze właściciela. Nie zmieniamy innych usług, DNS, Nginx, firewalla ani certyfikatów. Każda migracja, administracja lub deployment działającego stagingu nadal wymaga osobnej zgody. Stan planowany poniżej nie stanowi dowodu uruchomienia usług.
+
 - **Status:** decyzja architektoniczna dla [Issue #19](https://github.com/RolePlayingTech/polish-accounting-platform/issues/19)
 - **Data:** 2026-10-28
 - **Powiązania:** [ADR-002](002-stos-technologiczny-i-wdrozenia.md), [ADR-004](004-model-zagrozen-i-autoryzacji.md), [ADR-005](005-rozwoj-lokalny.md), [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6), [Issue #19](https://github.com/RolePlayingTech/polish-accounting-platform/issues/19)
