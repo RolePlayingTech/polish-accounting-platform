@@ -1,5 +1,7 @@
 # Plan wdrożenia i pierwszej publikacji na serwerze Hetzner
 
+> Aktualny stan (2026-10-29): [PR #23](https://github.com/RolePlayingTech/polish-accounting-platform/pull/23) i [PR #24](https://github.com/RolePlayingTech/polish-accounting-platform/pull/24) zostały scalone do `main`, a prywatny staging techniczny Etapu A (`@pap/web` i `@pap/api` za HTTPS i HTTP Basic Auth pod `https://ksiegowosc.roleplayingtech.com`, bez uruchomionej bazy `pap_staging`) działa na hoście `hetz-1`. Automatyczne uruchamianie GitHub Actions jest tymczasowo wyłączone na rzecz izolowanego CI na Hetznerze ([ADR-006](adr/006-tymczasowe-ci-hetzner.md)). Poniższa treść zachowuje pierwotny plan z `2026-10-28`; każda kolejna migracja, administracja i wdrożenie wymagają osobnej zgody właściciela, a Etap B pozostaje zablokowany do odbioru `6D-3` ([plan QA 6D-3](6D3_SECURITY_QA_ACCEPTANCE_PLAN.md)).
+
 - **Data:** 2026-10-28
 - **Powiązane zadanie:** [Issue #19](https://github.com/RolePlayingTech/polish-accounting-platform/issues/19), [Audyt serwera Hetzner](HETZNER_SERVER_AUDIT_2026-10-28.md), [Architektura stagingu](HETZNER_STAGING_ARCHITECTURE.md), [Checklista gotowości](HETZNER_READINESS_CHECKLIST.md)
 - **Docelowa domena (jedyna kanoniczna):** `https://ksiegowosc.roleplayingtech.com`
