@@ -37,12 +37,12 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A — rzeczywisty builder i k
           rows = [[id(6), 'active', null]];
         } else if (query.includes('from "legal_entity"')) {
           rows = [[id(5)]];
-        } else if (query.includes('for update')) {
+        } else if (query.includes('from "tenant_membership"')) {
           rows = [
             [
               target.tenantId,
-              target.userId,
-              'tenant_member',
+              parameters[1],
+              parameters[1] === id(6) ? 'tenant_owner' : 'tenant_member',
               'active',
               '2026-01-01T00:00:00.000Z',
               null,

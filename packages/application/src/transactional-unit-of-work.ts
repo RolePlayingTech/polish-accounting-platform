@@ -146,8 +146,14 @@ export async function executeAuthorizedCompanyAction<
 ): Promise<ExecuteAuthorizedCompanyActionResult<TOutput>> {
   let parsedTenantId: TenantId;
   let parsedLegalEntityId: LegalEntityId;
+  // Kopia wszystkich selektorów przed pierwszym await, także akcji i zakresów.
+  const action = input.action;
+  const rawBearerToken = input.rawBearerToken;
+  const requiredScopes = input.requiredScopes
+    ? Object.freeze([...input.requiredScopes])
+    : undefined;
   try {
-    if (input.action !== 'read' && input.action !== 'write') {
+    if (action !== 'read' && action !== 'write') {
       throw new Error('Niepoprawna akcja księgowa.');
     }
     parsedTenantId = tenantId(input.tenantId);
@@ -161,12 +167,12 @@ export async function executeAuthorizedCompanyAction<
   }
 
   const actor = await authenticateOidcActor(
-    input.rawBearerToken,
+    rawBearerToken,
     {
       verifier: dependencies.verifier,
       identityResolver: dependencies.identityResolver,
     },
-    input.requiredScopes ? { requiredScopes: input.requiredScopes } : undefined,
+    requiredScopes ? { requiredScopes } : undefined,
   );
 
   if (!actor.authenticated) {
@@ -197,7 +203,7 @@ export async function executeAuthorizedCompanyAction<
           userId: txActor.userId,
           tenantId: parsedTenantId,
           legalEntityId: parsedLegalEntityId,
-          action: input.action,
+          action,
         });
 
         const facts = await tx.getLockedFacts(query);
@@ -228,7 +234,7 @@ export async function executeAuthorizedCompanyAction<
           userId: txActor.userId,
           tenantId: parsedTenantId,
           legalEntityId: parsedLegalEntityId,
-          action: input.action,
+          action,
           identity: actor.identity,
         });
 

@@ -107,7 +107,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       },
       {
         verifier: {
-          verifyAccessToken: async () => ({ ok: false, reason: 'expired_token' }),
+          verifyAccessToken: async () => ({ ok: false, reason: 'token_expired' }),
         },
         identityResolver: {
           resolveVerifiedIdentity: vi.fn(),
@@ -120,7 +120,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     expect(result).toEqual({
       allowed: false,
       status: 'unauthenticated',
-      reason: 'expired_token',
+      reason: 'token_expired',
     });
     expect(runCompanyActionInTransaction).not.toHaveBeenCalled();
     expect(operation).not.toHaveBeenCalled();
@@ -177,17 +177,20 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       },
     };
 
+    const mutableInput = {
+      rawBearerToken: 'valid-jwt',
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write' as 'read' | 'write',
+      requiredScopes: ['pap:accounting'],
+    };
     const result = await executeAuthorizedCompanyAction(
-      {
-        rawBearerToken: 'valid-jwt',
-        tenantId: TENANT_A,
-        legalEntityId: ENTITY_A1,
-        action: 'write',
-        requiredScopes: ['pap:accounting'],
-      },
+      mutableInput,
       {
         verifier: {
           verifyAccessToken: async () => {
+            mutableInput.action = 'read';
+            mutableInput.tenantId = tenantId(id(999));
             events.push('verifyAccessToken');
             return {
               ok: true,

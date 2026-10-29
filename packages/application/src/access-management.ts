@@ -121,7 +121,7 @@ export interface AccessManagementTransaction extends AccessManagementAuthorizati
  * wspólną blokadę faktów i członkostwa, idempotencję oraz atomowy audyt.
  */
 export interface AccessManagementStore {
-  runInTransaction?(
+  runInTransaction(
     work: (tx: AccessManagementTransaction) => Promise<AccessManagementResult>,
   ): Promise<AccessManagementResult>;
   execute(
@@ -300,10 +300,8 @@ export async function manageAccess(
       });
     }
 
-    if ((await authorizer.authorize(actor, command)) !== true) {
-      return { ok: false, reason: 'access_management_denied' };
-    }
-    return await store.execute(command, actor);
+    // Brak adaptera transakcyjnego nigdy nie uruchamia starej ścieżki check-then-write.
+    return { ok: false, reason: 'access_management_unavailable' };
   } catch {
     return { ok: false, reason: 'access_management_unavailable' };
   }
