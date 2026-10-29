@@ -23,7 +23,7 @@ export async function createTestDatabase() {
     }
   }
   const dataSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
-  const connection = connectDatabase(process.env, dataSchema);
+  const connection = connectDatabase(process.env, dataSchema, { roleScope: 'migrator' });
   const { client: sql } = connection;
   let created = false;
 
@@ -53,9 +53,11 @@ export async function createTestDatabase() {
   let before: Awaited<ReturnType<typeof inventory>>;
   try {
     before = await inventory();
-    if (before.extensions.some((row) => row.extname === 'btree_gist')) {
+    if (
+      before.extensions.some((row) => row.extname === 'btree_gist' || row.extname === 'pgcrypto')
+    ) {
       throw new Error(
-        'Test wymaga pap_test bez btree_gist; nie usuwa ani nie przenosi zastanego rozszerzenia.',
+        'Test wymaga pap_test bez btree_gist/pgcrypto; nie usuwa ani nie przenosi zastanego rozszerzenia.',
       );
     }
     // Bez IF NOT EXISTS: w razie kolizji nie przejmujemy własności zastanego schematu.

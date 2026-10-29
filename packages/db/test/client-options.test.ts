@@ -9,13 +9,13 @@ describe('Opcje klienta PostgreSQL (bez otwierania połączenia)', () => {
   ])('przekazuje poprawny host loopback %s do sterownika', async (urlHost, expectedHost) => {
     const { client } = connectDatabase({
       PAP_DATABASE_ENV: 'test',
-      DATABASE_URL: `postgres://pap_test:test_only@${urlHost}:5433/pap_test`,
+      DATABASE_URL: `postgres://pap_test_app:test_only@${urlHost}:5433/pap_test`,
     });
 
     try {
       expect(client.options.host).toEqual([expectedHost]);
       expect(client.options.port).toEqual([5433]);
-      expect(client.options.user).toBe('pap_test');
+      expect(client.options.user).toBe('pap_test_app');
       expect(client.options.database).toBe('pap_test');
       expect(client.options.max).toBe(5);
       expect(client.options.connection.search_path).toBe('public,pg_catalog');
@@ -27,7 +27,7 @@ describe('Opcje klienta PostgreSQL (bez otwierania połączenia)', () => {
   it('pozwala jawnie ograniczyć rozmiar puli połączeń (np. maxConnections: 1) i odrzuca błędne limity', async () => {
     const env = {
       PAP_DATABASE_ENV: 'test',
-      DATABASE_URL: 'postgres://pap_test:test_only@127.0.0.1:5432/pap_test',
+      DATABASE_URL: 'postgres://pap_test_app:test_only@127.0.0.1:5432/pap_test',
     };
     const { client } = connectDatabase(env, 'public', { maxConnections: 1 });
     try {
@@ -48,7 +48,7 @@ describe('Opcje klienta PostgreSQL (bez otwierania połączenia)', () => {
     const { client } = connectDatabase(
       {
         PAP_DATABASE_ENV: 'test',
-        DATABASE_URL: 'postgres://pap_test:test_only@127.0.0.1:5432/pap_test',
+        DATABASE_URL: 'postgres://pap_test_app:test_only@127.0.0.1:5432/pap_test',
       },
       dataSchema,
     );
@@ -66,7 +66,7 @@ describe('Opcje klienta PostgreSQL (bez otwierania połączenia)', () => {
         connectDatabase(
           {
             PAP_DATABASE_ENV: 'test',
-            DATABASE_URL: 'postgres://pap_test:test_only@127.0.0.1:5432/pap_test',
+            DATABASE_URL: 'postgres://pap_test_app:test_only@127.0.0.1:5432/pap_test',
           },
           dataSchema,
         ),
@@ -79,7 +79,7 @@ describe('Opcje klienta PostgreSQL (bez otwierania połączenia)', () => {
       connectDatabase(
         {
           PAP_DATABASE_ENV: 'local',
-          DATABASE_URL: 'postgres://pap_local:test_only@127.0.0.1:5432/pap_local',
+          DATABASE_URL: 'postgres://pap_local_app:test_only@127.0.0.1:5432/pap_local',
         },
         'pap_test_0123456789abcdef0123456789abcdef',
       ),

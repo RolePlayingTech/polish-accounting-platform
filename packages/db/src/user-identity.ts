@@ -3,6 +3,7 @@ import type { UserIdentityResolver, VerifiedOidcIdentity } from '@pap/applicatio
 import { and, eq, or, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import { appUser, userOidcIdentity } from './schema.js';
+import type { PostgresContextSigner } from './signed-context.js';
 
 type IdentityReadDatabase = Pick<ReturnType<typeof connectDatabase>['db'], 'select'>;
 type IdentityWriteDatabase = Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>;
@@ -17,7 +18,10 @@ function isExactNonBlank(value: unknown): value is string {
  * i nigdy nie dopasowuje użytkowników po adresie e-mail ani nazwie.
  */
 export class PostgresUserIdentityResolver implements UserIdentityResolver {
-  constructor(private readonly db: IdentityReadDatabase) {}
+  constructor(
+    private readonly db: IdentityReadDatabase & Partial<IdentityWriteDatabase>,
+    private readonly signer?: PostgresContextSigner,
+  ) {}
 
   async resolveVerifiedIdentity(
     identity: VerifiedOidcIdentity,
@@ -27,6 +31,20 @@ export class PostgresUserIdentityResolver implements UserIdentityResolver {
     }
 
     try {
+      if (this.signer) {
+        if (!this.db.transaction) throw new Error('Brak transakcji resolvera.');
+        return await this.db.transaction(async (tx) => {
+          await this.signer!.apply(tx, {
+            purpose: 'identity',
+            issuer: identity.issuer,
+            subject: identity.subject,
+          });
+          const [row] = await tx.execute<{ user_id: string | null }>(
+            sql`SELECT pap_resolve_identity(${identity.issuer}, ${identity.subject}) AS user_id`,
+          );
+          return row?.user_id ? Object.freeze({ userId: userId(row.user_id) }) : null;
+        });
+      }
       const rows = await this.db
         .select({
           userId: appUser.id,

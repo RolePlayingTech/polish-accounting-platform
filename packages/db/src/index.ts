@@ -36,3 +36,11 @@ export {
   type DatabaseRoleScope,
   type LoadDatabaseConfigOptions,
 } from './database-config.js';
+export * from './signed-context.js';
+export { companyOperationProbe } from './schema.js';
+export { recordCompanyOperationProbe } from './company-operation-probe.js';
+export { configureRuntimePrivileges, provisionDatabaseContextKey } from './runtime-provisioning.js';
+export {
+  assertRuntimeDatabaseSecurity,
+  createPostgresSecurityServices,
+} from './runtime-security.js';

@@ -21,7 +21,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A — rzeczywisty builder i k
     async (kind) => {
       const { db, client } = connectDatabase({
         PAP_DATABASE_ENV: 'test',
-        DATABASE_URL: 'postgres://pap_test:synthetic_only@127.0.0.1:5432/pap_test',
+        DATABASE_URL: 'postgres://pap_test_app:synthetic_only@127.0.0.1:5432/pap_test',
       });
       // Zastąpiony transport: Drizzle rzeczywiście buduje transakcję i zapytania.
       vi.spyOn(client, 'begin').mockImplementation((async (
@@ -98,7 +98,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A — rzeczywisty builder i k
 
       const { db, client } = connectDatabase({
         PAP_DATABASE_ENV: 'test',
-        DATABASE_URL: 'postgres://pap_test:synthetic_only@127.0.0.1:5432/pap_test',
+        DATABASE_URL: 'postgres://pap_test_app:synthetic_only@127.0.0.1:5432/pap_test',
       });
 
       let beginCount = 0;
@@ -259,7 +259,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A — rzeczywisty builder i k
   it('PostgresTransactionalUnitOfWork wymusza fizyczny rollback (odrzucenie begin), gdy autoryzacja odmawia', async () => {
     const { db, client } = connectDatabase({
       PAP_DATABASE_ENV: 'test',
-      DATABASE_URL: 'postgres://pap_test:synthetic_only@127.0.0.1:5432/pap_test',
+      DATABASE_URL: 'postgres://pap_test_app:synthetic_only@127.0.0.1:5432/pap_test',
     });
 
     let beginRolledBack = false;

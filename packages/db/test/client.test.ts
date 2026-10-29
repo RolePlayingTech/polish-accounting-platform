@@ -10,7 +10,7 @@ describe('connectDatabase', () => {
     {
       NODE_ENV: 'production',
       PAP_DATABASE_ENV: 'local',
-      DATABASE_URL: 'postgres://pap_local:test_only@127.0.0.1/pap_local',
+      DATABASE_URL: 'postgres://pap_local_app:test_only@127.0.0.1/pap_local',
     },
     {
       NODE_ENV: 'production',
@@ -33,18 +33,21 @@ describe('connectDatabase', () => {
     },
     {
       PAP_DATABASE_ENV: 'production',
-      DATABASE_URL: 'postgres://pap_test:test_only@127.0.0.1/pap_test',
+      DATABASE_URL: 'postgres://pap_test_app:test_only@127.0.0.1/pap_test',
     },
     {
       PAP_DATABASE_ENV: 'test',
-      DATABASE_URL: 'postgres://pap_test:test_only@database.example.invalid/pap_test',
+      DATABASE_URL: 'postgres://pap_test_app:test_only@database.example.invalid/pap_test',
     },
-    { PAP_DATABASE_ENV: 'test', DATABASE_URL: 'postgres://pap_test:test_only@127.0.0.1/pap_local' },
+    {
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: 'postgres://pap_test_app:test_only@127.0.0.1/pap_local',
+    },
     { PAP_DATABASE_ENV: 'test', DATABASE_URL: 'postgres://postgres:test_only@127.0.0.1/pap_test' },
     {
       PAP_DATABASE_ENV: 'test',
       DATABASE_URL:
-        'postgres://pap_test:test_only@127.0.0.1/pap_test?host=database.example.invalid',
+        'postgres://pap_test_app:test_only@127.0.0.1/pap_test?host=database.example.invalid',
     },
   ])('odrzuca konfigurację przed utworzeniem klienta PostgreSQL', (environment) => {
     expect(() => connectDatabase(environment)).toThrow(DatabaseConfigError);

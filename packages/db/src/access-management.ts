@@ -13,6 +13,7 @@ import {
 import { legalEntityId, tenantId, userId, type TenantMembership } from '@pap/domain';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
+import type { PostgresContextSigner } from './signed-context.js';
 import {
   accessManagementEvent,
   companyAccessGrant,
@@ -169,7 +170,10 @@ export class PostgresAccessManagementAuthorizationDataSource implements AccessMa
  * 5) mutację oraz atomowy zapis audytu `access_management_event` przed COMMIT.
  */
 export class PostgresAccessManagementStore implements AccessManagementStore {
-  constructor(private readonly db: Pick<Database, 'transaction'>) {}
+  constructor(
+    private readonly db: Pick<Database, 'transaction'>,
+    private readonly signer?: PostgresContextSigner,
+  ) {}
 
   async runInTransaction(
     work: (tx: AccessManagementTransaction) => Promise<AccessManagementResult>,
@@ -225,6 +229,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
   private createTransactionAdapter(tx: PostgresTransaction): AccessManagementTransaction {
     let verifiedActorKey: string | null = null;
     let lockedSnapshot: LockedAccessManagementSnapshot | null = null;
+    let cachedFacts: AccessManagementAuthorizationFacts | undefined;
 
     const verifyActorAccount = async (rawActor: AccessManagementActor): Promise<boolean> => {
       let actor: AccessManagementActor;
@@ -237,6 +242,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
       if (verifiedActorKey === key) {
         return true;
       }
+      await this.signer?.apply(tx, { purpose: 'actor', actorUserId: actor.userId });
       const active = await verifyAndLockActorInTx(tx, actor);
       if (active) {
         verifiedActorKey = key;
@@ -264,6 +270,21 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
             now,
           };
         }
+      }
+      await this.signer?.apply(tx, {
+        purpose: 'facts',
+        actorUserId: actor.userId,
+        tenantId: command.tenantId,
+        targetUserId: command.userId,
+        command,
+        ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
+      });
+      if (
+        cachedFacts &&
+        lockedSnapshot?.requestKey === JSON.stringify(command) &&
+        lockedSnapshot.actorKey === currentActorKey
+      ) {
+        return structuredClone(cachedFacts);
       }
 
       // Samodzielna eskalacja jest zabroniona przez domenę — wystarczy FOR SHARE na wierszu aktora.
@@ -472,7 +493,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         now,
       };
 
-      return {
+      cachedFacts = {
         actorMembership: mapMembershipRow(actorMembershipRow),
         actorGrants: actorGrantsRows.map((grantRow) => ({
           ...grantRow,
@@ -489,6 +510,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
           : null,
         now,
       };
+      return structuredClone(cachedFacts);
     };
 
     const executeAuthorized = async (
@@ -506,6 +528,22 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
       }
 
       const requestKey = JSON.stringify(command);
+      // Niezależnie od wstrzykniętego autoryzatora wymuszamy wspólną politykę domenową.
+      if (
+        !(await createTenantAccessManagementAuthorizer().authorize(actor, command, {
+          getAuthorizationFacts,
+        }))
+      )
+        return { ok: false, reason: 'access_management_denied' };
+      await this.signer?.apply(tx, {
+        purpose: 'access',
+        actorUserId: actor.userId,
+        tenantId: command.tenantId,
+        targetUserId: command.userId,
+        command,
+        decisionAt: lockedSnapshot!.now.toISOString(),
+        ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
+      });
       const target = and(
         eq(tenantMembership.tenantId, command.tenantId),
         eq(tenantMembership.userId, command.userId),

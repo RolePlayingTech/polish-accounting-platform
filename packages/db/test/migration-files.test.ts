@@ -12,18 +12,25 @@ describe('Kontrakt plików migracji', () => {
     const schema = readJson('0001_snapshot.json');
     const lifecycle = readJson('0002_snapshot.json');
     const identity = readJson('0003_snapshot.json');
+    const runtime = readJson('0004_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(4);
+    expect(migrations).toHaveLength(5);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
     expect(lifecycle.prevId).toBe(schema.id);
     expect(identity.prevId).toBe(lifecycle.id);
+    expect(runtime.prevId).toBe(identity.id);
+    expect(Object.values(runtime.tables)).toHaveLength(10);
+    for (const table of Object.values(runtime.tables) as { isRLSEnabled: boolean }[]) {
+      expect(table.isRLSEnabled).toBe(true);
+    }
     expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual([
       '0000_technical-baseline',
       '0001_tenant-schema',
       '0002_access-lifecycle',
       '0003_user-identity',
+      '0004_runtime-security',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -42,6 +49,7 @@ describe('Kontrakt plików migracji', () => {
       '0001_tenant-schema.sql',
       '0002_access-lifecycle.sql',
       '0003_user-identity.sql',
+      '0004_runtime-security.sql',
     ]) {
       const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
       expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
@@ -63,5 +71,25 @@ describe('Kontrakt plików migracji', () => {
     expect(identityMigration).toContain('user_oidc_identity_issuer_subject_unique');
     expect(identityMigration).toContain('protect_user_oidc_identity');
     expect(identityMigration).toContain('revoke_oidc_identities_on_user_disable');
+  });
+
+  it('RLS wymaga podpisu związanej transakcji i pinowanych definerów, bez klucza w migracji', () => {
+    const migration = readFileSync(
+      new URL('../drizzle/0004_runtime-security.sql', import.meta.url),
+      'utf8',
+    );
+    for (const fragment of [
+      'FORCE ROW LEVEL SECURITY',
+      'pg_current_xact_id()',
+      'pg_backend_pid()',
+      'session_user',
+      "current_setting('pap.context_signature'",
+      "decode(secret, 'hex')",
+      'SET search_path = pg_catalog, %I, pg_temp',
+      'REVOKE ALL ON FUNCTION',
+    ]) {
+      expect(migration).toContain(fragment);
+    }
+    expect(migration).not.toMatch(/INSERT INTO security_context_key/i);
   });
 });

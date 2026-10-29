@@ -7,15 +7,33 @@ import { legalEntityId, tenantId, userId } from '@pap/domain';
 import { and, eq } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import { companyAccessGrant, tenantMembership } from './schema.js';
+import type { PostgresContextSigner } from './signed-context.js';
 
 type AuthorizationDatabase = Pick<ReturnType<typeof connectDatabase>['db'], 'select'>;
 
 /** Źródło faktów dla serwera; UUID wykonującego musi pochodzić ze zweryfikowanej tożsamości. */
 export class PostgresTenantAuthorizationDataSource implements TenantAuthorizationDataSource {
-  constructor(private readonly db: AuthorizationDatabase) {}
+  constructor(
+    private readonly db: AuthorizationDatabase &
+      Partial<Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>>,
+    private readonly signer?: PostgresContextSigner,
+  ) {}
 
   async getFacts(query: TenantAuthorizationQuery): Promise<TenantAuthorizationFacts> {
     try {
+      if (this.signer) {
+        if (!this.db.transaction) throw new Error('Brak transakcji źródła faktów.');
+        return await this.db.transaction(async (tx) => {
+          await this.signer!.apply(tx, {
+            purpose: 'facts',
+            actorUserId: query.userId,
+            tenantId: query.tenantId,
+            legalEntityId: query.legalEntityId,
+            action: query.action,
+          });
+          return new PostgresTenantAuthorizationDataSource(tx).getFacts(query);
+        });
+      }
       // Jeden SELECT: członkostwo i granty z tego samego snapshotu, bez cache.
       // Warunki grantu w JOIN zachowują członkostwo również przy braku grantu.
       const rows = await this.db

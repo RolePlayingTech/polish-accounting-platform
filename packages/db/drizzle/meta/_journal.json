@@ -29,6 +29,13 @@
       "when": 1793207140940,
       "tag": "0003_user-identity",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1793262718363,
+      "tag": "0004_runtime-security",
+      "breakpoints": true
     }
   ]
 }
