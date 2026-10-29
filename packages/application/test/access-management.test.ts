@@ -7,6 +7,9 @@ import {
   type AccessManagementAuthorizationDataSource,
   type AccessManagementCommand,
   type AccessManagementReceipt,
+  type AccessManagementResult,
+  type AccessManagementStore,
+  type AccessManagementTransaction,
 } from '../src/access-management.js';
 import {
   ConfirmedTransactionRollbackError,
@@ -657,5 +660,74 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
       reason: 'transaction_outcome_unknown',
     });
     expect(auditLog.some((e) => e.outcome === 'rolled_back')).toBe(false);
+  });
+
+  it('SEC-03: awaria applySessionContext nie uruchamia executeAuthorized i nie zapisuje fałszywego allow', async () => {
+    const failures = [
+      () => new ConfirmedTransactionRollbackError(new Error('set_config synthetic-secret')),
+      () => new TransactionOutcomeUnknownError(new Error('socket synthetic-secret')),
+      () => new Error('session context synthetic-secret'),
+    ];
+
+    for (const createFailure of failures) {
+      const recordedAudit: SecurityAuditEvent[] = [];
+      const applySessionContext = vi.fn(async (): Promise<void> => {
+        throw createFailure();
+      });
+      const executeAuthorized = vi.fn(async (): Promise<AccessManagementResult> => {
+        return { ok: false, reason: 'access_management_unavailable' };
+      });
+      const tx: AccessManagementTransaction = {
+        verifyActorAccount: async () => true,
+        getAuthorizationFacts: async () => ({
+          actorMembership: null,
+          actorGrants: [],
+          targetMembership: null,
+          targetGrant: null,
+        }),
+        applySessionContext,
+        executeAuthorized,
+      };
+      const store: AccessManagementStore = {
+        recordDeniedDecision: async (event) => {
+          recordedAudit.push(event);
+        },
+        execute: async () => ({ ok: false, reason: 'access_management_unavailable' }),
+        runInTransaction: async (work) => work(tx),
+      };
+
+      const result = await manageAccess(command, {
+        store,
+        actors: { getVerifiedActor: async () => actor },
+        authorizer: { authorize: async () => true },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: 'access_management_unavailable',
+      });
+      expect(applySessionContext).toHaveBeenCalledTimes(1);
+      expect(applySessionContext).toHaveBeenCalledWith({
+        actorUserId: actor.userId,
+        tenantId: command.tenantId,
+      });
+      expect(executeAuthorized).not.toHaveBeenCalled();
+      expect(recordedAudit).toEqual([
+        {
+          requestId: command.operationId,
+          operationId: command.operationId,
+          actorId: actor.userId,
+          targetUserId: command.userId,
+          tenantId: command.tenantId,
+          legalEntityId: null,
+          action: command.kind,
+          kind: 'access',
+          decision: 'deny',
+          outcome: 'denied',
+          reason: 'access_management_unavailable',
+        },
+      ]);
+      expect(JSON.stringify(recordedAudit)).not.toContain('synthetic-secret');
+    }
   });
 });
