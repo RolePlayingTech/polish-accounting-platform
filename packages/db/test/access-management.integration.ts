@@ -119,6 +119,7 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
     await db.delete(companyAccessGrant);
     await db.delete(tenantMembership);
     await db.insert(tenantMembership).values([
+      { tenantId: A, userId: ACTOR, role: 'tenant_owner', status: 'active', validFrom: from },
       { tenantId: A, userId: USER, role: 'tenant_admin', status: 'active', validFrom: from },
       { tenantId: B, userId: USER, role: 'tenant_owner', status: 'active', validFrom: from },
     ]);

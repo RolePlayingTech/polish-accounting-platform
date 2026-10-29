@@ -1,5 +1,6 @@
 import {
   copyAccessManagementCommand,
+  createTenantAccessManagementAuthorizer,
   freezeTransactionActor,
   type AccessManagementActor,
   type AccessManagementAuthorizationDataSource,
@@ -207,6 +208,16 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
       if ((await tx.verifyActorAccount(canonicalActor)) !== true) {
         return { ok: false, reason: 'access_management_denied' };
       }
+      if (
+        !(await createTenantAccessManagementAuthorizer().authorize(canonicalActor, command, tx))
+      ) {
+        return { ok: false, reason: 'access_management_denied' };
+      }
+      await tx.applySessionContext?.({
+        actorUserId: canonicalActor.userId,
+        tenantId: command.tenantId,
+        ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
+      });
       return tx.executeAuthorized(command, canonicalActor);
     });
   }
@@ -509,8 +520,14 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
       if (snapshotMatches) {
         member = lockedSnapshot!.targetMembershipRow;
       } else {
-        const [lockedMember] = await tx.select().from(tenantMembership).where(target).for('update');
-        member = lockedMember ?? null;
+        // Także bezpośredni adapter transakcji nie może ominąć zablokowanej polityki.
+        if (
+          !(await createTenantAccessManagementAuthorizer().authorize(actor, command, {
+            getAuthorizationFacts,
+          }))
+        )
+          return { ok: false, reason: 'access_management_denied' };
+        member = lockedSnapshot?.targetMembershipRow ?? null;
       }
 
       if (!member) {

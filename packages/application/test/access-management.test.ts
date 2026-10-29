@@ -17,8 +17,17 @@ const command: AccessManagementCommand = {
 };
 const actor = { userId: userId(id(4)) };
 function setup() {
+  const execute = vi.fn().mockResolvedValue({ ok: true });
+  const tx = {
+    verifyActorAccount: async () => true,
+    getAuthorizationFacts: vi.fn(),
+    executeAuthorized: execute,
+  };
   return {
-    store: { execute: vi.fn().mockResolvedValue({ ok: true }) },
+    store: {
+      execute,
+      runInTransaction: async (work: (value: typeof tx) => Promise<unknown>) => work(tx),
+    },
     actors: { getVerifiedActor: vi.fn().mockResolvedValue(actor) },
     authorizer: { authorize: vi.fn().mockResolvedValue(true) },
   };
@@ -57,7 +66,7 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
   it('przekazuje konkretny zakres i serwerowego aktora do autoryzatora oraz portu', async () => {
     const deps = setup();
     await manageAccess(command, deps);
-    expect(deps.authorizer.authorize).toHaveBeenCalledWith(actor, command);
+    expect(deps.authorizer.authorize).toHaveBeenCalledWith(actor, command, expect.any(Object));
     expect(deps.store.execute).toHaveBeenCalledWith(command, actor);
   });
   it('nie ufa actorId/roli w komendzie; kopia jest zamrożona przed await', async () => {
@@ -182,7 +191,16 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
     };
 
     const authorizer = createTenantAccessManagementAuthorizer(dataSource, { now: () => now });
-    const store = { execute: vi.fn().mockResolvedValue({ ok: true }) };
+    const execute = vi.fn().mockResolvedValue({ ok: true });
+    const tx = {
+      ...dataSource,
+      verifyActorAccount: async () => true,
+      executeAuthorized: execute,
+    };
+    const store = {
+      execute,
+      runInTransaction: async (work: (value: typeof tx) => Promise<unknown>) => work(tx),
+    };
 
     await expect(manageAccess(grantCommand, { store, actors, authorizer })).resolves.toEqual({
       ok: true,

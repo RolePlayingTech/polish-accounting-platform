@@ -51,13 +51,16 @@ export async function runManagedTransaction<TResult>(
   shouldCommit: (result: TResult) => boolean,
 ): Promise<TResult> {
   try {
-    return await db.transaction(async (tx) => {
-      const result = await work(tx);
-      if (!shouldCommit(result)) {
-        throw new RollbackTransactionWithValue(result);
-      }
-      return result;
-    });
+    return await db.transaction(
+      async (tx) => {
+        const result = await work(tx);
+        if (!shouldCommit(result)) {
+          throw new RollbackTransactionWithValue(result);
+        }
+        return result;
+      },
+      { isolationLevel: 'read committed' },
+    );
   } catch (error) {
     if (isRollbackWithValue<TResult>(error)) {
       return error.value;
