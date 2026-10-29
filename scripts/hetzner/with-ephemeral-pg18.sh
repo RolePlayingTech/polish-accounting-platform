@@ -137,6 +137,26 @@ get_user_manager_cgroup_dir() {
   printf '%s/user.slice/user-%s.slice/user@%s.service' "$(get_cgroup_root_dir)" "$(id -u)" "$(id -u)"
 }
 
+get_pg_ready_max_attempts() {
+  printf '%s' "30"
+}
+
+get_pg_ready_sleep_sec() {
+  printf '%s' "1"
+}
+
+exec_container_super_psql() {
+  local target_db="$1"
+  shift
+  docker exec -i -u postgres "${CONTAINER_NAME}" sh -eu -c '
+    target_db="$1"
+    shift
+    export PGPASSWORD
+    PGPASSWORD="$(cat /run/secrets/pg_pass)"
+    exec psql -X -w -q -v ON_ERROR_STOP=1 -U postgres -d "${target_db}" "$@"
+  ' sh "${target_db}" "$@"
+}
+
 usage() {
   cat <<'EOF'
 Użycie:
@@ -825,24 +845,32 @@ main() {
       -c log_disconnections=off >/dev/null
 
   local port_binding
-  port_binding="$(docker port "${CONTAINER_NAME}" 5432/tcp)"
+  port_binding="$(docker port "${CONTAINER_NAME}" 5432/tcp 2>/dev/null || true)"
   if [[ "${port_binding}" != "127.0.0.1:${PORT}" ]]; then
-    log_error "Niedozwolone bindowanie portu kontenera (${port_binding}); oczekiwano wyłącznie 127.0.0.1:${PORT}."
+    log_error "Niedozwolone lub brakujące bindowanie portu kontenera (${port_binding:-brak}); oczekiwano wyłącznie 127.0.0.1:${PORT}."
     exit 4
   fi
 
   local ready=0
-  local attempt
-  for attempt in $(seq 1 30); do
+  local attempt=0
+  local max_ready_attempts ready_sleep_sec running_state
+  max_ready_attempts="$(get_pg_ready_max_attempts)"
+  ready_sleep_sec="$(get_pg_ready_sleep_sec)"
+  for attempt in $(seq 1 "${max_ready_attempts}"); do
+    running_state="$(docker container inspect --format '{{.State.Running}}' "${CONTAINER_NAME}" 2>/dev/null || printf 'unknown')"
+    if [[ "${running_state}" == "false" ]]; then
+      log_error "Kontener PostgreSQL 18.6 (${CONTAINER_NAME}) zakończył działanie przed osiągnięciem gotowości (próba ${attempt})."
+      exit 4
+    fi
     if docker exec "${CONTAINER_NAME}" pg_isready -h 127.0.0.1 -U "${init_user}" -d "${init_db}" >/dev/null 2>&1; then
       ready=1
       break
     fi
-    sleep 1
+    sleep "${ready_sleep_sec}"
   done
 
   if (( ready == 0 )); then
-    log_error "Kontener PostgreSQL 18.6 nie osiągnął gotowości w ciągu 30 sekund (prób: ${attempt})."
+    log_error "Kontener PostgreSQL 18.6 nie osiągnął gotowości w wymaganym czasie (prób: ${attempt})."
     exit 4
   fi
 
@@ -851,38 +879,56 @@ main() {
 
   if [[ "${MODE}" == "strict-migrator" ]]; then
     test_db_password="$(openssl rand -hex 24)"
-    docker exec -i "${CONTAINER_NAME}" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres <<SQL
+    if ! exec_container_super_psql postgres <<SQL
 \\set migrator_pass '${test_db_password}'
 CREATE ROLE pap_test LOGIN PASSWORD :'migrator_pass'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 CREATE DATABASE pap_test OWNER pap_test ENCODING 'UTF8' TEMPLATE template0;
 GRANT SET ON PARAMETER deadlock_timeout TO pap_test;
 SQL
+    then
+      log_error "Inicjalizacja roli migratora pap_test w trybie strict-migrator nie powiodła się."
+      exit 4
+    fi
 
     if (( BOOTSTRAP_RUNTIME_ROLE == 1 )); then
       local runtime_password
       runtime_password="$(openssl rand -hex 24)"
-      docker exec -i "${CONTAINER_NAME}" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d pap_test <<SQL
+      if ! exec_container_super_psql pap_test <<SQL
 \\set runtime_pass '${runtime_password}'
 CREATE ROLE pap_test_app LOGIN PASSWORD :'runtime_pass'
   NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 SQL
+      then
+        log_error "Inicjalizacja roli aplikacyjnej pap_test_app w trybie strict-migrator nie powiodła się."
+        exit 4
+      fi
       runtime_db_url="postgres://pap_test_app:${runtime_password}@127.0.0.1:${PORT}/pap_test"
     fi
 
-    # Blokada logowania superusera postgres po TCP (127.0.0.1:${PORT}) w trybie strict-migrator.
-    docker exec -i "${CONTAINER_NAME}" sh -eu -c '
-      HBA_FILE="$(psql -X -q -t -A -U postgres -d postgres -c "SHOW hba_file")"
-      TMP_HBA="${HBA_FILE}.tmp"
+    # Blokada logowania superusera postgres po TCP (127.0.0.1:${PORT}) w trybie strict-migrator
+    # (uwierzytelnienie po gnieździe Unix z PGPASSWORD odczytanym wewnątrz kontenera z /run/secrets/pg_pass).
+    if ! docker exec -i -u postgres "${CONTAINER_NAME}" sh -eu -c '
+      export PGPASSWORD
+      PGPASSWORD="$(cat /run/secrets/pg_pass)"
+      HBA_FILE="$(psql -X -w -q -t -A -v ON_ERROR_STOP=1 -U postgres -d postgres -c "SHOW hba_file")"
+      if [ -z "${HBA_FILE}" ] || [ ! -f "${HBA_FILE}" ]; then
+        echo "Nie udało się ustalić pliku pg_hba.conf (${HBA_FILE:-brak})." >&2
+        exit 4
+      fi
+      TMP_HBA="${HBA_FILE}.pap.tmp"
+      umask 077
       {
         printf "host all postgres 0.0.0.0/0 reject\n"
         printf "host all postgres ::/0 reject\n"
         cat "${HBA_FILE}"
       } > "${TMP_HBA}"
-      cat "${TMP_HBA}" > "${HBA_FILE}"
-      rm -f "${TMP_HBA}"
-      psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres -c "SELECT pg_reload_conf();" >/dev/null
-    '
+      mv -f "${TMP_HBA}" "${HBA_FILE}"
+      psql -X -w -q -v ON_ERROR_STOP=1 -U postgres -d postgres -c "SELECT pg_reload_conf();" >/dev/null
+    '; then
+      log_error "Utwardzenie pg_hba.conf w trybie strict-migrator nie powiodło się."
+      exit 4
+    fi
   fi
 
   local test_db_url="postgres://pap_test:${test_db_password}@127.0.0.1:${PORT}/pap_test"

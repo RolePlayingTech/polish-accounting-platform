@@ -34,8 +34,8 @@ Wszystkie poniższe wartości zostały odczytane bezinwazyjnie przez `ssh hetzne
   - `pap-staging-api.service` (`127.0.0.1:4100`, `MemoryCurrent ~31–41 MiB`)
   - `pap-staging-web.service` (`127.0.0.1:3100`, `MemoryCurrent ~49–70 MiB`)
   - `pap-staging-healthcheck.timer` (`active/waiting`)
-  - Izolowany runtime w `/opt/pap-runtime` (zgodny z `package.json`):
-    - **Node.js `v24.22.1`** w `/opt/pap-runtime/current/bin/node`,
+  - Izolowany runtime w `/opt/pap-runtime` (zgodny z `package.json`, podczas gdy domyślny systemowy `/usr/bin/node` to `v20.20.2` bez `pnpm` w `PATH`):
+    - **Node.js `v24.22.1`** w `/opt/pap-runtime/current/bin/node` (`current -> node-v24.22.1-linux-x64`),
     - **pnpm `12.15.0`** w `/opt/pap-runtime/pnpm/pnpm` z cache offline w `/opt/pap-runtime/corepack-home/v1/pnpm/12.15.0` (**uwaga:** w `/opt/pap-runtime/current/bin` nie ma pliku `pnpm`, dlatego `PATH` musi zawierać oba katalogi: `/opt/pap-runtime/pnpm:/opt/pap-runtime/current/bin`, wraz z `COREPACK_DEFAULT_TO_LATEST=0`).
 - **Dostępne mechanizmy izolacji i limitowania zasobów (`[Potwierdzone na serwerze]`):**
   1. **Docker + cgroups v2 (`CgroupDriver=systemd`, `CgroupVersion=2`):** potwierdzone wsparcie `MemoryLimit=true`, `SwapLimit=true`, `pids-limit`, `SecurityOptions=[apparmor, seccomp(builtin), cgroupns]`, `no-new-privileges:true`, `--cap-drop=NET_RAW`, prywatnych sieci bridge (`enable_icc=false`) i bindowania wyłącznie do `127.0.0.1`.
@@ -100,7 +100,7 @@ Skrypt [`scripts/hetzner/with-ephemeral-pg18.sh`](../scripts/hetzner/with-epheme
 ### 3.4. Ochrona sekretów i gwarantowane sprzątanie (`cleanup`)
 
 - **Ochrona poświadczeń i logów:**
-  - Losowe 192-bitowe hasła generowane per uruchomienie (`openssl rand -hex 24`), przekazywane do kontenera przez plik `POSTGRES_PASSWORD_FILE=/run/secrets/pg_pass` (`scram-sha-256`), a do procesu testowego przez `export` w subshellu poprzedzającym `exec` (brak haseł w `ps aux` i `docker inspect`).
+  - Losowe 192-bitowe hasła generowane per uruchomienie (`openssl rand -hex 24`), przekazywane do kontenera przez plik `POSTGRES_PASSWORD_FILE=/run/secrets/pg_pass` (`scram-sha-256`), w trybie `strict-migrator` odczytywane przez lokalne `psql` wewnątrz kontenera (`docker exec -i -u postgres` z `/run/secrets/pg_pass`, bez flag `-e PGPASSWORD=...` na hoście), a do procesu testowego przekazywane przez `export` w subshellu poprzedzającym `exec` (brak haseł w `ps aux` i `docker inspect`).
   - Wyłączone logowanie zapytań SQL (`log_statement=none`), blokada logowania superusera `postgres` po TCP (`0.0.0.0/0` i `::/0` `reject` w `pg_hba.conf`) w trybie `--mode strict-migrator` oraz konserwatywne timeouty silnika (`statement_timeout=30s`, `lock_timeout=10s`, `idle_in_transaction_session_timeout=15s`, `max_connections=32`).
 - **Cztery zweryfikowane ścieżki sprzątania (bez ryzyka usunięcia istniejących zasobów serwera):**
   1. **Sukces (`exit 0`):** zamknięcie scope'a, wyczyszczenie plików PG, `docker rm -fv`, `rm -rf --one-file-system "${RUN_DIR}"`, `docker network rm` oraz weryfikacja nieistnienia kontenera, katalogu i sieci (w razie pozostawienia czegokolwiek wymusza kod błędu `5` zamiast `0`).
