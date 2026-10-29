@@ -10,7 +10,15 @@ Projekt: Polish Accounting Platform. Wszystkie zmiany projektuj dla jurysdykcji 
 - [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md): propozycja rozdziału administratora platformy, tenanta i księgowego oraz przygotowanie przyszłych abonamentów. Nie wdrażać płatności w #5.
 - [Brief UX i kierunek wizualny](docs/21-kierunek-wizualny.md): prosta, rozpoznawalna i przyjemna aplikacja do pracy, bez generycznego „AI dashboardu”; wzorce designu podlegają walidacji w [Issue #13](https://github.com/RolePlayingTech/polish-accounting-platform/issues/13).
 
-Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający moduł, ale respektuj spójność i autoryzację. W E1-01 (#5) stwórz faktycznie działające skrypty CI/build/test; dzisiejsze README to specyfikacja, a nie działająca aplikacja.
+Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający moduł, ale respektuj spójność i autoryzację. Skrypty build/test utrzymuj działające, ale ich bieżąca walidacja CI odbywa się na Hetznerze według zasad poniżej. Nie traktuj dokumentacji ani dawnych wyników GitHub Actions jako dowodu aktualnego odbioru.
+
+## Obowiązujący tryb środowisk i CI (decyzja właściciela, 2026-10-29)
+- **GitHub Actions jest tymczasowo wyłączone z automatycznego CI.** Agent nie uruchamia workflow, nie ponawia jobów, nie oczekuje na ich zakończenie i nie traktuje zielonych statusów GitHub jako wymaganego warunku review/merge. GitHub pozostaje miejscem zarządzania kodem, PR i Issue. Przywrócenie Actions wymaga odrębnej decyzji właściciela.
+- **Wszystkie bieżące procesy CI, w tym testy integracyjne PostgreSQL i testy migracji, realizujemy na serwerze Hetzner** w *odizolowanym środowisku testowym*, nigdy na istniejących danych aplikacji. Gdy środowisko agenta udostępnia skonfigurowany alias SSH, użyj `ssh hetzner` (serwer `hetz-1`); nie zakładaj, że każdy agent ma dostęp SSH.
+- Aplikacja na Hetznerze jest obecnie **nieprodukcyjna i przeznaczona do użytku własnego**. To nie jest zgoda na zmiany serwisów, konfiguracji, nginx, DNS, certyfikatów, baz ani automatyczne wdrożenia. Przed ingerencją poza izolowanym środowiskiem testowym ustal zakres i uzyskaj zgodę właściciela. Nie dotykaj istniejących usług, danych ani wolumenów; wymagane są limity zasobów, timeouty i sprzątanie zasobów testowych.
+- Przy tworzeniu funkcjonalności uruchamiaj **minimalne, celowane testy** i podstawowe kontrole adekwatne do zmian. Pełną walidację regresyjną, E2E i audyt bezpieczeństwa można zlecić oddzielnemu agentowi przed scaleniem. Dla zmian autoryzacji, RLS i migracji obowiązkowe są odpowiednie testy negatywne/integracyjne na Hetznerze przed odbiorem; nie rezygnuj z krytycznych testów tylko ze względu na koszt.
+- Opis każdego PR musi rozróżniać testy wykonane, pominięte i oczekujące; podawać SHA, środowisko (Hetzner), polecenia, wyniki oraz istotne ograniczenia. Nie oznaczaj testów jako zaliczonych bez faktycznego uruchomienia na wskazanym SHA.
+- Dotychczasowy [ADR-005](docs/adr/005-rozwoj-lokalny.md) opisuje wcześniejszy sposób pracy. W zakresie miejsca uruchamiania CI i prawa używania izolowanego Hetznera nadrzędny jest [ADR-006](docs/adr/006-tymczasowe-ci-hetzner.md). Zwykły rozwój lokalny pozostaje możliwy, ale nie jest bieżącą ścieżką integracyjnej walidacji CI.
 
 ## Zasady bezwzględne
 1. Priorytet: bezpieczeństwo danych, zgodność, audytowalność, dopiero potem funkcje.
@@ -38,7 +46,7 @@ Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający 
 - Agent implementacyjny wykonuje minimalne testy celowane zmienionego modułu, scenariusze negatywne, kontrolę typów i statyczny przegląd migracji.
 - Osobny etap/agenta walidacyjnego obowiązuje pełna kontrola regresji, integracji i bezpieczeństwa. Nie uruchamiaj pełnego zestawu wielokrotnie po drobnych zmianach.
 - Niewykonany test oznaczaj jako **nieweryfikowany**, nigdy jako zaliczony. Podaj komendy i wymagania środowiska w przekazaniu.
-- Krytyczne PR-y pozostają Draft do pełnego odbioru przed scaleniem. Nie wyłączaj ani nie obchodź automatycznego CI.
+- Krytyczne PR-y pozostają Draft do pełnego odbioru przed scaleniem. Zgodnie z nowszą decyzją właściciela (#29) CI wykonujemy na izolowanym Hetznerze; nie uruchamiaj, nie wznawiaj ani nie zmieniaj wyzwalaczy GitHub Actions bez odrębnej decyzji.
 
 ## Granice operacyjne
 
