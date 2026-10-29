@@ -7,8 +7,19 @@ Rollback chronionej operacji usuwa także jej zwykły INSERT audytu. Dlatego:
 
 - Allow operacji firmowej i administracyjnej zapisujemy w tej samej TX co efekt.
   Brak INSERT lub jego awaria uniemożliwia COMMIT.
-- Deny oraz allow zakończone rollbackiem zapisujemy osobną krótką TX dopiero po
-  zwolnieniu połączenia/blokad poprzedniej. Działa także z pulą max=1.
+- Deny oraz allow zakończone **potwierdzonym** rollbackiem (`rolled_back`) zapisujemy
+  osobną krótką TX dopiero po zwolnieniu połączenia/blokad poprzedniej. Działa także z pulą max=1.
+- Nie wolno utożsamiać dowolnego odrzucenia Promise transakcji po autoryzacji z potwierdzonym
+  rollbackiem (SEC-03). Jeśli błąd wystąpił po wejściu w fazę `COMMIT` albo baza nie
+  potwierdziła wykonania `ROLLBACK`, wynik zakończenia transakcji jest niepewny:
+  aplikacja zwraca fail-closed `transaction_outcome_unknown` (HTTP 503), nie ponawia
+  automatycznie callbacku biznesowego i nie zapisuje fałszywego `allow/rolled_back`.
+  Gdy DB jest dostępna na świeżym połączeniu, utrwala jawny wpis `allow/outcome_unknown`
+  (`reason = 'transaction_outcome_unknown'`, bez FK `access_management_operation_id`).
+  Jeżeli serwer PostgreSQL zdążył wykonać `COMMIT` przed utratą potwierdzenia, w bazie
+  pozostaje również atomowy wpis `allow/committed` z tej samej transakcji; system nie
+  deklaruje pozornej gwarancji `exactly-once`, której sieć i PostgreSQL nie zapewniają,
+  lecz opiera bezpieczne ponowienie na idempotentnym `operation_id`.
 - Bramka HTTP zapisuje preflight, odróżniony od committed. Jej allow nie daje prawa
   późniejszego zapisu. Wczesne odrzucenia transportowe mają actor_id NULL, bez
   zgadywania tożsamości z JWT, nagłówka lub body.
@@ -33,11 +44,14 @@ committed w tej samej rzeczywistej TX i zakresie. Dla lifecycle wymagany jest r�
 access_management_event. Idempotentne powtórzenie nie powiela mutacji/receipt,
 ale zapisuje nową decyzję z linkiem do istniejącej operacji.
 
-Awaria atomowego audytu wycofuje efekt i zwraca authorization_audit_unavailable.
-Próbujemy osobno utrwalić allow/rolled_back; awaria tej ścieżki również nie może dać
-sukcesu. Awaria bazy może uniemożliwić zapis całej odmowy — nie deklarujemy wtedy
-trwałego śladu. HTTP zwraca 503 bez szczegółów SQL; nie udajemy dostarczenia audytu
-przez log tekstowy ani nie wprowadzamy nieograniczonego retry/outbox na tym etapie.
+Awaria atomowego audytu przed `COMMIT` wycofuje efekt i zwraca `authorization_audit_unavailable`.
+Po potwierdzonym `ROLLBACK` próbujemy osobno utrwalić `allow/rolled_back`; awaria tej ścieżki
+również nie może dać sukcesu. Przy utracie potwierdzenia zakończenia transakcji (`outcome_unknown`)
+priorytetem jest zachowanie sygnału `transaction_outcome_unknown`, nawet gdy best-effort zapis
+wpisu niepewności także nie powiedzie się z powodu niedostępności bazy. Awaria bazy może
+uniemożliwić zapis całej odmowy lub śladu niepewności — nie deklarujemy wtedy trwałego śladu
+poza ewentualnie zatwierdzoną transakcją główną. HTTP zwraca 503 bez szczegółów SQL; nie udajemy
+dostarczenia audytu przez log tekstowy ani nie wprowadzamy automatycznego retry/outbox na tym etapie.
 
 Hardening C obejmuje też odebranie zastanych grantów kolumnowych (zwykły REVOKE na
 tabeli ich nie usuwa), odmowę roli z SET session_replication_role i porównanie wszystkich

@@ -46,11 +46,12 @@ Publiczny AppModule i MCP nadal nie udostępniają danych/operacji księgowych.
 - Migracje 0004 i 0005; 0000–0003 bez zmian. 11 tabel z ENABLE/FORCE RLS, przypięte
   search_path definerów, bootstrap/ACL/klucz poza automatycznym startem/migracją.
 - Syntetyczny, idempotentny company_operation_probe jako przykład chronionego zapisu.
-- Allow i efekt w jednej TX; deny/rollback zapisane po jej zakończeniu osobną TX.
+- Allow i efekt w jednej TX; deny oraz potwierdzony rollback zapisane po jej zakończeniu osobną TX;
+  utrata potwierdzenia COMMIT / niepotwierdzony rollback klasyfikowana jako `outcome_unknown` (SEC-03).
   Dokładny payload audytu jest podpisany osobno. Audit writer ma allowlistę pól/kodów.
 - Constraint triggers wymagają audytu runtime mutacji na COMMIT. Runtime nie czyta
   globalnego audytu, nie modyfikuje ani nie usuwa wpisów i nie ma TRUNCATE/DDL/trigger bypass.
-- Obsługa HTTP korelacji, audytu preflight/transport, 503 przy awarii audytu.
+- Obsługa HTTP korelacji, audytu preflight/transport, 503 przy awarii audytu oraz przy niepewnym wyniku TX.
 
 ## Minimalne testy wykonane w sesji
 
@@ -180,14 +181,20 @@ Nie uruchamiać Actions. Wyniki zapisać z SHA, wersją PG, izolacją, komendą 
    nie obiecuje anulowania operacji tylko dlatego, że termin minął już po decyzji.
 9. Bezpośrednie execute/executeAuthorized nie omijają polityki. Fałszowanie kind,
    grantId, dat, roli, aktora i tenant/company w SQL nie zmienia zatwierdzonej komendy.
-10. Atomowość: brak audytu na COMMIT, awaria jego INSERT oraz awaria samej operacji
-    wycofują efekt. Deny i allow/rolled_back pozostają poza rollbackiem głównej TX.
-    Awaria osobnego audytu daje audit_unavailable, nigdy sukces.
+10. Atomowość i niepewność zakończenia TX (SEC-03): brak audytu na COMMIT, awaria jego
+    INSERT oraz awaria samej operacji przed COMMIT z potwierdzonym `ROLLBACK` wycofują efekt
+    i zapisują `allow/rolled_back`. Zerwanie połączenia lub utrata potwierdzenia po wejściu
+    w fazę `COMMIT` (np. `08007` / zamknięcie gniazda po zatwierdzeniu po stronie PG)
+    zwraca fail-closed `transaction_outcome_unknown` (HTTP 503), **nigdy** nie zapisuje
+    fałszywego `rolled_back`, nie ponawia automatycznie callbacku, a przy ponowieniu z tym
+    samym `operationId` zachowuje idempotencję (jeden efekt i spójny ślad audytu).
 11. Idempotencja: powtórzenie potwierdzenia, konflikt payload/aktora/firmy, retry po
-    utracie uprawnień; jeden efekt/access_management_event i osobne decyzje.
-12. Audyt: realny serwerowy aktor, preflight vs committed vs denied/rolled_back,
-    request/operation/FK, append-only, brak możliwości samodzielnego INSERT bez podpisu,
-    brak tokenów/sekretów/dokumentów/SQL w DB, HTTP i logach błędów.
+    utracie uprawnień oraz ponowienie po `transaction_outcome_unknown`; jeden efekt /
+    `access_management_event` i osobne decyzje.
+12. Audyt: realny serwerowy aktor, preflight vs committed vs denied / rolled_back /
+    outcome_unknown, request/operation/FK (`outcome_unknown` zawsze z `access_management_operation_id IS NULL`),
+    append-only, brak możliwości samodzielnego INSERT bez podpisu, brak tokenów/sekretów/dokumentów/SQL
+    w DB, HTTP i logach błędów.
 
 ## Ryzyka i miejsca review
 

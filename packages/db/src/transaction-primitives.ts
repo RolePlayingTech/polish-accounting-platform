@@ -1,5 +1,7 @@
 import {
+  ConfirmedTransactionRollbackError,
   freezeTransactionActor,
+  TransactionOutcomeUnknownError,
   type LockedTenantAuthorizationFacts,
   type TenantAuthorizationQuery,
   type TransactionActor,
@@ -20,6 +22,7 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 export type PostgresTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 const ROLLBACK_BRAND = Symbol('pap.rollback_with_value');
+const PRE_COMMIT_ABORT_BRAND = Symbol('pap.pre_commit_abort');
 
 class RollbackTransactionWithValue<T> extends Error {
   readonly [ROLLBACK_BRAND] = true;
@@ -27,6 +30,22 @@ class RollbackTransactionWithValue<T> extends Error {
   constructor(readonly value: T) {
     super('Transakcja wycofana po kontrolowanej odmowie.');
     this.name = 'RollbackTransactionWithValue';
+  }
+}
+
+/**
+ * Wewnętrzny nośnik przerwania sprzed fazy COMMIT.
+ * W `postgres.js` (`scope`) wyjątek rzucony z callbacku powoduje wykonanie `await sql\`rollback\``,
+ * a ten sam obiekt błędu wraca wyłącznie wtedy, gdy serwer PostgreSQL potwierdził `ROLLBACK`.
+ * Jeśli `ROLLBACK` lub późniejszy `COMMIT` utraci połączenie/potwierdzenie, `postgres.js`
+ * odrzuci Promise błędem transportowym/protokołu zamiast tego nośnika.
+ */
+class PreCommitAbortCarrier extends Error {
+  readonly [PRE_COMMIT_ABORT_BRAND] = true;
+
+  constructor(readonly originalError: unknown) {
+    super('Przerwanie transakcji przed fazą COMMIT.');
+    this.name = 'PreCommitAbortCarrier';
   }
 }
 
@@ -39,33 +58,56 @@ function isRollbackWithValue<T>(error: unknown): error is RollbackTransactionWit
   );
 }
 
+function isPreCommitAbortCarrier(error: unknown): error is PreCommitAbortCarrier {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    PRE_COMMIT_ABORT_BRAND in error &&
+    (error as { readonly [PRE_COMMIT_ABORT_BRAND]?: unknown })[PRE_COMMIT_ABORT_BRAND] === true
+  );
+}
+
 /**
- * Wykonuje pracę w jednej transakcji PostgreSQL i wymusza fizyczny ROLLBACK,
- * gdy predykat `shouldCommit(result)` zwróci `false` (np. odmowa autoryzacji lub walidacji).
- * Zwalnia wszystkie blokady wierszowe, czyści lokalne zmienne GUC (`set_config(..., true)`)
- * i zwraca połączenie do puli w czystym stanie bez wycieku mutacji.
+ * Wykonuje pracę w jednej transakcji PostgreSQL i rozróżnia trzy stany zakończenia (SEC-03):
+ * 1) potwierdzony COMMIT (`db.transaction` rozwiązało się po `commitRequested = true`),
+ * 2) potwierdzony ROLLBACK przed fazą COMMIT (zwraca `result` przy `shouldCommit(result) === false`
+ *    lub rzuca `ConfirmedTransactionRollbackError` dla wyjątku z `work`),
+ * 3) niepewny wynik zakończenia transakcji (`TransactionOutcomeUnknownError`), m.in. gdy błąd
+ *    wystąpił po wejściu w fazę `COMMIT` albo gdy `ROLLBACK` nie został potwierdzony.
  */
 export async function runManagedTransaction<TResult>(
   db: Pick<Database, 'transaction'>,
   work: (tx: PostgresTransaction) => Promise<TResult>,
   shouldCommit: (result: TResult) => boolean,
 ): Promise<TResult> {
+  let commitRequested = false;
   try {
     return await db.transaction(
       async (tx) => {
-        const result = await work(tx);
-        if (!shouldCommit(result)) {
-          throw new RollbackTransactionWithValue(result);
+        let result: TResult;
+        try {
+          result = await work(tx);
+          if (!shouldCommit(result)) {
+            throw new RollbackTransactionWithValue(result);
+          }
+        } catch (error) {
+          throw new PreCommitAbortCarrier(error);
         }
+        commitRequested = true;
         return result;
       },
       { isolationLevel: 'read committed' },
     );
   } catch (error) {
-    if (isRollbackWithValue<TResult>(error)) {
-      return error.value;
+    if (!commitRequested && isPreCommitAbortCarrier(error)) {
+      if (isRollbackWithValue<TResult>(error.originalError)) {
+        return error.originalError.value;
+      }
+      throw new ConfirmedTransactionRollbackError(error.originalError);
     }
-    throw error;
+    throw new TransactionOutcomeUnknownError(
+      isPreCommitAbortCarrier(error) ? error.originalError : error,
+    );
   }
 }
 
@@ -162,7 +204,7 @@ export async function verifyAndLockActorInTx(
 
 /**
  * Ustawia parametry sesyjne PostgreSQL ograniczone wyłącznie do bieżącej transakcji (`is_local = true`).
- * Przygotowuje UnitOfWork pod przyszłe polityki PostgreSQL RLS i ograniczoną rolę runtime w etapie 6D-3B.
+ * Przygotowuje UnitOfWork pod przyszłe polityki PostgreSQL RLS i ograniczoną rolą runtime w etapie 6D-3B.
  * UWAGA: W etapie 6D-3A samo ustawienie zmiennych GUC nie włącza jeszcze polityk RLS na tabelach.
  */
 export async function applyLocalRlsSessionContext(

@@ -1,5 +1,6 @@
 import {
   copyAccessManagementCommand,
+  isConfirmedTransactionRollbackError,
   manageAccess,
   SecurityAuditUnavailableError,
   type SecurityAuditEvent,
@@ -196,13 +197,17 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         (result) => result.ok === true,
       );
     } catch (error) {
-      if (error instanceof SecurityAuditUnavailableError) {
-        return { ok: false, reason: 'authorization_audit_unavailable' };
+      // Tylko potwierdzony ROLLBACK przed COMMIT może zostać zmapowany na kontrolowaną odmowę.
+      // Niepotwierdzony wynik (`TransactionOutcomeUnknownError`) jest propagowany do `manageAccess`.
+      if (isConfirmedTransactionRollbackError(error)) {
+        if (error.cause instanceof SecurityAuditUnavailableError) {
+          return { ok: false, reason: 'authorization_audit_unavailable' };
+        }
+        if (isUniqueGrantConflict(error.cause)) {
+          return { ok: false, reason: 'operation_conflict' };
+        }
       }
-      if (isUniqueGrantConflict(error)) {
-        return { ok: false, reason: 'operation_conflict' };
-      }
-      return { ok: false, reason: 'access_management_unavailable' };
+      throw error;
     }
   }
 

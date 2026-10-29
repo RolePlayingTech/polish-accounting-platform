@@ -98,7 +98,7 @@ describe('Kontrakt plików migracji', () => {
     expect(migration).not.toMatch(/INSERT INTO security_context_key/i);
   });
 
-  it('audyt jest append-only, wiąże TX i wymaga śladu przy COMMIT', () => {
+  it('audyt jest append-only, wiąże TX, rozróżnia outcome_unknown (SEC-03) i wymaga śladu przy COMMIT', () => {
     const migration = readFileSync(
       new URL('../drizzle/0005_security-audit.sql', import.meta.url),
       'utf8',
@@ -112,6 +112,9 @@ describe('Kontrakt plików migracji', () => {
       'FOR byte_index IN 0..31',
       'pap_access_event_insert',
       'access_management_operation_id',
+      "'outcome_unknown'",
+      "'transaction_outcome_unknown'",
+      "reason = 'transaction_outcome_unknown' AND access_management_operation_id IS NULL",
     ]) {
       expect(migration).toContain(fragment);
     }

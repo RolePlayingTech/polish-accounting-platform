@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   auditIdentifier,
+  SECURITY_AUDIT_OUTCOMES,
   SECURITY_AUDIT_REASONS,
   SecurityAuditUnavailableError,
   type SecurityAuditEvent,
@@ -34,10 +35,37 @@ export async function appendSecurityDecision(
       !actions.includes(event.action) ||
       !['company', 'access', 'preflight', 'transport'].includes(event.kind) ||
       !['allow', 'deny'].includes(event.decision) ||
-      !['committed', 'denied', 'rolled_back', 'preflight'].includes(event.outcome)
+      !(SECURITY_AUDIT_OUTCOMES as readonly string[]).includes(event.outcome)
     ) {
       throw new SecurityAuditUnavailableError();
     }
+
+    const actorId = auditIdentifier(event.actorId);
+    const tenantId = auditIdentifier(event.tenantId);
+    const accessManagementOperationId = auditIdentifier(event.accessManagementOperationId);
+    const isAllow = event.decision === 'allow';
+    const validDecisionOutcome = isAllow ? event.outcome !== 'denied' : event.outcome === 'denied';
+    const validPostAuthOutcome =
+      (event.outcome !== 'rolled_back' && event.outcome !== 'outcome_unknown') ||
+      (isAllow &&
+        (event.kind === 'company' || event.kind === 'access') &&
+        actorId !== null &&
+        tenantId !== null);
+    const validUnknownOutcome =
+      event.outcome === 'outcome_unknown'
+        ? event.reason === 'transaction_outcome_unknown' && accessManagementOperationId === null
+        : event.reason !== 'transaction_outcome_unknown';
+    const validCommitted =
+      event.outcome !== 'committed' ||
+      (isAllow &&
+        actorId !== null &&
+        tenantId !== null &&
+        (event.kind !== 'access' || accessManagementOperationId !== null));
+
+    if (!validDecisionOutcome || !validPostAuthOutcome || !validUnknownOutcome || !validCommitted) {
+      throw new SecurityAuditUnavailableError();
+    }
+
     const decidedAt = event.decidedAt
       ? new Date(event.decidedAt)
       : await readTransactionClockNow(tx);
@@ -46,10 +74,10 @@ export async function appendSecurityDecision(
       id: randomUUID(),
       requestId: auditIdentifier(event.requestId) ?? randomUUID(),
       operationId: auditIdentifier(event.operationId),
-      accessManagementOperationId: auditIdentifier(event.accessManagementOperationId),
-      actorId: auditIdentifier(event.actorId),
+      accessManagementOperationId,
+      actorId,
       targetUserId: auditIdentifier(event.targetUserId),
-      tenantId: auditIdentifier(event.tenantId),
+      tenantId,
       legalEntityId: auditIdentifier(event.legalEntityId),
       action: event.action,
       kind: event.kind,
@@ -84,7 +112,7 @@ export async function appendSecurityDecision(
   }
 }
 
-/** Osobne, krótkie TX odmów/rollbacków. Nie trzyma połączenia z przerwanej TX. */
+/** Osobne, krótkie TX odmów, potwierdzonych rollbacków i niepewności zakończenia. Nie trzyma połączenia z przerwanej TX. */
 export class PostgresSecurityAudit implements SecurityAuditRecorder {
   constructor(
     private readonly db: Pick<Database, 'transaction'>,

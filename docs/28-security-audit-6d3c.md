@@ -9,7 +9,8 @@ Kontrakt: [ADR-009](adr/009-atomowy-audyt-decyzji.md). Migracja 0005 rozszerza
 | Spoofing nagłówków/brak Bearer | kind=transport, actor=NULL | 503, brak dostępu |
 | Firma allow | Ta sama TX co callback, outcome=committed | Rollback efektu |
 | Firma deny | Oddzielna TX po rollbacku, outcome=denied | Fail-closed, audit_unavailable |
-| Autoryzowana operacja z błędem | Oddzielna TX, allow/rolled_back | Brak deklaracji trwałego śladu przy awarii DB |
+| Autoryzowana operacja z potwierdzonym rollbackiem | Oddzielna TX, allow/rolled_back | Tylko gdy błąd wystąpił przed COMMIT i DB potwierdziła ROLLBACK |
+| Utrata potwierdzenia COMMIT / niepotwierdzony rollback (SEC-03) | Best-effort allow/outcome_unknown (bez FK operacji) | Fail-closed `transaction_outcome_unknown` (503), bez auto-retry i bez fałszywego `rolled_back` |
 | Zmiana dostępu allow | access_management_event + security_decision_event w TX | Rollback obu wpisów i mutacji |
 | Idempotentne powtórzenie | Nowa decyzja z FK do istniejącej operacji | Bez powielenia mutacji |
 

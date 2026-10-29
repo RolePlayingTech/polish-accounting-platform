@@ -5,6 +5,7 @@ import {
   createOidcAccessManagementActorSource,
   createTenantAccessManagementAuthorizer,
   manageAccess,
+  TransactionOutcomeUnknownError,
   type AccessManagementActor,
   type AccessManagementAuthorizationDataSource,
   type AccessManagementAuthorizationFacts,
@@ -183,6 +184,7 @@ class ControlledAuthState
   platformRoles: PlatformRoleAssignment[] = [];
   failIdentityResolution = false;
   failAuthorizationDataSource = false;
+  loseCommitConfirmation = false;
   onAfterResolveIdentity: (() => void) | null = null;
   txCounter = 0;
   committedTransactions = 0;
@@ -198,6 +200,7 @@ class ControlledAuthState
     this.platformRoles = [];
     this.failIdentityResolution = false;
     this.failAuthorizationDataSource = false;
+    this.loseCommitConfirmation = false;
     this.onAfterResolveIdentity = null;
     this.txCounter = 0;
     this.committedTransactions = 0;
@@ -343,12 +346,19 @@ class ControlledAuthState
       if (shouldCommit(result)) {
         this.committedTransactions += 1;
         this.executedOperations += 1;
+        if (this.loseCommitConfirmation) {
+          throw new TransactionOutcomeUnknownError(
+            new Error('08007: connection closed during COMMIT password=synthetic-db-secret'),
+          );
+        }
       } else {
         this.rolledBackTransactions += 1;
       }
       return result;
     } catch (error) {
-      this.rolledBackTransactions += 1;
+      if (!(error instanceof TransactionOutcomeUnknownError)) {
+        this.rolledBackTransactions += 1;
+      }
       throw error;
     }
   }
@@ -1102,5 +1112,55 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
     expect(state.committedTransactions).toBe(0);
     expect(state.rolledBackTransactions).toBe(2);
     expect(state.executedOperations).toBe(0);
+  });
+
+  it('executeHttpAuthorizedCompanyAction przy utracie potwierdzenia COMMIT zwraca 503 bez fałszywego rolled_back i bez sekretów (SEC-03)', async () => {
+    state.grants.push({
+      grantId: id(111),
+      tenantId: TENANT_A,
+      userId: USER_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write',
+      validFrom: VALID_FROM,
+      validUntil: null,
+      revokedAt: null,
+    });
+    state.loseCommitConfirmation = true;
+
+    const token = await issueToken({ sub: 'Sub-User-A' });
+    const response = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).not.toContain('synthetic-db-secret');
+    expect(response.body).not.toContain('08007');
+    expect(response.body).not.toContain(token);
+    expect(state.committedTransactions).toBe(1);
+    expect(state.rolledBackTransactions).toBe(0);
+    expect(state.executedOperations).toBe(1);
+    expect(state.auditEvents).toEqual([
+      expect.objectContaining({
+        actorId: USER_A,
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        decision: 'allow',
+        outcome: 'committed',
+        reason: 'explicit_company_grant',
+      }),
+      expect.objectContaining({
+        actorId: USER_A,
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        decision: 'allow',
+        outcome: 'outcome_unknown',
+        reason: 'transaction_outcome_unknown',
+      }),
+    ]);
   });
 });

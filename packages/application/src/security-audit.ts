@@ -20,8 +20,19 @@ export const SECURITY_AUDIT_REASONS = [
   'authorization_audit_unavailable',
   'transport_rejected',
   'operation_failed',
+  'transaction_outcome_unknown',
 ] as const;
 export type SecurityAuditReason = (typeof SECURITY_AUDIT_REASONS)[number];
+
+export const SECURITY_AUDIT_OUTCOMES = [
+  'committed',
+  'denied',
+  'rolled_back',
+  'outcome_unknown',
+  'preflight',
+] as const;
+export type SecurityAuditOutcome = (typeof SECURITY_AUDIT_OUTCOMES)[number];
+
 export type SecurityAuditAction =
   | 'read'
   | 'write'
@@ -42,7 +53,7 @@ export interface SecurityAuditEvent {
   readonly action: SecurityAuditAction;
   readonly kind: 'company' | 'access' | 'preflight' | 'transport';
   readonly decision: 'allow' | 'deny';
-  readonly outcome: 'committed' | 'denied' | 'rolled_back' | 'preflight';
+  readonly outcome: SecurityAuditOutcome;
   readonly reason: SecurityAuditReason;
   readonly decidedAt?: string | undefined;
 }

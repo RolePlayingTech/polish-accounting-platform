@@ -63,14 +63,18 @@ ALTER TABLE security_decision_event ADD CONSTRAINT security_decision_codes_check
   decision IN ('allow','deny')
   AND kind IN ('company','access','preflight','transport')
   AND action IN ('read','write','revoke_membership','reactivate_membership','grant','revoke_grant','unknown')
-  AND outcome IN ('committed','denied','rolled_back','preflight')
-  AND (decision <> 'deny' OR outcome = 'denied')
+  AND outcome IN ('committed','denied','rolled_back','outcome_unknown','preflight')
+  AND ((decision = 'deny' AND outcome = 'denied') OR (decision = 'allow' AND outcome <> 'denied'))
+  AND (outcome NOT IN ('rolled_back','outcome_unknown') OR (decision = 'allow' AND kind IN ('company','access') AND actor_id IS NOT NULL AND tenant_id IS NOT NULL))
+  AND (outcome <> 'outcome_unknown' OR (reason = 'transaction_outcome_unknown' AND access_management_operation_id IS NULL))
+  AND (reason <> 'transaction_outcome_unknown' OR outcome = 'outcome_unknown')
   AND reason IN ('explicit_company_grant','authorized_tenant_administration','authentication_failed',
     'authorization_context_invalid','active_membership_required','explicit_company_grant_required',
     'identity_not_provisioned_or_disabled','authorization_data_unavailable','access_management_denied',
     'invalid_command','membership_unavailable','membership_inactive','membership_not_revoked',
     'grant_unavailable','operation_conflict','access_management_unavailable',
-    'authorization_audit_unavailable','transport_rejected','operation_failed')
+    'authorization_audit_unavailable','transport_rejected','operation_failed',
+    'transaction_outcome_unknown')
   AND isfinite(decided_at)
   AND (outcome <> 'committed' OR (decision = 'allow' AND actor_id IS NOT NULL AND tenant_id IS NOT NULL))
   AND (kind <> 'access' OR outcome <> 'committed' OR access_management_operation_id IS NOT NULL)

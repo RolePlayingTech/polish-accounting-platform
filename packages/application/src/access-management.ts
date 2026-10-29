@@ -18,10 +18,18 @@ import {
 import { systemClock, type Clock } from './tenant-authorization.js';
 import {
   freezeTransactionActor,
+  isConfirmedTransactionRollbackError,
+  isTransactionOutcomeUnknownError,
   type TransactionActor,
+  type TransactionEndResolution,
   type TransactionSessionContext,
 } from './transactional-unit-of-work.js';
-import { auditIdentifier, securityAuditReason, type SecurityAuditEvent } from './security-audit.js';
+import {
+  auditIdentifier,
+  securityAuditReason,
+  SecurityAuditUnavailableError,
+  type SecurityAuditEvent,
+} from './security-audit.js';
 
 interface AccessTarget {
   readonly operationId: string;
@@ -102,7 +110,8 @@ export type AccessManagementResult =
         | 'grant_unavailable'
         | 'operation_conflict'
         | 'access_management_unavailable'
-        | 'authorization_audit_unavailable';
+        | 'authorization_audit_unavailable'
+        | 'transaction_outcome_unknown';
     };
 
 /**
@@ -121,6 +130,9 @@ export interface AccessManagementTransaction extends AccessManagementAuthorizati
 /**
  * Infrastruktura gwarantuje transakcyjne powiązanie autoryzacji z mutacją (runInTransaction),
  * wspólną blokadę faktów i członkostwa, idempotencję oraz atomowy audyt.
+ * Wyjątek po potwierdzonym wycofaniu transakcji przed COMMIT powinien być opakowany w
+ * `ConfirmedTransactionRollbackError`; niepotwierdzony wynik zakończenia transakcji rzuca
+ * `TransactionOutcomeUnknownError`.
  */
 export interface AccessManagementStore {
   recordDeniedDecision(event: SecurityAuditEvent): Promise<void>;
@@ -270,8 +282,12 @@ async function manageAccessCore(
     readonly actors?: AccessManagementActorSource;
     readonly authorizer?: AccessManagementAuthorizer;
   },
-  onActor: (actorId: string) => void,
-  onAuthorized: () => void,
+  audit: {
+    actorId: string | null;
+    authorized: boolean;
+    commitPhaseEntered: boolean;
+    resolution: 'not_started' | TransactionEndResolution;
+  },
 ): Promise<AccessManagementResult> {
   let command: AccessManagementCommand;
   try {
@@ -285,17 +301,16 @@ async function manageAccessCore(
     const verified = await actors.getVerifiedActor();
     if (!verified) return { ok: false, reason: 'access_management_denied' };
     const actor = freezeTransactionActor(verified);
-    onActor(actor.userId);
+    audit.actorId = actor.userId;
 
     if (typeof store.runInTransaction === 'function') {
-      return await store.runInTransaction(async (tx): Promise<AccessManagementResult> => {
+      const txResult = await store.runInTransaction(async (tx): Promise<AccessManagementResult> => {
         if ((await tx.verifyActorAccount(actor)) !== true) {
           return { ok: false, reason: 'access_management_denied' };
         }
         if ((await authorizer.authorize(actor, command, tx)) !== true) {
           return { ok: false, reason: 'access_management_denied' };
         }
-        onAuthorized();
         if (tx.applySessionContext) {
           await tx.applySessionContext({
             actorUserId: actor.userId,
@@ -303,14 +318,63 @@ async function manageAccessCore(
             ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
           });
         }
-        return await tx.executeAuthorized(command, actor);
+        audit.authorized = true;
+        const executionResult = await tx.executeAuthorized(command, actor);
+        if (executionResult.ok) {
+          audit.commitPhaseEntered = true;
+        }
+        return executionResult;
       });
+
+      if (txResult.ok) {
+        audit.resolution = 'committed';
+        return txResult;
+      }
+
+      if (!audit.authorized) {
+        return txResult;
+      }
+
+      if (audit.commitPhaseEntered || txResult.reason === 'transaction_outcome_unknown') {
+        audit.resolution = 'outcome_unknown';
+        return { ok: false, reason: 'transaction_outcome_unknown' };
+      }
+
+      audit.resolution = 'rolled_back';
+      return txResult;
     }
 
     // Brak adaptera transakcyjnego nigdy nie uruchamia starej ścieżki check-then-write.
     return { ok: false, reason: 'access_management_unavailable' };
-  } catch {
-    return { ok: false, reason: 'access_management_unavailable' };
+  } catch (error) {
+    const rootError =
+      isConfirmedTransactionRollbackError(error) || isTransactionOutcomeUnknownError(error)
+        ? error.cause
+        : error;
+
+    if (!audit.authorized) {
+      return {
+        ok: false,
+        reason:
+          rootError instanceof SecurityAuditUnavailableError
+            ? 'authorization_audit_unavailable'
+            : 'access_management_unavailable',
+      };
+    }
+
+    if (!audit.commitPhaseEntered && isConfirmedTransactionRollbackError(error)) {
+      audit.resolution = 'rolled_back';
+      return {
+        ok: false,
+        reason:
+          error.cause instanceof SecurityAuditUnavailableError
+            ? 'authorization_audit_unavailable'
+            : 'access_management_unavailable',
+      };
+    }
+
+    audit.resolution = 'outcome_unknown';
+    return { ok: false, reason: 'transaction_outcome_unknown' };
   }
 }
 
@@ -333,31 +397,51 @@ export async function manageAccess(
   )
     ? input.kind
     : 'unknown';
-  let actorId: string | null = null;
-  let authorized = false;
-  const result = await manageAccessCore(
-    input,
-    dependencies,
-    (verified) => {
-      actorId = verified;
-    },
-    () => {
-      authorized = true;
-    },
-  );
+  const audit = {
+    actorId: null as string | null,
+    authorized: false,
+    commitPhaseEntered: false,
+    resolution: 'not_started' as 'not_started' | TransactionEndResolution,
+  };
+  const result = await manageAccessCore(input, dependencies, audit);
   if (!result.ok) {
+    if (
+      audit.resolution === 'outcome_unknown' ||
+      (audit.authorized && audit.resolution !== 'rolled_back')
+    ) {
+      try {
+        await dependencies.store.recordDeniedDecision({
+          requestId: operation,
+          operationId: operation,
+          actorId: audit.actorId,
+          targetUserId: target,
+          tenantId: tenant,
+          legalEntityId: entity,
+          action,
+          kind: 'access',
+          decision: 'allow',
+          outcome: 'outcome_unknown',
+          reason: 'transaction_outcome_unknown',
+        });
+      } catch {
+        // Baza danych może być nadal niedostępna po utracie potwierdzenia COMMIT;
+        // nie zastępujemy niepewności fałszywym rolled_back ani dostępem.
+      }
+      return { ok: false, reason: 'transaction_outcome_unknown' };
+    }
+
     try {
       await dependencies.store.recordDeniedDecision({
         requestId: operation,
         operationId: operation,
-        actorId,
+        actorId: audit.actorId,
         targetUserId: target,
         tenantId: tenant,
         legalEntityId: entity,
         action,
         kind: 'access',
-        decision: authorized ? 'allow' : 'deny',
-        outcome: authorized ? 'rolled_back' : 'denied',
+        decision: audit.authorized ? 'allow' : 'deny',
+        outcome: audit.authorized ? 'rolled_back' : 'denied',
         reason: securityAuditReason(result.reason),
       });
     } catch {
