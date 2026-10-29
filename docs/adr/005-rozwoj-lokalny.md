@@ -1,5 +1,7 @@
 # ADR-005 — Bieżący rozwój wyłącznie lokalny
 
+> Uzupełnienie 2026-10-29: poniższa decyzja opisuje historyczny etap local-only i nadal dostępny rozwój lokalny bez DB. ADR-006 rozszerza model o istniejący prywatny staging Hetzner oraz izolowane testy serwerowe. Lokalna instalacja PostgreSQL na komputerze właściciela nie jest wymagana. Nie znosi to blokad produkcyjnych, zasad separacji baz ani wymogu osobnej zgody na deployment, migracje i administrację działającego stagingu.
+
 - **Status:** decyzja właściciela projektu; do review wraz z pakietem 6A (PR #17).
 - **Data:** 2026-10-27
 - **Powiązania:** [ADR-002](002-stos-technologiczny-i-wdrozenia.md), [Issue #6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6).

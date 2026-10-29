@@ -1,9 +1,10 @@
 name: CI
 
+# CI uruchamiamy obecnie wyłącznie na Hetznerze (ADR-006).
+# Nie wznawiać GitHub Actions bez wyraźnej decyzji właściciela.
+# Tymczasowo bez automatycznych wyzwalaczy PR/push.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read

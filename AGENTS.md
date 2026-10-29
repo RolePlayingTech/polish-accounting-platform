@@ -10,7 +10,23 @@ Projekt: Polish Accounting Platform. Wszystkie zmiany projektuj dla jurysdykcji 
 - [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md): propozycja rozdziału administratora platformy, tenanta i księgowego oraz przygotowanie przyszłych abonamentów. Nie wdrażać płatności w #5.
 - [Brief UX i kierunek wizualny](docs/21-kierunek-wizualny.md): prosta, rozpoznawalna i przyjemna aplikacja do pracy, bez generycznego „AI dashboardu”; wzorce designu podlegają walidacji w [Issue #13](https://github.com/RolePlayingTech/polish-accounting-platform/issues/13).
 
-Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający moduł, ale respektuj spójność i autoryzację. W E1-01 (#5) stwórz faktycznie działające skrypty CI/build/test; dzisiejsze README to specyfikacja, a nie działająca aplikacja.
+Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający moduł, ale respektuj spójność i autoryzację. Skrypty build/test utrzymuj działające, ale ich bieżąca walidacja CI odbywa się na Hetznerze według zasad poniżej. Nie traktuj dokumentacji ani dawnych wyników GitHub Actions jako dowodu aktualnego odbioru.
+
+## Obowiązujący tryb środowisk i CI (decyzja właściciela, 2026-10-29)
+- **GitHub Actions jest tymczasowo wyłączone z automatycznego CI.** Agent nie uruchamia workflow, nie ponawia jobów, nie oczekuje na ich zakończenie i nie traktuje zielonych statusów GitHub jako wymaganego warunku review/merge. GitHub pozostaje miejscem zarządzania kodem, PR i Issue. Przywrócenie Actions wymaga odrębnej decyzji właściciela.
+- **Wszystkie bieżące procesy CI, w tym testy integracyjne PostgreSQL i testy migracji, realizujemy na serwerze Hetzner** w *odizolowanym środowisku testowym*, nigdy na istniejących danych aplikacji. Gdy środowisko agenta udostępnia skonfigurowany alias SSH, użyj `ssh hetzner` (serwer `hetz-1`); nie zakładaj, że każdy agent ma dostęp SSH.
+- Aplikacja na Hetznerze jest obecnie **nieprodukcyjna i przeznaczona do użytku własnego**. To nie jest zgoda na zmiany serwisów, konfiguracji, nginx, DNS, certyfikatów, baz ani automatyczne wdrożenia. Przed ingerencją poza izolowanym środowiskiem testowym ustal zakres i uzyskaj zgodę właściciela. Nie dotykaj istniejących usług, danych ani wolumenów; wymagane są limity zasobów, timeouty i sprzątanie zasobów testowych.
+- Przy tworzeniu funkcjonalności uruchamiaj **minimalne, celowane testy** i podstawowe kontrole adekwatne do zmian. Pełną walidację regresyjną, E2E i audyt bezpieczeństwa można zlecić oddzielnemu agentowi przed scaleniem. Dla zmian autoryzacji, RLS i migracji obowiązkowe są odpowiednie testy negatywne/integracyjne na Hetznerze przed odbiorem; nie rezygnuj z krytycznych testów tylko ze względu na koszt.
+- Opis każdego PR musi rozróżniać testy wykonane, pominięte i oczekujące; podawać SHA, środowisko (Hetzner), polecenia, wyniki oraz istotne ograniczenia. Nie oznaczaj testów jako zaliczonych bez faktycznego uruchomienia na wskazanym SHA.
+- Dotychczasowy [ADR-005](docs/adr/005-rozwoj-lokalny.md) opisuje wcześniejszy sposób pracy. W zakresie miejsca uruchamiania CI i prawa używania izolowanego Hetznera nadrzędny jest [ADR-006](docs/adr/006-tymczasowe-ci-hetzner.md). Zwykły rozwój lokalny pozostaje możliwy, ale nie jest bieżącą ścieżką integracyjnej walidacji CI.
+
+## GitHub jako źródło prawdy i handoff między agentami (decyzja właściciela, 2026-10-29)
+- **Trwała wiedza o projekcie należy do repozytorium GitHub, nie do czatu agenta.** Przed pracą sprawdź aktualny `main`, otwarte PR-y, Issues, review, `AGENTS.md` i właściwe ADR. Nie polegaj na pamięci poprzedniego agenta ani lokalnych, nieopublikowanych plikach.
+- **Każde zadanie musi mieć ślad na GitHubie:** istniejący Issue lub PR (albo nowy, jeżeli naprawdę potrzebny). Wynik, decyzje architektoniczne, kompromisy, ryzyka, blokery i kolejny krok zapisz w opisie PR, komentarzu do właściwego Issue/PR lub wersjonowanym dokumencie w repo. Nie twórz równoległego, prywatnego źródła ustaleń.
+- **Przekazanie pracy jest obowiązkowe**, także gdy niczego nie scalono. Krótki, aktualny handoff na GitHubie powinien zawierać: cel i zakres; PR/Issue i branch/SHA; co zrobiono; co sprawdzono (dokładne testy PASS/FAIL/NOT RUN i środowisko); ryzyka i blokery; konkretne następne działania, zależności oraz warunki GO/NO-GO. W razie długiego raportu użyj `docs/` i zalinkuj go z PR/Issue. Po zmianie SHA nie przedstawiaj starych wyników jako testów nowego commita.
+- **Konflikty i uwagi z review** rozwiązuj oraz dokumentuj w odpowiednim PR; nie gub kontekstu w lokalnym notatniku. Przed startem nowej pracy sprawdź, czy inny agent nie realizuje tego samego zakresu. Agenci równolegli powinni używać odrębnych gałęzi i nie modyfikować wzajemnie swoich PR bez koordynacji w GitHubie.
+- **Wiadomość końcowa dla właściciela ma być krótka:** status, najważniejszy wynik, link do PR/Issue i ewentualna decyzja wymagająca jego zgody. Nie wklejaj wielostronicowych raportów ani pełnych logów do czatu. **Brak wpisu na GitHubie oznacza niedokończone przekazanie**; jeśli publikacja jest technicznie niemożliwa, zgłoś blokadę, nie twierdź, że handoff wykonano.
+- **Bezpieczeństwo:** nigdy nie publikuj na GitHubie sekretów, tokenów, prywatnych danych, pełnych logów z PII ani danych dostępowych. Dokumentuj tylko zredagowane reprodukcje i metadane. Ta polityka nie zezwala na deploy, merge ani zmianę infrastruktury; obowiązują osobne zgody i bramki bezpieczeństwa.
 
 ## Zasady bezwzględne
 1. Priorytet: bezpieczeństwo danych, zgodność, audytowalność, dopiero potem funkcje.
@@ -22,6 +38,30 @@ Nie zastępuj wybranego stacku bez nowego ADR. Wybierz najmniejszy działający 
 7. Nie wykonuj operacji na produkcji ani wysyłki do instytucji bez odrębnej zgody właściciela projektu.
 8. W API, UI i MCP obowiązuje jedna i ta sama autoryzacja; każdy tenant jest izolowany.
 9. Dokumentacja to plan, nie dowód, że system realizuje daną funkcję.
+
+## Środowiska pracy
+
+- Istnieje prywatny staging techniczny na Hetznerze, dostęp przez `ssh hetzner`.
+- Kanoniczna domena: `https://ksiegowosc.roleplayingtech.com`, HTTPS i HTTP Basic Auth.
+- To nie jest produkcja księgowa; wyłącznie prywatny użytek i dane syntetyczne, bez prawdziwych rozliczeń.
+- Działające Web/API nie dowodzą uruchomienia PostgreSQL. Najpierw sprawdź usługi i zasoby.
+- Testy wymagające serwera można wykonywać na uprzednio wydzielonych, izolowanych zasobach testowych Hetznera. Nie używaj bazy działającego stagingu ani danych innych usług.
+- Nie wymagamy lokalnej instalacji bazy na komputerze właściciela. Rozwój lokalny bez DB pozostaje dostępny; ADR-005 opisuje również historyczny etap local-only, rozszerzony przez ADR-006.
+- Przed obciążającą operacją sprawdź limity ADR-006. Pełne buildy uruchamiaj tylko w zatwierdzonym, izolowanym środowisku CI z limitami zasobów na Hetznerze, nigdy w działającym stagingu ani bezpośrednio na współdzielonym hoście. Gdy brak takiego środowiska, oznacz build jako niewykonany. Nie instaluj automatycznie usług systemowych.
+
+## Polityka pracy agentów
+
+- Agent implementacyjny wykonuje minimalne testy celowane zmienionego modułu, scenariusze negatywne, kontrolę typów i statyczny przegląd migracji.
+- Osobny etap/agenta walidacyjnego obowiązuje pełna kontrola regresji, integracji i bezpieczeństwa. Nie uruchamiaj pełnego zestawu wielokrotnie po drobnych zmianach.
+- Niewykonany test oznaczaj jako **nieweryfikowany**, nigdy jako zaliczony. Podaj komendy i wymagania środowiska w przekazaniu.
+- Krytyczne PR-y pozostają Draft do pełnego odbioru przed scaleniem. Zgodnie z nowszą decyzją właściciela (#29) CI wykonujemy na izolowanym Hetznerze; nie uruchamiaj, nie wznawiaj ani nie zmieniaj wyzwalaczy GitHub Actions bez odrębnej decyzji.
+
+## Granice operacyjne
+
+- Zakaz ingerencji w produkcję i w usługi innych projektów.
+- Brak automatycznego deploymentu. Wdrożenia, migracje i administracja działającego stagingu wymagają osobnej zgody właściciela.
+- Nie wykonuj destrukcyjnych zmian istniejących danych, nie zmieniaj firewalla, Nginx, DNS ani certyfikatów bez odrębnej zgody.
+- Zgoda na odczytową kontrolę lub izolowany test nie jest zgodą na deployment ani migrację stagingu.
 
 ## Zasady projektowania interfejsu
 - Przed tworzeniem wielu nowych ekranów pokaż 2–3 warianty i wyjaśnij rekomendację; masz swobodę zaproponowania innego, lepszego kierunku.
