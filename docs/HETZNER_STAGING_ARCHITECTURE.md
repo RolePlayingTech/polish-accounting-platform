@@ -1,9 +1,10 @@
 # Architektura prywatnego stagingu na serwerze Hetzner
 
+> Aktualny stan pracy (2026-10-29): istnieje prywatny staging techniczny Web/API pod `https://ksiegowosc.roleplayingtech.com` za HTTPS i HTTP Basic Auth, dostęp przez `ssh hetzner`. Kontrola odczytowa: Web/API aktywne; nie wykazano PostgreSQL ani wydzielonej bazy testowej. Opisy PG, backupów i nieaktywnych jednostek poniżej są planem/historyczną inwentaryzacją, nie potwierdzeniem obecnego działania. Testy 6D-3 wyłącznie na odizolowanych zasobach testowych, bez lokalnej instalacji DB u właściciela i bez używania bazy stagingu. Zasady ADR-006 i osobna zgoda na migracje, administrację oraz deployment pozostają obowiązujące.
 - **Data:** 2026-10-28
 - **Powiązane zadanie:** [Issue #19](https://github.com/RolePlayingTech/polish-accounting-platform/issues/19), [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md), [ADR-005](adr/005-rozwoj-lokalny.md), [ADR-006](adr/006-prywatny-staging-hetzner.md), [Audyt serwera Hetzner](HETZNER_SERVER_AUDIT_2026-10-28.md)
 - **Docelowa domena (jedyna kanoniczna):** `https://ksiegowosc.roleplayingtech.com`
-- **Status:** Projekt architektury zrealizowany w warstwie przygotowawczej (nieaktywne usługi oczekują na zgodę właściciela przed pierwszym uruchomieniem).
+- **Status:** prywatny staging techniczny Web/API działa; pozostałe komponenty opisano jako plan.
 
 ---
 
