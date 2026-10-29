@@ -9,11 +9,11 @@ przed wymaganymi testami PostgreSQL i niezależnym code/security review.
 
 | Część | PR / gałąź | Stan |
 | --- | --- | --- |
-| Środowiska i AGENTS | #26, codex/6d3-environments | Niezależny dokumentacyjny Draft |
+| Środowiska i AGENTS | #26, codex/6d3-environments, 2c8e2a24346f1bfa6b47db2fb2ffa0c9b0e2370d | Niezależny dokumentacyjny Draft, zsynchronizowany z #29/main |
 | Istniejąca transakcyjna implementacja | #27, feat/issue-6d3a-transactional-authz, 918b6c148cce77b13cb0ee2770f763e4bba42176 | Zastana praca, nie duplikować |
 | B: domknięcie ścieżek transakcyjnych | #28, codex/6d3b-transactional-authorization, db31f508140cce2a9a1549bf54da44943acbebe9 | Baza #27 |
 | A: role, podpis i RLS | #30, codex/6d3a-runtime-rls, dec04f1693d575b3a8907ca37e22e1f053e99c47 | Baza #28 |
-| C: audyt i hardening | codex/6d3c-security-audit | Baza #30; końcowy SHA w PR i raporcie |
+| C: audyt i hardening | #31, codex/6d3c-security-audit, kod 5a25ddfc04d7f6ebf62229cfbc4cd0db30495307 | Baza #30; końcowy SHA z dokumentacją w PR i raporcie |
 
 Numeracja istniejącego #27 jest historyczna: nazywa transakcje 6D-3A. W bieżącym
 poleceniu A oznacza role/RLS, B transakcje, C audyt.
@@ -42,7 +42,7 @@ Publiczny AppModule i MCP nadal nie udostępniają danych/operacji księgowych.
 - Allow i efekt w jednej TX; deny/rollback zapisane po jej zakończeniu osobną TX.
   Dokładny payload audytu jest podpisany osobno. Audit writer ma allowlistę pól/kodów.
 - Constraint triggers wymagają audytu runtime mutacji na COMMIT. Runtime nie czyta
-  globalnego audytu, nie modyfikuje/usuwana wpisów i nie ma TRUNCATE/DDL/trigger bypass.
+  globalnego audytu, nie modyfikuje ani nie usuwa wpisów i nie ma TRUNCATE/DDL/trigger bypass.
 - Obsługa HTTP korelacji, audytu preflight/transport, 503 przy awarii audytu.
 
 ## Minimalne testy wykonane w sesji
@@ -60,6 +60,7 @@ Wyniki dotyczą kodu kandydackiego; kolejne zmiany dokumentacji nie zmieniają k
 | C application (transactional-unit-of-work + access-management) | 26/26 PASS |
 | C oidc-authentication | 7/7 PASS przed końcowymi zmianami dokumentacji |
 | C DB writer audytu | 2/2 PASS |
+| C statyczny kontrakt migracji/metadanych | 4/4 PASS |
 | C pipeline HTTP z awarią audytu i brakiem tokenu w śladzie | 23/23 PASS |
 | TypeScript application/db/api oraz testy db/api | PASS |
 | Lint zmienionych modułów, format, git diff --check | PASS |
