@@ -316,6 +316,11 @@ export async function executeHttpAuthorizedCompanyAction<
     if (decision.reason === 'authorization_audit_unavailable') {
       throw new ServiceUnavailableException('Audyt bezpieczeństwa jest niedostępny.');
     }
+    if (decision.status === 'unavailable' || decision.reason === 'transaction_outcome_unknown') {
+      throw new ServiceUnavailableException(
+        'Wynik zakończenia operacji jest nieznany; sprawdź stan przed ponowieniem.',
+      );
+    }
     if (decision.status === 'unauthenticated') {
       reply.header('WWW-Authenticate', 'Bearer error="invalid_token"');
       throw new UnauthorizedException({

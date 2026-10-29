@@ -27,6 +27,66 @@ import {
   type SecurityAuditEvent,
 } from './security-audit.js';
 
+const CONFIRMED_ROLLBACK_BRAND = Symbol.for('pap.transaction.confirmed_rollback');
+const OUTCOME_UNKNOWN_BRAND = Symbol.for('pap.transaction.outcome_unknown');
+
+export type TransactionEndResolution = 'committed' | 'rolled_back' | 'outcome_unknown';
+export type ConfirmedRollbackFailureReason =
+  'authorization_audit_unavailable' | 'operation_conflict';
+
+/**
+ * Jawny dowód wycofania transakcji bazodanowej (potwierdzony ROLLBACK przed COMMIT
+ * lub jawne odrzucenie COMMIT przez serwer PostgreSQL przed utrwaleniem transakcji).
+ * Wyłącznie potwierdzony rollback uprawnia do zapisu śladu audytowego `allow/rolled_back`.
+ */
+export class ConfirmedTransactionRollbackError extends Error {
+  readonly [CONFIRMED_ROLLBACK_BRAND] = true;
+
+  constructor(
+    override readonly cause?: unknown,
+    readonly failureReason?: ConfirmedRollbackFailureReason | undefined,
+  ) {
+    super('Transakcja została wycofana z potwierdzeniem (ROLLBACK).');
+    this.name = 'ConfirmedTransactionRollbackError';
+  }
+}
+
+/**
+ * Niepewny wynik zakończenia transakcji bazodanowej (np. utrata potwierdzenia po wysłaniu COMMIT
+ * lub niepotwierdzony ROLLBACK przy zerwanym połączeniu). Nie wolno traktować tego stanu jako
+ * potwierdzonego wycofania ani automatycznie ponawiać callbacku biznesowego.
+ */
+export class TransactionOutcomeUnknownError extends Error {
+  readonly [OUTCOME_UNKNOWN_BRAND] = true;
+
+  constructor(override readonly cause?: unknown) {
+    super('Wynik zakończenia transakcji jest nieznany.');
+    this.name = 'TransactionOutcomeUnknownError';
+  }
+}
+
+export function isConfirmedTransactionRollbackError(
+  error: unknown,
+): error is ConfirmedTransactionRollbackError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    CONFIRMED_ROLLBACK_BRAND in error &&
+    (error as { readonly [CONFIRMED_ROLLBACK_BRAND]?: unknown })[CONFIRMED_ROLLBACK_BRAND] === true
+  );
+}
+
+export function isTransactionOutcomeUnknownError(
+  error: unknown,
+): error is TransactionOutcomeUnknownError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    OUTCOME_UNKNOWN_BRAND in error &&
+    (error as { readonly [OUTCOME_UNKNOWN_BRAND]?: unknown })[OUTCOME_UNKNOWN_BRAND] === true
+  );
+}
+
 function isNonBlankExactString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value === value.trim();
 }
@@ -135,9 +195,10 @@ export type ExecuteAuthorizedCompanyActionResult<TOutput> =
     }
   | {
       readonly allowed: false;
-      readonly status: 'unauthenticated' | 'forbidden' | 'invalid_selector';
+      readonly status: 'unauthenticated' | 'forbidden' | 'invalid_selector' | 'unavailable';
       readonly reason:
         | 'authorization_audit_unavailable'
+        | 'transaction_outcome_unknown'
         | AuthenticationFailureReason
         | Exclude<TenantAuthorizationResult, { readonly allowed: true }>['reason'];
     };
@@ -159,6 +220,8 @@ async function executeAuthorizedCompanyActionCore<
   audit: {
     actorId: string | null;
     authorized: boolean;
+    commitPhaseEntered: boolean;
+    resolution: 'not_started' | TransactionEndResolution;
     decidedAt: string | undefined;
     event(
       decision: 'allow' | 'deny',
@@ -217,7 +280,7 @@ async function executeAuthorizedCompanyActionCore<
       identity: actor.identity,
     });
 
-    return await dependencies.unitOfWork.runCompanyActionInTransaction(
+    const txResult = await dependencies.unitOfWork.runCompanyActionInTransaction(
       async (tx): Promise<ExecuteAuthorizedCompanyActionResult<TOutput>> => {
         if ((await tx.verifyActorAccount(txActor)) !== true) {
           return {
@@ -274,6 +337,7 @@ async function executeAuthorizedCompanyActionCore<
         audit.authorized = true;
         const data = await operation(context, tx);
         await tx.recordAuthorizationDecision(audit.event('allow', 'committed', decision.reason));
+        audit.commitPhaseEntered = true;
         return Object.freeze({
           allowed: true,
           status: 'allowed',
@@ -284,14 +348,57 @@ async function executeAuthorizedCompanyActionCore<
       },
       (result) => result.allowed === true,
     );
+
+    if (txResult.allowed) {
+      audit.resolution = 'committed';
+      return txResult;
+    }
+
+    if (audit.authorized) {
+      // Po autoryzacji brak potwierdzonego rollbacku nie pozwala uznać operacji za wycofaną.
+      audit.resolution = 'outcome_unknown';
+      return {
+        allowed: false,
+        status: 'unavailable',
+        reason: 'transaction_outcome_unknown',
+      };
+    }
+
+    return txResult;
   } catch (error) {
+    if (!audit.authorized) {
+      const cause =
+        isConfirmedTransactionRollbackError(error) || isTransactionOutcomeUnknownError(error)
+          ? error.cause
+          : error;
+      return {
+        allowed: false,
+        status: isTransactionOutcomeUnknownError(error) ? 'unavailable' : 'forbidden',
+        reason:
+          cause instanceof SecurityAuditUnavailableError
+            ? 'authorization_audit_unavailable'
+            : 'authorization_data_unavailable',
+      };
+    }
+
+    if (isConfirmedTransactionRollbackError(error)) {
+      audit.resolution = 'rolled_back';
+      return {
+        allowed: false,
+        status: 'forbidden',
+        reason:
+          error.failureReason === 'authorization_audit_unavailable' ||
+          error.cause instanceof SecurityAuditUnavailableError
+            ? 'authorization_audit_unavailable'
+            : 'authorization_data_unavailable',
+      };
+    }
+
+    audit.resolution = 'outcome_unknown';
     return {
       allowed: false,
-      status: 'forbidden',
-      reason:
-        error instanceof SecurityAuditUnavailableError
-          ? 'authorization_audit_unavailable'
-          : 'authorization_data_unavailable',
+      status: 'unavailable',
+      reason: 'transaction_outcome_unknown',
     };
   }
 }
@@ -312,6 +419,8 @@ export async function executeAuthorizedCompanyAction<
   const audit = {
     actorId: null as string | null,
     authorized: false,
+    commitPhaseEntered: false,
+    resolution: 'not_started' as 'not_started' | TransactionEndResolution,
     decidedAt: undefined as string | undefined,
     event(
       decision: 'allow' | 'deny',
@@ -336,12 +445,25 @@ export async function executeAuthorizedCompanyAction<
   };
   const result = await executeAuthorizedCompanyActionCore(snapshot, dependencies, operation, audit);
   if (!result.allowed) {
+    if (audit.resolution === 'outcome_unknown') {
+      try {
+        await dependencies.unitOfWork.recordDeniedDecision(
+          audit.event('allow', 'outcome_unknown', 'transaction_outcome_unknown'),
+        );
+      } catch {
+        // Przy utracie połączenia po COMMIT baza może pozostać chwilowo niedostępna;
+        // zachowujemy fail-closed status `unavailable` / `transaction_outcome_unknown`
+        // bez tworzenia fałszywego śladu `rolled_back`.
+      }
+      return result;
+    }
+
     try {
       await dependencies.unitOfWork.recordDeniedDecision(
         audit.event(
-          audit.authorized ? 'allow' : 'deny',
-          audit.authorized ? 'rolled_back' : 'denied',
-          audit.authorized && result.reason !== 'authorization_audit_unavailable'
+          audit.resolution === 'rolled_back' ? 'allow' : 'deny',
+          audit.resolution === 'rolled_back' ? 'rolled_back' : 'denied',
+          audit.resolution === 'rolled_back' && result.reason !== 'authorization_audit_unavailable'
             ? 'operation_failed'
             : result.reason,
         ),

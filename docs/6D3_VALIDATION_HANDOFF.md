@@ -5,16 +5,19 @@ Data: 2026-10-29. Status: kompletna implementacja kandydacka w Draft PR,
 Issue #6 pozostaje otwarte. Nie dopuszczać danych rzeczywistych ani endpointów firm
 przed wymaganymi testami PostgreSQL i niezależnym code/security review.
 
-**Rewizja SEC-01/02 — 2026-10-29:** wspólna naprawa jest opisana w
-[docs/29](29-sec01-sec02-kontrakt-efektow.md): kontrolowany executor dostępu,
-rzeczywiste OLD/NEW w receipt z TX, dokładne daty, retry bez DML i związana
-operacja firmowa. W tej sesji **nie uruchomiono żadnych testów, typechecków,
-lintów, buildów, migracji, E2E ani Actions**. Historyczne PASS poniżej nie dotyczą
-tej rewizji. SHA odbioru i Draft PR znajdują się w aktualnym przekazaniu Issue #6.
-QA ma najpierw dostosować fixture i zaimplementować macierz docs/29, zintegrować
-SEC-03 z #35 (`a01ae68dd30919a95f2549b3d4e24e5c421629b8`) zachowując
-outcome_unknown, następnie wykonać całość na dokładnym połączonym SHA.
-SEC-04/05 oraz H1/H2 nadal są odrębnymi bramkami. Stan: **NO-GO / NO-MERGE**.
+**Aktualna integracja SEC-01/02/03:** [docs/30](30-security-foundation-integracja.md)
+jest bieżącym przekazaniem: #36 + #37 na bazie #31, porównanie końcowego #35,
+addytywna 0006 bez zmian historycznych 0000–0005, częściowe domknięcie SEC-04
+i poprawka scope SEC-05. Dokładny HEAD jest w opisie integracyjnego PR i Issue #6.
+Wszystkie testy/typecheck/lint/build/migracje/CI tej głowy: **NOT RUN**.
+Następny agent dostosowuje fixture, implementuje brakujące scenariusze, odbiera
+PG18 na izolowanym Hetznerze i publikuje wyniki SHA/PASS/FAIL/NOT RUN.
+SEC-04 residual oraz H1/H2 nadal blokują udostępnienie operacji firmowych.
+**NO-MERGE / oczekuje na QA i security review.**
+
+Poniższe raporty wcześniejszych etapów zachowano jako historię, w tym dawne
+polecenia integracji #35 i wyniki PASS. Nie są aktualnym odbiorem ani poleceniem
+ponownej integracji źródłowych gałęzi. Aktualne migracje, scenariusze i komendy: docs/30.
 
 ## Repozytorium i zależności
 
@@ -192,8 +195,12 @@ Nie uruchamiać Actions. Wyniki zapisać z SHA, wersją PG, izolacją, komendą 
 9. Bezpośrednie execute/executeAuthorized nie omijają polityki. Fałszowanie kind,
    grantId, dat, roli, aktora i tenant/company w SQL nie zmienia zatwierdzonej komendy.
 10. Atomowość: brak audytu na COMMIT, awaria jego INSERT oraz awaria samej operacji
-    wycofują efekt. Deny i allow/rolled_back pozostają poza rollbackiem głównej TX.
-    Awaria osobnego audytu daje audit_unavailable, nigdy sukces.
+    wycofują efekt. Deny i potwierdzone allow/rolled_back pozostają poza rollbackiem głównej TX.
+    Utrata potwierdzenia po wysłaniu COMMIT (lub niepotwierdzony ROLLBACK) nie może zapisać
+    fałszywego `allow/rolled_back` ani automatycznie ponowić callbacku — zwraca fail-closed
+    `transaction_outcome_unknown` (HTTP 503) i best-effort zapisuje `allow/outcome_unknown`
+    obok atomowego `allow/committed` (gdy serwer rzeczywiście zatwierdził TX). Awaria osobnego
+    audytu odmowy/rollbacku daje audit_unavailable, nigdy sukces.
 11. Idempotencja: powtórzenie potwierdzenia, konflikt payload/aktora/firmy, retry po
     utracie uprawnień; jeden efekt/access_management_event i osobne decyzje.
 12. Audyt: realny serwerowy aktor, preflight vs committed vs denied/rolled_back,

@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { legalEntityId, tenantId, userId } from '@pap/domain';
 import {
+  ConfirmedTransactionRollbackError,
   executeAuthorizedCompanyAction,
   freezeTransactionActor,
+  TransactionOutcomeUnknownError,
   type CompanyActionTransactionContext,
   type CompanyActionUnitOfWork,
 } from '../src/transactional-unit-of-work.js';
+import { SecurityAuditUnavailableError, type SecurityAuditEvent } from '../src/security-audit.js';
 
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
 const TENANT_A = tenantId(id(1));
@@ -442,5 +445,461 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       reason: 'authorization_audit_unavailable',
     });
     expect(operation).not.toHaveBeenCalled();
+  });
+
+  it('SEC-03: zapisuje allow/rolled_back wyłącznie przy potwierdzonym rollbacku (przed COMMIT oraz przy serwerowym odrzuceniu COMMIT)', async () => {
+    const durableEvents: SecurityAuditEvent[] = [];
+    const baseFacts = {
+      membership: {
+        tenantId: TENANT_A,
+        userId: USER_A,
+        role: 'tenant_member' as const,
+        status: 'active' as const,
+        validFrom: VALID_FROM,
+        validUntil: null,
+      },
+      grants: [
+        {
+          grantId: id(95),
+          tenantId: TENANT_A,
+          userId: USER_A,
+          legalEntityId: ENTITY_A1,
+          action: 'write' as const,
+          validFrom: VALID_FROM,
+          validUntil: null,
+          revokedAt: null,
+        },
+      ],
+      platformRoleAssignments: [],
+      now: DB_NOW,
+    };
+
+    const baseDeps = {
+      verifier: {
+        verifyAccessToken: async () => ({
+          ok: true as const,
+          identity: { issuer: 'https://idp.example.test', subject: 'Sub-User-A' },
+        }),
+      },
+      identityResolver: { resolveVerifiedIdentity: async () => ({ userId: USER_A }) },
+    };
+
+    // 1) Błąd biznesowy przed COMMIT + potwierdzony ROLLBACK -> allow/rolled_back (operation_failed)
+    const preCommitRollbackUoW: CompanyActionUnitOfWork = {
+      recordDeniedDecision: async (ev) => {
+        durableEvents.push(ev);
+      },
+      async runCompanyActionInTransaction(work) {
+        const tx: CompanyActionTransactionContext = {
+          verifyActorAccount: async () => true,
+          getLockedFacts: async () => baseFacts,
+          recordAuthorizationDecision: vi.fn(),
+        };
+        try {
+          return await work(tx);
+        } catch (err) {
+          throw new ConfirmedTransactionRollbackError(err);
+        }
+      },
+    };
+
+    const preCommitRes = await executeAuthorizedCompanyAction(
+      {
+        requestId: id(201),
+        operationId: id(301),
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      { ...baseDeps, unitOfWork: preCommitRollbackUoW },
+      async () => {
+        throw new Error('Błąd walidacji w callbacku przed COMMIT');
+      },
+    );
+    expect(preCommitRes).toEqual({
+      allowed: false,
+      status: 'forbidden',
+      reason: 'authorization_data_unavailable',
+    });
+
+    // 2) Awaria atomowego INSERT audytu przed COMMIT + potwierdzony ROLLBACK -> allow/rolled_back (authorization_audit_unavailable)
+    const auditFailUoW: CompanyActionUnitOfWork = {
+      recordDeniedDecision: async (ev) => {
+        durableEvents.push(ev);
+      },
+      async runCompanyActionInTransaction(work) {
+        const tx: CompanyActionTransactionContext = {
+          verifyActorAccount: async () => true,
+          getLockedFacts: async () => baseFacts,
+          recordAuthorizationDecision: async () => {
+            throw new SecurityAuditUnavailableError();
+          },
+        };
+        try {
+          return await work(tx);
+        } catch (err) {
+          throw new ConfirmedTransactionRollbackError(err);
+        }
+      },
+    };
+
+    const auditFailRes = await executeAuthorizedCompanyAction(
+      {
+        requestId: id(202),
+        operationId: id(302),
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      { ...baseDeps, unitOfWork: auditFailUoW },
+      async () => ({ ok: true }),
+    );
+    expect(auditFailRes).toEqual({
+      allowed: false,
+      status: 'forbidden',
+      reason: 'authorization_audit_unavailable',
+    });
+
+    // 3) Odroczony constraint trigger PostgreSQL (23514) odrzucający COMMIT z potwierdzonym rollbackiem serwera
+    const deferredTriggerAbortUoW: CompanyActionUnitOfWork = {
+      recordDeniedDecision: async (ev) => {
+        durableEvents.push(ev);
+      },
+      async runCompanyActionInTransaction(work, shouldCommit) {
+        const stagedEvents: SecurityAuditEvent[] = [];
+        const tx: CompanyActionTransactionContext = {
+          verifyActorAccount: async () => true,
+          getLockedFacts: async () => baseFacts,
+          recordAuthorizationDecision: async (ev) => {
+            stagedEvents.push(ev);
+          },
+        };
+        const result = await work(tx);
+        expect(shouldCommit(result)).toBe(true);
+        expect(stagedEvents).toHaveLength(1);
+        // Serwer odrzucił COMMIT przed WAL -> stagedEvents wycofane, potwierdzony rollback
+        throw new ConfirmedTransactionRollbackError(
+          Object.assign(new Error('Brak atomowego audytu operacji'), { code: '23514' }),
+        );
+      },
+    };
+
+    const deferredAbortRes = await executeAuthorizedCompanyAction(
+      {
+        requestId: id(203),
+        operationId: id(303),
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      { ...baseDeps, unitOfWork: deferredTriggerAbortUoW },
+      async () => ({ ok: true }),
+    );
+    expect(deferredAbortRes).toEqual({
+      allowed: false,
+      status: 'forbidden',
+      reason: 'authorization_data_unavailable',
+    });
+
+    expect(durableEvents).toEqual([
+      expect.objectContaining({
+        requestId: id(201),
+        operationId: id(301),
+        decision: 'allow',
+        outcome: 'rolled_back',
+        reason: 'operation_failed',
+      }),
+      expect.objectContaining({
+        requestId: id(202),
+        operationId: id(302),
+        decision: 'allow',
+        outcome: 'rolled_back',
+        reason: 'authorization_audit_unavailable',
+      }),
+      expect.objectContaining({
+        requestId: id(203),
+        operationId: id(303),
+        decision: 'allow',
+        outcome: 'rolled_back',
+        reason: 'operation_failed',
+      }),
+    ]);
+  });
+
+  it('SEC-03: utrata potwierdzenia po skutecznym COMMIT nie tworzy fałszywego rolled_back, nie ponawia callbacku i obsługuje idempotentny retry z tym samym operationId', async () => {
+    const persistedOperations = new Map<string, { readonly probe: string }>();
+    const persistedAuditLog: SecurityAuditEvent[] = [];
+    let simulateLostCommitAck = true;
+    let failDiagnosticAuditOnce = false;
+
+    const unitOfWork: CompanyActionUnitOfWork = {
+      async recordDeniedDecision(event) {
+        if (failDiagnosticAuditOnce) {
+          failDiagnosticAuditOnce = false;
+          throw new SecurityAuditUnavailableError();
+        }
+        persistedAuditLog.push(event);
+      },
+      async runCompanyActionInTransaction(work, shouldCommit) {
+        const stagedOps = new Map<string, { readonly probe: string }>();
+        const stagedAudit: SecurityAuditEvent[] = [];
+        const tx: CompanyActionTransactionContext = {
+          verifyActorAccount: async () => true,
+          getLockedFacts: async () => ({
+            membership: {
+              tenantId: TENANT_A,
+              userId: USER_A,
+              role: 'tenant_member',
+              status: 'active',
+              validFrom: VALID_FROM,
+              validUntil: null,
+            },
+            grants: [
+              {
+                grantId: id(96),
+                tenantId: TENANT_A,
+                userId: USER_A,
+                legalEntityId: ENTITY_A1,
+                action: 'write',
+                validFrom: VALID_FROM,
+                validUntil: null,
+                revokedAt: null,
+              },
+            ],
+            platformRoleAssignments: [],
+            now: DB_NOW,
+          }),
+          recordAuthorizationDecision: async (event) => {
+            stagedAudit.push(event);
+          },
+        };
+
+        const txWithStore = Object.assign(tx, {
+          upsertIdempotentProbe(opId: string, payload: { readonly probe: string }) {
+            const existing = persistedOperations.get(opId) ?? stagedOps.get(opId);
+            if (existing) {
+              return { created: false, record: existing };
+            }
+            stagedOps.set(opId, payload);
+            return { created: true, record: payload };
+          },
+        });
+
+        const result = await work(txWithStore);
+        if (!shouldCommit(result)) {
+          return result;
+        }
+
+        // PostgreSQL zatwierdził transakcję (efekt biznesowy + atomowy allow/committed w WAL):
+        for (const [key, value] of stagedOps) {
+          persistedOperations.set(key, value);
+        }
+        persistedAuditLog.push(...stagedAudit);
+
+        if (simulateLostCommitAck) {
+          simulateLostCommitAck = false;
+          throw new TransactionOutcomeUnknownError(
+            Object.assign(new Error('utracono potwierdzenie COMMIT'), { code: '08007' }),
+          );
+        }
+        return result;
+      },
+    };
+
+    const deps = {
+      verifier: {
+        verifyAccessToken: async () => ({
+          ok: true as const,
+          identity: { issuer: 'https://idp.example.test', subject: 'Sub-User-A' },
+        }),
+      },
+      identityResolver: { resolveVerifiedIdentity: async () => ({ userId: USER_A }) },
+      unitOfWork,
+    };
+
+    const opId = id(401);
+    let callbackInvocations = 0;
+
+    // Pierwsze wywołanie: serwer wykonał COMMIT, klient stracił potwierdzenie
+    const firstAttempt = await executeAuthorizedCompanyAction(
+      {
+        requestId: id(501),
+        operationId: opId,
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      deps as Parameters<typeof executeAuthorizedCompanyAction>[1],
+      async (_ctx, rawTx) => {
+        callbackInvocations += 1;
+        const txStore = rawTx as CompanyActionTransactionContext & {
+          upsertIdempotentProbe(
+            key: string,
+            payload: { readonly probe: string },
+          ): { created: boolean; record: { readonly probe: string } };
+        };
+        return txStore.upsertIdempotentProbe(opId, { probe: 'syntetyczny-zapis' });
+      },
+    );
+
+    // Brak automatycznego ponowienia callbacku i brak fałszywego rolled_back
+    expect(callbackInvocations).toBe(1);
+    expect(firstAttempt).toEqual({
+      allowed: false,
+      status: 'unavailable',
+      reason: 'transaction_outcome_unknown',
+    });
+    expect(persistedOperations.size).toBe(1);
+    expect(persistedAuditLog.some((e) => e.outcome === 'rolled_back')).toBe(false);
+    expect(persistedAuditLog).toEqual([
+      expect.objectContaining({
+        requestId: id(501),
+        operationId: opId,
+        decision: 'allow',
+        outcome: 'committed',
+        reason: 'explicit_company_grant',
+      }),
+      expect.objectContaining({
+        requestId: id(501),
+        operationId: opId,
+        decision: 'allow',
+        outcome: 'outcome_unknown',
+        reason: 'transaction_outcome_unknown',
+      }),
+    ]);
+
+    // Jawne ponowienie operacji przez klienta z tym samym operationId: brak duplikacji efektu
+    const retryAttempt = await executeAuthorizedCompanyAction(
+      {
+        requestId: id(502),
+        operationId: opId,
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      deps as Parameters<typeof executeAuthorizedCompanyAction>[1],
+      async (_ctx, rawTx) => {
+        callbackInvocations += 1;
+        const txStore = rawTx as CompanyActionTransactionContext & {
+          upsertIdempotentProbe(
+            key: string,
+            payload: { readonly probe: string },
+          ): { created: boolean; record: { readonly probe: string } };
+        };
+        return txStore.upsertIdempotentProbe(opId, { probe: 'syntetyczny-zapis' });
+      },
+    );
+
+    expect(callbackInvocations).toBe(2);
+    expect(retryAttempt).toMatchObject({
+      allowed: true,
+      status: 'allowed',
+      reason: 'explicit_company_grant',
+      data: { created: false, record: { probe: 'syntetyczny-zapis' } },
+    });
+    expect(persistedOperations.size).toBe(1);
+    expect(persistedAuditLog.some((e) => e.outcome === 'rolled_back')).toBe(false);
+
+    // Także gdy baza pozostaje niedostępna dla diagnostycznego audytu po zerwaniu COMMIT,
+    // zachowany jest fail-closed `transaction_outcome_unknown` (bez nadpisania i bez rolled_back)
+    simulateLostCommitAck = true;
+    failDiagnosticAuditOnce = true;
+    const outageAttempt = await executeAuthorizedCompanyAction(
+      {
+        requestId: id(503),
+        operationId: id(402),
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      deps,
+      async () => 'zapis',
+    );
+    expect(outageAttempt).toEqual({
+      allowed: false,
+      status: 'unavailable',
+      reason: 'transaction_outcome_unknown',
+    });
+    expect(persistedAuditLog.some((e) => e.outcome === 'rolled_back')).toBe(false);
+  });
+
+  it('SEC-03: niepotwierdzone odrzucenie Promise transakcji po autoryzacji nigdy nie jest klasyfikowane jako rolled_back', async () => {
+    const recorded: SecurityAuditEvent[] = [];
+    const result = await executeAuthorizedCompanyAction(
+      {
+        requestId: id(601),
+        operationId: id(602),
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      {
+        verifier: {
+          verifyAccessToken: async () => ({
+            ok: true as const,
+            identity: { issuer: 'https://idp.example.test', subject: 'Sub-User-A' },
+          }),
+        },
+        identityResolver: { resolveVerifiedIdentity: async () => ({ userId: USER_A }) },
+        unitOfWork: {
+          recordDeniedDecision: async (event) => {
+            recorded.push(event);
+          },
+          async runCompanyActionInTransaction(work) {
+            await work({
+              verifyActorAccount: async () => true,
+              getLockedFacts: async () => ({
+                membership: {
+                  tenantId: TENANT_A,
+                  userId: USER_A,
+                  role: 'tenant_member',
+                  status: 'active',
+                  validFrom: VALID_FROM,
+                  validUntil: null,
+                },
+                grants: [
+                  {
+                    grantId: id(97),
+                    tenantId: TENANT_A,
+                    userId: USER_A,
+                    legalEntityId: ENTITY_A1,
+                    action: 'write',
+                    validFrom: VALID_FROM,
+                    validUntil: null,
+                    revokedAt: null,
+                  },
+                ],
+                platformRoleAssignments: [],
+                now: DB_NOW,
+              }),
+              recordAuthorizationDecision: async () => {},
+            });
+            // Surowy wyjątek bez dowodu potwierdzonego ROLLBACKu
+            throw new Error('ECONNRESET po wysłaniu COMMIT');
+          },
+        },
+      },
+      async () => ({ saved: true }),
+    );
+
+    expect(result).toEqual({
+      allowed: false,
+      status: 'unavailable',
+      reason: 'transaction_outcome_unknown',
+    });
+    expect(recorded).toEqual([
+      expect.objectContaining({
+        decision: 'allow',
+        outcome: 'outcome_unknown',
+        reason: 'transaction_outcome_unknown',
+      }),
+    ]);
   });
 });

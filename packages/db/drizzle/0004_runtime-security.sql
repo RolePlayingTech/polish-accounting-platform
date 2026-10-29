@@ -109,12 +109,8 @@ $$;
 CREATE FUNCTION pap_guard_access_write() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE c jsonb := pap_context(); command jsonb; decision_time timestamptz;
 BEGIN
-  -- INVOKER: SELECT FOR UPDATE nadal działa, ale runtime nigdy nie wykonuje DML.
-  -- Kontrolowana funkcja SECURITY DEFINER wykonuje DML jako właściciel tabeli.
-  IF current_user <> pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = TG_RELID)) THEN
-    RAISE EXCEPTION 'Zmiana dostępu wymaga kontrolowanej funkcji' USING ERRCODE = '42501';
-  END IF;
-  IF session_user = current_user THEN RETURN NEW; END IF;
+  IF current_user = pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = TG_RELID))
+    THEN RETURN NEW; END IF;
   IF c->>'purpose' IS DISTINCT FROM 'access' THEN
     RAISE EXCEPTION 'Brak autoryzowanej komendy dostępu' USING ERRCODE = '42501';
   END IF;
@@ -145,34 +141,10 @@ BEGIN
     THEN RAISE EXCEPTION 'Grant niezgodny z komendą' USING ERRCODE = '42501'; END IF;
   ELSE
     IF (to_jsonb(NEW) - 'revoked_at') IS DISTINCT FROM (to_jsonb(OLD) - 'revoked_at')
-      OR NEW.revoked_at IS DISTINCT FROM LEAST(OLD.revoked_at, decision_time)
+      OR NEW.revoked_at IS NULL OR NEW.revoked_at > clock_timestamp()
       OR (command->>'kind' NOT IN ('revoke_membership', 'reactivate_membership')
         AND NOT (command->>'kind' = 'revoke_grant' AND NEW.grant_id::text = command->>'grantId'))
     THEN RAISE EXCEPTION 'Cofnięcie niezgodne z komendą' USING ERRCODE = '42501'; END IF;
-  END IF;
-  RETURN NEW;
-END;
-$$;
---> statement-breakpoint
--- Zegar kaskady musi być tym samym zegarem decyzji co jawna mutacja.
-CREATE OR REPLACE FUNCTION revoke_grants_on_membership_transition() RETURNS trigger
-LANGUAGE plpgsql AS $$
-DECLARE
-  c jsonb := pap_context();
-  revoked_time timestamptz := date_trunc('milliseconds', clock_timestamp());
-BEGIN
-  IF session_user <> current_user THEN
-    IF c->>'purpose' IS DISTINCT FROM 'access' OR c->>'decision_at' IS NULL THEN
-      RAISE EXCEPTION 'Brak decyzji kaskady' USING ERRCODE = '42501';
-    END IF;
-    revoked_time := (c->>'decision_at')::timestamptz;
-  ELSIF NEW.status = 'active' THEN
-    revoked_time := LEAST(revoked_time, NEW.valid_from);
-  END IF;
-  IF NEW.status IS DISTINCT FROM OLD.status THEN
-    UPDATE company_access_grant SET revoked_at = revoked_time
-      WHERE tenant_id = OLD.tenant_id AND user_id = OLD.user_id
-        AND (revoked_at IS NULL OR revoked_at > revoked_time);
   END IF;
   RETURN NEW;
 END;
@@ -306,6 +278,4 @@ CREATE POLICY pap_probe_insert ON company_operation_probe FOR INSERT WITH CHECK 
   AND tenant_id::text = pap_context()->>'tenant_id'
   AND legal_entity_id::text = pap_context()->>'legal_entity_id'
   AND actor_id::text = pap_context()->>'actor_user_id'
-  AND operation_id::text = pap_context()->>'operation_id'
-  AND created_at = (pap_context()->>'decision_at')::timestamptz
   AND pap_company_allowed(tenant_id, legal_entity_id, 'write'));

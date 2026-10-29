@@ -7,8 +7,24 @@ Rollback chronionej operacji usuwa także jej zwykły INSERT audytu. Dlatego:
 
 - Allow operacji firmowej i administracyjnej zapisujemy w tej samej TX co efekt.
   Brak INSERT lub jego awaria uniemożliwia COMMIT.
-- Deny oraz allow zakończone rollbackiem zapisujemy osobną krótką TX dopiero po
-  zwolnieniu połączenia/blokad poprzedniej. Działa także z pulą max=1.
+- Deny oraz allow zakończone **potwierdzonym** rollbackiem zapisujemy osobną krótką TX
+  dopiero po zwolnieniu połączenia/blokad poprzedniej. Działa także z pulą max=1.
+  `allow/rolled_back` wolno zapisać wyłącznie wtedy, gdy wycofanie transakcji zostało
+  rzeczywiście potwierdzone (potwierdzony `ROLLBACK` przed `COMMIT`
+  albo jawne odrzucenie `COMMIT` przez serwer PostgreSQL z `ErrorResponse`
+  `severity = 'ERROR'` i kodem wycofania, np. `23514` z odroczonego constraint triggera
+  lub `40001`).
+- Nie utożsamiamy dowolnego odrzucenia Promise transakcji z potwierdzonym rollbackiem
+  (SEC-03). Utrata potwierdzenia po wysłaniu `COMMIT` (np. zerwanie gniazda TCP, `08007`,
+  `40003`, `57P01`, `FATAL`/`PANIC`) albo niepotwierdzony `ROLLBACK` oznaczają niepewny
+  wynik zakończenia transakcji: aplikacja nigdy nie zapisuje fałszywego `allow/rolled_back`
+  i nigdy nie uruchamia automatycznie ponownie callbacku biznesowego. Best-effort próbuje
+  zapisać diagnostyczny `allow/outcome_unknown` (`reason = 'transaction_outcome_unknown'`,
+  `access_management_operation_id = NULL`, korelacja po `request_id`/`operation_id`) i
+  zwraca fail-closed `transaction_outcome_unknown` (HTTP 503), nawet gdy baza nadal nie
+  odpowiada. Protokół sieciowy i PostgreSQL nie dają gwarancji `exactly-once` dostarczania
+  potwierdzenia `COMMIT`; bezpieczne ponowienie opiera się na jawnym `operation_id` i
+  idempotencji operacji.
 - Bramka HTTP zapisuje preflight, odróżniony od committed. Jej allow nie daje prawa
   późniejszego zapisu. Wczesne odrzucenia transportowe mają actor_id NULL, bez
   zgadywania tożsamości z JWT, nagłówka lub body.
@@ -43,28 +59,31 @@ operation_id i created_at = decision_at w asercji/repozytorium/RLS/audycie.
 Decyzja oraz odrzucone warianty i macierz QA:
 [SEC-01/02](../29-sec01-sec02-kontrakt-efektow.md). Wszystkie testy rewizji NOT RUN.
 
-Awaria atomowego audytu nie pozwala utrwalić efektu i zwraca authorization_audit_unavailable.
-Próbujemy osobno utrwalić allow/rolled_back; awaria tej ścieżki również nie może dać
-sukcesu. Awaria bazy może uniemożliwić zapis całej odmowy — nie deklarujemy wtedy
-trwałego śladu. HTTP zwraca 503 bez szczegółów SQL; nie udajemy dostarczenia audytu
-przez log tekstowy ani nie wprowadzamy nieograniczonego retry/outbox na tym etapie.
-
-Powyższy opis rolled_back wymaga integracji poprawki SEC-03 z PR #35:
-tylko potwierdzony rollback przed COMMIT może dać rolled_back. Niepewne
-zakończenie ma outcome_unknown/503 i nie uruchamia ponownie callbacku.
-Executor nie rozstrzyga wyniku COMMIT. Zachować rozszerzenie CHECK/allowlisty,
-typy błędów i obsługę aplikacyjną z #35 podczas integracji; kod SEC-03 pozostaje
-odrębnym PR i obowiązkową zależnością odbioru tej rewizji.
+Awaria atomowego audytu wycofuje efekt i zwraca authorization_audit_unavailable.
+Po potwierdzonym rollbacku próbujemy osobno utrwalić allow/rolled_back; awaria tej
+ścieżki również nie może dać sukcesu. Przy niepewnym wyniku zakończenia transakcji
+(utrata potwierdzenia po wysłaniu COMMIT lub niepotwierdzony ROLLBACK) zwracamy
+fail-closed `transaction_outcome_unknown` (HTTP 503) bez fałszywego `rolled_back`.
+Awaria bazy może uniemożliwić zapis całej odmowy lub śladu niepewności — nie
+deklarujemy wtedy trwałego śladu. HTTP zwraca 503 bez szczegółów SQL; nie udajemy
+dostarczenia audytu przez log tekstowy ani nie wprowadzamy nieograniczonego retry/outbox
+na tym etapie.
+Integracja SEC-03 pochodzi z #37, z porównaniem #35. Executor nie rozstrzyga
+wyniku COMMIT; adapter klasyfikuje zakończenie transakcji, a aplikacja zapisuje
+odpowiedni outcome bez automatycznego ponawiania callbacku.
 
 Hardening C obejmuje też odebranie zastanych grantów kolumnowych (zwykły REVOKE na
 tabeli ich nie usuwa), odmowę roli z SET session_replication_role i porównanie wszystkich
 32 bajtów MAC bez wczesnego zakończenia. Nie jest to dowód odporności timingowej całej DB.
 
-Migracja: rewizja kandydackich 0004/0005, bez zmian 0000–0003. 0005 dodaje
+Migracja: addytywna 0006, bez zmian 0000–0005 z #31. 0006 dodaje
 transaction_id/indeks do receipt; historycznym wpisom pozostawia NULL, bez
 przypisywania im TX migracji. Ręczny provisioning ACL należy powtórzyć po
 migracji: INSERT security_decision_event i EXECUTE executora, bez INSERT
 grantów/receipt i UPDATE stanu uprawnień. Factory wymaga 11 tabel z FORCE RLS.
+CHECK audytu w 0006 jest NOT VALID dla zachowania niezmienionej historii
+dopuszczonej przez 0005; nowe INSERT-y są sprawdzane. Nie dopisujemy historycznych
+identyfikatorów operacji i nie deklarujemy walidacji dawnych wpisów.
 Nie wyłączać kontroli ani nie usuwać audytu jako rollbacku. Brak automatycznych
 migracji/deploymentu; wymagany pełny odbiór PG18 na izolowanym Hetznerze.
 

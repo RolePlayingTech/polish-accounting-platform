@@ -14,8 +14,9 @@ describe('Kontrakt plików migracji', () => {
     const identity = readJson('0003_snapshot.json');
     const runtime = readJson('0004_snapshot.json');
     const audit = readJson('0005_snapshot.json');
+    const foundation = readJson('0006_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(6);
+    expect(migrations).toHaveLength(7);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
@@ -23,6 +24,9 @@ describe('Kontrakt plików migracji', () => {
     expect(identity.prevId).toBe(lifecycle.id);
     expect(runtime.prevId).toBe(identity.id);
     expect(audit.prevId).toBe(runtime.id);
+    expect(foundation.prevId).toBe(audit.id);
+    expect(foundation.tables['public.access_management_event'].columns.transaction_id).toBeDefined();
+    expect(audit.tables['public.access_management_event'].columns.transaction_id).toBeUndefined();
     expect(Object.keys(audit.tables)).toHaveLength(11);
     expect(Object.values(runtime.tables)).toHaveLength(10);
     for (const table of Object.values(runtime.tables) as { isRLSEnabled: boolean }[]) {
@@ -35,6 +39,7 @@ describe('Kontrakt plików migracji', () => {
       '0003_user-identity',
       '0004_runtime-security',
       '0005_security-audit',
+      '0006_security-foundation',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -55,6 +60,7 @@ describe('Kontrakt plików migracji', () => {
       '0003_user-identity.sql',
       '0004_runtime-security.sql',
       '0005_security-audit.sql',
+      '0006_security-foundation.sql',
     ]) {
       const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
       expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
@@ -115,5 +121,16 @@ describe('Kontrakt plików migracji', () => {
     ]) {
       expect(migration).toContain(fragment);
     }
+  });
+
+  it('0006 łączy dokładne efekty i trzy wyniki TX bez przepisywania historycznego audytu', () => {
+    const migration = readFileSync(new URL('../drizzle/0006_security-foundation.sql', import.meta.url), 'utf8');
+    for (const fragment of [
+      'pap_execute_access()', 'pap_security_protocol_version()',
+      'e.operation_id = NEW.operation_id', "a.state_change->'effects'->effect_key = expected_effect",
+      'a.transaction_id = pg_current_xact_id()::text', 'WITH CHECK (false)',
+      "'outcome_unknown'", "'transaction_outcome_unknown'", 'access_management_operation_id IS NULL',
+      ') NOT VALID;', "SET LOCAL lock_timeout = '5s'",
+    ]) expect(migration).toContain(fragment);
   });
 });

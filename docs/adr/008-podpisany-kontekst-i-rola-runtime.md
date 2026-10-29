@@ -20,7 +20,7 @@ facts (zablokowane fakty), company (operacja firmy), access (zatwierdzona komend
 Runtime może czytać tylko wiersze odpowiednie dla podpisanego zakresu; RLS dodatkowo
 sprawdza aktywność konta, członkostwa i grantu oraz ich czas. Granica per-action
 pozostaje w domenie. Po rewizji SEC-01/02 zapis członkostw/grantów wykonuje wyłącznie
-pap_execute_access() z 0005, bez argumentów SQL, na podstawie podpisanej komendy.
+pap_execute_access() z 0006, bez argumentów SQL, na podstawie podpisanej komendy.
 Invoker guard odrzuca DML runtime, a wewnątrz executora sprawdza dokładne OLD/NEW
 i revoked_at = LEAST(OLD.revoked_at, decision_at). Nie wolno zmieniać roli ani kluczy.
 Runtime ma kolumnowy UPDATE tylko do blokowania wierszy i WITH CHECK false;
@@ -53,10 +53,14 @@ z jedynym obecnym efektem firmowym. Przejęcie samego SQL runtime nie pozwala
 wykonać dodatkowej komendy pod historycznym receipt ani zmienić daty cofnięcia.
 Szczegóły, scenariusze QA i zależności SEC-03/04/05: [docs/29](../29-sec01-sec02-kontrakt-efektow.md).
 
-Migracja: kandydackie 0004/0005, bez zmian 0000–0003. Rewizja SEC-01/02 zmienia
-nieodebrane 0004/0005 i wymaga ponownego jawnego provisioningu ACL. Nie stosować
-edycji historycznego pliku do istniejącej bazy z poprzednią wersją tych migracji;
-w takim przypadku potrzebna jest osobna migracja addytywna. Role i klucz nie powstają automatycznie w migracji.
+Integracja zachowuje 0000–0005 dokładnie z #31 i dodaje 0006, także dla upgrade
+oryginalnej 0005. Wymaga ponownego jawnego provisioningu ACL i zgodnej wersji
+aplikacji; factory sprawdza marker 60301. Role i klucz nie powstają automatycznie.
+SEC-05: helpery sprawdzają podpisany tenant, fazę i (dla company) firmę/akcję
+przed odczytem tabel. SEC-04: UoW wymaga jednorazowej pozytywnej weryfikacji
+aktora i sam sprawdza politykę na prywatnych, zablokowanych faktach przed podpisem
+dokładnego zakresu i czasu. Pozostaje bramka ograniczenia surowego portu/tx przed
+API/MCP i niezależny odbiór savepointów; szczegóły w [integracji](../30-security-foundation-integracja.md).
 Nie ma automatycznego deploymentu ani migracji stagingu. Rollback aplikacji wymaga
 utrzymania zgodnego podpisu i ACL; nie wyłączać RLS i nie kasować danych jako rollbacku.
 Pełna walidacja ról, definerów, poolingu i wyścigów jest bramką przed merge.

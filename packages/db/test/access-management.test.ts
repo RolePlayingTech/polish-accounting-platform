@@ -1,14 +1,20 @@
 import { legalEntityId, tenantId, userId } from '@pap/domain';
 import {
+  ConfirmedTransactionRollbackError,
   createOidcAccessManagementActorSource,
   createTenantAccessManagementAuthorizer,
   executeAuthorizedCompanyAction,
+  isConfirmedTransactionRollbackError,
+  isTransactionOutcomeUnknownError,
   manageAccess,
+  TransactionOutcomeUnknownError,
   type AccessManagementCommand,
 } from '@pap/application';
+import postgres from 'postgres';
 import { describe, expect, it, vi } from 'vitest';
 import { connectDatabase } from '../src/client.js';
 import { PostgresAccessManagementStore } from '../src/access-management.js';
+import { runManagedTransaction } from '../src/transaction-primitives.js';
 import { PostgresTransactionalUnitOfWork } from '../src/transactional-unit-of-work.js';
 
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
@@ -318,6 +324,297 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A — rzeczywisty builder i k
         allowed: false,
         status: 'forbidden',
         reason: 'identity_not_provisioned_or_disabled',
+      });
+    } finally {
+      vi.restoreAllMocks();
+      await client.end({ timeout: 1 });
+    }
+  });
+
+  it('SEC-03: runManagedTransaction rozróżnia potwierdzony ROLLBACK (przed COMMIT i przy serwerowym 23514/40001) od niepewnego wyniku (08007, 40003, 57P01, FATAL, zerwane gniazdo)', async () => {
+    const { db, client } = connectDatabase({
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: 'postgres://pap_test_app:synthetic_only@127.0.0.1:5432/pap_test',
+    });
+
+    vi.spyOn(client, 'unsafe').mockImplementation(() => {
+      const result = Object.assign(Promise.resolve([]), { values: async () => [] });
+      return result as unknown as ReturnType<typeof client.unsafe>;
+    });
+
+    const beginSpy = vi.spyOn(client, 'begin');
+
+    try {
+      // 1) Awaria przed wejściem do callbacku nie dowodzi potwierdzenia ROLLBACK.
+      beginSpy.mockImplementationOnce((async () => {
+        throw Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' });
+      }) as unknown as typeof client.begin);
+      await expect(
+        runManagedTransaction(
+          db,
+          async () => 'ok',
+          () => true,
+        ),
+      ).rejects.toSatisfy(isTransactionOutcomeUnknownError);
+
+      // 2) Błąd w callbacku + potwierdzony ROLLBACK (postgres.js rethrowuje wyjątek z callbacku po `await sql\`rollback\``)
+      beginSpy.mockImplementationOnce((async (callback: (sql: typeof client) => Promise<unknown>) =>
+        callback(client)) as unknown as typeof client.begin);
+      const callbackErr = new Error('błąd przed COMMIT');
+      await expect(
+        runManagedTransaction(
+          db,
+          async () => {
+            throw callbackErr;
+          },
+          () => true,
+        ),
+      ).rejects.toSatisfy(
+        (err: unknown) =>
+          isConfirmedTransactionRollbackError(err) &&
+          (err as ConfirmedTransactionRollbackError).cause === callbackErr,
+      );
+
+      // 3) Błąd w callbacku, ale zerwane połączenie podczas `ROLLBACK` -> TransactionOutcomeUnknownError
+      beginSpy.mockImplementationOnce((async (
+        callback: (sql: typeof client) => Promise<unknown>,
+      ) => {
+        try {
+          return await callback(client);
+        } catch {
+          throw Object.assign(new Error('CONNECTION_CLOSED podczas ROLLBACK'), {
+            code: 'CONNECTION_CLOSED',
+          });
+        }
+      }) as unknown as typeof client.begin);
+      await expect(
+        runManagedTransaction(
+          db,
+          async () => {
+            throw new Error('błąd przed COMMIT');
+          },
+          () => true,
+        ),
+      ).rejects.toSatisfy(isTransactionOutcomeUnknownError);
+
+      // 4) Odroczony constraint trigger PostgreSQL (23514) oraz serialization_failure (40001) o severity = 'ERROR' na COMMIT -> ConfirmedTransactionRollbackError
+      for (const code of ['23514', '40001']) {
+        beginSpy.mockImplementationOnce((async (
+          callback: (sql: typeof client) => Promise<unknown>,
+        ) => {
+          await callback(client);
+          throw new postgres.PostgresError({
+            severity_local: 'BŁĄD',
+            severity: 'ERROR',
+            code,
+            message: 'Transakcja odrzucona przez serwer na COMMIT',
+          } as never);
+        }) as unknown as typeof client.begin);
+
+        await expect(
+          runManagedTransaction(
+            db,
+            async () => 'done',
+            () => true,
+          ),
+        ).rejects.toSatisfy(isConfirmedTransactionRollbackError);
+      }
+
+      // 5) Niepewne błędy podczas COMMIT: 08007, 40003, 57P01, FATAL oraz zerwane gniazdo TCP -> TransactionOutcomeUnknownError
+      for (const uncertainCommitError of [
+        new postgres.PostgresError({
+          severity_local: 'ERROR',
+          severity: 'ERROR',
+          code: '08007',
+          message: 'transaction_resolution_unknown',
+        } as never),
+        new postgres.PostgresError({
+          severity_local: 'ERROR',
+          severity: 'ERROR',
+          code: '40003',
+          message: 'statement_completion_unknown',
+        } as never),
+        new postgres.PostgresError({
+          severity_local: 'FATAL',
+          severity: 'FATAL',
+          code: '57P01',
+          message: 'terminating connection due to administrator command',
+        } as never),
+        new postgres.PostgresError({
+          severity_local: 'FATAL',
+          severity: 'FATAL',
+          code: '23514',
+          message: 'fatal mimo kodu 23514 nie jest czystym ReadyForQuery',
+        } as never),
+        Object.assign(new Error('write ECONNRESET'), { code: 'ECONNRESET' }),
+      ]) {
+        beginSpy.mockImplementationOnce((async (
+          callback: (sql: typeof client) => Promise<unknown>,
+        ) => {
+          await callback(client);
+          throw uncertainCommitError;
+        }) as unknown as typeof client.begin);
+
+        await expect(
+          runManagedTransaction(
+            db,
+            async () => 'done',
+            () => true,
+          ),
+        ).rejects.toSatisfy(
+          (err: unknown) =>
+            isTransactionOutcomeUnknownError(err) &&
+            (err as TransactionOutcomeUnknownError).cause === uncertainCommitError,
+        );
+      }
+    } finally {
+      vi.restoreAllMocks();
+      await client.end({ timeout: 1 });
+    }
+  });
+
+  it('SEC-03: PostgresAccessManagementStore po utracie potwierdzenia COMMIT nie zapisuje fałszywego rolled_back i przy ponowieniu z tym samym operationId zwraca pierwotny receipt bez duplikacji mutacji', async () => {
+    const { db, client } = connectDatabase({
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: 'postgres://pap_test_app:synthetic_only@127.0.0.1:5432/pap_test',
+    });
+
+    const actorUuid = userId(id(6));
+    const targetUuid = userId(id(3));
+    const tenantUuid = tenantId(id(2));
+    const entityUuid = legalEntityId(id(5));
+    const opId = id(901);
+    const grantUuid = id(902);
+
+    let persistedAccessEventRow: unknown[] | null = null;
+    let grantInsertCount = 0;
+    const securityAuditRows: Array<{
+      decision: unknown;
+      outcome: unknown;
+      reason: unknown;
+      accessManagementOperationId: unknown;
+    }> = [];
+    let dropFirstCommitAck = true;
+
+    vi.spyOn(client, 'begin').mockImplementation((async (
+      callback: (sql: typeof client) => Promise<unknown>,
+    ) => {
+      const res = await callback(client);
+      if (dropFirstCommitAck) {
+        dropFirstCommitAck = false;
+        // Symulacja: serwer PostgreSQL zatwierdził TX, ale połączenie zerwało się przed dostarczeniem potwierdzenia COMMIT
+        throw Object.assign(new Error('CONNECTION_CLOSED po COMMIT'), {
+          code: 'CONNECTION_CLOSED',
+        });
+      }
+      return res;
+    }) as unknown as typeof client.begin);
+
+    vi.spyOn(client, 'unsafe').mockImplementation((query, parameters = []) => {
+      let rows: unknown[] = [];
+      if (query.includes('from "app_user"')) {
+        rows = [[actorUuid, 'active', null]];
+      } else if (query.includes('from "tenant_membership"')) {
+        rows = [
+          [
+            tenantUuid,
+            parameters[1],
+            parameters[1] === actorUuid ? 'tenant_owner' : 'tenant_member',
+            'active',
+            '2026-01-01T00:00:00.000Z',
+            null,
+          ],
+        ];
+      } else if (query.includes('from "legal_entity"')) {
+        rows = [[entityUuid]];
+      } else if (query.includes('from "access_management_event"')) {
+        rows = persistedAccessEventRow ? [persistedAccessEventRow] : [];
+      } else if (query.includes('insert into "company_access_grant"')) {
+        grantInsertCount += 1;
+      } else if (query.includes('insert into "access_management_event"')) {
+        // Kolumny w porządku schematu Drizzle `accessManagementEvent`
+        persistedAccessEventRow = [
+          parameters[0],
+          parameters[1],
+          parameters[2],
+          parameters[3],
+          parameters[4],
+          parameters[5],
+          parameters[6],
+          parameters[7],
+          typeof parameters[8] === 'string' ? JSON.parse(parameters[8]) : parameters[8],
+          typeof parameters[9] === 'string' ? JSON.parse(parameters[9]) : parameters[9],
+        ];
+      } else if (query.includes('insert into "security_decision_event"')) {
+        securityAuditRows.push({
+          accessManagementOperationId: parameters[3],
+          decision: parameters[10],
+          outcome: parameters[11],
+          reason: parameters[12],
+        });
+      } else if (query.includes('clock_timestamp()')) {
+        rows = [{ now }];
+      }
+      const result = Object.assign(Promise.resolve(rows), { values: async () => rows });
+      return result as unknown as ReturnType<typeof client.unsafe>;
+    });
+
+    try {
+      const store = new PostgresAccessManagementStore(db);
+      const command: AccessManagementCommand = {
+        kind: 'grant',
+        operationId: opId,
+        tenantId: tenantUuid,
+        userId: targetUuid,
+        grantId: grantUuid,
+        legalEntityId: entityUuid,
+        action: 'read',
+        validFrom: null,
+        validUntil: null,
+      };
+
+      // Pierwsza próba: serwer wykonał COMMIT, klient stracił potwierdzenie
+      const first = await store.execute(command, { userId: actorUuid });
+      expect(first).toEqual({
+        ok: false,
+        reason: 'transaction_outcome_unknown',
+      });
+      expect(grantInsertCount).toBe(1);
+      expect(securityAuditRows.some((r) => r.outcome === 'rolled_back')).toBe(false);
+      expect(securityAuditRows).toEqual([
+        {
+          accessManagementOperationId: opId,
+          decision: 'allow',
+          outcome: 'committed',
+          reason: 'authorized_tenant_administration',
+        },
+        {
+          accessManagementOperationId: null,
+          decision: 'allow',
+          outcome: 'outcome_unknown',
+          reason: 'transaction_outcome_unknown',
+        },
+      ]);
+
+      // Jawne ponowienie z tym samym operationId: brak drugiego INSERT do company_access_grant, zwraca pierwotny receipt
+      const second = await store.execute(command, { userId: actorUuid });
+      expect(second).toEqual({
+        ok: true,
+        receipt: {
+          operationId: opId,
+          occurredAt: now,
+          changed: true,
+          grantId: grantUuid,
+        },
+      });
+      expect(grantInsertCount).toBe(1);
+      expect(securityAuditRows.some((r) => r.outcome === 'rolled_back')).toBe(false);
+      expect(securityAuditRows).toHaveLength(3);
+      expect(securityAuditRows[2]).toEqual({
+        accessManagementOperationId: opId,
+        decision: 'allow',
+        outcome: 'committed',
+        reason: 'authorized_tenant_administration',
       });
     } finally {
       vi.restoreAllMocks();

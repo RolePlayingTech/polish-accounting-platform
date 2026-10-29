@@ -65,8 +65,9 @@ BEGIN
   EXECUTE format('GRANT INSERT ON %I.company_operation_probe TO %I', data_schema, runtime_name);
   EXECUTE format('GRANT INSERT ON %I.security_decision_event TO %I', data_schema, runtime_name);
   EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pap_context(), %I.pap_admin_allowed(uuid),
-    %I.pap_company_allowed(uuid,uuid,text), %I.pap_resolve_identity(text,text), %I.pap_execute_access() TO %I',
-    data_schema, data_schema, data_schema, data_schema, data_schema, runtime_name);
+    %I.pap_company_allowed(uuid,uuid,text), %I.pap_resolve_identity(text,text),
+    %I.pap_execute_access(), %I.pap_security_protocol_version() TO %I',
+    data_schema, data_schema, data_schema, data_schema, data_schema, data_schema, runtime_name);
   -- Runtime nie uzyskuje USAGE na schemacie rejestru migracji.
   IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
     EXECUTE format('REVOKE ALL ON SCHEMA drizzle FROM PUBLIC, %I', runtime_name);

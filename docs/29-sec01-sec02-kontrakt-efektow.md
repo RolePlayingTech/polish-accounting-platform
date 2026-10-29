@@ -1,6 +1,7 @@
 # SEC-01/SEC-02 — kontrakt autoryzacji, efektów i audytu
 
 Data: 2026-10-29. Issue #6, baza PR #31 `bd0c56047dd9a86243c12a1a7e917429c487015f`.
+Aktualny kontrakt integracji/migracji i status SEC-01–05: [docs/30](30-security-foundation-integracja.md).
 Status: implementacja kandydacka, **Draft / NO-GO**. Wszystkie testy i narzędzia
 walidacyjne tej zmiany: **NOT RUN**, zgodnie z instrukcją właściciela. Scenariusze
 poniżej ma zaimplementować i wykonać odrębny agent QA na izolowanym Hetznerze.
@@ -72,7 +73,8 @@ zawiera wewnętrzne identyfikatory i stany uprawnień. Runtime nadal nie odczytu
 globalnego security audit; odczyt receipt jest ograniczony do podpisanej komendy.
 
 Administrator/migrator i proces z kluczem HMAC pozostają granicą zaufania.
-Nie deklarujemy naprawy SEC-04/05; nadal wymagają osobnych poprawek i review.
+Integracja wzmacnia stan aktora/scope UoW (SEC-04) i ogranicza helpery (SEC-05);
+pozostałe bramki i brak odbioru są opisane w docs/30.
 H2 (savepointy/utrata blokad) pozostaje obowiązkowym scenariuszem audytu całego
 UoW: executor bierze blokadę celu, ale decyzja delegacji opiera się na blokadach
 i polityce wspólnego core. Nie traktować tej zmiany jako odbioru całego 6D-3.
@@ -91,16 +93,12 @@ i polityce wspólnego core. Nie traktować tej zmiany jako odbioru całego 6D-3.
   politykę domenową i blokady; zastępuje własny DML pojedynczym SELECT executora.
   Produkcyjna ścieżka wymaga signera. Dawne testy adaptera używające właściciela
   bez signera muszą zostać dostosowane do rzeczywistego protokołu przez QA.
-- `0000`–`0003` bez zmian. `0004` domyka guard, zegar kaskady i RLS probe;
-  `0005` dodaje executor, kontrole i nullable `access_management_event.transaction_id`
-  z domyślnym xid dla nowych wpisów oraz indeksem transakcji. Istniejącym receipt
-  zostawiamy NULL; nie dorabiamy fałszywych efektów ani identyfikatora TX migracji.
-  `schema.ts` i snapshot `0005` opisują tę kolumnę/indeks.
-- To rewizja **nieodebranych migracji kandydackich** ze stosu #30/#31, a nie
-  migracja już wdrożonej bazy. Nie edytowano rejestru migracji, nie uruchomiono SQL.
-  Jeśli ktoś wykonał poprzednią 0004/0005 poza efemerycznymi fixture, potrzebna
-  jest osobna addytywna migracja naprawcza i decyzja operatora; zmieniony plik nie
-  zostanie bezpiecznie zastosowany ponownie przez istniejący runner.
+- Integracja zachowuje 0000–0005 i snapshoty z #31. Cały SQL naprawczy jest
+  addytywną 0006 z osobnym snapshotem/journal. Historyczne receipt zachowują
+  transaction_id NULL i niezmienioną treść; nowe mają xid i mapę efektów.
+  CHECK NOT VALID chroni nowe INSERT-y bez przepisywania dawnego audytu.
+  Cold install oraz upgrade oryginalnej 0005 wymagają QA; bazy ze zmienionymi
+  migracjami gałęzi naprawczych wymagają osobnej oceny operatora. Szczegóły docs/30.
 - Po cold install / upgrade wymagane jest jawne uruchomienie nowego provisioning ACL
   przed użyciem factory. Stara aplikacja + nowe ACL/SQL odmawia; nowa aplikacja +
   stare SQL także nie działa. Zmiana wymaga wspólnej wersji application/DB/ACL,
@@ -122,25 +120,18 @@ i polityce wspólnego core. Nie traktować tej zmiany jako odbioru całego 6D-3.
 
 ## Integracja z SEC-03
 
-Przeczytano diff gałęzi `fix/issue-6-sec03-transaction-outcome`, PR #35,
-SHA `a01ae68dd30919a95f2549b3d4e24e5c421629b8`. Nie zmieniano tej gałęzi ani stosu.
-PR #35 jest obowiązkową zależnością odbioru. Ten PR nie kopiuje jego implementacji.
-
-Po integracji zachować `ConfirmedTransactionRollbackError`,
-`TransactionOutcomeUnknownError`, status 503 i `outcome_unknown` z #35, w tym
-rozszerzony CHECK 0005 i allowlisty writera. Zmiana executora jest wewnątrz tej
-samej transakcji; nie dodaje COMMIT, catch/auto-retry ani ponownego callbacku.
-Odczyt istniejącego receipt wymaga ponownej autoryzacji i tej samej komendy/ID.
-Zatwierdzona TX zawiera efekt, receipt i audyt; utrata potwierdzenia ich nie rozdziela.
-Niepewność nie może zostać zapisana jako pewny rollback. Konflikty integracyjne
-mogą dotyczyć access-management.ts, application UoW, 0005 i ADR-009/handoff;
-należy połączyć oba kontrakty, nie wybierać całego pliku z jednej gałęzi.
+Zintegrowano #37 a459aa1, porównano także końcowy #35 6da3326. Zachowano
+ConfirmedTransactionRollbackError, TransactionOutcomeUnknownError, HTTP 503,
+best-effort outcome_unknown i brak automatycznego callback retry. Wspólny CHECK
+jest w 0006. SQLSTATE 40003 jest wykluczony z potwierdzonego rollbacku.
+Executor i audyt pozostają w tej samej TX; utrata potwierdzenia ich nie rozdziela.
+Opis decyzji klasyfikatora i scenariusze integracyjne: docs/30.
 
 ## Scenariusze dla QA — do implementacji i wykonania, wszystkie NOT RUN
 
 Każdy scenariusz sprawdza wynik **i stan po COMMIT/ROLLBACK z konta kontrolnego**.
 Wykonać na prawdziwym loginie `pap_test_app`, także przy migratorze
-NOSUPERUSER/NOBYPASSRLS, na dokładnym końcowym SHA po integracji #35.
+NOSUPERUSER/NOBYPASSRLS, na dokładnym końcowym SHA integracji.
 
 | Przypadek | Wymagany wynik |
 | --- | --- |
@@ -169,7 +160,7 @@ NOSUPERUSER/NOBYPASSRLS, na dokładnym końcowym SHA po integracji #35.
 | Przechwycenie asercji i replay w innej TX/backendzie/roli lub po TTL | odmowa; brak efektu/receipt |
 | Wyścigi grant/revoke/reactivate; oba porządki UUID A→B i B→A | serializacja członkostwem, brak deadlocka i odnowienia grantów |
 | SEC-03: utrata potwierdzenia skutecznego COMMIT, potem retry tym samym ID | jeden efekt/receipt, committed + outcome_unknown, brak fałszywego rolled_back |
-| Błąd przed COMMIT i potwierdzony rollback z #35 | brak efektu/receipt, prawdziwy rolled_back |
+| Błąd przed COMMIT i potwierdzony rollback adaptera | brak efektu/receipt, prawdziwy rolled_back |
 | Pula max=1 po odmowie, błędzie SQL i niepewnym zakończeniu | brak wycieku kontekstu/blokad; deny nie blokuje puli |
 | Cold install, upgrade 0000–0003 z syntetycznymi danymi, provisioning powtórzony | stare dane zachowane; historyczne tx NULL; poprawne ACL/FORCE RLS |
 | Migrator NOSUPERUSER i pgcrypto (H1), ACL wszystkich nowych funkcji | prawidłowa własność/search_path; brak PUBLIC EXECUTE i DDL runtime |
@@ -205,7 +196,7 @@ Nie osłabiać kontroli w celu przyspieszenia testu. Jeden use case odpowiada je
 autoryzowanej operacji; nie obiecujemy arbitralnych sekwencji wielu poleceń i
 powtarzających się identycznych przejść w jednym UoW.
 
-Następne kroki: review decyzji → integracja z #35 i SEC-04/05 → implementacja
+Następne kroki: review integracji → domknięcie pozostałych bramek docs/30 → implementacja
 macierzy przez QA → izolowane PG18 i raport SHA/PASS/FAIL/NOT RUN → niezależny
 gate GO/NO-GO. Bez tych kroków zachować Draft i NO-MERGE. Brak deployu, merge,
 zmian na serwerze, nowych usług, UI, endpointów księgowych i MCP.

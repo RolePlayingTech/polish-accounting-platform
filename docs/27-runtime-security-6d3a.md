@@ -26,6 +26,7 @@ FOR SHARE/UPDATE; WITH CHECK false uniemożliwia rzeczywistą zmianę.
 | drizzle.__drizzle_migrations | Brak | Wyłącznie migrator |
 | pap_context, pap_admin_allowed, pap_company_allowed, pap_resolve_identity | EXECUTE | Małe definery, jawny scope i zamknięty search_path |
 | pap_execute_access | EXECUTE | Cztery komendy lifecycle z podpisu; receipt i rzeczywiste OLD/NEW, bez parametrów SQL |
+| pap_security_protocol_version | EXECUTE | Marker zgodności 0006 i aplikacji: 60301 |
 | Funkcje triggerów i pgcrypto | Brak bezpośredniego EXECUTE | Triggery wywoływane przez PostgreSQL; kryptografia tylko wewnątrz definerów |
 | Nowe tabele/funkcje/sekwencje | Brak domyślnych grantów | Każdy moduł wymaga własnej migracji/macierzy |
 
@@ -67,7 +68,7 @@ jej nie znaleziono. Nie tworzymy jej i nie używamy bazy działającego stagingu
 5. Runtime ma DATABASE_URL z pap_test_app (local: pap_local_app; staging: pap_staging_app).
    Migrator zachowuje odpowiednio pap_test/pap_local/pap_staging_migrator.
 6. Kompozycja: loadDatabaseContextSigner → createPostgresSecurityServices(db, signer).
-   Factory sprawdza rolę, ACL, FORCE RLS i podpis; zwraca spójne adaptery.
+   Factory sprawdza marker 0006, rolę, ACL, FORCE RLS i podpis; zwraca spójne adaptery.
    Bez podpisu starsze adaptery na ograniczonej roli odmawiają; nie podłączać
    nieblokującego źródła faktów jako autoryzatora zapisu.
 

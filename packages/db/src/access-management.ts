@@ -1,5 +1,7 @@
 import {
+  ConfirmedTransactionRollbackError,
   copyAccessManagementCommand,
+  isConfirmedTransactionRollbackError,
   manageAccess,
   SecurityAuditUnavailableError,
   type SecurityAuditEvent,
@@ -18,7 +20,7 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import type { PostgresContextSigner } from './signed-context.js';
 import { appendSecurityDecision, PostgresSecurityAudit } from './security-audit.js';
-import { companyAccessGrant, legalEntity, tenantMembership } from './schema.js';
+import { accessManagementEvent, companyAccessGrant, legalEntity, tenantMembership } from './schema.js';
 import {
   applyLocalRlsSessionContext,
   readTransactionClockNow,
@@ -191,13 +193,19 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         (result) => result.ok === true,
       );
     } catch (error) {
-      if (error instanceof SecurityAuditUnavailableError) {
-        return { ok: false, reason: 'authorization_audit_unavailable' };
+      if (isConfirmedTransactionRollbackError(error)) {
+        if (error.cause instanceof SecurityAuditUnavailableError) {
+          throw new ConfirmedTransactionRollbackError(
+            error.cause,
+            'authorization_audit_unavailable',
+          );
+        }
+        if (isUniqueGrantConflict(error.cause)) {
+          throw new ConfirmedTransactionRollbackError(error.cause, 'operation_conflict');
+        }
+        throw error;
       }
-      if (isUniqueGrantConflict(error)) {
-        return { ok: false, reason: 'operation_conflict' };
-      }
-      return { ok: false, reason: 'access_management_unavailable' };
+      throw error;
     }
   }
 
@@ -495,6 +503,26 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         actorGrantsRows = await lockActorGrants();
       }
 
+      // Receipt jest append-only. Dopiero dokładne dopasowanie pozwala autoryzować
+      // odczyt wyniku zamiast ponownej propozycji grantu z datą już w przeszłości.
+      const [previous] = await tx.select({
+        actorId: accessManagementEvent.actorId,
+        tenantId: accessManagementEvent.tenantId,
+        userId: accessManagementEvent.userId,
+        requestKey: accessManagementEvent.requestKey,
+        occurredAt: accessManagementEvent.occurredAt,
+      }).from(accessManagementEvent).where(eq(accessManagementEvent.operationId, command.operationId));
+      let committedOperationAt: Date | undefined;
+      if (previous && previous.actorId === actor.userId && previous.tenantId === command.tenantId && previous.userId === command.userId) {
+        try {
+          if (JSON.stringify(copyAccessManagementCommand(JSON.parse(previous.requestKey) as AccessManagementCommand)) === JSON.stringify(command)) {
+            committedOperationAt = previous.occurredAt;
+          }
+        } catch {
+          // Uszkodzony/historycznie niezgodny receipt nie jest dowodem retry.
+        }
+      }
+
       // Autorytatywny czas z zegara PostgreSQL pobrany PO uzyskaniu wszystkich blokad wierszowych.
       const now = await readTransactionClockNow(tx);
 
@@ -508,6 +536,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
       };
 
       cachedFacts = {
+        committedOperationAt,
         actorMembership: mapMembershipRow(actorMembershipRow),
         actorGrants: actorGrantsRows.map((grantRow) => ({
           ...grantRow,
