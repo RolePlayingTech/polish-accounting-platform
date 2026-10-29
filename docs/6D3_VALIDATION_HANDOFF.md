@@ -11,9 +11,9 @@ przed wymaganymi testami PostgreSQL i niezależnym code/security review.
 | --- | --- | --- |
 | Środowiska i AGENTS | #26, codex/6d3-environments, 2c8e2a24346f1bfa6b47db2fb2ffa0c9b0e2370d | Niezależny dokumentacyjny Draft, zsynchronizowany z #29/main |
 | Istniejąca transakcyjna implementacja | #27, feat/issue-6d3a-transactional-authz, 918b6c148cce77b13cb0ee2770f763e4bba42176 | Zastana praca, nie duplikować |
-| B: domknięcie ścieżek transakcyjnych | #28, codex/6d3b-transactional-authorization, db31f508140cce2a9a1549bf54da44943acbebe9 | Baza #27 |
-| A: role, podpis i RLS | #30, codex/6d3a-runtime-rls, dec04f1693d575b3a8907ca37e22e1f053e99c47 | Baza #28 |
-| C: audyt i hardening | #31, codex/6d3c-security-audit, kod 5a25ddfc04d7f6ebf62229cfbc4cd0db30495307 | Baza #30; końcowy SHA z dokumentacją w PR i raporcie |
+| B: domknięcie ścieżek transakcyjnych | #28, codex/6d3b-transactional-authorization, 0d1c54c25504b1dea79e3c6fe51bd6578d94710c | Baza #27 + aktualny main |
+| A: role, podpis i RLS | #30, codex/6d3a-runtime-rls, 8a7d34635dcd8592479065267e3a085d5f213a42 | Baza #28 |
+| C: audyt i hardening | #31, codex/6d3c-security-audit, kod 23ed1b9f406d0cc14db235e1dbfa7deea07a4d3f | Baza #30; końcowy SHA z dokumentacją w PR i raporcie |
 
 Numeracja istniejącego #27 jest historyczna: nazywa transakcje 6D-3A. W bieżącym
 poleceniu A oznacza role/RLS, B transakcje, C audyt.
@@ -21,8 +21,10 @@ poleceniu A oznacza role/RLS, B transakcje, C audyt.
 Podczas sesji main zmienił się z af641ca647fad44def882767126ebe2ab6d3cfaa na
 00fb64f0fcbbf18c7d6c47b651bb49245d106bcb (#29). Właściciel wyłączył automatyczne
 Actions i wskazał tymczasowe CI na Hetznerze. Nie uruchamiać workflow_dispatch/rerun
-i nie oczekiwać statusów GitHub. Przed odbiorem zsynchronizować stos z aktualnym main,
-zachowując tę politykę oraz dokumentacyjne #26. Nie cofać zmian #29 w workflow.
+i nie oczekiwać statusów GitHub. Stos B/A/C zsynchronizowano z tym main,
+zachowując politykę #29; diff workflow względem main jest pusty. Dokumentacyjne #26
+pozostaje osobnym PR. Po synchronizacji porównanie apps/packages/test/package.json/lockfile
+wykazało identyczny kod względem testowanego drzewa, dlatego nie powtarzano testów.
 
 Przeczytaj ADR-007/008/009, docs/27-runtime-security-6d3a.md i docs/28-security-audit-6d3c.md.
 Uchwyty tx i signer są zaufanym kodem serwera, nigdy wejściem REST/MCP.
