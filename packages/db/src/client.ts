@@ -7,10 +7,14 @@ import {
   type LoadDatabaseConfigOptions,
 } from './database-config.js';
 
+export interface ConnectDatabaseOptions extends LoadDatabaseConfigOptions {
+  readonly maxConnections?: number;
+}
+
 export function connectDatabase(
   env: Readonly<Record<string, string | undefined>> = process.env,
   dataSchema = 'public',
-  options: LoadDatabaseConfigOptions = {},
+  options: ConnectDatabaseOptions = {},
 ) {
   const config = loadDatabaseConfig(env, options);
   // Namespace testowy dotyczy wszystkich połączeń puli, także transakcji migratora.
@@ -21,6 +25,12 @@ export function connectDatabase(
   ) {
     throw new DatabaseConfigError('Niedozwolony schemat danych; własny namespace wymaga testu.');
   }
+
+  const maxConnections = options.maxConnections ?? 5;
+  if (!Number.isInteger(maxConnections) || maxConnections < 1 || maxConnections > 100) {
+    throw new DatabaseConfigError('Niepoprawny limit połączeń puli PostgreSQL.');
+  }
+
   const url = new URL(config.url);
   const host = url.hostname.replace(/^\[|\]$/g, '');
   const client = postgres(config.url, {
@@ -31,7 +41,7 @@ export function connectDatabase(
     port: [Number(url.port)],
     connect_timeout: 5,
     idle_timeout: 20,
-    max: 5,
+    max: maxConnections,
     connection: { search_path: `${dataSchema},pg_catalog` },
   });
 

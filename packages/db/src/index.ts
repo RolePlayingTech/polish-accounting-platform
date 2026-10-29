@@ -1,8 +1,18 @@
-export { connectDatabase } from './client.js';
+export { connectDatabase, type ConnectDatabaseOptions } from './client.js';
 export {
   PostgresAccessManagementAuthorizationDataSource,
   PostgresAccessManagementStore,
 } from './access-management.js';
+export {
+  applyLocalRlsSessionContext,
+  lockCompanyActionFactsInTx,
+  PostgresTransactionalUnitOfWork,
+  readTransactionClockNow,
+  runManagedTransaction,
+  verifyAndLockActorInTx,
+  type PostgresCompanyActionTransactionContext,
+  type PostgresTransaction,
+} from './transactional-unit-of-work.js';
 export {
   PostgresUserIdentityResolver,
   PostgresUserIdentityStore,

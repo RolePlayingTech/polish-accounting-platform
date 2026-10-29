@@ -13,8 +13,14 @@ import {
 import {
   authenticateOidcActor,
   type AuthenticateOidcActorDependencies,
+  type VerifiedOidcIdentity,
 } from './oidc-authentication.js';
 import { systemClock, type Clock } from './tenant-authorization.js';
+import {
+  freezeTransactionActor,
+  type TransactionActor,
+  type TransactionSessionContext,
+} from './transactional-unit-of-work.js';
 
 interface AccessTarget {
   readonly operationId: string;
@@ -38,15 +44,20 @@ export type AccessManagementCommand = AccessTarget &
   );
 
 /** Wyłącznie wynik weryfikacji serwerowej; ten interfejs sam nie uwierzytelnia. */
-export interface AccessManagementActor {
+export interface AccessManagementActor extends TransactionActor {
   readonly userId: UserId;
+  readonly identity?: VerifiedOidcIdentity | undefined;
 }
 export interface AccessManagementActorSource {
   getVerifiedActor(): Promise<AccessManagementActor | null>;
 }
 /** Osobne prawo administracyjne, nigdy wywnioskowane z księgowego read/write. */
 export interface AccessManagementAuthorizer {
-  authorize(actor: AccessManagementActor, command: AccessManagementCommand): Promise<boolean>;
+  authorize(
+    actor: AccessManagementActor,
+    command: AccessManagementCommand,
+    transaction?: AccessManagementAuthorizationDataSource,
+  ): Promise<boolean>;
 }
 
 export interface AccessManagementAuthorizationFacts {
@@ -57,6 +68,11 @@ export interface AccessManagementAuthorizationFacts {
     readonly legalEntityId: LegalEntityId;
     readonly action: AccountingAction;
   } | null;
+  /**
+   * Autorytatywny czas z zegara transakcyjnego DB pobrany PO uzyskaniu blokad (6D-3A).
+   * Gdy jest obecny, polityka domenowa używa go zamiast zegara procesu aplikacji.
+   */
+  readonly now?: Date | undefined;
 }
 
 export interface AccessManagementAuthorizationDataSource {
@@ -87,8 +103,27 @@ export type AccessManagementResult =
         | 'access_management_unavailable';
     };
 
-/** Infrastruktura gwarantuje wspólną blokadę członkostwa, idempotencję i atomowy audyt. */
+/**
+ * Kontekst pojedynczej transakcji DB dla operacji administracyjnej (6D-3A).
+ * Łączy rewalidację konta aktora, pobranie zablokowanych faktów, decyzję, mutację i audyt.
+ */
+export interface AccessManagementTransaction extends AccessManagementAuthorizationDataSource {
+  verifyActorAccount(actor: AccessManagementActor): Promise<boolean>;
+  applySessionContext?(context: TransactionSessionContext): Promise<void>;
+  executeAuthorized(
+    command: AccessManagementCommand,
+    actor: AccessManagementActor,
+  ): Promise<AccessManagementResult>;
+}
+
+/**
+ * Infrastruktura gwarantuje transakcyjne powiązanie autoryzacji z mutacją (runInTransaction),
+ * wspólną blokadę faktów i członkostwa, idempotencję oraz atomowy audyt.
+ */
 export interface AccessManagementStore {
+  runInTransaction?(
+    work: (tx: AccessManagementTransaction) => Promise<AccessManagementResult>,
+  ): Promise<AccessManagementResult>;
   execute(
     command: AccessManagementCommand,
     actor: AccessManagementActor,
@@ -97,6 +132,7 @@ export interface AccessManagementStore {
 
 /**
  * Serwerowe źródło aktora administracyjnego powiązane z pełną weryfikacją OIDC i wewnętrznym resolverem tożsamości.
+ * Zachowuje zweryfikowaną parę (issuer, subject) do ponownej weryfikacji wewnątrz transakcji DB.
  */
 export function createOidcAccessManagementActorSource(
   rawBearerToken: string | undefined | null,
@@ -109,33 +145,45 @@ export function createOidcAccessManagementActorSource(
       if (!result.authenticated) {
         return null;
       }
-      return Object.freeze({ userId: result.userId });
+      return freezeTransactionActor({
+        userId: result.userId,
+        identity: result.identity,
+      });
     },
   };
 }
 
 /**
  * Serwerowy autoryzator administracyjny egzekwujący domenową politykę delegacji i zakaz self-escalation.
+ * Gdy działa wewnątrz transakcji UnitOfWork (6D-3A), zawsze pobiera zablokowane fakty i zegar bezpośrednio
+ * z bieżącej transakcji DB, eliminując okno TOCTOU.
  */
 export function createTenantAccessManagementAuthorizer(
-  source: AccessManagementAuthorizationDataSource,
+  fallbackSource?: AccessManagementAuthorizationDataSource,
   clock: Clock = systemClock,
 ): AccessManagementAuthorizer {
   return {
     async authorize(
       actor: AccessManagementActor,
       command: AccessManagementCommand,
+      transaction?: AccessManagementAuthorizationDataSource,
     ): Promise<boolean> {
       let canonicalActor: AccessManagementActor;
       let canonicalCommand: AccessManagementCommand;
       try {
-        canonicalActor = Object.freeze({ userId: userId(actor.userId) });
+        canonicalActor = freezeTransactionActor(actor);
         canonicalCommand = copyAccessManagementCommand(command);
       } catch {
         return false;
       }
 
-      const facts = await source.getAuthorizationFacts(canonicalActor, canonicalCommand);
+      const activeSource = transaction ?? fallbackSource;
+      if (!activeSource) {
+        return false;
+      }
+
+      const facts = await activeSource.getAuthorizationFacts(canonicalActor, canonicalCommand);
+      const decisionTime = facts.now ?? clock.now();
       const decision = decideAccessManagementAuthorization({
         actorUserId: canonicalActor.userId,
         targetUserId: canonicalCommand.userId,
@@ -162,7 +210,7 @@ export function createTenantAccessManagementAuthorizer(
               }
             : undefined,
         revokedGrantScope: canonicalCommand.kind === 'revoke_grant' ? facts.targetGrant : undefined,
-        now: clock.now(),
+        now: decisionTime,
       });
       return decision.allowed === true;
     },
@@ -227,14 +275,35 @@ export async function manageAccess(
     return { ok: false, reason: 'invalid_command' };
   }
   try {
-    if (!dependencies.actors || !dependencies.authorizer)
-      return { ok: false, reason: 'access_management_denied' };
-    const verified = await dependencies.actors.getVerifiedActor();
+    const { actors, authorizer, store } = dependencies;
+    if (!actors || !authorizer) return { ok: false, reason: 'access_management_denied' };
+    const verified = await actors.getVerifiedActor();
     if (!verified) return { ok: false, reason: 'access_management_denied' };
-    const actor = Object.freeze({ userId: userId(verified.userId) });
-    if ((await dependencies.authorizer.authorize(actor, command)) !== true)
+    const actor = freezeTransactionActor(verified);
+
+    if (typeof store.runInTransaction === 'function') {
+      return await store.runInTransaction(async (tx): Promise<AccessManagementResult> => {
+        if ((await tx.verifyActorAccount(actor)) !== true) {
+          return { ok: false, reason: 'access_management_denied' };
+        }
+        if ((await authorizer.authorize(actor, command, tx)) !== true) {
+          return { ok: false, reason: 'access_management_denied' };
+        }
+        if (tx.applySessionContext) {
+          await tx.applySessionContext({
+            actorUserId: actor.userId,
+            tenantId: command.tenantId,
+            ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
+          });
+        }
+        return await tx.executeAuthorized(command, actor);
+      });
+    }
+
+    if ((await authorizer.authorize(actor, command)) !== true) {
       return { ok: false, reason: 'access_management_denied' };
-    return await dependencies.store.execute(command, actor);
+    }
+    return await store.execute(command, actor);
   } catch {
     return { ok: false, reason: 'access_management_unavailable' };
   }

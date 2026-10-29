@@ -2,7 +2,7 @@
 
 > Aktualny model pracy (2026-10-29): rozwój lokalny bez DB oraz prywatny staging techniczny `https://ksiegowosc.roleplayingtech.com` przez `ssh hetzner`, zgodnie z ADR-006. Historyczne wzmianki „wyłącznie lokalnie” poniżej dotyczą etapu ADR-005. Nie wymagamy PostgreSQL na komputerze właściciela. Testy serwerowe wykonujemy tylko na już wydzielonych zasobach testowych, nigdy na bazie działającego stagingu. Brak takich zasobów oznacza test nieweryfikowany i przekazanie do etapu walidacji na izolowanym Hetznerze. Osobna zgoda obowiązuje dla migracji, administracji i deploymentu stagingu. Buildy na współdzielonym Hetznerze są zabronione; obowiązują limity ADR-006. Nie instalujemy automatycznie usług.
 
-Ten dokument opisuje szkielet z Issue #5 oraz pakiety DB/autoryzacji 6A/6B/6C/6D-1/6D-R/6D-2 z Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B i warstwa serwerowa [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) nie wystawiają jeszcze publicznych operacji księgowych ani interaktywnego logowania w przeglądarce; decyzje i ograniczenia opisują [model 6B](22-schemat-tenantow-6b.md), [cykl 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) i [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md).
+Ten dokument opisuje szkielet z Issue #5 oraz pakiety DB/autoryzacji 6A/6B/6C/6D-1/6D-R/6D-2/6D-3A z Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B oraz warstwy serwerowe [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) i [6D-3A](26-transakcyjna-autoryzacja-6d3a.md) nie wystawiają jeszcze publicznych operacji księgowych ani interaktywnego logowania w przeglądarce; decyzje i ograniczenia opisują [model 6B](22-schemat-tenantow-6b.md), [cykl 6D-R](24-bezpieczny-cykl-dostepu-6dr.md), [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) i [dokument 6D-3A](26-transakcyjna-autoryzacja-6d3a.md).
 
 ## Wymagania
 
@@ -134,7 +134,7 @@ W świeżej bazie oczekiwane jest zero wierszy. Jeśli istnieją obiekty, ustal 
 pnpm test:integration
 ```
 
-Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują cztery wpisy rejestru (`0000`–`0003`), osiem tabel modelu, ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter autoryzacji 6D-1, transakcyjny cykl dostępu 6D-R oraz mapowanie i provisioning tożsamości OIDC 6D-2. Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Bez PostgreSQL raportuj testy integracyjne jako niewykonane lokalnie; CI uruchamia je na świeżej izolowanej usłudze PostgreSQL.
+Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują cztery wpisy rejestru (`0000`–`0003`), osiem tabel modelu, ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter autoryzacji 6D-1, transakcyjny cykl dostępu 6D-R, mapowanie i provisioning tożsamości OIDC 6D-2 oraz transakcyjną autoryzację `UnitOfWork`, wyścigi TOCTOU, brak zakleszczeń i reużycie połączeń 6D-3A. Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Bez PostgreSQL raportuj testy integracyjne jako niewykonane lokalnie; CI uruchamia je na świeżej izolowanej usłudze PostgreSQL.
 
 ## MCP lokalne STDIO
 
@@ -164,7 +164,7 @@ Opis scenariuszy i zakresu walidacji znajduje się w [20 — strategii testów](
 
 - `/app` prezentuje stan techniczny szkieletu. Moduły księgowe i autoryzacja tenantów w publicznym statusie pozostają oznaczone jako `not_available`.
 - `/settings` i `/platform` są statycznymi placeholderami bez operacji administracyjnych.
-- Warstwa serwerowa [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) weryfikuje tokeny dostępu OIDC, rozwiązuje wewnętrzne `userId` i egzekwuje autoryzację w guardzie API oraz w `manageAccess`, lecz nie wystawia jeszcze publicznych endpointów księgowych ani mutujących i nie obejmuje interaktywnego logowania UI, RLS ani ograniczonej roli runtime DB.
+- Warstwy serwerowe [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) i [6D-3A](26-transakcyjna-autoryzacja-6d3a.md) weryfikują tokeny dostępu OIDC, rozwiązują wewnętrzne `userId` i egzekwują transakcyjną autoryzację w `UnitOfWork` (`executeAuthorizedCompanyAction` i `manageAccess`), lecz nie wystawiają jeszcze publicznych endpointów księgowych ani mutujących i nie obejmują interaktywnego logowania UI, RLS ani ograniczonej roli runtime DB (6D-3B).
 - Przed samodzielnym `pnpm test:integration` po czystej instalacji zbuduj zależności przez `pnpm --filter @pap/application... build` (pełne `pnpm build` również je buduje); CI wykonuje ten krok jawnie.
 - W pakietach i testach używaj wyłącznie danych syntetycznych. Nie dodawaj danych osobowych, faktur, tokenów, certyfikatów ani sekretów.
 

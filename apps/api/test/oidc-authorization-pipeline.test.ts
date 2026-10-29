@@ -1,4 +1,4 @@
-import { Bind, Controller, Get, Module, Post, Req, UseGuards } from '@nestjs/common';
+import { Bind, Controller, Get, Inject, Module, Post, Req, Res, UseGuards } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
@@ -11,9 +11,15 @@ import {
   type AccessManagementCommand,
   type AccessManagementResult,
   type AccessManagementStore,
+  type AccessManagementTransaction,
+  type CompanyActionTransactionContext,
+  type CompanyActionUnitOfWork,
+  type LockedTenantAuthorizationFacts,
   type TenantAuthorizationDataSource,
   type TenantAuthorizationFacts,
   type TenantAuthorizationQuery,
+  type TransactionActor,
+  type TransactionSessionContext,
   type UserIdentityResolver,
   type VerifiedOidcIdentity,
 } from '@pap/application';
@@ -26,12 +32,14 @@ import {
   type TenantMembership,
   type UserId,
 } from '@pap/domain';
+import type { FastifyReply } from 'fastify';
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import {
   AUTHORIZATION_CLOCK,
   CompanyActionAuthorizationGuard,
+  executeHttpAuthorizedCompanyAction,
   JwksOidcAccessTokenVerifier,
   OIDC_ACCESS_TOKEN_VERIFIER,
   RequireCompanyAction,
@@ -62,6 +70,13 @@ const AUDIENCE = 'pap-api';
 const VALID_FROM = new Date('2026-01-01T00:00:00.000Z');
 const NOW = new Date('2026-10-28T12:00:00.000Z');
 const NOW_SEC = Math.floor(NOW.getTime() / 1000);
+
+const TEST_COMPANY_UNIT_OF_WORK = Symbol('TEST_COMPANY_UNIT_OF_WORK');
+
+interface TestCompanyTransactionContext extends CompanyActionTransactionContext {
+  readonly txNumber: number;
+  appliedSessionContext: TransactionSessionContext | null;
+}
 
 /**
  * Kontroler testowy rejestrowany wyłącznie w module testowym (Sec 6: brak nowych publicznych endpointów księgowych w AppModule).
@@ -100,12 +115,53 @@ class TestCompanyAuthorizationController {
   }
 }
 
+/**
+ * Drugi kontroler testowy (wyłącznie w module testowym) weryfikujący transakcyjny helper HTTP 6D-3A
+ * `executeHttpAuthorizedCompanyAction`, który eliminuje okno TOCTOU między uwierzytelnieniem OIDC a operacją DB.
+ */
+@Controller('api/v1/test-authz/tenants/:tenantId/entities/:legalEntityId')
+class TestTransactionalCompanyController {
+  constructor(
+    @Inject(OIDC_ACCESS_TOKEN_VERIFIER)
+    private readonly verifier: JwksOidcAccessTokenVerifier,
+    @Inject(USER_IDENTITY_RESOLVER)
+    private readonly identityResolver: UserIdentityResolver,
+    @Inject(TEST_COMPANY_UNIT_OF_WORK)
+    private readonly unitOfWork: CompanyActionUnitOfWork<TestCompanyTransactionContext>,
+  ) {}
+
+  @Post('probe-transactional-write')
+  @Bind(Req(), Res({ passthrough: true }))
+  async writeTransactionalProbe(request: AuthenticatedFastifyRequest, reply: FastifyReply) {
+    return executeHttpAuthorizedCompanyAction(
+      request,
+      reply,
+      { action: 'write', requiredScopes: ['pap:accounting'] },
+      {
+        verifier: this.verifier,
+        identityResolver: this.identityResolver,
+        unitOfWork: this.unitOfWork,
+      },
+      async (ctx, tx) => ({
+        ok: true,
+        txNumber: tx.txNumber,
+        resolvedActorUserId: ctx.userId,
+        tenantId: ctx.tenantId,
+        legalEntityId: ctx.legalEntityId,
+        action: ctx.action,
+        sessionContext: tx.appliedSessionContext,
+      }),
+    );
+  }
+}
+
 class ControlledAuthState
   implements
     UserIdentityResolver,
     TenantAuthorizationDataSource,
     AccessManagementAuthorizationDataSource,
-    AccessManagementStore
+    AccessManagementStore,
+    CompanyActionUnitOfWork<TestCompanyTransactionContext>
 {
   readonly identities = new Map<
     string,
@@ -116,6 +172,11 @@ class ControlledAuthState
   platformRoles: PlatformRoleAssignment[] = [];
   failIdentityResolution = false;
   failAuthorizationDataSource = false;
+  onAfterResolveIdentity: (() => void) | null = null;
+  txCounter = 0;
+  committedTransactions = 0;
+  rolledBackTransactions = 0;
+  executedOperations = 0;
 
   reset() {
     this.identities.clear();
@@ -124,6 +185,11 @@ class ControlledAuthState
     this.platformRoles = [];
     this.failIdentityResolution = false;
     this.failAuthorizationDataSource = false;
+    this.onAfterResolveIdentity = null;
+    this.txCounter = 0;
+    this.committedTransactions = 0;
+    this.rolledBackTransactions = 0;
+    this.executedOperations = 0;
 
     this.linkIdentity(ISSUER_TRUSTED, 'Sub-User-A', USER_A);
     this.linkIdentity(ISSUER_OTHER, 'Sub-User-A', USER_B);
@@ -218,7 +284,78 @@ class ControlledAuthState
     if (!entry || !entry.userActive || !entry.linkActive) {
       return null;
     }
-    return { userId: entry.userId };
+    const resolved = { userId: entry.userId };
+    this.onAfterResolveIdentity?.();
+    return resolved;
+  }
+
+  private isActorCurrentlyActive(actor: TransactionActor): boolean {
+    if (actor.identity) {
+      const entry = this.identities.get(`${actor.identity.issuer}\u0000${actor.identity.subject}`);
+      return Boolean(
+        entry && entry.userId === actor.userId && entry.userActive && entry.linkActive,
+      );
+    }
+    for (const entry of this.identities.values()) {
+      if (entry.userId === actor.userId && entry.userActive) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async runCompanyActionInTransaction<TResult>(
+    work: (tx: TestCompanyTransactionContext) => Promise<TResult>,
+    shouldCommit: (result: TResult) => boolean,
+  ): Promise<TResult> {
+    const txNumber = ++this.txCounter;
+    const tx: TestCompanyTransactionContext = {
+      txNumber,
+      appliedSessionContext: null,
+      verifyActorAccount: async (actor) => this.isActorCurrentlyActive(actor),
+      getLockedFacts: async (query): Promise<LockedTenantAuthorizationFacts> => {
+        const facts = await this.getFacts(query);
+        return { ...facts, now: NOW };
+      },
+      applySessionContext: async (context) => {
+        tx.appliedSessionContext = context;
+      },
+    };
+
+    try {
+      const result = await work(tx);
+      if (shouldCommit(result)) {
+        this.committedTransactions += 1;
+        this.executedOperations += 1;
+      } else {
+        this.rolledBackTransactions += 1;
+      }
+      return result;
+    } catch (error) {
+      this.rolledBackTransactions += 1;
+      throw error;
+    }
+  }
+
+  async runInTransaction(
+    work: (tx: AccessManagementTransaction) => Promise<AccessManagementResult>,
+  ): Promise<AccessManagementResult> {
+    const tx: AccessManagementTransaction = {
+      verifyActorAccount: async (actor) => this.isActorCurrentlyActive(actor),
+      getAuthorizationFacts: async (actor, command) => {
+        const facts = await this.getAuthorizationFacts(actor, command);
+        return { ...facts, now: NOW };
+      },
+      applySessionContext: async () => undefined,
+      executeAuthorized: async (command) => this.execute(command),
+    };
+    const result = await work(tx);
+    if (result.ok) {
+      this.committedTransactions += 1;
+    } else {
+      this.rolledBackTransactions += 1;
+    }
+    return result;
   }
 
   async getFacts(query: TenantAuthorizationQuery): Promise<TenantAuthorizationFacts> {
@@ -417,12 +554,13 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
 
     @Module({
       imports: [AppModule],
-      controllers: [TestCompanyAuthorizationController],
+      controllers: [TestCompanyAuthorizationController, TestTransactionalCompanyController],
       providers: [
         CompanyActionAuthorizationGuard,
         { provide: OIDC_ACCESS_TOKEN_VERIFIER, useValue: verifier },
         { provide: USER_IDENTITY_RESOLVER, useValue: state },
         { provide: TENANT_AUTHORIZATION_DATA_SOURCE, useValue: state },
+        { provide: TEST_COMPANY_UNIT_OF_WORK, useValue: state },
         { provide: AUTHORIZATION_CLOCK, useValue: { now: () => NOW } },
       ],
     })
@@ -482,6 +620,15 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
         url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe`,
       });
     expect(unexposedProbe.statusCode).toBe(404);
+
+    const unexposedTxProbe = await prodApp
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+      });
+    expect(unexposedTxProbe.statusCode).toBe(404);
 
     const platform = await prodApp.getHttpAdapter().getInstance().inject({
       method: 'GET',
@@ -822,5 +969,98 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
     expect(resAuthzFail.statusCode).toBe(403);
     expect(resAuthzFail.body).not.toContain('synthetic-db-secret');
     expect(resAuthzFail.body).not.toContain('SELECT');
+  });
+
+  it('executeHttpAuthorizedCompanyAction wykonuje autoryzację, kontekst sesji i operację w jednej transakcji (201)', async () => {
+    state.grants.push({
+      grantId: id(109),
+      tenantId: TENANT_A,
+      userId: USER_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write',
+      validFrom: VALID_FROM,
+      validUntil: null,
+      revokedAt: null,
+    });
+
+    const token = await issueToken({ sub: 'Sub-User-A' });
+    const response = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    expect(response.statusCode).toBe(201);
+    expect(response.json()).toEqual({
+      ok: true,
+      txNumber: 1,
+      resolvedActorUserId: USER_A,
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write',
+      sessionContext: {
+        actorUserId: USER_A,
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+      },
+    });
+    expect(state.committedTransactions).toBe(1);
+    expect(state.rolledBackTransactions).toBe(0);
+    expect(state.executedOperations).toBe(1);
+  });
+
+  it('executeHttpAuthorizedCompanyAction eliminuje TOCTOU — wyłączenie konta lub cofnięcie grantu po resolveVerifiedIdentity wycofuje transakcję (403)', async () => {
+    state.grants.push({
+      grantId: id(110),
+      tenantId: TENANT_A,
+      userId: USER_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write',
+      validFrom: VALID_FROM,
+      validUntil: null,
+      revokedAt: null,
+    });
+
+    const token = await issueToken({ sub: 'Sub-User-A' });
+
+    // Scenariusz A: wyłączenie app_user w oknie między resolveVerifiedIdentity a wejściem do transakcji
+    state.onAfterResolveIdentity = () => {
+      state.linkIdentity(ISSUER_TRUSTED, 'Sub-User-A', USER_A, false, true);
+    };
+    const disabledRes = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+    expect(disabledRes.statusCode).toBe(403);
+    expect(state.committedTransactions).toBe(0);
+    expect(state.rolledBackTransactions).toBe(1);
+    expect(state.executedOperations).toBe(0);
+
+    // Scenariusz B: przywrócenie aktywnego konta, ale cofnięcie grantu w oknie przed getLockedFacts w transakcji
+    state.linkIdentity(ISSUER_TRUSTED, 'Sub-User-A', USER_A, true, true);
+    state.onAfterResolveIdentity = () => {
+      state.grants = state.grants.map((g) =>
+        g.grantId === id(110) ? { ...g, revokedAt: NOW } : g,
+      );
+    };
+    const revokedGrantRes = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+    expect(revokedGrantRes.statusCode).toBe(403);
+    expect(state.committedTransactions).toBe(0);
+    expect(state.rolledBackTransactions).toBe(2);
+    expect(state.executedOperations).toBe(0);
   });
 });

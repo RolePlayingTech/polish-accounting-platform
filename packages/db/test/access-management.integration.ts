@@ -11,6 +11,7 @@ import { PostgresAccessManagementStore } from '../src/access-management.js';
 import { applyMigrations } from '../src/migrations.js';
 import {
   accessManagementEvent,
+  appUser,
   companyAccessGrant,
   legalEntity,
   tenant,
@@ -97,6 +98,10 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
   beforeAll(async () => {
     database = await createTestDatabase();
     await applyMigrations(database.db, database.dataSchema);
+    await database.db.insert(appUser).values([
+      { id: USER, status: 'active', createdAt: from },
+      { id: ACTOR, status: 'active', createdAt: from },
+    ]);
     await database.db.insert(tenant).values([
       { id: A, name: 'Syntetyczny A' },
       { id: B, name: 'Syntetyczny B' },

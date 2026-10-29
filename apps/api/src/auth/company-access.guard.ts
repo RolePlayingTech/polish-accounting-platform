@@ -12,9 +12,12 @@ import {
 import { Reflector } from '@nestjs/core';
 import {
   authorizeAuthenticatedCompanyAction,
+  executeAuthorizedCompanyAction,
   systemClock,
   type AuthenticatedCompanyActionContext,
   type Clock,
+  type CompanyActionTransactionContext,
+  type ExecuteAuthorizedCompanyActionDependencies,
   type OidcAccessTokenVerifier,
   type TenantAuthorizationDataSource,
   type UserIdentityResolver,
@@ -90,9 +93,11 @@ export function extractBearerTokenFromHeaders(headers: FastifyRequest['headers']
 }
 
 /**
- * Serwerowy guard NestJS/Fastify łączący uwierzytelnienie OIDC, rozwiązanie wewnętrznego userId
- * i autoryzację akcji na firmie (authorizeCompanyAction).
- * Ignoruje wszelkie próby przekazania userId/roli w body lub query, a próby spoofingu nagłówków odrzuca.
+ * Serwerowy guard NestJS/Fastify pełniący funkcję wczesnej bramki transportowej HTTP (400/401/403).
+ * UWAGA (6D-3A): Krytyczne operacje odczytu i zapisu danych firmowych oraz administracji dostępem
+ * nie mogą opierać bezpieczeństwa wyłącznie na wcześniejszym wyniku guarda w pamięci żądania —
+ * muszą wykonywać autoryzację i operację DB w jednej transakcji przez `executeHttpAuthorizedCompanyAction`
+ * (`executeAuthorizedCompanyAction`) lub `manageAccess`.
  */
 @Injectable()
 export class CompanyActionAuthorizationGuard implements CanActivate {
@@ -195,4 +200,82 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
     request.papCompanyAuthContext = decision.context;
     return true;
   }
+}
+
+/**
+ * Transakcyjny helper HTTP (6D-3A) łączący ekstrakcję Bearer JWT i ochronę przed spoofingiem nagłówków
+ * z `executeAuthorizedCompanyAction` (jedna transakcja UnitOfWork dla autoryzacji, kontekstu sesji i operacji DB).
+ */
+export async function executeHttpAuthorizedCompanyAction<
+  TOutput,
+  TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
+>(
+  request: AuthenticatedFastifyRequest,
+  reply: FastifyReply,
+  metadata: RequireCompanyActionMetadata,
+  dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
+  operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+): Promise<TOutput> {
+  if (hasUntrustedIdentitySignal(request)) {
+    reply.header('WWW-Authenticate', 'Bearer error="invalid_request"');
+    throw new UnauthorizedException({
+      statusCode: 401,
+      error: 'unauthorized',
+      message: 'Wymagane poprawne uwierzytelnienie OIDC.',
+    });
+  }
+
+  const rawBearerToken = extractBearerTokenFromHeaders(request.headers);
+  if (!rawBearerToken) {
+    reply.header('WWW-Authenticate', 'Bearer');
+    throw new UnauthorizedException({
+      statusCode: 401,
+      error: 'unauthorized',
+      message: 'Wymagane poprawne uwierzytelnienie OIDC.',
+    });
+  }
+
+  const params = (request.params ?? {}) as Record<string, unknown>;
+  const rawTenantId = typeof params.tenantId === 'string' ? params.tenantId : '';
+  const rawLegalEntityId = typeof params.legalEntityId === 'string' ? params.legalEntityId : '';
+
+  const decision = await executeAuthorizedCompanyAction(
+    {
+      rawBearerToken,
+      tenantId: rawTenantId,
+      legalEntityId: rawLegalEntityId,
+      action: metadata.action,
+      requiredScopes: metadata.requiredScopes,
+    },
+    dependencies,
+    operation,
+  );
+
+  if (!decision.allowed) {
+    if (decision.status === 'unauthenticated') {
+      reply.header('WWW-Authenticate', 'Bearer error="invalid_token"');
+      throw new UnauthorizedException({
+        statusCode: 401,
+        error: 'unauthorized',
+        message: 'Wymagane poprawne uwierzytelnienie OIDC.',
+      });
+    }
+
+    if (decision.status === 'invalid_selector') {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'bad_request',
+        message: 'Niepoprawny identyfikator zasobu.',
+      });
+    }
+
+    throw new ForbiddenException({
+      statusCode: 403,
+      error: 'forbidden',
+      message: 'Brak uprawnień do wykonania operacji.',
+    });
+  }
+
+  request.papCompanyAuthContext = decision.context;
+  return decision.data;
 }
