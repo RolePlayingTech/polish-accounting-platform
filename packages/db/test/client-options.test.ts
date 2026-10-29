@@ -17,9 +17,29 @@ describe('Opcje klienta PostgreSQL (bez otwierania połączenia)', () => {
       expect(client.options.port).toEqual([5433]);
       expect(client.options.user).toBe('pap_test');
       expect(client.options.database).toBe('pap_test');
+      expect(client.options.max).toBe(5);
       expect(client.options.connection.search_path).toBe('public,pg_catalog');
     } finally {
       await client.end({ timeout: 1 });
+    }
+  });
+
+  it('pozwala jawnie ograniczyć rozmiar puli połączeń (np. maxConnections: 1) i odrzuca błędne limity', async () => {
+    const env = {
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: 'postgres://pap_test:test_only@127.0.0.1:5432/pap_test',
+    };
+    const { client } = connectDatabase(env, 'public', { maxConnections: 1 });
+    try {
+      expect(client.options.max).toBe(1);
+    } finally {
+      await client.end({ timeout: 1 });
+    }
+
+    for (const invalidMax of [0, -1, 1.5, 101]) {
+      expect(() => connectDatabase(env, 'public', { maxConnections: invalidMax })).toThrow(
+        'Niepoprawny limit połączeń puli PostgreSQL.',
+      );
     }
   });
 

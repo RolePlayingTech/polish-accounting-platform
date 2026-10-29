@@ -8,14 +8,14 @@
 polish-accounting-platform/
 ├── apps/
 │   ├── web/                    # Next.js; /app oraz statyczne placeholdery
-│   ├── api/                    # NestJS + Fastify; publiczny status oraz serwerowy adapter OIDC/guard (6D-2)
+│   ├── api/                    # NestJS + Fastify; publiczny status oraz serwerowy adapter OIDC/guard/UnitOfWork (6D-2/6D-3A)
 │   └── mcp/                    # lokalne STDIO; tylko read-only system_status
 ├── packages/
 │   ├── domain/                 # identyfikatory, polityka grantów (6C) i autoryzacji administracyjnej (6D-2)
-│   ├── application/            # use case statusu, porty OIDC/tożsamości i autoryzacji (6C/6D-R/6D-2)
+│   ├── application/            # use case statusu, porty OIDC/tożsamości, autoryzacji i transakcyjnego UnitOfWork (6C/6D-R/6D-2/6D-3A)
 │   ├── contracts/              # ścisły kontrakt statusu
 │   ├── ui/                     # współdzielone komponenty interfejsu
-│   └── db/                     # Drizzle, migracje 0000-0003 (6A/6B/6D-R/6D-2) i adaptery PostgreSQL
+│   └── db/                     # Drizzle, migracje 0000-0003 (6A/6B/6D-R/6D-2) i transakcyjne adaptery PostgreSQL (6D-3A)
 ├── .github/workflows/ci.yml
 ├── compose.yaml                # wcześniejszy scaffold; poza bieżącym trybem pracy
 ├── pnpm-workspace.yaml
@@ -23,9 +23,9 @@ polish-accounting-platform/
 └── turbo.json
 ```
 
-Pakiet `db` dla opcjonalnego PostgreSQL zainstalowanego lokalnie zawiera migracje `0000`–`0003`: tabele tenantów, firm, członkostw, wersji profilu, jawnych grantów, zdarzeń audytowych cyklu dostępu oraz wewnętrznej tożsamości użytkownika (`app_user`, `user_oidc_identity`) z constraints i testami integralności ([opis 6B](22-schemat-tenantow-6b.md), [6D-R](24-bezpieczny-cykl-dostepu-6dr.md), [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md)). Nie ma jeszcze RLS, ograniczonej roli runtime DB, workerów, integracji zewnętrznych ani księgowania. Bieżący tryb pracy nie wymaga Dockera i nie obejmuje serwera ani deploymentu ([ADR-005](adr/005-rozwoj-lokalny.md)). `domain` zawiera czyste funkcje decyzji dla dostępu księgowego (`decideAccountingAccess`) oraz operacji administracyjnych (`decideAccessManagementAuthorization`). `application` udostępnia porty weryfikacji OIDC, rozwiązania wewnętrznej tożsamości, źródła faktów autoryzacyjnych oraz wspólne use case'y (`authenticateOidcActor`, `authorizeAuthenticatedCompanyAction`, `manageAccess`). Identyfikatory firm z pakietu `domain` nie nadają dostępu, a role administratora tenanta i operatora platformy nie dają domyślnego dostępu do ksiąg.
+Pakiet `db` dla opcjonalnego PostgreSQL zainstalowanego lokalnie zawiera migracje `0000`–`0003`: tabele tenantów, firm, członkostw, wersji profilu, jawnych grantów, zdarzeń audytowych cyklu dostępu oraz wewnętrznej tożsamości użytkownika (`app_user`, `user_oidc_identity`) z constraints i testami integralności ([opis 6B](22-schemat-tenantow-6b.md), [6D-R](24-bezpieczny-cykl-dostepu-6dr.md), [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md), [6D-3A](26-transakcyjna-autoryzacja-6d3a.md)). Nie ma jeszcze RLS ani ograniczonej roli runtime DB (6D-3B), workerów, integracji zewnętrznych ani księgowania. Bieżący tryb pracy nie wymaga Dockera i nie obejmuje serwera ani deploymentu ([ADR-005](adr/005-rozwoj-lokalny.md)). `domain` zawiera czyste funkcje decyzji dla dostępu księgowego (`decideAccountingAccess`) oraz operacji administracyjnych (`decideAccessManagementAuthorization`). `application` udostępnia porty weryfikacji OIDC, rozwiązania wewnętrznej tożsamości, źródła faktów autoryzacyjnych oraz wspólne use case'y (`authenticateOidcActor`, `authorizeAuthenticatedCompanyAction`, `executeAuthorizedCompanyAction`, `manageAccess`). Identyfikatory firm z pakietu `domain` nie nadają dostępu, a role administratora tenanta i operatora platformy nie dają domyślnego dostępu do ksiąg.
 
-**Stan 6D-2 / ograniczenie Issue #6:** `@pap/db` implementuje porty przez `PostgresTenantAuthorizationDataSource`, `PostgresAccessManagementStore`, `PostgresAccessManagementAuthorizationDataSource`, `PostgresUserIdentityResolver` oraz `PostgresUserIdentityStore`. `apps/api` dostarcza `JwksOidcAccessTokenVerifier` i `CompanyActionAuthorizationGuard`, łączące serwerową walidację tokenu Bearer OIDC z wewnętrznym `userId` i kontrolą dostępu w pipeline NestJS/Fastify. Publiczne `AppModule` nie wystawia jeszcze endpointów księgowych ani mutujących z uwagi na blokery 6D-3 (brak ograniczonej roli runtime DB, RLS, atomowości decyzji i operacji na danych oraz audytu decyzji). Szczegóły opisuje [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md).
+**Stan 6D-3A / ograniczenie Issue #6:** `@pap/db` implementuje porty przez `PostgresTransactionalUnitOfWork`, `PostgresAccessManagementStore` (z transakcyjnym `runInTransaction`), `PostgresTenantAuthorizationDataSource`, `PostgresAccessManagementAuthorizationDataSource`, `PostgresUserIdentityResolver` oraz `PostgresUserIdentityStore`. `apps/api` dostarcza `JwksOidcAccessTokenVerifier`, `CompanyActionAuthorizationGuard` i `executeHttpAuthorizedCompanyAction`. Publiczne `AppModule` nie wystawia jeszcze endpointów księgowych ani mutujących z uwagi na pozostałe podetapy 6D-3: brak ograniczonej roli runtime DB i polityk PostgreSQL RLS (6D-3B) oraz pełnego audytu decyzji `allow/deny` (6D-3C). Szczegóły opisują [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) oraz [dokument 6D-3A](26-transakcyjna-autoryzacja-6d3a.md).
 
 ## Struktura monorepo
 
@@ -98,7 +98,7 @@ pnpm db:migrate
 pnpm audit --audit-level high
 ```
 
-Powyższe skrypty są skonfigurowane w repozytorium. Szczegółowa instalacja jest w [19 — przewodniku developera](19-przewodnik-developera.md), a zakres testów w [20 — strategii testów](20-strategia-testow.md). Przeglądarkowy E2E sprawdza rzeczywisty przepływ web → API oraz niedostępność API. Testy integracyjne na izolowanej bazie PostgreSQL w CI weryfikują migracje `0000`–`0003`, adapter autoryzacji, cykl dostępu i mapowanie tożsamości OIDC.
+Powyższe skrypty są skonfigurowane w repozytorium. Szczegółowa instalacja jest w [19 — przewodniku developera](19-przewodnik-developera.md), a zakres testów w [20 — strategii testów](20-strategia-testow.md). Przeglądarkowy E2E sprawdza rzeczywisty przepływ web → API oraz niedostępność API. Testy integracyjne na izolowanej bazie PostgreSQL w CI weryfikują migracje `0000`–`0003`, adapter autoryzacji, cykl dostępu, mapowanie tożsamości OIDC oraz transakcyjną eliminację TOCTOU i brak zakleszczeń (6D-3A).
 
 ## Standard CI i dependency hygiene
 

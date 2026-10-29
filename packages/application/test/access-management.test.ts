@@ -187,7 +187,10 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
     await expect(manageAccess(grantCommand, { store, actors, authorizer })).resolves.toEqual({
       ok: true,
     });
-    expect(store.execute).toHaveBeenCalledWith(grantCommand, actor);
+    expect(store.execute).toHaveBeenCalledWith(grantCommand, {
+      userId: actor.userId,
+      identity: { issuer: 'https://idp.example.test', subject: 'admin-sub' },
+    });
 
     // Próba nadania write przez admina mającego tylko read kończy się odmową przed store.execute
     store.execute.mockClear();
@@ -207,5 +210,220 @@ describe('Zarządzanie dostępem — jawna granica administracyjna', () => {
       reason: 'access_management_denied',
     });
     expect(store.execute).not.toHaveBeenCalled();
+  });
+
+  it('wykonuje weryfikację konta, autoryzację na zablokowanych faktach, kontekst sesji i mutację w jednej transakcji (6D-3A)', async () => {
+    const dbNow = new Date('2026-10-29T10:00:00.000Z');
+    const staleClockNow = new Date('2026-01-02T00:00:00.000Z');
+    const validFrom = new Date('2026-01-01T00:00:00.000Z');
+    const entityA1 = legalEntityId(id(11));
+    const grantCommand: AccessManagementCommand = {
+      kind: 'grant',
+      operationId: id(20),
+      tenantId: command.tenantId,
+      userId: command.userId,
+      grantId: id(21),
+      legalEntityId: entityA1,
+      action: 'read',
+      validFrom: null,
+      validUntil: '2026-11-15T00:00:00.000Z',
+    };
+
+    const callOrder: string[] = [];
+    const actors = createOidcAccessManagementActorSource('valid.jwt.token', {
+      verifier: {
+        verifyAccessToken: async () => {
+          callOrder.push('verifyAccessToken');
+          return {
+            ok: true,
+            identity: { issuer: 'https://idp.example.test', subject: 'admin-sub' },
+          };
+        },
+      },
+      identityResolver: {
+        resolveVerifiedIdentity: async () => {
+          callOrder.push('resolveVerifiedIdentity');
+          return { userId: actor.userId };
+        },
+      },
+    });
+
+    // Niezablokowane źródło fallback nie może zostać wywołane wewnątrz transakcji UnitOfWork.
+    const staleFallbackSource: AccessManagementAuthorizationDataSource = {
+      getAuthorizationFacts: vi.fn(async () => {
+        throw new Error('Nie wolno czytać z fallbackSource, gdy aktywna jest transakcja!');
+      }),
+    };
+
+    const tx = {
+      verifyActorAccount: vi.fn(async () => {
+        callOrder.push('tx.verifyActorAccount');
+        return true;
+      }),
+      getAuthorizationFacts: vi.fn(async (verifiedActor, cmd) => {
+        callOrder.push('tx.getAuthorizationFacts');
+        return {
+          actorMembership: {
+            userId: verifiedActor.userId,
+            tenantId: cmd.tenantId,
+            role: 'tenant_admin' as const,
+            status: 'active' as const,
+            validFrom,
+            validUntil: null,
+          },
+          actorGrants: [
+            {
+              grantId: id(81),
+              userId: verifiedActor.userId,
+              tenantId: cmd.tenantId,
+              legalEntityId: entityA1,
+              action: 'read' as const,
+              validFrom,
+              validUntil: new Date('2026-12-31T00:00:00.000Z'),
+              revokedAt: null,
+            },
+          ],
+          targetMembership: {
+            userId: cmd.userId,
+            tenantId: cmd.tenantId,
+            role: 'tenant_member' as const,
+            status: 'active' as const,
+            validFrom,
+            validUntil: null,
+          },
+          targetGrant: null,
+          now: dbNow,
+        };
+      }),
+      applySessionContext: vi.fn(async () => {
+        callOrder.push('tx.applySessionContext');
+      }),
+      executeAuthorized: vi.fn(async () => {
+        callOrder.push('tx.executeAuthorized');
+        return {
+          ok: true as const,
+          receipt: {
+            operationId: grantCommand.operationId,
+            occurredAt: dbNow.toISOString(),
+            changed: true,
+            grantId: grantCommand.grantId,
+          },
+        };
+      }),
+    };
+
+    const store = {
+      runInTransaction: vi.fn(async (work) => {
+        callOrder.push('store.runInTransaction:begin');
+        const result = await work(tx);
+        callOrder.push('store.runInTransaction:end');
+        return result;
+      }),
+      execute: vi.fn(async () => {
+        throw new Error(
+          'Nie wolno wywoływać niepowiązanego store.execute, gdy jest runInTransaction!',
+        );
+      }),
+    };
+
+    const authorizer = createTenantAccessManagementAuthorizer(staleFallbackSource, {
+      now: () => staleClockNow,
+    });
+
+    const result = await manageAccess(grantCommand, { store, actors, authorizer });
+    expect(result).toEqual({
+      ok: true,
+      receipt: {
+        operationId: grantCommand.operationId,
+        occurredAt: dbNow.toISOString(),
+        changed: true,
+        grantId: grantCommand.grantId,
+      },
+    });
+    expect(callOrder).toEqual([
+      'verifyAccessToken',
+      'resolveVerifiedIdentity',
+      'store.runInTransaction:begin',
+      'tx.verifyActorAccount',
+      'tx.getAuthorizationFacts',
+      'tx.applySessionContext',
+      'tx.executeAuthorized',
+      'store.runInTransaction:end',
+    ]);
+    expect(staleFallbackSource.getAuthorizationFacts).not.toHaveBeenCalled();
+    expect(store.execute).not.toHaveBeenCalled();
+    expect(tx.applySessionContext).toHaveBeenCalledWith({
+      actorUserId: actor.userId,
+      tenantId: grantCommand.tenantId,
+      legalEntityId: entityA1,
+    });
+
+    // Zegar transakcyjny facts.now (dbNow), a nie staleClockNow, decyduje o wygaśnięciu delegowalnego grantu
+    tx.getAuthorizationFacts.mockResolvedValueOnce({
+      actorMembership: {
+        userId: actor.userId,
+        tenantId: grantCommand.tenantId,
+        role: 'tenant_admin',
+        status: 'active',
+        validFrom,
+        validUntil: null,
+      },
+      actorGrants: [
+        {
+          grantId: id(81),
+          userId: actor.userId,
+          tenantId: grantCommand.tenantId,
+          legalEntityId: entityA1,
+          action: 'read',
+          validFrom,
+          validUntil: new Date('2026-06-01T00:00:00.000Z'),
+          revokedAt: null,
+        },
+      ],
+      targetMembership: {
+        userId: grantCommand.userId,
+        tenantId: grantCommand.tenantId,
+        role: 'tenant_member',
+        status: 'active',
+        validFrom,
+        validUntil: null,
+      },
+      targetGrant: null,
+      now: dbNow,
+    });
+    tx.executeAuthorized.mockClear();
+
+    await expect(manageAccess(grantCommand, { store, actors, authorizer })).resolves.toEqual({
+      ok: false,
+      reason: 'access_management_denied',
+    });
+    expect(tx.executeAuthorized).not.toHaveBeenCalled();
+  });
+
+  it('przerywa transakcję bez mutacji, gdy konto aktora zostało wyłączone po OIDC lub brak źródła autoryzacji', async () => {
+    const tx = {
+      verifyActorAccount: vi.fn().mockResolvedValue(false),
+      getAuthorizationFacts: vi.fn(),
+      applySessionContext: vi.fn(),
+      executeAuthorized: vi.fn(),
+    };
+    const store = {
+      runInTransaction: vi.fn(async (work) => work(tx)),
+      execute: vi.fn(),
+    };
+    const authorizer = createTenantAccessManagementAuthorizer();
+    const actors = { getVerifiedActor: vi.fn().mockResolvedValue(actor) };
+
+    await expect(manageAccess(command, { store, actors, authorizer })).resolves.toEqual({
+      ok: false,
+      reason: 'access_management_denied',
+    });
+    expect(tx.verifyActorAccount).toHaveBeenCalledWith(actor);
+    expect(tx.getAuthorizationFacts).not.toHaveBeenCalled();
+    expect(tx.applySessionContext).not.toHaveBeenCalled();
+    expect(tx.executeAuthorized).not.toHaveBeenCalled();
+
+    // Bez fallbackSource wywołanie autoryzatora poza transakcją jest fail-closed
+    await expect(authorizer.authorize(actor, command)).resolves.toBe(false);
   });
 });

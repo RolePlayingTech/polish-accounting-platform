@@ -1,6 +1,6 @@
 # 18. Model zagrożeń i uprawnień
 
-**Stan implementacji 6D-2 (2026-10-28):** po [cyklu dostępu 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) [etap 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) dostarcza serwerową walidację tokenów dostępu OIDC/JWKS (`JwksOidcAccessTokenVerifier`), mapowanie wewnętrznej tożsamości `(issuer, subject) -> userId` (`PostgresUserIdentityResolver`), domenową i aplikacyjną autoryzację administracyjną dla `manageAccess` (`decideAccessManagementAuthorization`, `createOidcAccessManagementActorSource`, `createTenantAccessManagementAuthorizer`) oraz guard NestJS/Fastify (`CompanyActionAuthorizationGuard`). `read`/`write` i role administratora nadal nie dają automatycznego dostępu księgowego, a samodzielne podwyższanie uprawnień jest blokowane. Ograniczona rola runtime DB, polityki PostgreSQL RLS, transakcyjna atomowość decyzji i operacji na danych (TOCTOU) oraz audyt decyzji pozostają blockerami na etap 6D-3 przed wystawieniem publicznych endpointów firmowych.
+**Stan implementacji 6D-3A (2026-10-29):** po [cyklu dostępu 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) oraz [serwerowym uwierzytelnianiu OIDC 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) [etap 6D-3A](26-transakcyjna-autoryzacja-6d3a.md) wprowadza transakcyjny `UnitOfWork` (`PostgresTransactionalUnitOfWork`, `executeAuthorizedCompanyAction` oraz transakcyjne `PostgresAccessManagementStore.runInTransaction` w `manageAccess`). Eliminuje to okno TOCTOU pomiędzy rewalidacją `app_user` / `user_oidc_identity`, zablokowaniem i oceną faktów autoryzacyjnych a wykonaniem operacji i zapisem atomowego audytu w PostgreSQL, przy zachowaniu kanonicznego porządku blokad odpornego na zakleszczenia oraz wiązaniu lokalnego kontekstu sesji `set_config(..., true)` pod przyszłe RLS. `read`/`write` i role administratora nadal nie dają automatycznego dostępu księgowego, a samodzielne podwyższanie uprawnień jest blokowane. Ograniczona rola runtime DB i polityki PostgreSQL RLS (**6D-3B**) oraz pełny strukturalny audyt decyzji `allow/deny` (**6D-3C**) pozostają blockerami przed wystawieniem publicznych endpointów firmowych.
 
 **Status:** kontrakt projektowy proponowany w PR do Issue #3; rozwijany etapami w Issue #6.  
 **Zakres:** UI, REST API, przyszły MCP Gateway, zadania w tle i przyszłe powierzchnie administracyjne.  
@@ -8,7 +8,7 @@
 
 ## Cel i granice zaufania
 
-System będzie przetwarzać dokumenty księgowe, dane finansowe, dane osób fizycznych i uprawnienia do systemów zewnętrznych. Ochrona nie może zależeć od tego, czy operację rozpoczęto w przeglądarce, przez REST, MCP czy worker.
+System będzie przetwarzać dokumenty księgowe, dane finansowe, dane osób fizycznych i uprawnienia do systemów zewnętrznych. Ochrona nie może zależeć od tego, czy operację rozpoczęto w przeglądarkce, przez REST, MCP czy worker.
 
 ```mermaid
 flowchart LR
@@ -120,7 +120,7 @@ Serwer tworzy kontekst żądania z uwierzytelnionego podmiotu, typu aktora, nada
 
 ## Wymagane scenariusze negatywne
 
-Scenariusze 1–6, 8–9, 13–14, 16, 20, 22 i 23 są już automatycznie testowane w zestawach jednostkowych, integracyjnych PostgreSQL i pipeline'u API (6C, 6D-1, 6D-R, [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md)); pozostałe scenariusze (w tym RLS, audyt decyzji i MCP w Issue #8) będą domykane w kolejnych etapach.
+Scenariusze 1–6, 8–9, 13–14, 16, 20, 22 i 23 (w tym współbieżne odebranie członkostwa, delegowalnego grantu i konta w oknie TOCTOU) są już automatycznie testowane w zestawach jednostkowych, integracyjnych/współbieżnościowych PostgreSQL i pipeline'u API (6C, 6D-1, 6D-R, [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md), [6D-3A](26-transakcyjna-autoryzacja-6d3a.md)); pozostałe scenariusze (w tym RLS 6D-3B, audyt decyzji 6D-3C i MCP w Issue #8) będą domykane w kolejnych etapach.
 
 1. Użytkownik z tenanta A pyta o prawidłowy `entity_id` z tenanta B — odmowa bez ujawnienia danych ani side effect.
 2. Użytkownik w tym samym tenancie wybiera firmę, której nie obejmuje jego grant — odmowa.
@@ -154,7 +154,7 @@ Monitorować odmowy cross-tenant, nietypowe serie eksportów, wzrost błędów t
 
 ## Zakres wdrożenia i źródła
 
-Ten dokument wyznacza kontrakt dla implementacji. Etap [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) wdraża serwerową weryfikację OIDC, wewnętrzną tożsamość i integrację z autoryzacją API; etap 6D-3 domknie PostgreSQL RLS, rolę runtime DB, atomowość operacji i audyt decyzji, a Issue #8 użyje tej samej polityki w MCP.
+Ten dokument wyznacza kontrakt dla implementacji. Etap [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) wdrożył serwerową weryfikację OIDC, wewnętrzną tożsamość i integrację z autoryzacją API; etap [6D-3A](26-transakcyjna-autoryzacja-6d3a.md) domknął transakcyjną autoryzację `UnitOfWork` i eliminację TOCTOU; kolejne podetapy 6D-3B i 6D-3C domkną PostgreSQL RLS, ograniczoną rolę runtime DB i pełny audyt decyzji, a Issue #8 użyje tej samej polityki w MCP.
 
 Odniesienia techniczne:
 
