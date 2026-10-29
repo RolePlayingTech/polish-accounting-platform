@@ -5,7 +5,10 @@ import type { PostgresTransaction } from './transaction-primitives.js';
 
 /** Asercja zaufanego serwera. Nigdy DTO klienta ani token OIDC. */
 export interface DatabaseSecurityContext {
-  readonly purpose: 'actor' | 'facts' | 'company' | 'access' | 'identity' | 'audit';
+  readonly purpose:
+    'actor' | 'facts' | 'company' | 'access' | 'identity' | 'audit' | 'access_event';
+  readonly auditEvent?: Readonly<Record<string, unknown>>;
+  readonly accessEvent?: Readonly<Record<string, unknown>>;
   readonly actorUserId?: string;
   readonly tenantId?: string;
   readonly legalEntityId?: string;
@@ -55,6 +58,8 @@ export class PostgresContextSigner {
       decision_at: context.decisionAt,
       issuer: context.issuer,
       subject: context.subject,
+      audit_event: context.auditEvent,
+      access_event: context.accessEvent,
     });
     const signature = createHmac('sha256', this.#key).update(payload, 'utf8').digest('hex');
     await tx.execute(sql`SELECT set_config('pap.context', ${payload}, true),

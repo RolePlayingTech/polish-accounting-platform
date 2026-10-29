@@ -8,6 +8,7 @@ DECLARE
   data_schema text := current_schema();
   role_record record;
   table_name text;
+  column_record record;
 BEGIN
   IF (db_name, runtime_name) NOT IN (
       ('pap_local','pap_local_app'), ('pap_test','pap_test_app'),
@@ -20,6 +21,7 @@ BEGIN
   SELECT * INTO role_record FROM pg_roles WHERE rolname = runtime_name;
   IF NOT FOUND OR role_record.rolsuper OR role_record.rolbypassrls
     OR role_record.rolcreatedb OR role_record.rolcreaterole OR role_record.rolreplication
+    OR has_parameter_privilege(runtime_name, 'session_replication_role', 'SET')
     OR EXISTS (SELECT 1 FROM pg_auth_members WHERE member = role_record.oid)
     OR EXISTS (SELECT 1 FROM pg_database WHERE oid = (SELECT oid FROM pg_database WHERE datname = db_name)
       AND datdba = role_record.oid)
@@ -37,6 +39,14 @@ BEGIN
     EXECUTE format('REVOKE CREATE ON SCHEMA %I FROM PUBLIC, %I', 'public', runtime_name);
   END IF;
   EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM PUBLIC, %I', data_schema, runtime_name);
+  -- REVOKE na tabeli nie usuwa zastanych uprawnień kolumnowych.
+  FOR column_record IN SELECT c.relname, a.attname FROM pg_attribute a
+    JOIN pg_class c ON c.oid = a.attrelid WHERE c.relnamespace = data_schema::regnamespace
+      AND c.relkind IN ('r','p') AND a.attnum > 0 AND NOT a.attisdropped
+  LOOP
+    EXECUTE format('REVOKE ALL (%I) ON %I.%I FROM PUBLIC, %I',
+      column_record.attname, data_schema, column_record.relname, runtime_name);
+  END LOOP;
   EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC, %I', data_schema, runtime_name);
   EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC, %I', data_schema, runtime_name);
   FOREACH table_name IN ARRAY ARRAY['tenant','legal_entity','entity_profile_version','tenant_membership',
@@ -50,10 +60,13 @@ BEGIN
     data_schema, data_schema, data_schema, runtime_name);
   EXECUTE format('GRANT UPDATE (status, valid_from, valid_until) ON %I.tenant_membership TO %I',
     data_schema, runtime_name);
-  EXECUTE format('GRANT INSERT, UPDATE (revoked_at) ON %I.company_access_grant TO %I',
+  EXECUTE format('GRANT INSERT ON %I.company_access_grant TO %I',
+    data_schema, runtime_name);
+  EXECUTE format('GRANT UPDATE (revoked_at) ON %I.company_access_grant TO %I',
     data_schema, runtime_name);
   EXECUTE format('GRANT INSERT ON %I.access_management_event, %I.company_operation_probe TO %I',
     data_schema, data_schema, runtime_name);
+  EXECUTE format('GRANT INSERT ON %I.security_decision_event TO %I', data_schema, runtime_name);
   EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pap_context(), %I.pap_admin_allowed(uuid),
     %I.pap_company_allowed(uuid,uuid,text), %I.pap_resolve_identity(text,text) TO %I',
     data_schema, data_schema, data_schema, data_schema, runtime_name);

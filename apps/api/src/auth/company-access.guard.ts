@@ -5,15 +5,19 @@ import {
   Injectable,
   Optional,
   SetMetadata,
+  ServiceUnavailableException,
   UnauthorizedException,
   type CanActivate,
   type ExecutionContext,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { Reflector } from '@nestjs/core';
 import {
   authorizeAuthenticatedCompanyAction,
   executeAuthorizedCompanyAction,
   systemClock,
+  auditIdentifier,
+  type SecurityAuditRecorder,
   type AuthenticatedCompanyActionContext,
   type Clock,
   type CompanyActionTransactionContext,
@@ -29,6 +33,7 @@ export const OIDC_ACCESS_TOKEN_VERIFIER = Symbol('OIDC_ACCESS_TOKEN_VERIFIER');
 export const USER_IDENTITY_RESOLVER = Symbol('USER_IDENTITY_RESOLVER');
 export const TENANT_AUTHORIZATION_DATA_SOURCE = Symbol('TENANT_AUTHORIZATION_DATA_SOURCE');
 export const AUTHORIZATION_CLOCK = Symbol('AUTHORIZATION_CLOCK');
+export const SECURITY_AUDIT_RECORDER = Symbol('SECURITY_AUDIT_RECORDER');
 
 export const COMPANY_ACTION_METADATA_KEY = 'pap:require_company_action';
 
@@ -41,7 +46,38 @@ export const RequireCompanyAction = (metadata: RequireCompanyActionMetadata) =>
   SetMetadata(COMPANY_ACTION_METADATA_KEY, Object.freeze({ ...metadata }));
 
 export interface AuthenticatedFastifyRequest extends FastifyRequest {
+  papRequestId?: string;
   papCompanyAuthContext?: AuthenticatedCompanyActionContext;
+}
+
+function serverRequestId(request: AuthenticatedFastifyRequest, reply: FastifyReply): string {
+  const id = (request.papRequestId ??= randomUUID());
+  reply.header('x-request-id', id);
+  return id;
+}
+
+async function auditTransportDenial(
+  request: AuthenticatedFastifyRequest,
+  reply: FastifyReply,
+  audit: SecurityAuditRecorder,
+  action: AccountingAction | 'unknown',
+): Promise<void> {
+  const params = (request.params ?? {}) as Record<string, unknown>;
+  try {
+    await audit.recordDecision({
+      requestId: serverRequestId(request, reply),
+      actorId: null,
+      tenantId: auditIdentifier(params.tenantId),
+      legalEntityId: auditIdentifier(params.legalEntityId),
+      action,
+      kind: 'transport',
+      decision: 'deny',
+      outcome: 'denied',
+      reason: 'transport_rejected',
+    });
+  } catch {
+    throw new ServiceUnavailableException('Audyt bezpieczeństwa jest niedostępny.');
+  }
 }
 
 /**
@@ -110,6 +146,8 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
     private readonly identityResolver: UserIdentityResolver,
     @Inject(TENANT_AUTHORIZATION_DATA_SOURCE)
     private readonly authorizationDataSource: TenantAuthorizationDataSource,
+    @Inject(SECURITY_AUDIT_RECORDER)
+    private readonly securityAudit: SecurityAuditRecorder,
     @Optional()
     @Inject(AUTHORIZATION_CLOCK)
     private readonly clock: Clock = systemClock,
@@ -126,6 +164,7 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
     const reply = http.getResponse<FastifyReply>();
 
     if (!metadata) {
+      await auditTransportDenial(request, reply, this.securityAudit, 'unknown');
       throw new ForbiddenException({
         statusCode: 403,
         error: 'forbidden',
@@ -134,6 +173,7 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
     }
 
     if (hasUntrustedIdentitySignal(request)) {
+      await auditTransportDenial(request, reply, this.securityAudit, metadata.action);
       reply.header('WWW-Authenticate', 'Bearer error="invalid_request"');
       throw new UnauthorizedException({
         statusCode: 401,
@@ -144,6 +184,7 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
 
     const rawBearerToken = extractBearerTokenFromHeaders(request.headers);
     if (!rawBearerToken) {
+      await auditTransportDenial(request, reply, this.securityAudit, metadata.action);
       reply.header('WWW-Authenticate', 'Bearer');
       throw new UnauthorizedException({
         statusCode: 401,
@@ -159,6 +200,7 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
     const decision = await authorizeAuthenticatedCompanyAction(
       {
         rawBearerToken,
+        requestId: serverRequestId(request, reply),
         tenantId: rawTenantId,
         legalEntityId: rawLegalEntityId,
         action: metadata.action,
@@ -169,10 +211,14 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
         identityResolver: this.identityResolver,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
+        securityAudit: this.securityAudit,
       },
     );
 
     if (!decision.allowed) {
+      if (decision.reason === 'authorization_audit_unavailable') {
+        throw new ServiceUnavailableException('Audyt bezpieczeństwa jest niedostępny.');
+      }
       if (decision.status === 'unauthenticated') {
         reply.header('WWW-Authenticate', 'Bearer error="invalid_token"');
         throw new UnauthorizedException({
@@ -217,6 +263,12 @@ export async function executeHttpAuthorizedCompanyAction<
   operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
 ): Promise<TOutput> {
   if (hasUntrustedIdentitySignal(request)) {
+    await auditTransportDenial(
+      request,
+      reply,
+      { recordDecision: (event) => dependencies.unitOfWork.recordDeniedDecision(event) },
+      metadata.action,
+    );
     reply.header('WWW-Authenticate', 'Bearer error="invalid_request"');
     throw new UnauthorizedException({
       statusCode: 401,
@@ -227,6 +279,12 @@ export async function executeHttpAuthorizedCompanyAction<
 
   const rawBearerToken = extractBearerTokenFromHeaders(request.headers);
   if (!rawBearerToken) {
+    await auditTransportDenial(
+      request,
+      reply,
+      { recordDecision: (event) => dependencies.unitOfWork.recordDeniedDecision(event) },
+      metadata.action,
+    );
     reply.header('WWW-Authenticate', 'Bearer');
     throw new UnauthorizedException({
       statusCode: 401,
@@ -242,6 +300,7 @@ export async function executeHttpAuthorizedCompanyAction<
   const decision = await executeAuthorizedCompanyAction(
     {
       rawBearerToken,
+      requestId: serverRequestId(request, reply),
       tenantId: rawTenantId,
       legalEntityId: rawLegalEntityId,
       action: metadata.action,
@@ -252,6 +311,9 @@ export async function executeHttpAuthorizedCompanyAction<
   );
 
   if (!decision.allowed) {
+    if (decision.reason === 'authorization_audit_unavailable') {
+      throw new ServiceUnavailableException('Audyt bezpieczeństwa jest niedostępny.');
+    }
     if (decision.status === 'unauthenticated') {
       reply.header('WWW-Authenticate', 'Bearer error="invalid_token"');
       throw new UnauthorizedException({

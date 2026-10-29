@@ -109,6 +109,40 @@ export const accessManagementEvent = pgTable(
   ],
 ).enableRLS();
 
+export const securityDecisionEvent = pgTable(
+  'security_decision_event',
+  {
+    id: uuid('id').primaryKey(),
+    requestId: uuid('request_id').notNull(),
+    operationId: uuid('operation_id'),
+    accessManagementOperationId: uuid('access_management_operation_id').references(
+      () => accessManagementEvent.operationId,
+      { onDelete: 'restrict' },
+    ),
+    actorId: uuid('actor_id'),
+    targetUserId: uuid('target_user_id'),
+    tenantId: uuid('tenant_id'),
+    legalEntityId: uuid('legal_entity_id'),
+    action: text('action').notNull(),
+    kind: text('kind').notNull(),
+    decision: text('decision').notNull(),
+    outcome: text('outcome').notNull(),
+    reason: text('reason').notNull(),
+    decidedAt: instant('decided_at').notNull(),
+    recordedAt: instant('recorded_at')
+      .notNull()
+      .default(sql`clock_timestamp()`),
+    transactionId: text('transaction_id')
+      .notNull()
+      .default(sql`pg_current_xact_id()::text`),
+  },
+  (table) => [
+    index('security_decision_request_idx').on(table.requestId, table.recordedAt),
+    index('security_decision_scope_idx').on(table.tenantId, table.legalEntityId, table.recordedAt),
+    index('security_decision_transaction_idx').on(table.transactionId),
+  ],
+).enableRLS();
+
 export const tenant = pgTable(
   'tenant',
   {

@@ -115,7 +115,7 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
   beforeEach(async () => {
     const { db, client: sql } = connection();
     // Wyłącznie tabela we własnym losowym namespace, nigdy dane zastanej bazy.
-    await sql`TRUNCATE access_management_event`;
+    await sql`TRUNCATE security_decision_event, access_management_event`;
     await db.delete(companyAccessGrant);
     await db.delete(tenantMembership);
     await db.insert(tenantMembership).values([

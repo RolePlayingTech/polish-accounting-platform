@@ -1,5 +1,7 @@
 # Polish Accounting Platform 🇵🇱
 
+> Kandydat Security Foundation 6D-3 (2026-10-29): transakcyjne operacje, ograniczone role, podpisany kontekst, FORCE RLS i audyt allow/deny są przygotowane w zależnych Draft PR. Nie są odebrane produkcyjnie; testy PostgreSQL i pełny security review pozostają nieweryfikowane. Aktualny zakres, zależności i komendy: [przekazanie walidacji](docs/6D3_VALIDATION_HANDOFF.md), [role/RLS](docs/27-runtime-security-6d3a.md), [audyt](docs/28-security-audit-6d3c.md). Historyczne opisy etapów poniżej należy czytać z tym statusem. Brak deploymentu i endpointów księgowych.
+
 > **Status: działający szkielet developerski; istnieje testowana polityka dostępu, cykl członkostw/grantów (6D-R), serwerowa weryfikacja OIDC i mapowanie tożsamości (6D-2) oraz transakcyjna autoryzacja eliminująca TOCTOU (6D-3A), ale interaktywne logowanie UI, polityki RLS, rola runtime DB (6D-3B), audyt decyzji (6D-3C) i publiczne endpointy firmowe nie są jeszcze wdrożone.**
 >
 > **Stan weryfikacji źródeł: 29 października 2026 r.**  

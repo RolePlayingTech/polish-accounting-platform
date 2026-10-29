@@ -13,14 +13,17 @@ describe('Kontrakt plików migracji', () => {
     const lifecycle = readJson('0002_snapshot.json');
     const identity = readJson('0003_snapshot.json');
     const runtime = readJson('0004_snapshot.json');
+    const audit = readJson('0005_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(5);
+    expect(migrations).toHaveLength(6);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
     expect(lifecycle.prevId).toBe(schema.id);
     expect(identity.prevId).toBe(lifecycle.id);
     expect(runtime.prevId).toBe(identity.id);
+    expect(audit.prevId).toBe(runtime.id);
+    expect(Object.keys(audit.tables)).toHaveLength(11);
     expect(Object.values(runtime.tables)).toHaveLength(10);
     for (const table of Object.values(runtime.tables) as { isRLSEnabled: boolean }[]) {
       expect(table.isRLSEnabled).toBe(true);
@@ -31,6 +34,7 @@ describe('Kontrakt plików migracji', () => {
       '0002_access-lifecycle',
       '0003_user-identity',
       '0004_runtime-security',
+      '0005_security-audit',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -50,6 +54,7 @@ describe('Kontrakt plików migracji', () => {
       '0002_access-lifecycle.sql',
       '0003_user-identity.sql',
       '0004_runtime-security.sql',
+      '0005_security-audit.sql',
     ]) {
       const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
       expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
@@ -91,5 +96,24 @@ describe('Kontrakt plików migracji', () => {
       expect(migration).toContain(fragment);
     }
     expect(migration).not.toMatch(/INSERT INTO security_context_key/i);
+  });
+
+  it('audyt jest append-only, wiąże TX i wymaga śladu przy COMMIT', () => {
+    const migration = readFileSync(
+      new URL('../drizzle/0005_security-audit.sql', import.meta.url),
+      'utf8',
+    );
+    for (const fragment of [
+      'DEFERRABLE INITIALLY DEFERRED',
+      'pap_require_security_audit',
+      'NEW.transaction_id := pg_current_xact_id()::text',
+      'BEFORE UPDATE OR DELETE',
+      "pap_context()->>'purpose' = 'audit'",
+      'FOR byte_index IN 0..31',
+      'pap_access_event_insert',
+      'access_management_operation_id',
+    ]) {
+      expect(migration).toContain(fragment);
+    }
   });
 });

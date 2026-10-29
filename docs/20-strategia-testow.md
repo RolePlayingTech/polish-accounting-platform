@@ -1,5 +1,7 @@
 # 20. Strategia testów i aktualna walidacja
 
+> Bieżący kandydat 6D-3: [plan i wyniki minimalne](6D3_VALIDATION_HANDOFF.md). Właściciel zmienił politykę CI na main w scalonym PR #29: pełna walidacja na izolowanym Hetznerze, bez automatycznych GitHub Actions i bez ręcznego workflow_dispatch/rerun. Historyczne opisy Actions poniżej nie są aktualną instrukcją wykonania. Zmiany tej sesji nie modyfikują workflow. Brak wydzielonego PostgreSQL oznacza NOT RUN i blokuje odbiór, ale nie przygotowanie Draft PR.
+
 **Aktualizacja 6D-2 (2026-10-28):** po [testach lifecycle 6D-R](24-bezpieczny-cykl-dostepu-6dr.md) [etap 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) rozszerza walidację o:
 
 - testy czystej polityki autoryzacji administracyjnej `decideAccessManagementAuthorization` w `packages/domain` (izolacja tenanta, zakaz self-escalation dla każdej roli, hierarchia ról i granice delegacji `tenant_admin`),

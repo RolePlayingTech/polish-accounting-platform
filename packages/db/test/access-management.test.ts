@@ -279,6 +279,8 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A — rzeczywisty builder i k
       if (query.includes('from "app_user"')) {
         // Konto wyłączone między krokiem 1 (OIDC) a krokiem 3 (wewnątrz transakcji)
         rows = [[id(31), 'disabled', '2026-10-28T11:00:00.000Z']];
+      } else if (query.includes('clock_timestamp()')) {
+        rows = [{ now }];
       }
       const result = Object.assign(Promise.resolve(rows), { values: async () => rows });
       return result as unknown as ReturnType<typeof client.unsafe>;

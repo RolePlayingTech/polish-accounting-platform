@@ -1,5 +1,7 @@
 # 19. Przewodnik developera
 
+> Aktualizacja kandydata 6D-3: runtime używa pap_local_app/pap_test_app/pap_staging_app, a CLI migracji oddzielnie pap_local/pap_test/pap_staging_migrator. Instrukcje tworzenia kont właścicielskich poniżej dotyczą migratora, nie runtime. Pełny provisioning, podpis i wspólna kompozycja adapterów: [27](27-runtime-security-6d3a.md), obowiązkowy audyt: [28](28-security-audit-6d3c.md). Nie wymagamy DB na komputerze właściciela; integracje na izolowanym Hetznerze pozostają do osobnego odbioru. Automatyczne Actions wyłączono na main decyzją właściciela w PR #29; nie uruchamiaj workflow ani pełnych buildów na współdzielonym hoście.
+
 Ten dokument opisuje szkielet z Issue #5 oraz pakiety DB/autoryzacji 6A/6B/6C/6D-1/6D-R/6D-2/6D-3A z Issue #6. Obecnie pracujemy wyłącznie lokalnie, zgodnie z [ADR-005](adr/005-rozwoj-lokalny.md), bez przygotowywania serwera i deploymentu. Schemat 6B oraz warstwy serwerowe [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) i [6D-3A](26-transakcyjna-autoryzacja-6d3a.md) nie wystawiają jeszcze publicznych operacji księgowych ani interaktywnego logowania w przeglądarce; decyzje i ograniczenia opisują [model 6B](22-schemat-tenantow-6b.md), [cykl 6D-R](24-bezpieczny-cykl-dostepu-6dr.md), [dokument 6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) i [dokument 6D-3A](26-transakcyjna-autoryzacja-6d3a.md).
 
 ## Wymagania

@@ -1,5 +1,8 @@
 import {
   copyAccessManagementCommand,
+  manageAccess,
+  SecurityAuditUnavailableError,
+  type SecurityAuditEvent,
   createTenantAccessManagementAuthorizer,
   freezeTransactionActor,
   type AccessManagementActor,
@@ -14,6 +17,7 @@ import { legalEntityId, tenantId, userId, type TenantMembership } from '@pap/dom
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import type { PostgresContextSigner } from './signed-context.js';
+import { appendSecurityDecision, PostgresSecurityAudit } from './security-audit.js';
 import {
   accessManagementEvent,
   companyAccessGrant,
@@ -175,6 +179,10 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
     private readonly signer?: PostgresContextSigner,
   ) {}
 
+  recordDeniedDecision(event: SecurityAuditEvent): Promise<void> {
+    return new PostgresSecurityAudit(this.db, this.signer).recordDecision(event);
+  }
+
   async runInTransaction(
     work: (tx: AccessManagementTransaction) => Promise<AccessManagementResult>,
   ): Promise<AccessManagementResult> {
@@ -188,6 +196,9 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         (result) => result.ok === true,
       );
     } catch (error) {
+      if (error instanceof SecurityAuditUnavailableError) {
+        return { ok: false, reason: 'authorization_audit_unavailable' };
+      }
       if (isUniqueGrantConflict(error)) {
         return { ok: false, reason: 'operation_conflict' };
       }
@@ -199,30 +210,10 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
     input: AccessManagementCommand,
     actor: AccessManagementActor,
   ): Promise<AccessManagementResult> {
-    let command: AccessManagementCommand;
-    let canonicalActor: AccessManagementActor;
-    try {
-      command = copyAccessManagementCommand(input);
-      canonicalActor = freezeTransactionActor(actor);
-    } catch {
-      return { ok: false, reason: 'invalid_command' };
-    }
-
-    return this.runInTransaction(async (tx) => {
-      if ((await tx.verifyActorAccount(canonicalActor)) !== true) {
-        return { ok: false, reason: 'access_management_denied' };
-      }
-      if (
-        !(await createTenantAccessManagementAuthorizer().authorize(canonicalActor, command, tx))
-      ) {
-        return { ok: false, reason: 'access_management_denied' };
-      }
-      await tx.applySessionContext?.({
-        actorUserId: canonicalActor.userId,
-        tenantId: command.tenantId,
-        ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
-      });
-      return tx.executeAuthorized(command, canonicalActor);
+    return manageAccess(input, {
+      store: this,
+      actors: { getVerifiedActor: async () => freezeTransactionActor(actor) },
+      authorizer: createTenantAccessManagementAuthorizer(),
     });
   }
 
@@ -230,6 +221,34 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
     let verifiedActorKey: string | null = null;
     let lockedSnapshot: LockedAccessManagementSnapshot | null = null;
     let cachedFacts: AccessManagementAuthorizationFacts | undefined;
+
+    const recordAccessAllow = async (
+      command: AccessManagementCommand,
+      actor: AccessManagementActor,
+      now: Date,
+    ) =>
+      appendSecurityDecision(
+        tx,
+        {
+          requestId: command.operationId,
+          operationId: command.operationId,
+          accessManagementOperationId: command.operationId,
+          actorId: actor.userId,
+          targetUserId: command.userId,
+          tenantId: command.tenantId,
+          legalEntityId:
+            command.kind === 'grant'
+              ? command.legalEntityId
+              : (lockedSnapshot?.targetGrantRow?.legalEntityId ?? null),
+          action: command.kind,
+          kind: 'access',
+          decision: 'allow',
+          outcome: 'committed',
+          reason: 'authorized_tenant_administration',
+          decidedAt: now.toISOString(),
+        },
+        this.signer,
+      );
 
     const verifyActorAccount = async (rawActor: AccessManagementActor): Promise<boolean> => {
       let actor: AccessManagementActor;
@@ -586,6 +605,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         ) {
           return { ok: false, reason: 'operation_conflict' };
         }
+        await recordAccessAllow(command, actor, lockedSnapshot!.now);
         return { ok: true, receipt: previous.receipt };
       }
 
@@ -761,7 +781,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         grantId,
       };
       // Wymagany INSERT, bez catch wewnątrz transakcji: błąd audytu wycofuje wszystkie zmiany.
-      await tx.insert(accessManagementEvent).values({
+      const event = {
         operationId: command.operationId,
         tenantId: command.tenantId,
         userId: command.userId,
@@ -772,7 +792,24 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         requestKey,
         stateChange: { before, after, revokedGrants },
         receipt,
+      };
+      await this.signer?.apply(tx, {
+        purpose: 'access_event',
+        accessEvent: {
+          operation_id: event.operationId,
+          tenant_id: event.tenantId,
+          user_id: event.userId,
+          actor_id: event.actorId,
+          kind: event.kind,
+          grant_id: event.grantId,
+          occurred_at: now.toISOString(),
+          request_key: event.requestKey,
+          state_change: event.stateChange,
+          receipt: event.receipt,
+        },
       });
+      await tx.insert(accessManagementEvent).values(event);
+      await recordAccessAllow(command, actor, now);
       return { ok: true, receipt };
     };
 

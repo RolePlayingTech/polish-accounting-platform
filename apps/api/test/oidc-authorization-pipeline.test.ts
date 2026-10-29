@@ -38,6 +38,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import {
   AUTHORIZATION_CLOCK,
+  SECURITY_AUDIT_RECORDER,
   CompanyActionAuthorizationGuard,
   executeHttpAuthorizedCompanyAction,
   JwksOidcAccessTokenVerifier,
@@ -163,6 +164,16 @@ class ControlledAuthState
     AccessManagementStore,
     CompanyActionUnitOfWork<TestCompanyTransactionContext>
 {
+  readonly auditEvents: unknown[] = [];
+  async recordDeniedDecision(event: unknown) {
+    this.auditEvents.push(event);
+  }
+  failAudit = false;
+  async recordDecision(event: unknown) {
+    if (this.failAudit) throw new Error('SQL synthetic-secret');
+    this.auditEvents.push(event);
+  }
+
   readonly identities = new Map<
     string,
     { userId: UserId; userActive: boolean; linkActive: boolean }
@@ -179,6 +190,8 @@ class ControlledAuthState
   executedOperations = 0;
 
   reset() {
+    this.failAudit = false;
+    this.auditEvents.length = 0;
     this.identities.clear();
     this.memberships.clear();
     this.grants = [];
@@ -313,6 +326,9 @@ class ControlledAuthState
       txNumber,
       appliedSessionContext: null,
       verifyActorAccount: async (actor) => this.isActorCurrentlyActive(actor),
+      recordAuthorizationDecision: async (event) => {
+        this.auditEvents.push(event);
+      },
       getLockedFacts: async (query): Promise<LockedTenantAuthorizationFacts> => {
         const facts = await this.getFacts(query);
         return { ...facts, now: NOW };
@@ -561,6 +577,7 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
         { provide: USER_IDENTITY_RESOLVER, useValue: state },
         { provide: TENANT_AUTHORIZATION_DATA_SOURCE, useValue: state },
         { provide: TEST_COMPANY_UNIT_OF_WORK, useValue: state },
+        { provide: SECURITY_AUDIT_RECORDER, useValue: state },
         { provide: AUTHORIZATION_CLOCK, useValue: { now: () => NOW } },
       ],
     })
@@ -651,6 +668,16 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
       });
 
     expect(response.statusCode).toBe(200);
+    expect(state.auditEvents).toContainEqual(
+      expect.objectContaining({
+        actorId: USER_A,
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        decision: 'allow',
+        kind: 'preflight',
+      }),
+    );
+    expect(JSON.stringify(state.auditEvents)).not.toContain(token);
     expect(response.json()).toEqual({
       ok: true,
       resolvedActorUserId: USER_A,
@@ -658,6 +685,19 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
       legalEntityId: ENTITY_A1,
       action: 'read',
     });
+  });
+
+  it('awaria audytu bramki daje 503 bez tokenu i szczegółów SQL', async () => {
+    state.failAudit = true;
+    const response = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'GET',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe`,
+      });
+    expect(response.statusCode).toBe(503);
+    expect(response.body).not.toContain('synthetic-secret');
   });
 
   it('ignoruje próby podmiany userId lub roli w body i query — tożsamość pochodzi wyłącznie z serwera', async () => {

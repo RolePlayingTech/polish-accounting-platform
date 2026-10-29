@@ -2,10 +2,12 @@ import type {
   AccessManagementStore,
   CompanyActionTransactionContext,
   CompanyActionUnitOfWork,
+  SecurityAuditEvent,
 } from '@pap/application';
 import { PostgresAccessManagementStore } from './access-management.js';
 import type { connectDatabase } from './client.js';
 import type { PostgresContextSigner } from './signed-context.js';
+import { appendSecurityDecision, PostgresSecurityAudit } from './security-audit.js';
 import {
   applyLocalRlsSessionContext,
   lockCompanyActionFactsInTx,
@@ -42,6 +44,10 @@ export class PostgresTransactionalUnitOfWork implements CompanyActionUnitOfWork<
     private readonly signer?: PostgresContextSigner,
   ) {}
 
+  recordDeniedDecision(event: SecurityAuditEvent): Promise<void> {
+    return new PostgresSecurityAudit(this.db, this.signer).recordDecision(event);
+  }
+
   async runCompanyActionInTransaction<TResult>(
     work: (tx: PostgresCompanyActionTransactionContext) => Promise<TResult>,
     shouldCommit: (result: TResult) => boolean,
@@ -53,6 +59,7 @@ export class PostgresTransactionalUnitOfWork implements CompanyActionUnitOfWork<
         let action: 'read' | 'write' | undefined;
         const context: PostgresCompanyActionTransactionContext = {
           tx,
+          recordAuthorizationDecision: (event) => appendSecurityDecision(tx, event, this.signer),
           verifyActorAccount: async (actor) => {
             actorUserId = actor.userId;
             await this.signer?.apply(tx, { purpose: 'actor', actorUserId });

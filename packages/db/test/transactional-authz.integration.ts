@@ -245,7 +245,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
 
   beforeEach(async () => {
     const { db, client: sql } = connection();
-    await sql`TRUNCATE access_management_event`;
+    await sql`TRUNCATE security_decision_event, access_management_event`;
     await db.delete(companyAccessGrant);
     await db.delete(tenantMembership);
     await db.delete(userOidcIdentity);

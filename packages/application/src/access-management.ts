@@ -21,6 +21,7 @@ import {
   type TransactionActor,
   type TransactionSessionContext,
 } from './transactional-unit-of-work.js';
+import { auditIdentifier, securityAuditReason, type SecurityAuditEvent } from './security-audit.js';
 
 interface AccessTarget {
   readonly operationId: string;
@@ -100,7 +101,8 @@ export type AccessManagementResult =
         | 'membership_not_revoked'
         | 'grant_unavailable'
         | 'operation_conflict'
-        | 'access_management_unavailable';
+        | 'access_management_unavailable'
+        | 'authorization_audit_unavailable';
     };
 
 /**
@@ -121,6 +123,7 @@ export interface AccessManagementTransaction extends AccessManagementAuthorizati
  * wspólną blokadę faktów i członkostwa, idempotencję oraz atomowy audyt.
  */
 export interface AccessManagementStore {
+  recordDeniedDecision(event: SecurityAuditEvent): Promise<void>;
   runInTransaction(
     work: (tx: AccessManagementTransaction) => Promise<AccessManagementResult>,
   ): Promise<AccessManagementResult>;
@@ -260,13 +263,15 @@ export function copyAccessManagementCommand(
   }
 }
 
-export async function manageAccess(
+async function manageAccessCore(
   input: AccessManagementCommand,
   dependencies: {
     readonly store: AccessManagementStore;
     readonly actors?: AccessManagementActorSource;
     readonly authorizer?: AccessManagementAuthorizer;
   },
+  onActor: (actorId: string) => void,
+  onAuthorized: () => void,
 ): Promise<AccessManagementResult> {
   let command: AccessManagementCommand;
   try {
@@ -280,6 +285,7 @@ export async function manageAccess(
     const verified = await actors.getVerifiedActor();
     if (!verified) return { ok: false, reason: 'access_management_denied' };
     const actor = freezeTransactionActor(verified);
+    onActor(actor.userId);
 
     if (typeof store.runInTransaction === 'function') {
       return await store.runInTransaction(async (tx): Promise<AccessManagementResult> => {
@@ -289,6 +295,7 @@ export async function manageAccess(
         if ((await authorizer.authorize(actor, command, tx)) !== true) {
           return { ok: false, reason: 'access_management_denied' };
         }
+        onAuthorized();
         if (tx.applySessionContext) {
           await tx.applySessionContext({
             actorUserId: actor.userId,
@@ -305,4 +312,57 @@ export async function manageAccess(
   } catch {
     return { ok: false, reason: 'access_management_unavailable' };
   }
+}
+
+export async function manageAccess(
+  input: AccessManagementCommand,
+  dependencies: Parameters<typeof manageAccessCore>[1],
+): Promise<AccessManagementResult> {
+  // Metadane selektorów kopiujemy przed await; klient nigdy nie dostarcza actorId audytu.
+  try {
+    input = copyAccessManagementCommand(input);
+  } catch {
+    /* Core zwróci invalid_command. */
+  }
+  const tenant = auditIdentifier(input?.tenantId);
+  const operation = auditIdentifier(input?.operationId);
+  const target = auditIdentifier(input?.userId);
+  const entity = input?.kind === 'grant' ? auditIdentifier(input.legalEntityId) : null;
+  const action = ['revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant'].includes(
+    input?.kind,
+  )
+    ? input.kind
+    : 'unknown';
+  let actorId: string | null = null;
+  let authorized = false;
+  const result = await manageAccessCore(
+    input,
+    dependencies,
+    (verified) => {
+      actorId = verified;
+    },
+    () => {
+      authorized = true;
+    },
+  );
+  if (!result.ok) {
+    try {
+      await dependencies.store.recordDeniedDecision({
+        requestId: operation,
+        operationId: operation,
+        actorId,
+        targetUserId: target,
+        tenantId: tenant,
+        legalEntityId: entity,
+        action,
+        kind: 'access',
+        decision: authorized ? 'allow' : 'deny',
+        outcome: authorized ? 'rolled_back' : 'denied',
+        reason: securityAuditReason(result.reason),
+      });
+    } catch {
+      return { ok: false, reason: 'authorization_audit_unavailable' };
+    }
+  }
+  return result;
 }
