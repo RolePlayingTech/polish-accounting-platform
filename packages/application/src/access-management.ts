@@ -311,7 +311,6 @@ async function manageAccessCore(
         if ((await authorizer.authorize(actor, command, tx)) !== true) {
           return { ok: false, reason: 'access_management_denied' };
         }
-        audit.authorized = true;
         if (tx.applySessionContext) {
           await tx.applySessionContext({
             actorUserId: actor.userId,
@@ -319,6 +318,7 @@ async function manageAccessCore(
             ...(command.kind === 'grant' ? { legalEntityId: command.legalEntityId } : {}),
           });
         }
+        audit.authorized = true;
         const executionResult = await tx.executeAuthorized(command, actor);
         if (executionResult.ok) {
           audit.commitPhaseEntered = true;
