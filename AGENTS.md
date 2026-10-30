@@ -1,5 +1,9 @@
 # Zasady dla agentów AI
 
+## Decyzja właściciela 2026-10-30: proporcjonalny odbiór wewnętrzny
+
+Do czasu odrębnej decyzji o udostępnieniu komercyjnym obowiązuje [polityka wewnętrznych merge](docs/internal-development-merge-policy.md). Zastępuje wcześniejsze bezwzględne wymaganie pełnego CI i kompletnej macierzy testowej **przed każdym merge na potrzeby rozwoju wewnętrznego**. Nie znosi ochrony tenantów, RLS, sekretów, poprawności audytu ani obowiązku osobnej zgody na deploy, migracje i rzeczywiste operacje księgowe. W testach odróżniać `NOT RUN` od `PASS` i znane błędy od brakującej infrastruktury.
+
 Projekt: Polish Accounting Platform. Wszystkie zmiany projektuj dla jurysdykcji polskiej i w języku polskim.
 
 ## Dokumenty architektoniczne — obowiązkowe przed kodowaniem
