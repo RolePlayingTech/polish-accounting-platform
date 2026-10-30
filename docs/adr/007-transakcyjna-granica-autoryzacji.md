@@ -14,6 +14,13 @@ audyt kończą się jednym COMMIT; kontrolowana odmowa również wykonuje fizycz
 Brak adaptera transakcyjnego powoduje odmowę, bez fallbacku do check-then-write.
 Bezpośrednie execute adaptera PostgreSQL także sprawdza zablokowaną politykę.
 
+Rewizja SEC-01/02 (2026-10-29): wykonanie czterech komend dostępu należy do
+kontrolowanego executora SQL w tej samej TX; TS zachowuje decyzję domenową i
+blokady. Runtime nie wykonuje dowolnego DML uprawnień. Zapis firmowy wymaga
+kanonicznego operationId i czasu decyzji także w podpisanej asercji i repozytorium.
+Pełny kontrakt, wpływ na migracje, alternatywy i scenariusze **NOT RUN**:
+[docs/29](../29-sec01-sec02-kontrakt-efektow.md). To kandydat, nie dowód odbioru.
+
 Odrzucono: ponowne nieblokujące authorize przed zapisem (pozostawia TOCTOU),
 cache decyzji, SERIALIZABLE jako jedyny mechanizm (nie zastępuje granicy uprawnień).
 Nie powtarzamy automatycznie callbacku, który mógł wykonać efekt zewnętrzny.

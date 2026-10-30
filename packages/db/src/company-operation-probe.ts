@@ -12,6 +12,9 @@ export async function recordCompanyOperationProbe(
 ): Promise<{ readonly operationId: string; readonly created: boolean }> {
   if (context.action !== 'write') throw new Error('Próba wymaga jawnego prawa zapisu.');
   const operationId = userId(rawOperationId);
+  if (operationId !== context.operationId || !context.decisionAt) {
+    throw new Error('Efekt nie należy do zatwierdzonej operacji.');
+  }
   const inserted = await transaction.tx
     .insert(companyOperationProbe)
     .values({
@@ -19,6 +22,7 @@ export async function recordCompanyOperationProbe(
       tenantId: context.tenantId,
       legalEntityId: context.legalEntityId,
       actorId: context.userId,
+      createdAt: new Date(context.decisionAt),
     })
     .onConflictDoNothing()
     .returning({ operationId: companyOperationProbe.operationId });

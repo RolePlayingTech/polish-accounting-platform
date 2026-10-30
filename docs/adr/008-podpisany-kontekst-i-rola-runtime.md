@@ -19,8 +19,12 @@ Fazy: actor (rewalidacja konta), identity (minimalny resolver issuer/subject),
 facts (zablokowane fakty), company (operacja firmy), access (zatwierdzona komenda).
 Runtime może czytać tylko wiersze odpowiednie dla podpisanego zakresu; RLS dodatkowo
 sprawdza aktywność konta, członkostwa i grantu oraz ich czas. Granica per-action
-pozostaje w domenie. Zapis członkostw/grantów ogranicza również trigger, do dokładnej
-zatwierdzonej komendy; nie wolno zmieniać roli ani kluczy. Konto SQL nie ma DELETE,
+pozostaje w domenie. Po rewizji SEC-01/02 zapis członkostw/grantów wykonuje wyłącznie
+pap_execute_access() z 0006, bez argumentów SQL, na podstawie podpisanej komendy.
+Invoker guard odrzuca DML runtime, a wewnątrz executora sprawdza dokładne OLD/NEW
+i revoked_at = LEAST(OLD.revoked_at, decision_at). Nie wolno zmieniać roli ani kluczy.
+Runtime ma kolumnowy UPDATE tylko do blokowania wierszy i WITH CHECK false;
+brak INSERT grantów oraz receipt. Konto SQL nie ma DELETE,
 TRUNCATE, DDL, TRIGGER, REFERENCES, klucza, rejestru migracji ani członkostwa w migratorze.
 
 ENABLE i FORCE RLS obejmują wszystkie 10 tabel modelu/bezpieczeństwa. Migrator ma
@@ -44,8 +48,19 @@ obowiązkowe. PostgreSQL constraints/FK/unikalność mogą ujawniać istnienie i
 przez konflikty; transport musi redagować błędy i nie udostępniać SQL. Krótkie transakcje
 są wymagane; po 30 s polityka odmawia zamiast przedłużać asercję w niezaufanym SQL.
 Dokładny audyt allow/deny i ochrona jego zapisu należą do zależnego C.
+Rewizja SEC-01/02 wiąże także operation_id i decision_at w asercji company
+z jedynym obecnym efektem firmowym. Przejęcie samego SQL runtime nie pozwala
+wykonać dodatkowej komendy pod historycznym receipt ani zmienić daty cofnięcia.
+Szczegóły, scenariusze QA i zależności SEC-03/04/05: [docs/29](../29-sec01-sec02-kontrakt-efektow.md).
 
-Migracja: 0004, bez zmian 0000–0003. Role i klucz nie powstają automatycznie w migracji.
+Integracja zachowuje 0000–0005 dokładnie z #31 i dodaje 0006, także dla upgrade
+oryginalnej 0005. Wymaga ponownego jawnego provisioningu ACL i zgodnej wersji
+aplikacji; factory sprawdza marker 60301. Role i klucz nie powstają automatycznie.
+SEC-05: helpery sprawdzają podpisany tenant, fazę i (dla company) firmę/akcję
+przed odczytem tabel. SEC-04: UoW wymaga jednorazowej pozytywnej weryfikacji
+aktora i sam sprawdza politykę na prywatnych, zablokowanych faktach przed podpisem
+dokładnego zakresu i czasu. Pozostaje bramka ograniczenia surowego portu/tx przed
+API/MCP i niezależny odbiór savepointów; szczegóły w [integracji](../30-security-foundation-integracja.md).
 Nie ma automatycznego deploymentu ani migracji stagingu. Rollback aplikacji wymaga
 utrzymania zgodnego podpisu i ACL; nie wyłączać RLS i nie kasować danych jako rollbacku.
 Pełna walidacja ról, definerów, poolingu i wyścigów jest bramką przed merge.

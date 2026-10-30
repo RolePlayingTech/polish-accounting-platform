@@ -16,6 +16,7 @@ export interface DatabaseSecurityContext {
   readonly targetUserId?: string;
   readonly command?: AccessManagementCommand;
   readonly decisionAt?: string;
+  readonly operationId?: string;
   readonly issuer?: string;
   readonly subject?: string;
 }
@@ -56,6 +57,7 @@ export class PostgresContextSigner {
       target_user_id: context.targetUserId,
       command: context.command,
       decision_at: context.decisionAt,
+      operation_id: context.operationId,
       issuer: context.issuer,
       subject: context.subject,
       audit_event: context.auditEvent,

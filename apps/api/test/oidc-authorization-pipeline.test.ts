@@ -2,9 +2,11 @@ import { Bind, Controller, Get, Inject, Module, Post, Req, Res, UseGuards } from
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
+  ConfirmedTransactionRollbackError,
   createOidcAccessManagementActorSource,
   createTenantAccessManagementAuthorizer,
   manageAccess,
+  TransactionOutcomeUnknownError,
   type AccessManagementActor,
   type AccessManagementAuthorizationDataSource,
   type AccessManagementAuthorizationFacts,
@@ -71,6 +73,7 @@ const AUDIENCE = 'pap-api';
 const VALID_FROM = new Date('2026-01-01T00:00:00.000Z');
 const NOW = new Date('2026-10-28T12:00:00.000Z');
 const NOW_SEC = Math.floor(NOW.getTime() / 1000);
+const TEST_WRITE_OPERATION_ID = id(701);
 
 const TEST_COMPANY_UNIT_OF_WORK = Symbol('TEST_COMPANY_UNIT_OF_WORK');
 
@@ -134,6 +137,13 @@ class TestTransactionalCompanyController {
   @Post('probe-transactional-write')
   @Bind(Req(), Res({ passthrough: true }))
   async writeTransactionalProbe(request: AuthenticatedFastifyRequest, reply: FastifyReply) {
+    const rawOperationId = request.headers['x-operation-id'];
+    const operationId =
+      rawOperationId === undefined
+        ? TEST_WRITE_OPERATION_ID
+        : typeof rawOperationId === 'string'
+          ? rawOperationId
+          : '';
     return executeHttpAuthorizedCompanyAction(
       request,
       reply,
@@ -146,12 +156,15 @@ class TestTransactionalCompanyController {
       async (ctx, tx) => ({
         ok: true,
         txNumber: tx.txNumber,
+        operationId: ctx.operationId,
+        decisionAt: ctx.decisionAt,
         resolvedActorUserId: ctx.userId,
         tenantId: ctx.tenantId,
         legalEntityId: ctx.legalEntityId,
         action: ctx.action,
         sessionContext: tx.appliedSessionContext,
       }),
+      { operationId },
     );
   }
 }
@@ -183,6 +196,7 @@ class ControlledAuthState
   platformRoles: PlatformRoleAssignment[] = [];
   failIdentityResolution = false;
   failAuthorizationDataSource = false;
+  simulateLostCommitConfirmation = false;
   onAfterResolveIdentity: (() => void) | null = null;
   txCounter = 0;
   committedTransactions = 0;
@@ -198,6 +212,7 @@ class ControlledAuthState
     this.platformRoles = [];
     this.failIdentityResolution = false;
     this.failAuthorizationDataSource = false;
+    this.simulateLostCommitConfirmation = false;
     this.onAfterResolveIdentity = null;
     this.txCounter = 0;
     this.committedTransactions = 0;
@@ -343,13 +358,22 @@ class ControlledAuthState
       if (shouldCommit(result)) {
         this.committedTransactions += 1;
         this.executedOperations += 1;
+        if (this.simulateLostCommitConfirmation) {
+          this.simulateLostCommitConfirmation = false;
+          throw new TransactionOutcomeUnknownError(
+            new Error('SELECT secret_hex FROM security_context_key -- ECONNRESET po COMMIT'),
+          );
+        }
       } else {
         this.rolledBackTransactions += 1;
       }
       return result;
     } catch (error) {
+      if (error instanceof TransactionOutcomeUnknownError) {
+        throw error;
+      }
       this.rolledBackTransactions += 1;
-      throw error;
+      throw new ConfirmedTransactionRollbackError(error);
     }
   }
 
@@ -811,6 +835,14 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
       'probe-write',
     ],
     [
+      'Grant read nie pozwala wykonać transakcyjnego write',
+      'Sub-User-A',
+      TENANT_A,
+      ENTITY_A1,
+      'POST',
+      'probe-transactional-write',
+    ],
+    [
       'Właściciel tenanta (tenant_owner) nie otrzymuje automatycznie dostępu księgowego',
       'Sub-Owner-A',
       TENANT_A,
@@ -1037,11 +1069,15 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
     expect(response.json()).toEqual({
       ok: true,
       txNumber: 1,
+      operationId: TEST_WRITE_OPERATION_ID,
+      decisionAt: NOW.toISOString(),
       resolvedActorUserId: USER_A,
       tenantId: TENANT_A,
       legalEntityId: ENTITY_A1,
       action: 'write',
       sessionContext: {
+        operationId: TEST_WRITE_OPERATION_ID,
+        decisionAt: NOW.toISOString(),
         actorUserId: USER_A,
         tenantId: TENANT_A,
         legalEntityId: ENTITY_A1,
@@ -1050,6 +1086,59 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
     expect(state.committedTransactions).toBe(1);
     expect(state.rolledBackTransactions).toBe(0);
     expect(state.executedOperations).toBe(1);
+    expect(state.auditEvents).toEqual([
+      expect.objectContaining({
+        operationId: TEST_WRITE_OPERATION_ID,
+        actorId: USER_A,
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+        kind: 'company',
+        decision: 'allow',
+        outcome: 'committed',
+        reason: 'explicit_company_grant',
+        decidedAt: NOW.toISOString(),
+      }),
+    ]);
+  });
+
+  it('SEC-01: executeHttpAuthorizedCompanyAction odrzuca transakcyjny write z niepoprawnym operationId (400) przed otwarciem transakcji', async () => {
+    state.grants.push({
+      grantId: id(108),
+      tenantId: TENANT_A,
+      userId: USER_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write',
+      validFrom: VALID_FROM,
+      validUntil: null,
+      revokedAt: null,
+    });
+
+    const token = await issueToken({ sub: 'Sub-User-A' });
+    for (const invalidOperationId of ['', 'not-a-uuid']) {
+      const response = await app
+        .getHttpAdapter()
+        .getInstance()
+        .inject({
+          method: 'POST',
+          url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+          headers: {
+            authorization: `Bearer ${token}`,
+            'x-operation-id': invalidOperationId,
+          },
+        });
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toEqual({
+        statusCode: 400,
+        error: 'bad_request',
+        message: 'Niepoprawny identyfikator zasobu.',
+      });
+    }
+
+    expect(state.committedTransactions).toBe(0);
+    expect(state.rolledBackTransactions).toBe(0);
+    expect(state.executedOperations).toBe(0);
   });
 
   it('executeHttpAuthorizedCompanyAction eliminuje TOCTOU — wyłączenie konta lub cofnięcie grantu po resolveVerifiedIdentity wycofuje transakcję (403)', async () => {
@@ -1102,5 +1191,63 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
     expect(state.committedTransactions).toBe(0);
     expect(state.rolledBackTransactions).toBe(2);
     expect(state.executedOperations).toBe(0);
+  });
+
+  it('SEC-03: executeHttpAuthorizedCompanyAction zwraca 503 bez fałszywego rolled_back i bez wycieku SQL, gdy po skutecznym COMMIT utracono potwierdzenie', async () => {
+    state.grants.push({
+      grantId: id(115),
+      tenantId: TENANT_A,
+      userId: USER_A,
+      legalEntityId: ENTITY_A1,
+      action: 'write',
+      validFrom: VALID_FROM,
+      validUntil: null,
+      revokedAt: null,
+    });
+    state.simulateLostCommitConfirmation = true;
+
+    const token = await issueToken({ sub: 'Sub-User-A' });
+    const response = await app
+      .getHttpAdapter()
+      .getInstance()
+      .inject({
+        method: 'POST',
+        url: `/api/v1/test-authz/tenants/${TENANT_A}/entities/${ENTITY_A1}/probe-transactional-write`,
+        headers: { authorization: `Bearer ${token}` },
+      });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).not.toContain('secret_hex');
+    expect(response.body).not.toContain('SELECT');
+    expect(response.body).not.toContain(token);
+    expect(state.committedTransactions).toBe(1);
+    expect(state.rolledBackTransactions).toBe(0);
+    expect(state.executedOperations).toBe(1);
+    expect(state.auditEvents).toEqual([
+      expect.objectContaining({
+        operationId: TEST_WRITE_OPERATION_ID,
+        actorId: USER_A,
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+        kind: 'company',
+        decision: 'allow',
+        outcome: 'committed',
+        reason: 'explicit_company_grant',
+        decidedAt: NOW.toISOString(),
+      }),
+      expect.objectContaining({
+        operationId: TEST_WRITE_OPERATION_ID,
+        actorId: USER_A,
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+        kind: 'company',
+        decision: 'allow',
+        outcome: 'outcome_unknown',
+        reason: 'transaction_outcome_unknown',
+        decidedAt: NOW.toISOString(),
+      }),
+    ]);
   });
 });

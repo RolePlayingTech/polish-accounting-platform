@@ -10,6 +10,11 @@ type Database = ReturnType<typeof connectDatabase>['db'];
 
 /** Kontrola rzeczywistych ACL/katalogów, niezależna od samej nazwy w DATABASE_URL. */
 export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'>): Promise<void> {
+  // Brak 0006 albo stare ACL mają zatrzymać kompozycję przed utworzeniem usług.
+  const [protocol] = await db.execute<{ version: number }>(
+    sql`SELECT pap_security_protocol_version() AS version`,
+  );
+  if (protocol?.version !== 60301) throw new Error('Niezgodna wersja protokołu bezpieczeństwa DB.');
   const [state] = await db.execute<{ safe: boolean }>(sql`SELECT (
     current_user = session_user AND
     NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication) AND
@@ -20,8 +25,17 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     NOT has_schema_privilege(current_schema(), 'CREATE') AND
     NOT has_schema_privilege('public', 'CREATE') AND
     NOT has_table_privilege('security_context_key', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('security_context_key', 'SELECT,INSERT,UPDATE,REFERENCES') AND
     NOT has_table_privilege('security_decision_event', 'SELECT,UPDATE,DELETE,TRUNCATE') AND
-    NOT has_table_privilege('access_management_event', 'UPDATE,DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('security_decision_event', 'SELECT,UPDATE,REFERENCES') AND
+    NOT has_any_column_privilege('access_management_event', 'INSERT,UPDATE') AND
+    NOT has_table_privilege('access_management_event', 'DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('company_access_grant', 'INSERT') AND
+    NOT has_column_privilege('company_access_grant', 'revoked_at', 'UPDATE') AND
+    NOT has_column_privilege('tenant_membership', 'status', 'UPDATE') AND
+    NOT has_column_privilege('tenant_membership', 'valid_from', 'UPDATE') AND
+    NOT has_column_privilege('tenant_membership', 'valid_until', 'UPDATE') AND
+    has_function_privilege('pap_execute_access()', 'EXECUTE') AND
     (SELECT count(*) = 11 AND bool_and(c.relrowsecurity AND c.relforcerowsecurity AND c.relowner <> r.oid)
       FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace
         AND c.relname IN ('tenant','legal_entity','tenant_membership','entity_profile_version',

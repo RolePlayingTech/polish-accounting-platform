@@ -261,6 +261,7 @@ export async function executeHttpAuthorizedCompanyAction<
   metadata: RequireCompanyActionMetadata,
   dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
   operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+  options?: { readonly operationId?: string },
 ): Promise<TOutput> {
   if (hasUntrustedIdentitySignal(request)) {
     await auditTransportDenial(
@@ -301,6 +302,7 @@ export async function executeHttpAuthorizedCompanyAction<
     {
       rawBearerToken,
       requestId: serverRequestId(request, reply),
+      operationId: options?.operationId,
       tenantId: rawTenantId,
       legalEntityId: rawLegalEntityId,
       action: metadata.action,
@@ -313,6 +315,11 @@ export async function executeHttpAuthorizedCompanyAction<
   if (!decision.allowed) {
     if (decision.reason === 'authorization_audit_unavailable') {
       throw new ServiceUnavailableException('Audyt bezpieczeństwa jest niedostępny.');
+    }
+    if (decision.status === 'unavailable' || decision.reason === 'transaction_outcome_unknown') {
+      throw new ServiceUnavailableException(
+        'Wynik zakończenia operacji jest nieznany; sprawdź stan przed ponowieniem.',
+      );
     }
     if (decision.status === 'unauthenticated') {
       reply.header('WWW-Authenticate', 'Bearer error="invalid_token"');

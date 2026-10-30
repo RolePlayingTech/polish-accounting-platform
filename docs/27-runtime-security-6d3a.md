@@ -18,15 +18,20 @@ FOR SHARE/UPDATE; WITH CHECK false uniemożliwia rzeczywistą zmianę.
 | entity_profile_version | SELECT | Faza company, dokładny tenant/firma/akcja i aktywny grant |
 | app_user | SELECT; UPDATE(id) do blokady | Wyłącznie aktor asercji; zapis zabroniony |
 | user_oidc_identity | SELECT; UPDATE(id) do blokady | Wyłącznie aktor asercji; provisioning zabroniony |
-| tenant_membership | SELECT; UPDATE(status, valid_from, valid_until) | Aktor/cel podpisanego tenanta; zapis wyłącznie zatwierdzonej komendy |
-| company_access_grant | SELECT, INSERT, UPDATE(revoked_at) | Aktor/cel; dokładny grant i komenda; cofnięcie nieodwracalne |
-| access_management_event | SELECT, INSERT | Tylko dokładna zatwierdzona operacja i aktor; brak modyfikacji/usuwania |
-| company_operation_probe | SELECT, INSERT | Syntetyczny przykład; podpisana firma i akcja, INSERT tylko write |
+| tenant_membership | SELECT; UPDATE(user_id) do blokady | Aktor/cel; DML runtime zabronione przez RLS/guard; executor SEC-01/02 |
+| company_access_grant | SELECT; UPDATE(grant_id) do blokady | Brak INSERT/UPDATE danych; executor wykonuje dokładną podpisaną komendę |
+| access_management_event | SELECT | Tylko dokładna zatwierdzona operacja i aktor; INSERT wyłącznie z executora |
+| company_operation_probe | SELECT, INSERT | Podpisane operation_id, firma, aktor i decision_at; INSERT tylko write |
 | security_context_key | Brak | Migrator/operator, nigdy runtime |
 | drizzle.__drizzle_migrations | Brak | Wyłącznie migrator |
 | pap_context, pap_admin_allowed, pap_company_allowed, pap_resolve_identity | EXECUTE | Małe definery, jawny scope i zamknięty search_path |
+| pap_execute_access | EXECUTE | Cztery komendy lifecycle z podpisu; receipt i rzeczywiste OLD/NEW, bez parametrów SQL |
+| pap_security_protocol_version | EXECUTE | Marker zgodności 0006 i aplikacji: 60301 |
 | Funkcje triggerów i pgcrypto | Brak bezpośredniego EXECUTE | Triggery wywoływane przez PostgreSQL; kryptografia tylko wewnątrz definerów |
 | Nowe tabele/funkcje/sekwencje | Brak domyślnych grantów | Każdy moduł wymaga własnej migracji/macierzy |
+
+Macierz uwzględnia rewizję SEC-01/02: [kontrakt i QA](29-sec01-sec02-kontrakt-efektow.md).
+Testy tej rewizji są **NOT RUN**; wyniki wcześniejszego kandydata nie stanowią odbioru.
 
 Runtime: CONNECT do dedykowanej bazy, USAGE na schemacie danych, bez CREATE/TEMP.
 Nie jest właścicielem bazy, schematu, tabel ani funkcji, nie należy do innych ról,
@@ -63,7 +68,7 @@ jej nie znaleziono. Nie tworzymy jej i nie używamy bazy działającego stagingu
 5. Runtime ma DATABASE_URL z pap_test_app (local: pap_local_app; staging: pap_staging_app).
    Migrator zachowuje odpowiednio pap_test/pap_local/pap_staging_migrator.
 6. Kompozycja: loadDatabaseContextSigner → createPostgresSecurityServices(db, signer).
-   Factory sprawdza rolę, ACL, FORCE RLS i podpis; zwraca spójne adaptery.
+   Factory sprawdza marker 0006, rolę, ACL, FORCE RLS i podpis; zwraca spójne adaptery.
    Bez podpisu starsze adaptery na ograniczonej roli odmawiają; nie podłączać
    nieblokującego źródła faktów jako autoryzatora zapisu.
 

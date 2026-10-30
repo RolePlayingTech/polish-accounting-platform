@@ -58,18 +58,16 @@ BEGIN
   -- WITH CHECK false i brak polityk INSERT blokują rzeczywiste mutacje tożsamości/firmy.
   EXECUTE format('GRANT UPDATE (id) ON %I.app_user, %I.user_oidc_identity, %I.legal_entity TO %I',
     data_schema, data_schema, data_schema, runtime_name);
-  EXECUTE format('GRANT UPDATE (status, valid_from, valid_until) ON %I.tenant_membership TO %I',
+  EXECUTE format('GRANT UPDATE (user_id) ON %I.tenant_membership TO %I',
     data_schema, runtime_name);
-  EXECUTE format('GRANT INSERT ON %I.company_access_grant TO %I',
+  EXECUTE format('GRANT UPDATE (grant_id) ON %I.company_access_grant TO %I',
     data_schema, runtime_name);
-  EXECUTE format('GRANT UPDATE (revoked_at) ON %I.company_access_grant TO %I',
-    data_schema, runtime_name);
-  EXECUTE format('GRANT INSERT ON %I.access_management_event, %I.company_operation_probe TO %I',
-    data_schema, data_schema, runtime_name);
+  EXECUTE format('GRANT INSERT ON %I.company_operation_probe TO %I', data_schema, runtime_name);
   EXECUTE format('GRANT INSERT ON %I.security_decision_event TO %I', data_schema, runtime_name);
   EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pap_context(), %I.pap_admin_allowed(uuid),
-    %I.pap_company_allowed(uuid,uuid,text), %I.pap_resolve_identity(text,text) TO %I',
-    data_schema, data_schema, data_schema, data_schema, runtime_name);
+    %I.pap_company_allowed(uuid,uuid,text), %I.pap_resolve_identity(text,text),
+    %I.pap_execute_access(), %I.pap_security_protocol_version() TO %I',
+    data_schema, data_schema, data_schema, data_schema, data_schema, data_schema, runtime_name);
   -- Runtime nie uzyskuje USAGE na schemacie rejestru migracji.
   IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'drizzle') THEN
     EXECUTE format('REVOKE ALL ON SCHEMA drizzle FROM PUBLIC, %I', runtime_name);

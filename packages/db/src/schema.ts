@@ -93,14 +93,32 @@ export const accessManagementEvent = pgTable(
     grantId: uuid('grant_id'),
     occurredAt: instant('occurred_at').notNull(),
     requestKey: text('request_key').notNull(),
+    // NULL wyłącznie dla historycznych receipt sprzed protokołu SEC-01/02.
+    transactionId: text('transaction_id').default(sql`pg_current_xact_id()::text`),
     // Wyłącznie jawne pola stanu; bez HTTP, tokenów i dokumentów.
     stateChange: jsonb('state_change')
-      .$type<{ before: string; after: string; revokedGrants: number }>()
+      .$type<{
+        before: string;
+        after: string;
+        revokedGrants: number;
+        effects?: Readonly<
+          Record<
+            string,
+            {
+              table: 'tenant_membership' | 'company_access_grant';
+              operation: 'INSERT' | 'UPDATE';
+              old: Readonly<Record<string, unknown>> | null;
+              new: Readonly<Record<string, unknown>>;
+            }
+          >
+        >;
+      }>()
       .notNull(),
     receipt: jsonb('receipt').$type<import('@pap/application').AccessManagementReceipt>().notNull(),
   },
   (table) => [
     index('access_management_event_target_idx').on(table.tenantId, table.userId, table.occurredAt),
+    index('access_management_event_transaction_idx').on(table.transactionId, table.tenantId, table.userId),
     check(
       'access_management_event_kind_check',
       sql`${table.kind} IN ('revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant')`,

@@ -45,6 +45,8 @@ export interface DecideAccessManagementAuthorizationInput {
   readonly requestedValidUntil?: Date | null | undefined;
   readonly grantScope?: AccessManagementGrantScope | undefined;
   readonly revokedGrantScope?: AccessManagementRevokedGrantScope | null | undefined;
+  /** Zaufany receipt dokładnie tej samej komendy/aktora; nigdy pole żądania klienta. */
+  readonly replayOccurredAt?: Date | undefined;
   readonly now: Date;
 }
 
@@ -65,6 +67,10 @@ export function decideAccessManagementAuthorization(
   }
 
   const now = input.now.getTime();
+  const replayAt = input.replayOccurredAt;
+  if (replayAt !== undefined && (!isValidDate(replayAt) || replayAt.getTime() > now)) {
+    return { allowed: false, reason: 'authorization_context_invalid' };
+  }
   const actorMembership = input.actorMembership;
   if (
     actorMembership === null ||
@@ -103,7 +109,7 @@ export function decideAccessManagementAuthorization(
 
     case 'reactivate_membership': {
       const requestedEnd = input.requestedValidUntil ?? null;
-      if (requestedEnd !== null && (!isValidDate(requestedEnd) || requestedEnd.getTime() <= now)) {
+      if (requestedEnd !== null && (!isValidDate(requestedEnd) || requestedEnd.getTime() <= (replayAt?.getTime() ?? now))) {
         return { allowed: false, reason: 'authorization_context_invalid' };
       }
       if (!isEndWithinDelegatorLimit(requestedEnd, actorMembership.validUntil)) {
@@ -123,9 +129,9 @@ export function decideAccessManagementAuthorization(
       ) {
         return { allowed: false, reason: 'authorization_context_invalid' };
       }
-      const effectiveStart = scope.validFrom === null ? now : scope.validFrom.getTime();
+      const effectiveStart = scope.validFrom?.getTime() ?? replayAt?.getTime() ?? now;
       if (
-        effectiveStart < now ||
+        (replayAt === undefined && effectiveStart < now) ||
         (scope.validUntil !== null && scope.validUntil.getTime() <= effectiveStart)
       ) {
         return { allowed: false, reason: 'authorization_context_invalid' };

@@ -1,7 +1,10 @@
 # 28. Audyt bezpieczeństwa — kandydat 6D-3C
 
-Kontrakt: [ADR-009](adr/009-atomowy-audyt-decyzji.md). Migracja 0005 rozszerza
-0004; historyczne 0000–0003 i opublikowane 0004 nie są zmienione.
+Kontrakt: [ADR-009](adr/009-atomowy-audyt-decyzji.md). Integracja SEC-01/02/03 dodaje
+0006 i zachowuje historyczne 0000–0005 z #31. Wymaga wspólnej wersji
+SQL/application/ACL. [Decyzje i aktualny handoff](30-security-foundation-integracja.md).
+Rzeczywiste OLD/NEW w receipt,
+retry bez DML oraz scenariusze QA **NOT RUN**: [docs/29](29-sec01-sec02-kontrakt-efektow.md).
 
 | Ścieżka | Audyt | Awaria |
 | --- | --- | --- |
@@ -9,7 +12,8 @@ Kontrakt: [ADR-009](adr/009-atomowy-audyt-decyzji.md). Migracja 0005 rozszerza
 | Spoofing nagłówków/brak Bearer | kind=transport, actor=NULL | 503, brak dostępu |
 | Firma allow | Ta sama TX co callback, outcome=committed | Rollback efektu |
 | Firma deny | Oddzielna TX po rollbacku, outcome=denied | Fail-closed, audit_unavailable |
-| Autoryzowana operacja z błędem | Oddzielna TX, allow/rolled_back | Brak deklaracji trwałego śladu przy awarii DB |
+| Autoryzowana operacja z potwierdzonym rollbackiem | Oddzielna TX po potwierdzonym ROLLBACK, allow/rolled_back | Brak deklaracji trwałego śladu przy awarii DB |
+| Niepewny wynik zakończenia TX (np. utrata potwierdzenia po COMMIT) | Best-effort allow/outcome_unknown (`reason=transaction_outcome_unknown`, `access_management_operation_id=NULL`), nigdy `rolled_back` | Fail-closed 503, brak automatycznego ponowienia callbacku |
 | Zmiana dostępu allow | access_management_event + security_decision_event w TX | Rollback obu wpisów i mutacji |
 | Idempotentne powtórzenie | Nowa decyzja z FK do istniejącej operacji | Bez powielenia mutacji |
 
@@ -28,7 +32,7 @@ Macierz uzupełniająca do docs/27:
 | security_decision_event | INSERT tylko pod podpisem dokładnych metadanych; brak odczytu/zmiany/usuwania/TRUNCATE |
 | pap_stamp_security_event | Bez bezpośredniego EXECUTE, BEFORE INSERT nadaje czas i txid |
 | pap_require_security_audit | Bez bezpośredniego EXECUTE; mały definer z pinowanym search_path, kontrola przy COMMIT |
-| access_management_event INSERT | Osobny podpis state_change/receipt, nie sama asercja komendy |
+| access_management_event INSERT | Wyłącznie executor SQL z podpisanej komendy; runtime nie dostarcza receipt/state_change |
 
 Audyt nie przechowuje FK do tenanta/aktora dla odmów: próba obcej lub nieistniejącej
 firmy także wymaga śladu, a czasowa niedostępność konta nie może go skasować.
