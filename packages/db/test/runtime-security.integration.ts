@@ -156,6 +156,7 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS i pula', () => {
       executeAuthorizedCompanyAction(
         {
           rawBearerToken: 'synthetic-token',
+          operationId,
           tenantId: tenantA,
           legalEntityId: entityA,
           action: 'write',
@@ -191,6 +192,7 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS i pula', () => {
       await executeAuthorizedCompanyAction(
         {
           rawBearerToken: 'synthetic-token',
+          operationId,
           tenantId: tenantB,
           legalEntityId: entityB,
           action: 'write',
