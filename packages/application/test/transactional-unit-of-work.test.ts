@@ -73,6 +73,19 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         legalEntityId: ENTITY_A1,
         action: 'admin' as unknown as 'read',
       },
+      {
+        rawBearerToken: 'token',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write' as const,
+      },
+      {
+        rawBearerToken: 'token',
+        operationId: 'zly',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write' as const,
+      },
     ]) {
       await expect(
         executeAuthorizedCompanyAction(
@@ -185,6 +198,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     };
 
     const mutableInput = {
+      operationId: id(99),
       rawBearerToken: 'valid-jwt',
       tenantId: TENANT_A,
       legalEntityId: ENTITY_A1,
@@ -196,6 +210,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       {
         verifier: {
           verifyAccessToken: async () => {
+            mutableInput.operationId = id(998);
             mutableInput.action = 'read';
             mutableInput.tenantId = tenantId(id(999));
             events.push('verifyAccessToken');
@@ -231,6 +246,8 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       status: 'allowed',
       reason: 'explicit_company_grant',
       context: {
+        operationId: id(99),
+        decisionAt: DB_NOW.toISOString(),
         userId: USER_A,
         tenantId: TENANT_A,
         legalEntityId: ENTITY_A1,
@@ -242,6 +259,13 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         },
       },
       data: { invoiceCount: 3 },
+    });
+    expect(tx.applySessionContext).toHaveBeenCalledWith({
+      operationId: id(99),
+      decisionAt: DB_NOW.toISOString(),
+      actorUserId: USER_A,
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A1,
     });
     expect(events).toEqual([
       'verifyAccessToken',
@@ -800,6 +824,10 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       allowed: true,
       status: 'allowed',
       reason: 'explicit_company_grant',
+      context: {
+        operationId: opId,
+        decisionAt: DB_NOW.toISOString(),
+      },
       data: { created: false, record: { probe: 'syntetyczny-zapis' } },
     });
     expect(persistedOperations.size).toBe(1);
