@@ -243,6 +243,46 @@ export function roundTaxAmountOrdynacjaArt63(amountGrosze: number): TaxRoundingR
 }
 
 /**
+ * Zaokrąglanie ze znakiem do pełnych złotych wg art. 63 § 1 Ordynacji podatkowej dla pól typu `TKwotaC`
+ * (np. `P_38` i `P_48` w części deklaracyjnej `JPK_V7M(2)` / `JPK_V7M(3)`, które mogą przyjmować wartości ujemne
+ * przy przewadze faktur korygujących `in minus`):
+ * - dla `grosze >= 0`: `Math.floor((grosze + 50) / 100) * 100`
+ * - dla `grosze < 0`: `-Math.floor((Math.abs(grosze) + 50) / 100) * 100` (bez `-0`).
+ */
+export function roundSignedTaxAmountPln(amountGrosze: number): TaxRoundingResult {
+  assertSafeGrosze(amountGrosze, 'amountGrosze');
+  if (amountGrosze === 0) {
+    return {
+      inputGrosze: 0,
+      roundedFullPln: 0,
+      roundedGrosze: 0,
+    };
+  }
+
+  const isNegative = amountGrosze < 0;
+  const absBig = BigInt(isNegative ? -amountGrosze : amountGrosze);
+  const roundedAbsPln = (absBig + 50n) / 100n;
+
+  if (roundedAbsPln === 0n) {
+    return {
+      inputGrosze: amountGrosze,
+      roundedFullPln: 0,
+      roundedGrosze: 0,
+    };
+  }
+
+  const signedPlnBig = isNegative ? -roundedAbsPln : roundedAbsPln;
+  const roundedFullPln = bigintToSafeNumber(signedPlnBig, 'roundSignedTaxAmountPln(fullPln)');
+  const roundedGrosze = bigintToSafeNumber(signedPlnBig * 100n, 'roundSignedTaxAmountPln(grosze)');
+
+  return {
+    inputGrosze: amountGrosze,
+    roundedFullPln,
+    roundedGrosze,
+  };
+}
+
+/**
  * Formatuje kwotę z groszy do czytelnego polskiego zapisu walutowego, np. `123456 -> "1 234,56 zł"`.
  */
 export function formatPlnFromGrosze(
@@ -307,10 +347,7 @@ const NIP_WEIGHTS = [6, 5, 7, 2, 3, 4, 5, 6, 7] as const;
  * Waliduje polski Numer Identyfikacji Podatkowej (NIP) z kontrolą sumy kontrolnej modulo 11.
  */
 export function validatePolishNip(rawNip: string): NipValidationResult {
-  const normalized = rawNip
-    .trim()
-    .replace(/^PL/i, '')
-    .replace(/[\s-]/g, '');
+  const normalized = rawNip.trim().replace(/^PL/i, '').replace(/[\s-]/g, '');
 
   if (!/^\d{10}$/.test(normalized)) {
     return {

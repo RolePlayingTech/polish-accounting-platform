@@ -145,7 +145,7 @@ export function parsePolishBankCsv(csvContent: string): readonly BankStatementTr
       throw new Error(`Transakcja CSV w wierszu ${String(index + 1)} ma zerową kwotę.`);
     }
 
-    const currency = ((cols[currencyIdx] ?? 'PLN').trim().toUpperCase() || 'PLN');
+    const currency = (cols[currencyIdx] ?? 'PLN').trim().toUpperCase() || 'PLN';
     if (currency !== 'PLN') {
       throw new Error(
         `Nieobsługiwana waluta wyciągu CSV w wierszu ${String(index + 1)}: "${currency}" (wymagane PLN).`,
@@ -185,7 +185,10 @@ function parseYyMmDdToIso(yymmdd: string): string {
   return assertValidIsoCalendarDate(`${String(year)}-${mm}-${dd}`, 'mt940Date');
 }
 
-function parseMt940BalanceTag(value: string): { readonly currency: string; readonly signedGrosze: number } {
+function parseMt940BalanceTag(value: string): {
+  readonly currency: string;
+  readonly signedGrosze: number;
+} {
   const match = /^([CD])(\d{6})([A-Z]{3})([\d,]+)$/.exec(value.trim());
   if (!match) {
     throw new Error(`Nieprawidłowy format pola salda MT940 (:60F:/:62F:): "${value}"`);
@@ -320,7 +323,9 @@ export function parseMt940Statement(mt940Content: string): Mt940ParsedStatement 
       const entryMmDd = txMatch[2];
       const bookingDate =
         entryMmDd !== undefined
-          ? assertValidIsoCalendarDate(`${valueDate.slice(0, 4)}-${entryMmDd.slice(0, 2)}-${entryMmDd.slice(2, 4)}`)
+          ? assertValidIsoCalendarDate(
+              `${valueDate.slice(0, 4)}-${entryMmDd.slice(0, 2)}-${entryMmDd.slice(2, 4)}`,
+            )
           : valueDate;
       const dcMark = txMatch[3]!;
       const amountStr = txMatch[5]!;
@@ -328,8 +333,7 @@ export function parseMt940Statement(mt940Content: string): Mt940ParsedStatement 
 
       const amountGrosze = parsePlnToGrosze(amountStr);
       // C = uznanie (credit), D = obciążenie (debit), RC = storno uznania (debit), RD = storno obciążenia (credit)
-      const direction: 'credit' | 'debit' =
-        dcMark === 'C' || dcMark === 'RD' ? 'credit' : 'debit';
+      const direction: 'credit' | 'debit' = dcMark === 'C' || dcMark === 'RD' ? 'credit' : 'debit';
 
       let raw86 = '';
       if (blocks[i + 1]?.tag === '86') {
@@ -396,11 +400,7 @@ export interface OpenInvoiceSettlementItem {
 }
 
 export type BankReconciliationStatus =
-  | 'matched_exact'
-  | 'matched_partial'
-  | 'overpaid'
-  | 'ambiguous_manual_review'
-  | 'unmatched';
+  'matched_exact' | 'matched_partial' | 'overpaid' | 'ambiguous_manual_review' | 'unmatched';
 
 export interface BankReconciliationMatch {
   readonly transactionId: string;
@@ -430,9 +430,7 @@ function titleContainsDocumentNumber(title: string, documentNumber: string): boo
     .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     .replace(/\//g, '\\s*/\\s*')
     .replace(/-/g, '\\s*-\\s*');
-  const boundaryRegex = new RegExp(
-    `(^|[^A-Z0-9ĄĆĘŁŃÓŚŹŻ])${escaped}($|[^A-Z0-9ĄĆĘŁŃÓŚŹŻ])`,
-  );
+  const boundaryRegex = new RegExp(`(^|[^A-Z0-9ĄĆĘŁŃÓŚŹŻ])${escaped}($|[^A-Z0-9ĄĆĘŁŃÓŚŹŻ])`);
   return boundaryRegex.test(title.toUpperCase());
 }
 
@@ -457,8 +455,7 @@ export function reconcileBankTransactions(
     const expectedDocDirection = tx.direction === 'credit' ? 'sales' : 'purchase';
     const activeItems = openItems.filter(
       (item) =>
-        item.direction === expectedDocDirection &&
-        (remainingByDoc.get(item.documentId) ?? 0) > 0,
+        item.direction === expectedDocDirection && (remainingByDoc.get(item.documentId) ?? 0) > 0,
     );
 
     // Krok 1: Wyszukanie po numerze dokumentu w tytule przelewu

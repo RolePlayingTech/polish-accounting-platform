@@ -3,6 +3,7 @@ import {
   AccountingDocumentSchema,
   BankReconciliationMatchSchema,
   BankStatementTransactionSchema,
+  IsoCalendarDateSchema,
   JournalEntrySchema,
   KpirEntrySchema,
   LegalExplanationSchema,
@@ -380,5 +381,20 @@ describe('@pap/contracts — legal rules & accounting schemas', () => {
       notes: 'Dopasowano dokładnie.',
     });
     expect(match.status).toBe('matched_exact');
+  });
+
+  it('rejects impossible calendar dates in IsoCalendarDateSchema (e.g. 2026-02-31, 2025-02-29) while accepting leap day 2024-02-29', () => {
+    expect(IsoCalendarDateSchema.parse('2026-02-28')).toBe('2026-02-28');
+    expect(IsoCalendarDateSchema.parse('2024-02-29')).toBe('2024-02-29');
+
+    expect(() => IsoCalendarDateSchema.parse('2026-02-31')).toThrow(
+      /Nieistniejąca data kalendarzowa/,
+    );
+    expect(() => IsoCalendarDateSchema.parse('2025-02-29')).toThrow(
+      /Nieistniejąca data kalendarzowa/,
+    );
+    expect(() => IsoCalendarDateSchema.parse('2026-04-31')).toThrow(
+      /Nieistniejąca data kalendarzowa/,
+    );
   });
 });

@@ -90,11 +90,7 @@ export function calculateMonthlyZusContributions(
   const accidentRateBps = input.customAccidentRateBps ?? defaultAccidentRateBps;
 
   if (insuredCount >= 10 || accidentRateBps !== defaultAccidentRateBps) {
-    const iwaRule = resolveRuleAtDate(
-      'ZUS_INDIVIDUAL_ACCIDENT_RATE_IWA',
-      eventDate,
-      ruleOptions,
-    );
+    const iwaRule = resolveRuleAtDate('ZUS_INDIVIDUAL_ACCIDENT_RATE_IWA', eventDate, ruleOptions);
     appliedRules.push(iwaRule);
   }
 
@@ -119,10 +115,7 @@ export function calculateMonthlyZusContributions(
 
   let socialContributionBaseGrosze = minimumSocialBaseGrosze;
   if (input.zusScheme !== 'ulga_na_start' && input.declaredHigherSocialBaseGrosze !== undefined) {
-    assertNonNegativeGrosze(
-      input.declaredHigherSocialBaseGrosze,
-      'declaredHigherSocialBaseGrosze',
-    );
+    assertNonNegativeGrosze(input.declaredHigherSocialBaseGrosze, 'declaredHigherSocialBaseGrosze');
     if (input.declaredHigherSocialBaseGrosze < minimumSocialBaseGrosze) {
       throw new Error(
         `Zadeklarowana podstawa wymiaru ZUS (${formatPlnFromGrosze(input.declaredHigherSocialBaseGrosze)}) nie może być niższa od minimum ustawowego (${formatPlnFromGrosze(minimumSocialBaseGrosze)}).`,
@@ -263,7 +256,8 @@ export function calculateMonthlyZusContributions(
     {
       stepNumber: 1,
       label: `Ustalenie podstawy i kwot składek społecznych ZUS (${input.zusScheme})`,
-      formula: 'społeczne = emerytalna (19,52%) + rentowa (8,00%) + chorobowa (2,45% opcj.) + wypadkowa',
+      formula:
+        'społeczne = emerytalna (19,52%) + rentowa (8,00%) + chorobowa (2,45% opcj.) + wypadkowa',
       inputs: {
         zusScheme: input.zusScheme,
         socialContributionBaseGrosze,

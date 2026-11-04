@@ -143,8 +143,18 @@ describe('full-ledger (UoR) & CIT — double-entry invariants, Trial Balance, P&
       documentNumber: 'AKT/01',
       description: 'Wpłata kapitału zakładowego',
       lines: [
-        { accountCode: '130', side: 'Wn', amountGrosze: 5_000_000, description: 'Rachunek bieżący' },
-        { accountCode: '800', side: 'Ma', amountGrosze: 5_000_000, description: 'Kapitał zakładowy' },
+        {
+          accountCode: '130',
+          side: 'Wn',
+          amountGrosze: 5_000_000,
+          description: 'Rachunek bieżący',
+        },
+        {
+          accountCode: '800',
+          side: 'Ma',
+          amountGrosze: 5_000_000,
+          description: 'Kapitał zakładowy',
+        },
       ],
     });
 
@@ -159,7 +169,12 @@ describe('full-ledger (UoR) & CIT — double-entry invariants, Trial Balance, P&
       lines: [
         { accountCode: '010', side: 'Wn', amountGrosze: 1_000_000, description: 'Środek trwały' },
         { accountCode: '221-2', side: 'Wn', amountGrosze: 230_000, description: 'VAT naliczony' },
-        { accountCode: '202', side: 'Ma', amountGrosze: 1_230_000, description: 'Zobowiązanie wobec dostawcy' },
+        {
+          accountCode: '202',
+          side: 'Ma',
+          amountGrosze: 1_230_000,
+          description: 'Zobowiązanie wobec dostawcy',
+        },
       ],
     });
 
@@ -186,8 +201,18 @@ describe('full-ledger (UoR) & CIT — double-entry invariants, Trial Balance, P&
       documentNumber: 'FV/2026/04/01',
       description: 'Sprzedaż usług programistycznych',
       lines: [
-        { accountCode: '201', side: 'Wn', amountGrosze: 2_460_000, description: 'Należność od odbiorcy' },
-        { accountCode: '700', side: 'Ma', amountGrosze: 2_000_000, description: 'Przychód ze sprzedaży usług' },
+        {
+          accountCode: '201',
+          side: 'Wn',
+          amountGrosze: 2_460_000,
+          description: 'Należność od odbiorcy',
+        },
+        {
+          accountCode: '700',
+          side: 'Ma',
+          amountGrosze: 2_000_000,
+          description: 'Przychód ze sprzedaży usług',
+        },
         { accountCode: '221-1', side: 'Ma', amountGrosze: 460_000, description: 'VAT należny' },
       ],
     });
@@ -221,7 +246,12 @@ describe('full-ledger (UoR) & CIT — double-entry invariants, Trial Balance, P&
         description: 'Niezbilansowany dekret',
         lines: [
           { accountCode: '130', side: 'Wn', amountGrosze: 100_000, description: 'Bank' },
-          { accountCode: '700', side: 'Ma', amountGrosze: 99_999, description: 'Przychód o 1 gr za mało' },
+          {
+            accountCode: '700',
+            side: 'Ma',
+            amountGrosze: 99_999,
+            description: 'Przychód o 1 gr za mało',
+          },
         ],
       }),
     ).toThrow(DoubleEntryValidationError);
@@ -469,6 +499,8 @@ describe('bank-reconciliation — Polish CSV & MT940 parsers and deterministic i
     expect(parsed.transactions[1]?.direction).toBe('debit');
 
     const corruptedMt940 = mt940.replace(':62F:C260430PLN12000,00', ':62F:C260430PLN99999,00');
-    expect(() => parseMt940Statement(corruptedMt940)).toThrow(/Niezgodność kontrolna wyciągu MT940/);
+    expect(() => parseMt940Statement(corruptedMt940)).toThrow(
+      /Niezgodność kontrolna wyciągu MT940/,
+    );
   });
 });

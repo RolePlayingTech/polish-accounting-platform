@@ -15,14 +15,7 @@ import type {
 import { formatPlnFromGrosze } from '../money.js';
 
 export type TaxObligationCategory =
-  | 'vat'
-  | 'pit'
-  | 'ryczalt'
-  | 'cit'
-  | 'zus'
-  | 'jpk_income_tax'
-  | 'ksef'
-  | 'edoreczenia';
+  'vat' | 'pit' | 'ryczalt' | 'cit' | 'zus' | 'jpk_income_tax' | 'ksef' | 'edoreczenia';
 
 export interface ShiftedNonWorkingDay {
   readonly date: string;
@@ -68,9 +61,7 @@ function formatUtcDate(date: Date): string {
 }
 
 function addDaysUtc(date: Date, days: number): Date {
-  return new Date(
-    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + days),
-  );
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + days));
 }
 
 /**
@@ -317,10 +308,7 @@ export function generateTaxCalendarObligations(
   }
 
   // 2. Podatek dochodowy (PIT zaliczka / Ryczałt / CIT zaliczka — do 20. dnia następnego miesiąca)
-  if (
-    profile.profileCode === 'jdg_kpir_skala' ||
-    profile.profileCode === 'jdg_kpir_liniowy'
-  ) {
+  if (profile.profileCode === 'jdg_kpir_skala' || profile.profileCode === 'jdg_kpir_liniowy') {
     const pitDeadlineRule = resolveRuleAtDate(
       'PIT_ADVANCE_DEADLINE_ART_44',
       eventDate,

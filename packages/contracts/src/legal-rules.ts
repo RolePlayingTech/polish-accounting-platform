@@ -1,8 +1,27 @@
 import { z } from 'zod';
 
+function isRealUtcCalendarDate(dateStr: string): boolean {
+  const parts = dateStr.split('-').map(Number);
+  const year = parts[0];
+  const month = parts[1];
+  const day = parts[2];
+  if (year === undefined || month === undefined || day === undefined) {
+    return false;
+  }
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() + 1 === month &&
+    parsed.getUTCDate() === day
+  );
+}
+
 export const IsoCalendarDateSchema = z
   .string()
-  .regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, 'Wymagany format daty YYYY-MM-DD');
+  .regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/, 'Wymagany format daty YYYY-MM-DD')
+  .refine(isRealUtcCalendarDate, {
+    message: 'Nieistniejąca data kalendarzowa (weryfikacja UTC YYYY-MM-DD)',
+  });
 
 export const TaxPeriodMonthSchema = z
   .string()

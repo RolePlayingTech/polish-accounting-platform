@@ -163,9 +163,9 @@ describe('kpir & pit — expense qualification, corrections, period summaries & 
     expect(res.roundedTaxBaseFullPln).toBe(150_000);
     expect(res.cumulativeTaxGrosze).toBe(2_040_000); // 20 400,00 zł
     expect(res.advanceDueGrosze).toBe(840_000); // 8 400,00 zł
-    expect(
-      res.explanation.warnings.some((w) => w.code === 'PIT_SECOND_BRACKET_32_EXCEEDED'),
-    ).toBe(true);
+    expect(res.explanation.warnings.some((w) => w.code === 'PIT_SECOND_BRACKET_32_EXCEEDED')).toBe(
+      true,
+    );
   });
 
   it('enforces annual health deduction cap on 19% flat tax: 12 900 zł in 2025 vs 14 100 zł in 2026', () => {

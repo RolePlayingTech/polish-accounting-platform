@@ -1,8 +1,5 @@
 export type TaxProfileCode =
-  | 'jdg_kpir_skala'
-  | 'jdg_kpir_liniowy'
-  | 'jdg_ryczalt'
-  | 'spzoo_pelne_ksiegi';
+  'jdg_kpir_skala' | 'jdg_kpir_liniowy' | 'jdg_ryczalt' | 'spzoo_pelne_ksiegi';
 
 export type ProfileSupportLevel = 'supported' | 'reviewed' | 'experimental' | 'planned';
 

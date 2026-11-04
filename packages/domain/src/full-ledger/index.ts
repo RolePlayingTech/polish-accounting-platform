@@ -24,13 +24,7 @@ import {
 export type LedgerSide = 'Wn' | 'Ma';
 export type AccountClassGroup = 0 | 1 | 2 | 3 | 4 | 7 | 8;
 export type AccountNature =
-  | 'asset'
-  | 'contra_asset'
-  | 'liability'
-  | 'equity'
-  | 'revenue'
-  | 'expense'
-  | 'tax_expense';
+  'asset' | 'contra_asset' | 'liability' | 'equity' | 'revenue' | 'expense' | 'tax_expense';
 
 export interface LedgerAccountDefinition {
   readonly code: string;
@@ -46,7 +40,12 @@ export const STANDARD_SPZOO_CHART_OF_ACCOUNTS: readonly LedgerAccountDefinition[
   // Zespół 0 — Aktywa trwałe
   { code: '010', name: 'Środki trwałe', classGroup: 0, nature: 'asset' },
   { code: '020', name: 'Wartości niematerialne i prawne', classGroup: 0, nature: 'asset' },
-  { code: '070', name: 'Umorzenie środków trwałych oraz WNiP', classGroup: 0, nature: 'contra_asset' },
+  {
+    code: '070',
+    name: 'Umorzenie środków trwałych oraz WNiP',
+    classGroup: 0,
+    nature: 'contra_asset',
+  },
   { code: '080', name: 'Środki trwałe w budowie', classGroup: 0, nature: 'asset' },
 
   // Zespół 1 — Środki pieniężne i rachunki bankowe
@@ -58,12 +57,27 @@ export const STANDARD_SPZOO_CHART_OF_ACCOUNTS: readonly LedgerAccountDefinition[
   // Zespół 2 — Rozrachunki i roszczenia
   { code: '201', name: 'Rozrachunki z odbiorcami krajowymi', classGroup: 2, nature: 'asset' },
   { code: '202', name: 'Rozrachunki z dostawcami krajowymi', classGroup: 2, nature: 'liability' },
-  { code: '220', name: 'Rozrachunki publicznoprawne z Urzędem Skarbowym', classGroup: 2, nature: 'liability' },
+  {
+    code: '220',
+    name: 'Rozrachunki publicznoprawne z Urzędem Skarbowym',
+    classGroup: 2,
+    nature: 'liability',
+  },
   { code: '221-1', name: 'VAT należny', classGroup: 2, nature: 'liability' },
   { code: '221-2', name: 'VAT naliczony i jego rozliczenie', classGroup: 2, nature: 'asset' },
-  { code: '229', name: 'Pozostałe rozrachunki publicznoprawne (ZUS)', classGroup: 2, nature: 'liability' },
+  {
+    code: '229',
+    name: 'Pozostałe rozrachunki publicznoprawne (ZUS)',
+    classGroup: 2,
+    nature: 'liability',
+  },
   { code: '230', name: 'Rozrachunki z tytułu wynagrodzeń', classGroup: 2, nature: 'liability' },
-  { code: '240', name: 'Pozostałe rozrachunki (w tym z udziałowcami)', classGroup: 2, nature: 'liability' },
+  {
+    code: '240',
+    name: 'Pozostałe rozrachunki (w tym z udziałowcami)',
+    classGroup: 2,
+    nature: 'liability',
+  },
 
   // Zespół 3 — Materiały i towary
   { code: '300', name: 'Rozliczenie zakupu', classGroup: 3, nature: 'liability' },
@@ -76,13 +90,23 @@ export const STANDARD_SPZOO_CHART_OF_ACCOUNTS: readonly LedgerAccountDefinition[
   { code: '402', name: 'Usługi obce', classGroup: 4, nature: 'expense' },
   { code: '403', name: 'Podatki i opłaty', classGroup: 4, nature: 'expense' },
   { code: '404', name: 'Wynagrodzenia', classGroup: 4, nature: 'expense' },
-  { code: '405', name: 'Ubezpieczenia społeczne i inne świadczenia', classGroup: 4, nature: 'expense' },
+  {
+    code: '405',
+    name: 'Ubezpieczenia społeczne i inne świadczenia',
+    classGroup: 4,
+    nature: 'expense',
+  },
   { code: '409', name: 'Pozostałe koszty rodzajowe', classGroup: 4, nature: 'expense' },
 
   // Zespół 7 — Przychody i koszty związane z ich osiągnięciem
   { code: '700', name: 'Przychody netto ze sprzedaży usług', classGroup: 7, nature: 'revenue' },
   { code: '730', name: 'Przychody netto ze sprzedaży towarów', classGroup: 7, nature: 'revenue' },
-  { code: '731', name: 'Wartość sprzedanych towarów w cenach zakupu', classGroup: 7, nature: 'expense' },
+  {
+    code: '731',
+    name: 'Wartość sprzedanych towarów w cenach zakupu',
+    classGroup: 7,
+    nature: 'expense',
+  },
   { code: '750', name: 'Przychody finansowe', classGroup: 7, nature: 'revenue' },
   { code: '751', name: 'Koszty finansowe', classGroup: 7, nature: 'expense' },
   { code: '760', name: 'Pozostałe przychody operacyjne', classGroup: 7, nature: 'revenue' },
@@ -91,9 +115,19 @@ export const STANDARD_SPZOO_CHART_OF_ACCOUNTS: readonly LedgerAccountDefinition[
   // Zespół 8 — Kapitały (fundusze) własne, wynik finansowy i CIT
   { code: '800', name: 'Kapitał zakładowy', classGroup: 8, nature: 'equity' },
   { code: '811', name: 'Kapitał zapasowy', classGroup: 8, nature: 'equity' },
-  { code: '820', name: 'Rozliczenie wyniku finansowego z lat ubiegłych', classGroup: 8, nature: 'equity' },
+  {
+    code: '820',
+    name: 'Rozliczenie wyniku finansowego z lat ubiegłych',
+    classGroup: 8,
+    nature: 'equity',
+  },
   { code: '860', name: 'Wynik finansowy', classGroup: 8, nature: 'equity' },
-  { code: '870', name: 'Podatek dochodowy od osób prawnych (CIT)', classGroup: 8, nature: 'tax_expense' },
+  {
+    code: '870',
+    name: 'Podatek dochodowy od osób prawnych (CIT)',
+    classGroup: 8,
+    nature: 'tax_expense',
+  },
 ];
 
 export interface JournalEntryLine {

@@ -33,6 +33,184 @@ export type KpirExpenseQualificationKind =
   | 'research_development_col16'
   | 'nkup_excluded';
 
+export type KpirRegulationVersion = 'pkpir_2019_17col' | 'pkpir_2026_ksef';
+
+export interface KpirColumnDescriptor {
+  readonly columnNumber: number;
+  readonly semanticKey: string;
+  readonly label: string;
+}
+
+export interface KpirColumnLayout {
+  readonly regulationVersion: KpirRegulationVersion;
+  readonly totalColumns: 17 | 19;
+  readonly ordinalCol: number;
+  readonly eventDateCol: number;
+  readonly ksefReferenceCol?: number;
+  readonly documentNumberCol: number;
+  readonly counterpartyNipCol?: number;
+  readonly counterpartyNameCol: number;
+  readonly counterpartyAddressCol: number;
+  readonly eventDescriptionCol: number;
+  readonly salesRevenueCol: number;
+  readonly otherRevenueCol: number;
+  readonly totalRevenueCol: number;
+  readonly goodsAndMaterialsCol: number;
+  readonly incidentalCostsCol: number;
+  readonly remunerationCol: number;
+  readonly otherExpensesCol: number;
+  readonly totalExpensesCol: number;
+  readonly freeCol: number;
+  readonly researchDevelopmentCol: number;
+  readonly remarksCol: number;
+  readonly columns: readonly KpirColumnDescriptor[];
+}
+
+const KPIR_2019_LAYOUT: KpirColumnLayout = {
+  regulationVersion: 'pkpir_2019_17col',
+  totalColumns: 17,
+  ordinalCol: 1,
+  eventDateCol: 2,
+  documentNumberCol: 3,
+  counterpartyNameCol: 4,
+  counterpartyAddressCol: 5,
+  eventDescriptionCol: 6,
+  salesRevenueCol: 7,
+  otherRevenueCol: 8,
+  totalRevenueCol: 9,
+  goodsAndMaterialsCol: 10,
+  incidentalCostsCol: 11,
+  remunerationCol: 12,
+  otherExpensesCol: 13,
+  totalExpensesCol: 14,
+  freeCol: 15,
+  researchDevelopmentCol: 16,
+  remarksCol: 17,
+  columns: [
+    { columnNumber: 1, semanticKey: 'ordinalNumber', label: 'Lp.' },
+    { columnNumber: 2, semanticKey: 'eventDate', label: 'Data zdarzenia gospodarczego' },
+    { columnNumber: 3, semanticKey: 'documentNumber', label: 'Nr dowodu księgowego' },
+    {
+      columnNumber: 4,
+      semanticKey: 'counterpartyName',
+      label: 'Imię i nazwisko (firma) kontrahenta',
+    },
+    { columnNumber: 5, semanticKey: 'counterpartyAddress', label: 'Adres kontrahenta' },
+    { columnNumber: 6, semanticKey: 'eventDescription', label: 'Opis zdarzenia gospodarczego' },
+    {
+      columnNumber: 7,
+      semanticKey: 'col7SalesRevenueGrosze',
+      label: 'Wartość sprzedanych towarów i usług',
+    },
+    { columnNumber: 8, semanticKey: 'col8OtherRevenueGrosze', label: 'Pozostałe przychody' },
+    { columnNumber: 9, semanticKey: 'col9TotalRevenueGrosze', label: 'Razem przychód (7 + 8)' },
+    {
+      columnNumber: 10,
+      semanticKey: 'col10GoodsAndMaterialsGrosze',
+      label: 'Zakup towarów handlowych i materiałów wg cen zakupu',
+    },
+    { columnNumber: 11, semanticKey: 'col11IncidentalCostsGrosze', label: 'Koszty uboczne zakupu' },
+    {
+      columnNumber: 12,
+      semanticKey: 'col12RemunerationGrosze',
+      label: 'Wynagrodzenia w gotówce i w naturze',
+    },
+    { columnNumber: 13, semanticKey: 'col13OtherExpensesGrosze', label: 'Pozostałe wydatki' },
+    { columnNumber: 14, semanticKey: 'col14TotalExpensesGrosze', label: 'Razem wydatki (12 + 13)' },
+    { columnNumber: 15, semanticKey: 'col15FreeColumnNote', label: 'Kolumna wolna' },
+    {
+      columnNumber: 16,
+      semanticKey: 'col16ResearchDevelopmentCostGrosze',
+      label: 'Koszty działalności badawczo-rozwojowej',
+    },
+    { columnNumber: 17, semanticKey: 'col17Remarks', label: 'Uwagi' },
+  ],
+};
+
+const KPIR_2026_LAYOUT: KpirColumnLayout = {
+  regulationVersion: 'pkpir_2026_ksef',
+  totalColumns: 19,
+  ordinalCol: 1,
+  eventDateCol: 2,
+  ksefReferenceCol: 3,
+  documentNumberCol: 4,
+  counterpartyNipCol: 5,
+  counterpartyNameCol: 6,
+  counterpartyAddressCol: 7,
+  eventDescriptionCol: 8,
+  salesRevenueCol: 9,
+  otherRevenueCol: 10,
+  totalRevenueCol: 11,
+  goodsAndMaterialsCol: 12,
+  incidentalCostsCol: 13,
+  remunerationCol: 14,
+  otherExpensesCol: 15,
+  totalExpensesCol: 16,
+  freeCol: 17,
+  researchDevelopmentCol: 18,
+  remarksCol: 19,
+  columns: [
+    { columnNumber: 1, semanticKey: 'ordinalNumber', label: 'Lp.' },
+    { columnNumber: 2, semanticKey: 'eventDate', label: 'Data zdarzenia gospodarczego' },
+    {
+      columnNumber: 3,
+      semanticKey: 'ksefReferenceNumber',
+      label: 'Nr identyfikujący fakturę wystawioną przy użyciu KSeF',
+    },
+    { columnNumber: 4, semanticKey: 'documentNumber', label: 'Nr dowodu księgowego' },
+    {
+      columnNumber: 5,
+      semanticKey: 'counterpartyNip',
+      label: 'Identyfikator podatkowy kontrahenta (NIP)',
+    },
+    {
+      columnNumber: 6,
+      semanticKey: 'counterpartyName',
+      label: 'Imię i nazwisko (firma) kontrahenta',
+    },
+    { columnNumber: 7, semanticKey: 'counterpartyAddress', label: 'Adres kontrahenta' },
+    { columnNumber: 8, semanticKey: 'eventDescription', label: 'Opis zdarzenia gospodarczego' },
+    {
+      columnNumber: 9,
+      semanticKey: 'col7SalesRevenueGrosze',
+      label: 'Wartość sprzedanych towarów i usług',
+    },
+    { columnNumber: 10, semanticKey: 'col8OtherRevenueGrosze', label: 'Pozostałe przychody' },
+    { columnNumber: 11, semanticKey: 'col9TotalRevenueGrosze', label: 'Razem przychód (9 + 10)' },
+    {
+      columnNumber: 12,
+      semanticKey: 'col10GoodsAndMaterialsGrosze',
+      label: 'Zakup towarów handlowych i materiałów wg cen zakupu',
+    },
+    { columnNumber: 13, semanticKey: 'col11IncidentalCostsGrosze', label: 'Koszty uboczne zakupu' },
+    {
+      columnNumber: 14,
+      semanticKey: 'col12RemunerationGrosze',
+      label: 'Wynagrodzenia w gotówce i w naturze',
+    },
+    { columnNumber: 15, semanticKey: 'col13OtherExpensesGrosze', label: 'Pozostałe wydatki' },
+    { columnNumber: 16, semanticKey: 'col14TotalExpensesGrosze', label: 'Razem wydatki (14 + 15)' },
+    { columnNumber: 17, semanticKey: 'col15FreeColumnNote', label: 'Kolumna wolna' },
+    {
+      columnNumber: 18,
+      semanticKey: 'col16ResearchDevelopmentCostGrosze',
+      label: 'Koszty działalności badawczo-rozwojowej',
+    },
+    { columnNumber: 19, semanticKey: 'col17Remarks', label: 'Uwagi' },
+  ],
+};
+
+/**
+ * Zwraca oficjalny układ numerów i etykiet kolumn PKPiR zależnie od obowiązującego rozporządzenia:
+ * - `pkpir_2019_17col` / `pkpir_2019` (do 2025-12-31, `Dz.U. 2019 poz. 2544`): kolumny 1..17
+ * - `pkpir_2026_ksef` (od 2026-01-01, `Dz.U. 2025 poz. 1299`): kolumny 1..19 (kol. 3 = Nr KSeF, kol. 5 = NIP kontrahenta).
+ */
+export function getKpirColumnLayout(
+  layoutVersion: KpirRegulationVersion | 'pkpir_2019',
+): KpirColumnLayout {
+  return layoutVersion === 'pkpir_2026_ksef' ? KPIR_2026_LAYOUT : KPIR_2019_LAYOUT;
+}
+
 export interface QualifyKpirExpenseInput {
   readonly eventDate: string;
   readonly qualificationKind: Exclude<KpirExpenseQualificationKind, 'none'>;
@@ -68,9 +246,41 @@ export function qualifyKpirExpense(input: QualifyKpirExpenseInput): QualifiedKpi
   assertSafeGrosze(input.netGrosze, 'netGrosze');
   assertSafeGrosze(input.vatGrosze, 'vatGrosze');
 
+  if (
+    (input.netGrosze > 0 && input.vatGrosze < 0) ||
+    (input.netGrosze < 0 && input.vatGrosze > 0)
+  ) {
+    throw new Error(
+      `Niezgodny znak kwoty netto (${String(input.netGrosze)} gr) i kwoty VAT (${String(input.vatGrosze)} gr) w kwalifikacji kosztu KPiR.`,
+    );
+  }
+
+  if (input.deductibleVatGrosze !== undefined) {
+    assertSafeGrosze(input.deductibleVatGrosze, 'deductibleVatGrosze');
+    if (input.vatGrosze >= 0 && input.deductibleVatGrosze < 0) {
+      throw new Error(
+        `Kwota odliczanego VAT (deductibleVatGrosze = ${String(input.deductibleVatGrosze)} gr) nie może być ujemna przy nieujemnej kwocie VAT (${String(input.vatGrosze)} gr).`,
+      );
+    }
+    if (input.vatGrosze < 0 && input.deductibleVatGrosze > 0) {
+      throw new Error(
+        `Niezgodny znak odliczanego VAT (deductibleVatGrosze = ${String(input.deductibleVatGrosze)} gr) względem korekty VAT in minus (${String(input.vatGrosze)} gr).`,
+      );
+    }
+    if (Math.abs(input.deductibleVatGrosze) > Math.abs(input.vatGrosze)) {
+      throw new Error(
+        `Kwota odliczanego VAT (${String(input.deductibleVatGrosze)} gr) nie może przekraczać kwoty VAT na dokumencie (${String(input.vatGrosze)} gr).`,
+      );
+    }
+  }
+
   const ruleOptions =
     input.customRegistry !== undefined ? { customRegistry: input.customRegistry } : undefined;
   const kpirRule = resolveRuleAtDate('KPIR_REGULATION_COLUMNS', input.eventDate, ruleOptions);
+  const rawRegVersion = getRequiredStringParameter(kpirRule, 'regulationVersion');
+  const layout = getKpirColumnLayout(
+    rawRegVersion === 'pkpir_2026_ksef' ? 'pkpir_2026_ksef' : 'pkpir_2019_17col',
+  );
   const appliedRules: LegalRule[] = [kpirRule];
 
   const grossGrosze = addGrosze(input.netGrosze, input.vatGrosze);
@@ -79,7 +289,6 @@ export function qualifyKpirExpense(input: QualifyKpirExpenseInput): QualifiedKpi
   if (!input.taxpayerVatActive) {
     nonDeductibleVat = input.vatGrosze;
   } else if (input.deductibleVatGrosze !== undefined) {
-    assertSafeGrosze(input.deductibleVatGrosze, 'deductibleVatGrosze');
     nonDeductibleVat = subtractGrosze(input.vatGrosze, input.deductibleVatGrosze);
   } else if (input.qualificationKind === 'vehicle_mixed_75_col13') {
     const vatVehicleRule = resolveRuleAtDate(
@@ -119,27 +328,39 @@ export function qualifyKpirExpense(input: QualifyKpirExpenseInput): QualifiedKpi
   let col12 = 0;
   let col13 = 0;
   let col16 = 0;
+  let targetColumnNumber = 0;
 
   switch (input.qualificationKind) {
     case 'goods_and_materials_col10':
       col10 = deductibleKupGrosze;
+      targetColumnNumber = layout.goodsAndMaterialsCol;
       break;
     case 'incidental_purchase_costs_col11':
       col11 = deductibleKupGrosze;
+      targetColumnNumber = layout.incidentalCostsCol;
       break;
     case 'remuneration_col12':
       col12 = deductibleKupGrosze;
+      targetColumnNumber = layout.remunerationCol;
       break;
     case 'other_expenses_100_col13':
     case 'vehicle_mixed_75_col13':
       col13 = deductibleKupGrosze;
+      targetColumnNumber = layout.otherExpensesCol;
       break;
     case 'research_development_col16':
       col16 = deductibleKupGrosze;
+      targetColumnNumber = layout.researchDevelopmentCol;
       break;
     case 'nkup_excluded':
+      targetColumnNumber = 0;
       break;
   }
+
+  const targetColSuffix =
+    targetColumnNumber > 0
+      ? ` — ujęcie w kolumnie ${String(targetColumnNumber)} PKPiR`
+      : ' — poza kolumnami KUP';
 
   const steps: ExplanationStep[] = [
     {
@@ -159,7 +380,7 @@ export function qualifyKpirExpense(input: QualifyKpirExpenseInput): QualifiedKpi
     },
     {
       stepNumber: 2,
-      label: 'Wyliczenie kwoty stanowiącej koszt uzyskania przychodów (KUP)',
+      label: `Wyliczenie kwoty stanowiącej koszt uzyskania przychodów (KUP${targetColSuffix})`,
       formula:
         input.qualificationKind === 'vehicle_mixed_75_col13'
           ? 'deductibleKup = round_half_up(expenseBase * 75%)'
@@ -169,6 +390,8 @@ export function qualifyKpirExpense(input: QualifyKpirExpenseInput): QualifiedKpi
       inputs: {
         qualificationKind: input.qualificationKind,
         expenseBaseForKupGrosze,
+        targetColumnNumber,
+        regulationVersion: layout.regulationVersion,
       },
       resultFormatted: formatPlnFromGrosze(deductibleKupGrosze),
       resultGrosze: deductibleKupGrosze,
@@ -177,7 +400,7 @@ export function qualifyKpirExpense(input: QualifyKpirExpenseInput): QualifiedKpi
 
   const explanation = buildLegalExplanation({
     calculationType: 'kpir_expense_qualification',
-    summary: `Kwalifikacja kosztu KPiR (${input.qualificationKind}): KUP = ${formatPlnFromGrosze(deductibleKupGrosze)}, NKUP = ${formatPlnFromGrosze(nonDeductibleNkupGrosze)}.`,
+    summary: `Kwalifikacja kosztu KPiR (${input.qualificationKind}${targetColumnNumber > 0 ? `, kol. ${String(targetColumnNumber)}` : ''}): KUP = ${formatPlnFromGrosze(deductibleKupGrosze)}, NKUP = ${formatPlnFromGrosze(nonDeductibleNkupGrosze)}.`,
     eventDate: input.eventDate,
     rules: appliedRules,
     steps,
@@ -191,6 +414,8 @@ export function qualifyKpirExpense(input: QualifyKpirExpenseInput): QualifiedKpi
       expenseBaseForKupGrosze,
       deductibleKupGrosze,
       nonDeductibleNkupGrosze,
+      targetColumnNumber,
+      regulationVersion: layout.regulationVersion,
     },
   });
 
@@ -291,7 +516,11 @@ export function createKpirEntry(input: CreateKpirEntryInput): KpirEntry {
 
   const isCorrection = input.isCorrection === true;
   if (isCorrection) {
-    if (!input.correctedEntryId || !input.correctionReason || input.correctionReason.trim().length === 0) {
+    if (
+      !input.correctedEntryId ||
+      !input.correctionReason ||
+      input.correctionReason.trim().length === 0
+    ) {
       throw new Error(
         'Zapis korygujący / storno w KPiR wymaga wskazania correctedEntryId oraz niepustego uzasadnienia correctionReason.',
       );
@@ -304,7 +533,10 @@ export function createKpirEntry(input: CreateKpirEntryInput): KpirEntry {
     input.col10GoodsAndMaterialsGrosze ?? 0,
     'col10GoodsAndMaterialsGrosze',
   );
-  const col11 = assertSafeGrosze(input.col11IncidentalCostsGrosze ?? 0, 'col11IncidentalCostsGrosze');
+  const col11 = assertSafeGrosze(
+    input.col11IncidentalCostsGrosze ?? 0,
+    'col11IncidentalCostsGrosze',
+  );
   const col12 = assertSafeGrosze(input.col12RemunerationGrosze ?? 0, 'col12RemunerationGrosze');
   const col13 = assertSafeGrosze(input.col13OtherExpensesGrosze ?? 0, 'col13OtherExpensesGrosze');
   const col16 = assertSafeGrosze(
@@ -312,7 +544,10 @@ export function createKpirEntry(input: CreateKpirEntryInput): KpirEntry {
     'col16ResearchDevelopmentCostGrosze',
   );
 
-  if (!isCorrection && (col7 < 0 || col8 < 0 || col10 < 0 || col11 < 0 || col12 < 0 || col13 < 0 || col16 < 0)) {
+  if (
+    !isCorrection &&
+    (col7 < 0 || col8 < 0 || col10 < 0 || col11 < 0 || col12 < 0 || col13 < 0 || col16 < 0)
+  ) {
     throw new Error(
       'Ujemne kwoty w KPiR są dopuszczalne wyłącznie dla jawnie oznaczonych wpisów korygujących / storna (isCorrection = true).',
     );
@@ -326,30 +561,43 @@ export function createKpirEntry(input: CreateKpirEntryInput): KpirEntry {
     input.customRegistry !== undefined ? { customRegistry: input.customRegistry } : undefined;
   const kpirRule = resolveRuleAtDate('KPIR_REGULATION_COLUMNS', input.eventDate, ruleOptions);
   const rawRegVersion = getRequiredStringParameter(kpirRule, 'regulationVersion');
-  const regulationVersion: 'pkpir_2019_17col' | 'pkpir_2026_ksef' =
+  const regulationVersion: KpirRegulationVersion =
     rawRegVersion === 'pkpir_2026_ksef' ? 'pkpir_2026_ksef' : 'pkpir_2019_17col';
+  const layout = getKpirColumnLayout(regulationVersion);
 
   const totalKupEntry = sumGrosze([col10, col11, col14]);
 
   const explanation = buildLegalExplanation({
     calculationType: 'kpir_entry_creation',
-    summary: `Zapis KPiR poz. ${String(input.ordinalNumber)} (${period}): przychód razem kol. 9 = ${formatPlnFromGrosze(col9)}, koszty KUP (kol. 10+11+14) = ${formatPlnFromGrosze(totalKupEntry)}.`,
+    summary: `Zapis KPiR poz. ${String(input.ordinalNumber)} (${period}, wzór ${String(layout.totalColumns)}-kolumnowy): przychód razem kol. ${String(layout.totalRevenueCol)} = ${formatPlnFromGrosze(col9)}, koszty KUP (kol. ${String(layout.goodsAndMaterialsCol)}+${String(layout.incidentalCostsCol)}+${String(layout.totalExpensesCol)}) = ${formatPlnFromGrosze(totalKupEntry)}.`,
     eventDate: input.eventDate,
     rules: [kpirRule],
     steps: [
       {
         stepNumber: 1,
-        label: 'Sumowanie przychodów (kolumna 9 = kolumna 7 + kolumna 8)',
-        formula: 'col9 = col7 + col8',
-        inputs: { col7, col8 },
+        label: `Sumowanie przychodów (kolumna ${String(layout.totalRevenueCol)} = kolumna ${String(layout.salesRevenueCol)} + kolumna ${String(layout.otherRevenueCol)})`,
+        formula: `col${String(layout.totalRevenueCol)} = col${String(layout.salesRevenueCol)} + col${String(layout.otherRevenueCol)}`,
+        inputs: {
+          salesRevenueGrosze: col7,
+          otherRevenueGrosze: col8,
+          salesRevenueCol: layout.salesRevenueCol,
+          otherRevenueCol: layout.otherRevenueCol,
+          totalRevenueCol: layout.totalRevenueCol,
+        },
         resultFormatted: formatPlnFromGrosze(col9),
         resultGrosze: col9,
       },
       {
         stepNumber: 2,
-        label: 'Sumowanie wydatków (kolumna 14 = kolumna 12 + kolumna 13) oraz łącznie KUP (kol. 10 + 11 + 14)',
-        formula: 'col14 = col12 + col13; totalKup = col10 + col11 + col14',
-        inputs: { col10, col11, col12, col13 },
+        label: `Sumowanie wydatków (kolumna ${String(layout.totalExpensesCol)} = kolumna ${String(layout.remunerationCol)} + kolumna ${String(layout.otherExpensesCol)}) oraz łącznie KUP (kol. ${String(layout.goodsAndMaterialsCol)} + ${String(layout.incidentalCostsCol)} + ${String(layout.totalExpensesCol)})`,
+        formula: `col${String(layout.totalExpensesCol)} = col${String(layout.remunerationCol)} + col${String(layout.otherExpensesCol)}; totalKup = col${String(layout.goodsAndMaterialsCol)} + col${String(layout.incidentalCostsCol)} + col${String(layout.totalExpensesCol)}`,
+        inputs: {
+          goodsAndMaterialsGrosze: col10,
+          incidentalCostsGrosze: col11,
+          remunerationGrosze: col12,
+          otherExpensesGrosze: col13,
+          totalColumns: layout.totalColumns,
+        },
         resultFormatted: formatPlnFromGrosze(totalKupEntry),
         resultGrosze: totalKupEntry,
       },
@@ -364,6 +612,7 @@ export function createKpirEntry(input: CreateKpirEntryInput): KpirEntry {
       col14TotalExpensesGrosze: col14,
       totalKupGrosze: totalKupEntry,
       regulationVersion,
+      totalColumns: layout.totalColumns,
     },
   });
 
@@ -543,9 +792,7 @@ export interface KpirPitAdvanceResult {
  * Oblicza zaliczkę miesięczną/kwartalną na podatek dochodowy PIT dla KPiR (Skala 12%/32% z kwotą wolną 30 000 zł
  * albo Podatek Liniowy 19% z rocznym limitem odliczenia składki zdrowotnej 12 900 zł w 2025 r. / 14 100 zł w 2026 r.).
  */
-export function calculateKpirPitAdvance(
-  input: CalculateKpirPitAdvanceInput,
-): KpirPitAdvanceResult {
+export function calculateKpirPitAdvance(input: CalculateKpirPitAdvanceInput): KpirPitAdvanceResult {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(input.period)) {
     throw new Error(`Nieprawidłowy okres zaliczki PIT: "${input.period}"`);
   }
@@ -594,7 +841,10 @@ export function calculateKpirPitAdvance(
     );
     appliedRules.push(healthLimitRule);
     const annualHealthCap = getRequiredNumericParameter(healthLimitRule, 'annualLimitGrosze');
-    const remainingCapForIncomeDeduction = Math.max(0, subtractGrosze(annualHealthCap, healthInKup));
+    const remainingCapForIncomeDeduction = Math.max(
+      0,
+      subtractGrosze(annualHealthCap, healthInKup),
+    );
     effectiveHealthDeduction = Math.min(healthPaid, remainingCapForIncomeDeduction);
 
     if (addGrosze(healthPaid, healthInKup) > annualHealthCap) {
@@ -668,8 +918,10 @@ export function calculateKpirPitAdvance(
     },
     {
       stepNumber: 2,
-      label: 'Pomniejszenie dochodu o zapłacone składki społeczne ZUS, stratę i (dla liniowego) składkę zdrowotną w limicie',
-      formula: 'taxableBase = round_ordynacja(max(0, ytdIncome - socialZus - deductibleHealth - loss))',
+      label:
+        'Pomniejszenie dochodu o zapłacone składki społeczne ZUS, stratę i (dla liniowego) składkę zdrowotną w limicie',
+      formula:
+        'taxableBase = round_ordynacja(max(0, ytdIncome - socialZus - deductibleHealth - loss))',
       inputs: {
         paidSocialZusYtdGrosze: socialPaid,
         effectiveHealthDeductionFromIncomeGrosze: effectiveHealthDeduction,
@@ -697,7 +949,8 @@ export function calculateKpirPitAdvance(
     },
     {
       stepNumber: 4,
-      label: 'Pomniejszenie o zaliczki należne za poprzednie miesiące i zaokrąglenie zaliczki do pełnych złotych',
+      label:
+        'Pomniejszenie o zaliczki należne za poprzednie miesiące i zaokrąglenie zaliczki do pełnych złotych',
       formula: 'advanceDue = round_ordynacja(max(0, cumulativeTax - previousAdvances))',
       inputs: {
         cumulativeTaxGrosze: cumulativeTaxRawGrosze,

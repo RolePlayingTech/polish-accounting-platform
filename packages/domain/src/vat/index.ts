@@ -18,6 +18,7 @@ import {
   formatPlnFromGrosze,
   multiplyGroszeByBps,
   multiplyGroszeByRatio,
+  roundSignedTaxAmountPln,
   roundTaxAmountOrdynacjaArt63,
   subtractGrosze,
   sumGrosze,
@@ -309,10 +310,7 @@ export function evaluateVatExemptionLimit(
 ): VatExemptionEvaluationResult {
   assertValidIsoCalendarDate(input.eventDate, 'eventDate');
   assertValidIsoCalendarDate(input.activityStartDate, 'activityStartDate');
-  assertNonNegativeGrosze(
-    input.cumulativeNetSalesBeforeGrosze,
-    'cumulativeNetSalesBeforeGrosze',
-  );
+  assertNonNegativeGrosze(input.cumulativeNetSalesBeforeGrosze, 'cumulativeNetSalesBeforeGrosze');
   const currentTx = input.currentTransactionNetGrosze ?? 0;
   assertNonNegativeGrosze(currentTx, 'currentTransactionNetGrosze');
 
@@ -340,7 +338,10 @@ export function evaluateVatExemptionLimit(
     : annualLimitGrosze;
 
   const cumulativeAfter = addGrosze(input.cumulativeNetSalesBeforeGrosze, currentTx);
-  const remainingLimitGrosze = Math.max(0, subtractGrosze(proportionalLimitGrosze, cumulativeAfter));
+  const remainingLimitGrosze = Math.max(
+    0,
+    subtractGrosze(proportionalLimitGrosze, cumulativeAfter),
+  );
   const warnings: ExplanationWarning[] = [];
 
   let status: VatExemptionEvaluationResult['status'];
@@ -361,7 +362,8 @@ export function evaluateVatExemptionLimit(
     warnings.push({
       code: 'VAT_LIMIT_ALREADY_EXCEEDED',
       severity: 'warning',
-      message: 'Limit zwolnienia podmiotowego VAT został już przekroczony przed bieżącą transakcją.',
+      message:
+        'Limit zwolnienia podmiotowego VAT został już przekroczony przed bieżącą transakcją.',
     });
   } else if (cumulativeAfter > proportionalLimitGrosze) {
     status = 'exceeded_by_current_transaction';
@@ -373,10 +375,7 @@ export function evaluateVatExemptionLimit(
     });
   } else {
     status = 'exempt_within_limit';
-    if (
-      proportionalLimitGrosze > 0 &&
-      cumulativeAfter * 10 >= proportionalLimitGrosze * 9
-    ) {
+    if (proportionalLimitGrosze > 0 && cumulativeAfter * 10 >= proportionalLimitGrosze * 9) {
       warnings.push({
         code: 'VAT_LIMIT_ABOVE_90_PERCENT',
         severity: 'info',
@@ -500,22 +499,34 @@ export function calculateJpkV7mSummary(
   const outputVatExactGrosze = sumGrosze(salesEntries.map((item) => item.deductibleVatGrosze));
   const inputVatExactGrosze = sumGrosze(purchaseEntries.map((item) => item.deductibleVatGrosze));
 
-  const outputVatRounded = roundTaxAmountOrdynacjaArt63(outputVatExactGrosze).roundedGrosze;
-  const inputVatCurrentRounded = roundTaxAmountOrdynacjaArt63(inputVatExactGrosze).roundedGrosze;
+  // W schemie XSD JPK_V7M(2) i JPK_V7M(3) pola P_38 i P_48 są typu TKwotaC (liczby całkowite ze znakiem)
+  const outputVatRounded = roundSignedTaxAmountPln(outputVatExactGrosze).roundedGrosze;
+  const inputVatCurrentRounded = roundSignedTaxAmountPln(inputVatExactGrosze).roundedGrosze;
   const carryOverRounded = roundTaxAmountOrdynacjaArt63(carryOverPrev).roundedGrosze;
   const totalInputVatPlnGrosze = addGrosze(inputVatCurrentRounded, carryOverRounded);
 
-  const diff = subtractGrosze(outputVatRounded, totalInputVatPlnGrosze);
-  const taxDueToPayP51Grosze = diff > 0 ? diff : 0;
-  const excessInputVatToCarryOverP53Grosze = diff < 0 ? -diff : 0;
+  const netDiff = subtractGrosze(outputVatRounded, totalInputVatPlnGrosze);
+  const taxDueToPayP51Grosze = netDiff > 0 ? netDiff : 0;
+  const excessInputVatToCarryOverP53Grosze = netDiff < 0 ? -netDiff : 0;
+
+  const warnings: ExplanationWarning[] = [];
+  if (outputVatRounded < 0 || totalInputVatPlnGrosze < 0) {
+    warnings.push({
+      code: 'JPK_V7M_SIGNED_NEGATIVE_CORRECTION_TKWOTAC',
+      severity: 'info',
+      message:
+        'W okresie wystąpiła przewaga korekt zmniejszających (in minus) — pola deklaracyjne P_38 / P_48 wykazano ze znakiem ujemnym zgodnie z typem TKwotaC schemy JPK_V7M.',
+    });
+  }
 
   const schemaVersion = getRequiredStringParameter(jpkRule, 'schemaVersionM');
 
   const steps: ExplanationStep[] = [
     {
       stepNumber: 1,
-      label: 'Sumowanie podatku należnego z ewidencji sprzedaży i zaokrąglenie deklaracyjne (art. 63 § 1 OP)',
-      formula: 'P_38 = round_ordynacja(sum(sales.vat))',
+      label:
+        'Sumowanie podatku należnego z ewidencji sprzedaży i zaokrąglenie ze znakiem TKwotaC (art. 63 § 1 OP)',
+      formula: 'P_38 = round_signed_pln(sum(sales.vat))',
       inputs: {
         salesCount: salesEntries.length,
         outputVatExactGrosze,
@@ -525,8 +536,9 @@ export function calculateJpkV7mSummary(
     },
     {
       stepNumber: 2,
-      label: 'Sumowanie podatku naliczonego z ewidencji zakupów wraz z nadwyżką z poprzedniej deklaracji',
-      formula: 'P_48 = round_ordynacja(sum(purchases.deductibleVat)) + round_ordynacja(carryOver)',
+      label:
+        'Sumowanie podatku naliczonego ze znakiem TKwotaC z ewidencji zakupów wraz z nadwyżką z poprzedniej deklaracji',
+      formula: 'P_48 = round_signed_pln(sum(purchases.deductibleVat)) + round_ordynacja(carryOver)',
       inputs: {
         purchasesCount: purchaseEntries.length,
         inputVatExactGrosze,
@@ -537,8 +549,10 @@ export function calculateJpkV7mSummary(
     },
     {
       stepNumber: 3,
-      label: 'Wyliczenie zobowiązania podatkowego (P_51) lub nadwyżki podatku naliczonego nad należnym (P_53)',
-      formula: 'if (P_38 > P_48) P_51 = P_38 - P_48 else P_53 = P_48 - P_38',
+      label:
+        'Wyliczenie zobowiązania podatkowego (P_51) lub nadwyżki podatku naliczonego nad należnym (P_53)',
+      formula:
+        'netDiff = P_38 - P_48; if (netDiff > 0) P_51 = netDiff else if (netDiff < 0) P_53 = -netDiff',
       inputs: {
         outputVatRoundedPlnGrosze: outputVatRounded,
         totalInputVatPlnGrosze,
@@ -547,7 +561,8 @@ export function calculateJpkV7mSummary(
         taxDueToPayP51Grosze > 0
           ? `Do wpłaty P_51: ${formatPlnFromGrosze(taxDueToPayP51Grosze)}`
           : `Nadwyżka P_53: ${formatPlnFromGrosze(excessInputVatToCarryOverP53Grosze)}`,
-      resultGrosze: taxDueToPayP51Grosze > 0 ? taxDueToPayP51Grosze : excessInputVatToCarryOverP53Grosze,
+      resultGrosze:
+        taxDueToPayP51Grosze > 0 ? taxDueToPayP51Grosze : excessInputVatToCarryOverP53Grosze,
     },
   ];
 
@@ -569,6 +584,7 @@ export function calculateJpkV7mSummary(
       taxDueToPayP51Grosze,
       excessInputVatToCarryOverP53Grosze,
     },
+    warnings,
   });
 
   return {

@@ -31,7 +31,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       actTitle: 'Ustawa z dnia 29 sierpnia 1997 r. — Ordynacja podatkowa',
       journalReference: 'Dz.U. z 2025 r. poz. 111',
       article: 'art. 63 § 1',
-      notes: 'Nie stosuje się do kwot na fakturach VAT i zapisów w KPiR, które prowadzi się w złotych i groszach.',
+      notes:
+        'Nie stosuje się do kwot na fakturach VAT i zapisów w KPiR, które prowadzi się w złotych i groszach.',
     },
     sourceUrl: 'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000111',
     sourceType: 'statute',
@@ -77,7 +78,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       actTitle: 'Ustawa z dnia 29 sierpnia 1997 r. — Ordynacja podatkowa',
       journalReference: 'Dz.U. z 2025 r. poz. 111',
       article: 'art. 12 § 5',
-      notes: 'Analogiczna zasada dla składek ZUS wynika z art. 31 ustawy o sus odsyłającego do art. 12 § 5 Ordynacji podatkowej.',
+      notes:
+        'Analogiczna zasada dla składek ZUS wynika z art. 31 ustawy o sus odsyłającego do art. 12 § 5 Ordynacji podatkowej.',
     },
     sourceUrl: 'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000111',
     sourceType: 'statute',
@@ -89,7 +91,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-ord-12-weekend',
-        description: 'Termin 20. dnia miesiąca wypadający w niedzielę 2026-09-20 przesuwa się na poniedziałek 2026-09-21',
+        description:
+          'Termin 20. dnia miesiąca wypadający w niedzielę 2026-09-20 przesuwa się na poniedziałek 2026-09-21',
         eventDate: '2026-09-20',
         inputSummary: 'statutoryDueDate = 2026-09-20 (niedziela)',
         expectedOutputSummary: 'effectiveDueDate = 2026-09-21',
@@ -109,10 +112,12 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2025-01-01',
     validTo: null,
     legalBasis: {
-      actTitle: 'Ustawa z dnia 18 stycznia 1951 r. o dniach wolnych od pracy (ze zm. z dnia 6 grudnia 2024 r.)',
+      actTitle:
+        'Ustawa z dnia 18 stycznia 1951 r. o dniach wolnych od pracy (ze zm. z dnia 6 grudnia 2024 r.)',
       journalReference: 'Dz.U. z 2024 r. poz. 1965',
       article: 'art. 1 pkt 1',
-      notes: 'Nowelizacja z 6 grudnia 2024 r. (Dz.U. 2024 poz. 1965) weszła w życie 1 lutego 2025 r., dodając 24 grudnia (Wigilię Bożego Narodzenia).',
+      notes:
+        'Nowelizacja z 6 grudnia 2024 r. (Dz.U. 2024 poz. 1965) weszła w życie 1 lutego 2025 r., dodając 24 grudnia (Wigilię Bożego Narodzenia).',
     },
     sourceUrl: 'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20240001965',
     sourceType: 'statute',
@@ -122,7 +127,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-holiday-christmas-25',
-        description: 'Termin JPK_V7M 25 grudnia (I dzień Bożego Narodzenia) i 26 grudnia przesuwa się po świętach i weekendzie',
+        description:
+          'Termin JPK_V7M 25 grudnia (I dzień Bożego Narodzenia) i 26 grudnia przesuwa się po świętach i weekendzie',
         eventDate: '2026-12-25',
         inputSummary: '2026-12-25 (piątek, Boże Narodzenie)',
         expectedOutputSummary: '2026-12-28 (poniedziałek)',
@@ -276,7 +282,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-vat-86a-50pct',
-        description: 'Paliwo 200,00 zł netto + 46,00 zł VAT w użytku mieszanym daje 23,00 zł odliczenia VAT',
+        description:
+          'Paliwo 200,00 zł netto + 46,00 zł VAT w użytku mieszanym daje 23,00 zł odliczenia VAT',
         eventDate: '2026-04-12',
         inputSummary: 'vatTotal = 4 600 gr, tryb = vehicle_mixed_50',
         expectedOutputSummary: 'deductible = 2 300 gr, nonDeductible = 2 300 gr',
@@ -304,7 +311,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       journalReference: 'Dz.U. z 2025 r. poz. 775',
       article: 'art. 108a ust. 1a oraz art. 106e ust. 1 pkt 18a',
     },
-    sourceUrl: 'https://www.podatki.gov.pl/vat/bezpieczna-transakcja/mechanizm-podzielonej-platnosci-mpp/',
+    sourceUrl:
+      'https://www.podatki.gov.pl/vat/bezpieczna-transakcja/mechanizm-podzielonej-platnosci-mpp/',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -321,7 +329,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       },
       {
         id: 'tc-vat-mpp-15000-01',
-        description: 'Faktura na 15 000,01 zł brutto z towarem z załącznika nr 15 objęta obowiązkowym MPP',
+        description:
+          'Faktura na 15 000,01 zł brutto z towarem z załącznika nr 15 objęta obowiązkowym MPP',
         eventDate: '2026-02-10',
         inputSummary: 'gross = 1 500 001 gr, annex15 = true',
         expectedOutputSummary: 'mandatoryMpp = true',
@@ -356,7 +365,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-jpk-v7-jan-2026',
-        description: 'Rozliczenie za styczeń 2026 r. składane na schemie JPK_V7M(2) do 25 lutego 2026 r.',
+        description:
+          'Rozliczenie za styczeń 2026 r. składane na schemie JPK_V7M(2) do 25 lutego 2026 r.',
         eventDate: '2026-01-31',
         inputSummary: 'period = 2026-01',
         expectedOutputSummary: 'schema = JPK_V7M(2), statutoryDueDay = 25',
@@ -416,7 +426,7 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     version: '2025.1',
     title: 'Limit statusu małego podatnika w 2025 r. (2 mln EUR = 8 569 000 zł brutto)',
     description:
-      'Status małego podatnika w PIT, CIT i VAT w 2025 r. przysługuje podatnikom, których przychód ze sprzedaży z VAT w 2024 r. nie przekroczył 8 569 000 zł (kurs NBP 4,2846 zł/EUR z 1 października 2024 r., tabela 191/A/NBP/2024).',
+      'Status małego podatnika w PIT, CIT i VAT w 2025 r. przysługuje podatnikom, których przychód ze sprzedaży z VAT w 2024 r. nie przekroczył 8 569 000 zł po zaokrągleniu do 1 000 zł (kurs NBP 4,2846 zł/EUR z 1 października 2024 r., tabela 191/A/NBP/2024). Uwaga: dla prawa do ryczałtu (art. 6 ust. 4 u.z.p.d.) limit 2 000 000 EUR przelicza się bez zaokrąglania do 1 000 zł i wynosi 8 569 200 zł przychodów netto.',
     scope: ALL_PROFILES,
     validFrom: '2025-01-01',
     validTo: '2025-12-31',
@@ -430,12 +440,14 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
     exceptions: [
+      'Dla ryczałtu od przychodów ewidencjonowanych limit 2 000 000 EUR z art. 6 ust. 4 przelicza się bez zaokrąglania do 1 000 zł (8 569 200 zł na 2025 r.).',
       'Dla przedsiębiorstw maklerskich i zarządzających funduszami w VAT obowiązuje odrębny limit prowizji 45 000 EUR.',
     ],
     referenceTestCases: [
       {
         id: 'tc-small-taxpayer-2025',
-        description: 'Przychód brutto z 2024 r. równy 8 500 000 zł zachowuje status małego podatnika na 2025 r.',
+        description:
+          'Przychód brutto z 2024 r. równy 8 500 000 zł zachowuje status małego podatnika na 2025 r.',
         eventDate: '2025-03-01',
         inputSummary: 'priorYearGrossSales = 850 000 000 gr',
         expectedOutputSummary: 'limit = 856 900 000 gr',
@@ -443,6 +455,7 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     ],
     parameters: {
       limitGrossGrosze: 856_900_000,
+      ryczaltExactLimitNetGrosze: 856_920_000,
       eurRateBps: 42846,
     },
   },
@@ -454,7 +467,7 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     version: '2026.1',
     title: 'Limit statusu małego podatnika w 2026 r. (2 mln EUR = 8 517 000 zł brutto)',
     description:
-      'Status małego podatnika w PIT, CIT i VAT w 2026 r. przysługuje podatnikom, których przychód ze sprzedaży z VAT w 2025 r. nie przekroczył 8 517 000 zł (kurs NBP 4,2586 zł/EUR z 1 października 2025 r., tabela 190/A/NBP/2025).',
+      'Status małego podatnika w PIT, CIT i VAT w 2026 r. przysługuje podatnikom, których przychód ze sprzedaży z VAT w 2025 r. nie przekroczył 8 517 000 zł po zaokrągleniu do 1 000 zł (kurs NBP 4,2586 zł/EUR z 1 października 2025 r., tabela 190/A/NBP/2025). Uwaga: dla prawa do ryczałtu (art. 6 ust. 4 u.z.p.d.) limit 2 000 000 EUR przelicza się bez zaokrąglania do 1 000 zł i wynosi 8 517 200 zł przychodów netto.',
     scope: ALL_PROFILES,
     validFrom: '2026-01-01',
     validTo: '2026-12-31',
@@ -468,6 +481,7 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
     exceptions: [
+      'Dla ryczałtu od przychodów ewidencjonowanych limit 2 000 000 EUR z art. 6 ust. 4 przelicza się bez zaokrąglania do 1 000 zł (8 517 200 zł na 2026 r.).',
       'W CIT 9% dodatkowo wymagane jest nieprzekroczenie równowartości 2 mln EUR netto przychodów bieżących (art. 19 ust. 1 pkt 2 CIT).',
     ],
     referenceTestCases: [
@@ -481,6 +495,7 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     ],
     parameters: {
       limitGrossGrosze: 851_700_000,
+      ryczaltExactLimitNetGrosze: 851_720_000,
       eurRateBps: 42586,
     },
   },
@@ -512,14 +527,16 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-pit-scale-below-30k',
-        description: 'Dochód narastająco 25 000 zł mieści się w kwocie wolnej 30 000 zł — zaliczka 0 zł',
+        description:
+          'Dochód narastająco 25 000 zł mieści się w kwocie wolnej 30 000 zł — zaliczka 0 zł',
         eventDate: '2026-03-31',
         inputSummary: 'podstawa = 25 000 zł',
         expectedOutputSummary: 'zaliczka = 0 zł',
       },
       {
         id: 'tc-pit-scale-above-120k',
-        description: 'Podstawa 150 000 zł: 10 800 zł + 32% * 30 000 zł = 20 400 zł podatku narastająco',
+        description:
+          'Podstawa 150 000 zł: 10 800 zł + 32% * 30 000 zł = 20 400 zł podatku narastająco',
         eventDate: '2026-10-31',
         inputSummary: 'podstawa = 150 000 zł',
         expectedOutputSummary: 'podatek narastająco = 20 400 zł (2 040 000 gr)',
@@ -586,7 +603,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     legalBasis: {
       actTitle:
         'Obwieszczenie Ministra Finansów z dnia 17 grudnia 2024 r. w sprawie wysokości kwoty składek na ubezpieczenie zdrowotne w 2025 r.',
-      journalReference: 'M.P. z 2024 r. poz. 1084 (w zw. z art. 23 ust. 1 pkt 58 i art. 30c ust. 2 pkt 2 ustawy o PIT)',
+      journalReference:
+        'M.P. z 2024 r. poz. 1084 (w zw. z art. 23 ust. 1 pkt 58 i art. 30c ust. 2 pkt 2 ustawy o PIT)',
       article: 'art. 30c ust. 2 pkt 2 i ust. 2b ustawy o PIT',
     },
     sourceUrl: 'https://www.podatki.gov.pl/pit/',
@@ -599,7 +617,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-pit-flat-health-2025-cap',
-        description: 'Zapłacone 15 000 zł składki zdrowotnej w 2025 r. zostaje ograniczone do 12 900 zł',
+        description:
+          'Zapłacone 15 000 zł składki zdrowotnej w 2025 r. zostaje ograniczone do 12 900 zł',
         eventDate: '2025-11-30',
         inputSummary: 'paidHealth = 1 500 000 gr',
         expectedOutputSummary: 'deductibleHealth = 1 290 000 gr',
@@ -624,7 +643,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     legalBasis: {
       actTitle:
         'Obwieszczenie Ministra Finansów z dnia 12 grudnia 2025 r. w sprawie wysokości kwoty składek na ubezpieczenie zdrowotne w 2026 r.',
-      journalReference: 'M.P. z 2025 r. poz. 1274 (w zw. z art. 23 ust. 1 pkt 58 i art. 30c ust. 2 pkt 2 ustawy o PIT)',
+      journalReference:
+        'M.P. z 2025 r. poz. 1274 (w zw. z art. 23 ust. 1 pkt 58 i art. 30c ust. 2 pkt 2 ustawy o PIT)',
       article: 'art. 30c ust. 2 pkt 2 i ust. 2b ustawy o PIT',
     },
     sourceUrl: 'https://www.podatki.gov.pl/pit/',
@@ -637,7 +657,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-pit-flat-health-2026-cap',
-        description: 'Zapłacone 16 000 zł składki zdrowotnej w 2026 r. zostaje ograniczone do 14 100 zł',
+        description:
+          'Zapłacone 16 000 zł składki zdrowotnej w 2026 r. zostaje ograniczone do 14 100 zł',
         eventDate: '2026-11-30',
         inputSummary: 'paidHealth = 1 600 000 gr',
         expectedOutputSummary: 'deductibleHealth = 1 410 000 gr',
@@ -726,9 +747,10 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'kpir-regulation-2026',
     ruleCode: 'KPIR_REGULATION_COLUMNS',
     version: '2026.1',
-    title: 'Nowe rozporządzenie w sprawie prowadzenia PKPiR od 1 stycznia 2026 r. (KSeF i JPK_PKPIR)',
+    title:
+      'Nowe rozporządzenie w sprawie prowadzenia PKPiR od 1 stycznia 2026 r. (19 kolumn, KSeF i JPK_PKPIR)',
     description:
-      'Od 1 stycznia 2026 r. obowiązuje nowe rozporządzenie PKPiR dostosowane do KSeF i JPK_PKPIR, rozszerzające ewidencję o numer identyfikujący fakturę w KSeF oraz identyfikator podatkowy (NIP) kontrahenta.',
+      'Od 1 stycznia 2026 r. obowiązuje nowe 19-kolumnowe rozporządzenie PKPiR dostosowane do KSeF i JPK_PKPIR, dodające kol. 3 (numer identyfikujący fakturę w KSeF) oraz kol. 5 (identyfikator podatkowy NIP kontrahenta) i przesuwające przychody do kol. 9–11 oraz wydatki do kol. 12–16 (B+R w kol. 18, uwagi w kol. 19).',
     scope: KPIR_PROFILES,
     validFrom: '2026-01-01',
     validTo: null,
@@ -748,7 +770,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-kpir-2026-reg',
-        description: 'Wpis z 2026 r. kwalifikowany wg nowego rozporządzenia PKPiR Dz.U. 2025 poz. 1299',
+        description:
+          'Wpis z 2026 r. kwalifikowany wg nowego rozporządzenia PKPiR Dz.U. 2025 poz. 1299',
         eventDate: '2026-02-15',
         inputSummary: 'eventDate = 2026-02-15, ksefReferenceNumber = obecny',
         expectedOutputSummary: 'regulationVersion = pkpir_2026_ksef',
@@ -764,7 +787,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'pit-car-mixed-75-art-23-2025',
     ruleCode: 'PIT_CAR_MIXED_EXPENSE_75_ART_23',
     version: '2025.1',
-    title: 'Ograniczenie do 75% KUP wydatków eksploatacyjnych samochodu osobowego w użytku mieszanym',
+    title:
+      'Ograniczenie do 75% KUP wydatków eksploatacyjnych samochodu osobowego w użytku mieszanym',
     description:
       'Z kosztów uzyskania przychodów wyłącza się 25% poniesionych wydatków z tytułu używania samochodu osobowego wykorzystywanego również do celów niezwiązanych z działalnością gospodarczą (75% stanowi KUP). Podstawę 75% powiększa nieodliczona na podstawie art. 86a ustawy o VAT połowa podatku VAT.',
     scope: KPIR_PROFILES,
@@ -786,7 +810,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-pit-car-75-active-vat',
-        description: 'Faktura 200,00 zł netto + 46,00 zł VAT: 50% nieodliczonego VAT = 23,00 zł; 75% z 223,00 zł = 167,25 zł KUP',
+        description:
+          'Faktura 200,00 zł netto + 46,00 zł VAT: 50% nieodliczonego VAT = 23,00 zł; 75% z 223,00 zł = 167,25 zł KUP',
         eventDate: '2026-04-12',
         inputSummary: 'netto = 20 000 gr, nonDeductibleVat = 2 300 gr',
         expectedOutputSummary: 'kupCol13 = 16 725 gr (167,25 zł)',
@@ -870,7 +895,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'ryczalt-health-deduction-50-art-11-2025',
     ruleCode: 'RYCZALT_HEALTH_DEDUCTION_50_ART_11',
     version: '2025.1',
-    title: 'Proporcjonalne odliczenie składek społecznych i 50% składki zdrowotnej od przychodu na ryczałcie',
+    title:
+      'Proporcjonalne odliczenie składek społecznych i 50% składki zdrowotnej od przychodu na ryczałcie',
     description:
       'Przychody opodatkowane ryczałtem pomniejsza się o zapłacone składki na ubezpieczenia społeczne oraz o 50% zapłaconych składek na ubezpieczenie zdrowotne z tytułu działalności opodatkowanej ryczałtem. Przy wielu stawkach ryczałtu odliczeń dokonuje się od każdego rodzaju przychodu w takim stosunku, w jakim w roku podatkowym pozostają poszczególne przychody w ogólnej kwocie przychodów.',
     scope: ['jdg_ryczalt'],
@@ -892,7 +918,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-ryczalt-50pct-health',
-        description: 'Zapłacona składka zdrowotna 498,35 zł w 2026 r. daje 249,18 zł odliczenia od przychodu',
+        description:
+          'Zapłacona składka zdrowotna 498,35 zł w 2026 r. daje 249,18 zł odliczenia od przychodu',
         eventDate: '2026-04-30',
         inputSummary: 'paidHealth = 49 835 gr',
         expectedOutputSummary: 'healthDeduction50 = 24 918 gr (249,18 zł)',
@@ -1074,7 +1101,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       journalReference: 'Dz.U. z 2025 r. poz. 350',
       article: 'art. 18 ust. 8',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/wysokosc-skladek-na-ubezpieczenia-spoleczne',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/wysokosc-skladek-na-ubezpieczenia-spoleczne',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1113,7 +1141,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       journalReference: 'Dz.U. z 2025 r. poz. 350',
       article: 'art. 18 ust. 8',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/wysokosc-skladek-na-ubezpieczenia-spoleczne',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/wysokosc-skladek-na-ubezpieczenia-spoleczne',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1148,11 +1177,13 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2025-01-01',
     validTo: '2027-03-31',
     legalBasis: {
-      actTitle: 'Ustawa z dnia 13 października 1998 r. o systemie ubezpieczeń społecznych oraz ustawa o ubezpieczeniu wypadkowym',
+      actTitle:
+        'Ustawa z dnia 13 października 1998 r. o systemie ubezpieczeń społecznych oraz ustawa o ubezpieczeniu wypadkowym',
       journalReference: 'Dz.U. z 2025 r. poz. 350',
       article: 'art. 22 ust. 1 pkt 1–3',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/stopy-procentowe-skladek',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/stopy-procentowe-skladek',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1189,11 +1220,13 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2025-01-01',
     validTo: null,
     legalBasis: {
-      actTitle: 'Ustawa z dnia 30 października 2002 r. o ubezpieczeniu społecznym z tytułu wypadków przy pracy i chorób zawodowych',
+      actTitle:
+        'Ustawa z dnia 30 października 2002 r. o ubezpieczeniu społecznym z tytułu wypadków przy pracy i chorób zawodowych',
       journalReference: 'Dz.U. z 2022 r. poz. 2189 z późn. zm.',
       article: 'art. 28 ust. 2 oraz art. 31',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/ubezpieczenie-wypadkowe',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/ubezpieczenie-wypadkowe',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'requires_expert_review',
@@ -1216,18 +1249,21 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'zus-health-scale-flat-jan-2025',
     ruleCode: 'ZUS_HEALTH_SCALE_AND_FLAT_ART_79A_81',
     version: '2024.12',
-    title: 'Składka zdrowotna na skali (9%) i liniowym (4,9%) w styczniu 2025 r. (rok składkowy 2024)',
+    title:
+      'Składka zdrowotna na skali (9%) i liniowym (4,9%) w styczniu 2025 r. (rok składkowy 2024)',
     description:
       'Styczeń 2025 r. należy do roku składkowego trwającego od 1 lutego 2024 r. do 31 stycznia 2025 r. Minimalną podstawę wymiaru stanowi minimalne wynagrodzenie z 2024 r. (4 242,00 zł), a minimalna składka wynosi 381,78 zł.',
     scope: KPIR_PROFILES,
     validFrom: '2025-01-01',
     validTo: '2025-01-31',
     legalBasis: {
-      actTitle: 'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
+      actTitle:
+        'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
       journalReference: 'Dz.U. z 2025 r. poz. 1461',
       article: 'art. 79a ust. 1 oraz art. 81 ust. 2 i ust. 2c',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1235,7 +1271,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-health-jan-2025-min',
-        description: 'Przy stracie w grudniu 2024 r. składka zdrowotna za styczeń 2025 r. wynosi 381,78 zł',
+        description:
+          'Przy stracie w grudniu 2024 r. składka zdrowotna za styczeń 2025 r. wynosi 381,78 zł',
         eventDate: '2025-01-31',
         inputSummary: 'dochód = 0 gr, okres = 2025-01',
         expectedOutputSummary: 'healthGrosze = 38 178 gr',
@@ -1254,18 +1291,21 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'zus-health-scale-flat-2025',
     ruleCode: 'ZUS_HEALTH_SCALE_AND_FLAT_ART_79A_81',
     version: '2025.1',
-    title: 'Składka zdrowotna na skali (9%) i liniowym (4,9%) w roku składkowym 2025 (min. 314,96 zł)',
+    title:
+      'Składka zdrowotna na skali (9%) i liniowym (4,9%) w roku składkowym 2025 (min. 314,96 zł)',
     description:
       'W roku składkowym od 1 lutego 2025 r. do 31 stycznia 2026 r. minimalna podstawa wymiaru składki zdrowotnej została obniżona do 75% minimalnego wynagrodzenia z 2025 r. (75% * 4 666,00 zł = 3 499,50 zł), co daje minimalną składkę 314,96 zł miesięcznie zarówno na skali, jak i na podatku liniowym.',
     scope: KPIR_PROFILES,
     validFrom: '2025-02-01',
     validTo: '2026-01-31',
     legalBasis: {
-      actTitle: 'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
+      actTitle:
+        'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
       journalReference: 'Dz.U. z 2025 r. poz. 1461',
       article: 'art. 79a ust. 1 oraz art. 81 ust. 2, ust. 2c i ust. 2d',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1294,18 +1334,21 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'zus-health-scale-flat-2026',
     ruleCode: 'ZUS_HEALTH_SCALE_AND_FLAT_ART_79A_81',
     version: '2026.1',
-    title: 'Składka zdrowotna na skali (9%) i liniowym (4,9%) w roku składkowym 2026 (min. 432,54 zł)',
+    title:
+      'Składka zdrowotna na skali (9%) i liniowym (4,9%) w roku składkowym 2026 (min. 432,54 zł)',
     description:
       'W roku składkowym od 1 lutego 2026 r. do 31 stycznia 2027 r. minimalna podstawa wymiaru składki zdrowotnej wynosi 100% minimalnego wynagrodzenia za pracę w 2026 r. (4 806,00 zł), a minimalna składka zdrowotna wynosi 432,54 zł miesięcznie (9% z 4 806,00 zł).',
     scope: KPIR_PROFILES,
     validFrom: '2026-02-01',
     validTo: '2027-01-31',
     legalBasis: {
-      actTitle: 'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
+      actTitle:
+        'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
       journalReference: 'Dz.U. z 2025 r. poz. 1461 oraz Dz.U. z 2025 r. poz. 1242',
       article: 'art. 79a ust. 1 oraz art. 81 ust. 2 i ust. 2c',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1315,7 +1358,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-health-2026-min-43254',
-        description: 'Przy dochodzie 2 000 zł na liniowym w marcu 2026 r. (4,9% = 98 zł) obowiązuje minimum 432,54 zł',
+        description:
+          'Przy dochodzie 2 000 zł na liniowym w marcu 2026 r. (4,9% = 98 zł) obowiązuje minimum 432,54 zł',
         eventDate: '2026-04-30',
         inputSummary: 'liniowy, dochód = 200 000 gr',
         expectedOutputSummary: 'healthGrosze = 43 254 gr (432,54 zł)',
@@ -1341,11 +1385,13 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2025-01-01',
     validTo: '2025-12-31',
     legalBasis: {
-      actTitle: 'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
+      actTitle:
+        'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
       journalReference: 'Dz.U. z 2025 r. poz. 1461',
       article: 'art. 81 ust. 2e i ust. 2f',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1386,11 +1432,13 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2026-01-01',
     validTo: '2026-12-31',
     legalBasis: {
-      actTitle: 'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
+      actTitle:
+        'Ustawa z dnia 27 sierpnia 2004 r. o świadczeniach opieki zdrowotnej finansowanych ze środków publicznych',
       journalReference: 'Dz.U. z 2025 r. poz. 1461',
       article: 'art. 81 ust. 2e i ust. 2f',
     },
-    sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
+    sourceUrl:
+      'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/skladki/skladka-na-ubezpieczenie-zdrowotne',
     sourceType: 'statute',
     verifiedAt: '2026-11-04',
     verificationStatus: 'verified',
@@ -1424,7 +1472,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'zus-dra-deadline-art-47-2025',
     ruleCode: 'ZUS_DRA_DEADLINE_ART_47',
     version: '2025.1',
-    title: 'Terminy przekazywania deklaracji ZUS DRA i opłacania składek (15. vs 20. dzień miesiąca)',
+    title:
+      'Terminy przekazywania deklaracji ZUS DRA i opłacania składek (15. vs 20. dzień miesiąca)',
     description:
       'Płatnicy składek posiadający osobowość prawną (w tym spółki z o.o.) opłacają składki i składają deklaracje do 15. dnia następnego miesiąca (pkt 2), a pozostali płatnicy składek (w tym przedsiębiorcy JDG i spółki osobowe) — do 20. dnia następnego miesiąca (pkt 3).',
     scope: ALL_PROFILES,
@@ -1493,7 +1542,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-ksef-small-apr-2026',
-        description: 'Standardowe JDG (sprzedaż > 10 000 zł/mies.) podlega obowiązkowi wystawiania w KSeF od 1 kwietnia 2026 r.',
+        description:
+          'Standardowe JDG (sprzedaż > 10 000 zł/mies.) podlega obowiązkowi wystawiania w KSeF od 1 kwietnia 2026 r.',
         eventDate: '2026-04-01',
         inputSummary: 'sales2024Above200M = false, monthlyB2bGross = 25 000 zł',
         expectedOutputSummary: 'issuingMandatoryFrom = 2026-04-01',
@@ -1520,8 +1570,10 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2025-01-01',
     validTo: '2027-12-31',
     legalBasis: {
-      actTitle: 'Ustawa o PIT (art. 24a ust. 1e) / Ustawa o ryczałcie (art. 15 ust. 12) / Ustawa o CIT (art. 9 ust. 1c)',
-      journalReference: 'Dz.U. z 2025 r. poz. 163, poz. 843 i poz. 278 (przepisy epizodyczne i wdrożeniowe)',
+      actTitle:
+        'Ustawa o PIT (art. 24a ust. 1e) / Ustawa o ryczałcie (art. 15 ust. 12) / Ustawa o CIT (art. 9 ust. 1c)',
+      journalReference:
+        'Dz.U. z 2025 r. poz. 163, poz. 843 i poz. 278 (przepisy epizodyczne i wdrożeniowe)',
       article: 'art. 24a ust. 1e PIT / art. 15 ust. 12 ryczałt / art. 9 ust. 1c CIT',
     },
     sourceUrl: 'https://www.podatki.gov.pl/jednolity-plik-kontrolny/jpk_pd/',
@@ -1534,7 +1586,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-jpk-pkpir-2026-v7m',
-        description: 'JDG KPiR na JPK_V7M prowadzi księgę wg struktury JPK_PKPIR za rok 2026 (wysyłka do 30.04.2027)',
+        description:
+          'JDG KPiR na JPK_V7M prowadzi księgę wg struktury JPK_PKPIR za rok 2026 (wysyłka do 30.04.2027)',
         eventDate: '2026-01-31',
         inputSummary: 'profile = jdg_kpir_skala, vatSettlementPeriod = monthly',
         expectedOutputSummary: 'jpkPdRequiredForYear = true',
@@ -1554,7 +1607,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2025-01-01',
     validTo: null,
     legalBasis: {
-      actTitle: 'Ustawa z dnia 18 listopada 2020 r. o doręczeniach elektronicznych (ze zm. z dnia 21 listopada 2024 r.)',
+      actTitle:
+        'Ustawa z dnia 18 listopada 2020 r. o doręczeniach elektronicznych (ze zm. z dnia 21 listopada 2024 r.)',
       journalReference: 'Dz.U. z 2024 r. poz. 1045 oraz Dz.U. z 2024 r. poz. 1841',
       article: 'art. 9 oraz art. 151–152',
     },
@@ -1568,7 +1622,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-edoreczenia-ceidg-oct-2026',
-        description: 'JDG zarejestrowane przed 2025 r. objęte powszechnym obowiązkiem e-Doręczeń od 2026-10-01',
+        description:
+          'JDG zarejestrowane przed 2025 r. objęte powszechnym obowiązkiem e-Doręczeń od 2026-10-01',
         eventDate: '2026-10-01',
         inputSummary: 'ceidgRegisteredBefore2025 = true',
         expectedOutputSummary: 'edoreczeniaMandatory = true',
@@ -1593,10 +1648,12 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     validFrom: '2025-01-01',
     validTo: null,
     legalBasis: {
-      actTitle: 'Ustawa z dnia 29 września 1994 r. o rachunkowości (ze zm. z dnia 6 grudnia 2024 r.)',
-      journalReference: 'Dz.U. z 2024 r. poz. 1863',
+      actTitle:
+        'Ustawa z dnia 29 września 1994 r. o rachunkowości (ze zm. z dnia 6 grudnia 2024 r.)',
+      journalReference: 't.j. Dz.U. z 2023 r. poz. 120 ze zm., w tym Dz.U. z 2024 r. poz. 1863',
       article: 'art. 5 ust. 1, art. 15 ust. 1, art. 18 ust. 1 oraz art. 25 ust. 1 pkt 2',
-      notes: 'Od 1 stycznia 2025 r. limit przychodów dla osób fizycznych i spółek osobowych zobowiązujący do pełnych ksiąg wzrósł do 2,5 mln EUR; spółki z o.o. prowadzą księgi rachunkowe zawsze niezależnie od przychodów (art. 2 ust. 1 pkt 1).',
+      notes:
+        'Od 1 stycznia 2025 r. limit przychodów dla osób fizycznych i spółek osobowych zobowiązujący do pełnych ksiąg wzrósł do 2,5 mln EUR; spółki z o.o. prowadzą księgi rachunkowe zawsze niezależnie od przychodów (art. 2 ust. 1 pkt 1).',
     },
     sourceUrl: 'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20240001863',
     sourceType: 'statute',
@@ -1621,7 +1678,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'cit-rates-art-19-2025-2026',
     ruleCode: 'CIT_RATES_ART_19',
     version: '2025.1',
-    title: 'Stawki podatku dochodowego od osób prawnych CIT (9% mały podatnik vs 19%) i termin zaliczek',
+    title:
+      'Stawki podatku dochodowego od osób prawnych CIT (9% mały podatnik vs 19%) i termin zaliczek',
     description:
       'Podatek CIT wynosi 19% podstawy opodatkowania, albo 9% podstawy opodatkowania od przychodów innych niż z zysków kapitałowych u małych podatników i podatników rozpoczynających działalność, u których przychody bieżące netto nie przekroczyły równowartości 2 000 000 EUR. Zaliczki wpłaca się do 20. dnia następnego miesiąca.',
     scope: ['spzoo_pelne_ksiegi'],
@@ -1643,7 +1701,8 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     referenceTestCases: [
       {
         id: 'tc-cit-9pct-small',
-        description: 'Sp. z o.o. ze statusem małego podatnika i dochodem 50 000 zł płaci 4 500 zł zaliczki CIT (9%)',
+        description:
+          'Sp. z o.o. ze statusem małego podatnika i dochodem 50 000 zł płaci 4 500 zł zaliczki CIT (9%)',
         eventDate: '2026-04-30',
         inputSummary: 'dochód = 5 000 000 gr, smallTaxpayer = true',
         expectedOutputSummary: 'zaliczka CIT = 450 000 gr (4 500 zł)',
