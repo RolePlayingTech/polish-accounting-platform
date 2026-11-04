@@ -165,7 +165,7 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
       );
     }
 
-    dataSchema = `pap_api_e2e_${randomUUID().replaceAll('-', '')}`;
+    dataSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
     owner = connectDatabase(process.env, dataSchema, { roleScope: 'migrator' });
     await owner.client`CREATE SCHEMA ${owner.client(dataSchema)}`;
     schemaCreated = true;
