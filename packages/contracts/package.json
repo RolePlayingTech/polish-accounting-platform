@@ -15,6 +15,10 @@
     "./notifications": {
       "types": "./dist/notifications.d.ts",
       "import": "./dist/notifications.js"
+    },
+    "./academy": {
+      "types": "./dist/academy.d.ts",
+      "import": "./dist/academy.js"
     }
   },
   "dependencies": {
