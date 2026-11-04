@@ -4,6 +4,8 @@ import {
   NotificationObligationInputSchema,
   NotificationPreferencesSchema,
   RenderedAuxiliaryEmailSchema,
+  SafeEmailAddressSchema,
+  SafeSenderEmailAddressSchema,
   type DeliveryAttemptRecord,
   type NotificationFrequency,
   type NotificationObligationInput,
@@ -29,6 +31,7 @@ export type NotificationsAuditEventKind =
   | 'notification_delivered'
   | 'notification_retry_scheduled'
   | 'notification_dead_lettered'
+  | 'notification_suppressed_by_preferences'
   | 'notification_recipient_blocked_by_sandbox_policy';
 
 export interface NotificationsAuditEvent {
@@ -58,6 +61,40 @@ export class InMemoryNotificationsAuditSink implements NotificationsAuditSink {
 
   listEvents(): readonly NotificationsAuditEvent[] {
     return [...this.events];
+  }
+}
+
+class KeyedAsyncMutex {
+  private readonly tails = new Map<string, Promise<void>>();
+
+  async runExclusive<T>(keys: readonly string[], fn: () => Promise<T>): Promise<T> {
+    const sortedUniqueKeys = [...new Set(keys)].sort();
+    const releases: (() => void)[] = [];
+
+    for (const key of sortedUniqueKeys) {
+      const previous = this.tails.get(key) ?? Promise.resolve();
+      let releaseCurrent!: () => void;
+      const current = new Promise<void>((resolve) => {
+        releaseCurrent = resolve;
+      });
+      const chained = previous.then(() => current);
+      this.tails.set(key, chained);
+      await previous;
+      releases.push(() => {
+        releaseCurrent();
+        if (this.tails.get(key) === chained) {
+          this.tails.delete(key);
+        }
+      });
+    }
+
+    try {
+      return await fn();
+    } finally {
+      for (let i = releases.length - 1; i >= 0; i -= 1) {
+        releases[i]!();
+      }
+    }
   }
 }
 
@@ -182,7 +219,7 @@ export function buildNotificationDeduplicationKey(params: {
 }
 
 const FORBIDDEN_IMPERSONATION_SENDER_PATTERN =
-  /(gov\.pl|zus\.pl|podatki|skarbow|ministerstwo|urzad|urząd|ksef)/i;
+  /(gov\.pl|zus\.pl|podatki|skarbow|ministerstwo|urzad|urząd|ksef|xn--)/i;
 
 export interface RenderAuxiliaryReminderEmailInput {
   readonly obligation: NotificationObligationInput;
@@ -197,14 +234,17 @@ export function renderAuxiliaryReminderEmail(
   input: RenderAuxiliaryReminderEmailInput,
 ): RenderedAuxiliaryEmail {
   const obligation = NotificationObligationInputSchema.parse(input.obligation);
-  const fromAddress = (input.fromAddress ?? 'powiadomienia@pap.local').trim();
+  const rawFrom = (input.fromAddress ?? 'powiadomienia@pap.local').trim();
+  const rawTo = input.toAddress.trim();
 
   if (
-    FORBIDDEN_IMPERSONATION_SENDER_PATTERN.test(fromAddress) ||
-    /[\r\n]/.test(fromAddress) ||
-    /[\r\n]/.test(input.toAddress)
+    FORBIDDEN_IMPERSONATION_SENDER_PATTERN.test(rawFrom) ||
+    !SafeSenderEmailAddressSchema.safeParse(rawFrom).success ||
+    !SafeEmailAddressSchema.safeParse(rawTo).success
   ) {
-    throw new Error('Sender or recipient address violates anti-impersonation or header safety policy');
+    throw new Error(
+      'Sender or recipient address violates anti-impersonation or single-address header safety policy',
+    );
   }
 
   const stageHeaderMap: Readonly<
@@ -246,7 +286,9 @@ export function renderAuxiliaryReminderEmail(
     `  ${legalBasisLinePl}`,
     `  Źródło urzędowe: ${obligation.legalBasis.officialUrl}`,
     `  Okres obowiązywania reguły: od ${obligation.legalBasis.effectiveFrom}${
-      obligation.legalBasis.effectiveTo ? ` do ${obligation.legalBasis.effectiveTo}` : ' (bezterminowo)'
+      obligation.legalBasis.effectiveTo
+        ? ` do ${obligation.legalBasis.effectiveTo}`
+        : ' (bezterminowo)'
     }`,
     '',
     'Szczegółowe kwoty rozliczenia oraz projekty deklaracji są dostępne wyłącznie po zalogowaniu',
@@ -293,9 +335,9 @@ export function renderAuxiliaryReminderEmail(
   ].join('\n');
 
   return RenderedAuxiliaryEmailSchema.parse({
-    fromAddress,
+    fromAddress: rawFrom,
     fromDisplayName: 'Polish Accounting Platform (Powiadomienia)',
-    toAddress: input.toAddress.trim(),
+    toAddress: rawTo,
     subject,
     textBody,
     htmlBody,
@@ -359,13 +401,15 @@ export interface ControlledSandboxMailboxTransportOptions {
   readonly clock?: Clock | undefined;
 }
 
-const SAFE_SINGLE_EMAIL_REGEX = /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)+$/;
-
-function parseRecipientDomain(rawAddress: string): { readonly normalized: string; readonly domain: string } | null {
+function parseRecipientDomain(rawAddress: string): {
+  readonly normalized: string;
+  readonly domain: string;
+} | null {
   if (/[\r\n<>,"';\s]/.test(rawAddress)) {
     return null;
   }
-  if (!SAFE_SINGLE_EMAIL_REGEX.test(rawAddress)) {
+  const parsed = SafeEmailAddressSchema.safeParse(rawAddress);
+  if (!parsed.success) {
     return null;
   }
   const atIndex = rawAddress.indexOf('@');
@@ -374,6 +418,10 @@ function parseRecipientDomain(rawAddress: string): { readonly normalized: string
   }
   const domain = rawAddress.slice(atIndex + 1).toLowerCase();
   if (domain.startsWith('.') || domain.endsWith('.') || domain.includes('..')) {
+    return null;
+  }
+  // Reject Punycode domains unless explicitly allowlisted
+  if (/(?:^|\.)xn--/i.test(domain)) {
     return null;
   }
   return {
@@ -488,7 +536,8 @@ export class ControlledSandboxMailboxTransport implements EmailDeliveryTransport
 
     const messageId = `<${randomUUID()}@sandbox.pap.local>`;
     const boundary = `pap-mime-${randomBytes(8).toString('hex')}`;
-    const formattedFrom = `"${email.fromDisplayName}" <${email.fromAddress}>`;
+    const safeFromAddr = SafeSenderEmailAddressSchema.parse(email.fromAddress);
+    const formattedFrom = `"${email.fromDisplayName}" <${safeFromAddr}>`;
     const extraHeaderLines = Object.entries(email.headers).map(
       ([key, val]) => `${key.replace(/[\r\n:]/g, '')}: ${val.replace(/[\r\n]/g, '')}`,
     );
@@ -586,9 +635,7 @@ export type ApplyOptOutResult =
   | {
       readonly ok: false;
       readonly reason:
-        | 'invalid_opt_out_token'
-        | 'opt_out_token_expired'
-        | 'opt_out_token_already_used';
+        'invalid_opt_out_token' | 'opt_out_token_expired' | 'opt_out_token_already_used';
     };
 
 export interface ProcessOutboxSummary {
@@ -597,6 +644,7 @@ export interface ProcessOutboxSummary {
   readonly retryScheduledCount: number;
   readonly deadLetteredCount: number;
   readonly blockedByPolicyCount: number;
+  readonly suppressedByPreferencesCount: number;
 }
 
 function sha256Hex(value: string): string {
@@ -632,9 +680,7 @@ function resolveStageForEvaluationDate(
   return null;
 }
 
-function isLegalBasisVerifiedAndActiveForDate(
-  obligation: NotificationObligationInput,
-): boolean {
+function isLegalBasisVerifiedAndActiveForDate(obligation: NotificationObligationInput): boolean {
   const { legalBasis, dueDate } = obligation;
   if (legalBasis.verificationStatus !== 'verified') {
     return false;
@@ -656,6 +702,8 @@ export class NotificationsEngine {
   private readonly baseRetryBackoffMs: number;
   private readonly maxRetryBackoffMs: number;
   private readonly fromAddress: string;
+  private readonly mutex = new KeyedAsyncMutex();
+  private readonly inFlightOutboxIds = new Set<string>();
 
   private readonly preferencesByKey = new Map<string, NotificationPreferences>();
   private readonly optOutTokens = new Map<string, StoredOptOutToken>();
@@ -672,7 +720,9 @@ export class NotificationsEngine {
       this.baseRetryBackoffMs,
       options.maxRetryBackoffMs ?? 3_600_000,
     );
-    this.fromAddress = options.fromAddress ?? 'powiadomienia@pap.local';
+    this.fromAddress = SafeSenderEmailAddressSchema.parse(
+      (options.fromAddress ?? 'powiadomienia@pap.local').trim(),
+    );
   }
 
   private prefKey(tenantIdVal: string, legalEntityIdVal: string, userIdVal: string): string {
@@ -723,41 +773,44 @@ export class NotificationsEngine {
     readonly explicitDisabledStages?: readonly ReminderStage[] | undefined;
   }): Promise<NotificationPreferences> {
     const key = this.prefKey(input.tenantId, input.legalEntityId, input.userId);
-    const disabledStages = deriveDisabledStages({
-      frequency: input.frequency,
-      optionalRemindersOptedOut: input.optionalRemindersOptedOut,
-      explicitDisabledStages: input.explicitDisabledStages,
-    });
-    const nowIso = this.clock.now().toISOString();
-    const updated = NotificationPreferencesSchema.parse({
-      tenantId: parseTenantId(input.tenantId),
-      legalEntityId: parseLegalEntityId(input.legalEntityId),
-      userId: parseUserId(input.userId),
-      recipientEmail: input.recipientEmail.trim(),
-      channel: 'email',
-      frequency: input.frequency,
-      optionalRemindersOptedOut: input.optionalRemindersOptedOut,
-      disabledStages,
-      disabledAlertsSummaryPl: computeDisabledAlertsSummaryPl(disabledStages),
-      updatedAt: nowIso,
-    });
-    this.preferencesByKey.set(key, updated);
+    return this.mutex.runExclusive([`pref:${key}`], async () => {
+      const disabledStages = deriveDisabledStages({
+        frequency: input.frequency,
+        optionalRemindersOptedOut: input.optionalRemindersOptedOut,
+        explicitDisabledStages: input.explicitDisabledStages,
+      });
+      const nowIso = this.clock.now().toISOString();
+      const updated = NotificationPreferencesSchema.parse({
+        tenantId: parseTenantId(input.tenantId),
+        legalEntityId: parseLegalEntityId(input.legalEntityId),
+        userId: parseUserId(input.userId),
+        recipientEmail: input.recipientEmail.trim(),
+        channel: 'email',
+        frequency: input.frequency,
+        optionalRemindersOptedOut: input.optionalRemindersOptedOut,
+        disabledStages,
+        disabledAlertsSummaryPl: computeDisabledAlertsSummaryPl(disabledStages),
+        updatedAt: nowIso,
+      });
 
-    await this.auditSink.record({
-      auditEventId: randomUUID(),
-      occurredAt: nowIso,
-      kind: 'notification_preferences_updated',
-      tenantId: updated.tenantId,
-      legalEntityId: updated.legalEntityId,
-      userId: updated.userId,
-      deduplicationKey: null,
-      outboxId: null,
-      maskedRecipient: maskEmailForAudit(updated.recipientEmail),
-      outcome: 'allow',
-      reasonCode: updated.optionalRemindersOptedOut ? 'optional_opted_out' : 'preferences_saved',
-    });
+      // Fail-closed: record audit before committing preference mutation
+      await this.auditSink.record({
+        auditEventId: randomUUID(),
+        occurredAt: nowIso,
+        kind: 'notification_preferences_updated',
+        tenantId: updated.tenantId,
+        legalEntityId: updated.legalEntityId,
+        userId: updated.userId,
+        deduplicationKey: null,
+        outboxId: null,
+        maskedRecipient: maskEmailForAudit(updated.recipientEmail),
+        outcome: 'allow',
+        reasonCode: updated.optionalRemindersOptedOut ? 'optional_opted_out' : 'preferences_saved',
+      });
 
-    return updated;
+      this.preferencesByKey.set(key, updated);
+      return updated;
+    });
   }
 
   async issueOptOutToken(input: {
@@ -771,16 +824,10 @@ export class NotificationsEngine {
     readonly rawOptOutToken: string;
     readonly expiresAt: string;
   }> {
-    this.getOrDefaultPreferences({
-      tenantId: input.tenantId,
-      legalEntityId: input.legalEntityId,
-      userId: input.userId,
-      recipientEmail: input.recipientEmail,
-    });
-
     const t = parseTenantId(input.tenantId);
     const e = parseLegalEntityId(input.legalEntityId);
     const u = parseUserId(input.userId);
+    const safeEmail = SafeEmailAddressSchema.parse(input.recipientEmail.trim());
     const now = this.clock.now();
     const ttlMs = Math.max(1, input.ttlMinutes ?? 60 * 24 * 7) * 60_000;
     const expiresAtMs = now.getTime() + ttlMs;
@@ -788,16 +835,7 @@ export class NotificationsEngine {
     const secretPart = randomBytes(24).toString('base64url');
     const rawOptOutToken = `pap_optout_${tokenId}.${secretPart}`;
 
-    this.optOutTokens.set(tokenId, {
-      tokenId,
-      tokenSha256Hex: sha256Hex(rawOptOutToken),
-      tenantId: t,
-      legalEntityId: e,
-      userId: u,
-      expiresAtMs,
-      usedAtIso: null,
-    });
-
+    // Fail-closed: audit token issuance before persisting preferences or token
     await this.auditSink.record({
       auditEventId: randomUUID(),
       occurredAt: now.toISOString(),
@@ -807,9 +845,26 @@ export class NotificationsEngine {
       userId: u,
       deduplicationKey: null,
       outboxId: null,
-      maskedRecipient: maskEmailForAudit(input.recipientEmail),
+      maskedRecipient: maskEmailForAudit(safeEmail),
       outcome: 'allow',
       reasonCode: 'one_time_opt_out_token_created',
+    });
+
+    this.getOrDefaultPreferences({
+      tenantId: t,
+      legalEntityId: e,
+      userId: u,
+      recipientEmail: safeEmail,
+    });
+
+    this.optOutTokens.set(tokenId, {
+      tokenId,
+      tokenSha256Hex: sha256Hex(rawOptOutToken),
+      tenantId: t,
+      legalEntityId: e,
+      userId: u,
+      expiresAtMs,
+      usedAtIso: null,
     });
 
     return {
@@ -823,13 +878,11 @@ export class NotificationsEngine {
     readonly rawOptOutToken: string;
     readonly disableOverdueAlerts?: boolean | undefined;
   }): Promise<ApplyOptOutResult> {
-    const now = this.clock.now();
-    const nowIso = now.toISOString();
-    const match = /^pap_optout_([0-9a-f-]{36})\.[A-Za-z0-9_-]{16,}$/i.exec(
-      input.rawOptOutToken.trim(),
-    );
+    const trimmedToken = input.rawOptOutToken.trim();
+    const match = /^pap_optout_([0-9a-f-]{36})\.[A-Za-z0-9_-]{16,}$/i.exec(trimmedToken);
 
     if (!match?.[1]) {
+      const nowIso = this.clock.now().toISOString();
       await this.auditSink.record({
         auditEventId: randomUUID(),
         occurredAt: nowIso,
@@ -846,105 +899,119 @@ export class NotificationsEngine {
       return { ok: false, reason: 'invalid_opt_out_token' };
     }
 
-    const record = this.optOutTokens.get(match[1].toLowerCase());
-    const providedHash = sha256Hex(input.rawOptOutToken.trim());
+    const tokenId = match[1].toLowerCase();
 
-    if (!record || !constantTimeHexEquals(record.tokenSha256Hex, providedHash)) {
-      await this.auditSink.record({
-        auditEventId: randomUUID(),
-        occurredAt: nowIso,
-        kind: 'notification_opt_out_rejected',
-        tenantId: record?.tenantId ?? null,
-        legalEntityId: record?.legalEntityId ?? null,
-        userId: record?.userId ?? null,
-        deduplicationKey: null,
-        outboxId: null,
-        maskedRecipient: null,
-        outcome: 'deny',
-        reasonCode: 'invalid_opt_out_token',
+    return this.mutex.runExclusive([`optout:${tokenId}`], async () => {
+      const now = this.clock.now();
+      const nowIso = now.toISOString();
+      const record = this.optOutTokens.get(tokenId);
+      const providedHash = sha256Hex(trimmedToken);
+
+      if (!record || !constantTimeHexEquals(record.tokenSha256Hex, providedHash)) {
+        await this.auditSink.record({
+          auditEventId: randomUUID(),
+          occurredAt: nowIso,
+          kind: 'notification_opt_out_rejected',
+          tenantId: record?.tenantId ?? null,
+          legalEntityId: record?.legalEntityId ?? null,
+          userId: record?.userId ?? null,
+          deduplicationKey: null,
+          outboxId: null,
+          maskedRecipient: null,
+          outcome: 'deny',
+          reasonCode: 'invalid_opt_out_token',
+        });
+        return { ok: false, reason: 'invalid_opt_out_token' } as const;
+      }
+
+      if (record.usedAtIso !== null) {
+        await this.auditSink.record({
+          auditEventId: randomUUID(),
+          occurredAt: nowIso,
+          kind: 'notification_opt_out_rejected',
+          tenantId: record.tenantId,
+          legalEntityId: record.legalEntityId,
+          userId: record.userId,
+          deduplicationKey: null,
+          outboxId: null,
+          maskedRecipient: null,
+          outcome: 'deny',
+          reasonCode: 'opt_out_token_already_used',
+        });
+        return { ok: false, reason: 'opt_out_token_already_used' } as const;
+      }
+
+      if (now.getTime() >= record.expiresAtMs) {
+        await this.auditSink.record({
+          auditEventId: randomUUID(),
+          occurredAt: nowIso,
+          kind: 'notification_opt_out_rejected',
+          tenantId: record.tenantId,
+          legalEntityId: record.legalEntityId,
+          userId: record.userId,
+          deduplicationKey: null,
+          outboxId: null,
+          maskedRecipient: null,
+          outcome: 'deny',
+          reasonCode: 'opt_out_token_expired',
+        });
+        return { ok: false, reason: 'opt_out_token_expired' } as const;
+      }
+
+      const key = this.prefKey(record.tenantId, record.legalEntityId, record.userId);
+      return this.mutex.runExclusive([`pref:${key}`], async () => {
+        const current = this.preferencesByKey.get(key);
+        const recipientEmail = current?.recipientEmail ?? 'opted-out@pap.local';
+
+        // Preserve previously disabled `overdue_1d` so clicking a standard opt-out link
+        // never re-enables overdue alerts that the user had already turned off.
+        const preserveOverdueDisabled =
+          Boolean(input.disableOverdueAlerts) ||
+          Boolean(current?.disabledStages.includes('overdue_1d'));
+        const explicitDisabled: ReminderStage[] = preserveOverdueDisabled
+          ? ['advance_7d', 'urgent_2d', 'overdue_1d']
+          : ['advance_7d', 'urgent_2d'];
+
+        const disabledStages = deriveDisabledStages({
+          frequency: current?.frequency ?? 'overdue_only',
+          optionalRemindersOptedOut: true,
+          explicitDisabledStages: explicitDisabled,
+        });
+
+        const updated = NotificationPreferencesSchema.parse({
+          tenantId: record.tenantId,
+          legalEntityId: record.legalEntityId,
+          userId: record.userId,
+          recipientEmail,
+          channel: 'email',
+          frequency: 'overdue_only',
+          optionalRemindersOptedOut: true,
+          disabledStages,
+          disabledAlertsSummaryPl: computeDisabledAlertsSummaryPl(disabledStages),
+          updatedAt: nowIso,
+        });
+
+        // Fail-closed: record audit BEFORE consuming token or mutating preferences
+        await this.auditSink.record({
+          auditEventId: randomUUID(),
+          occurredAt: nowIso,
+          kind: 'notification_opt_out_applied',
+          tenantId: record.tenantId,
+          legalEntityId: record.legalEntityId,
+          userId: record.userId,
+          deduplicationKey: null,
+          outboxId: null,
+          maskedRecipient: maskEmailForAudit(recipientEmail),
+          outcome: 'allow',
+          reasonCode: 'one_time_opt_out_applied',
+        });
+
+        record.usedAtIso = nowIso;
+        this.preferencesByKey.set(key, updated);
+
+        return { ok: true, preferences: updated } as const;
       });
-      return { ok: false, reason: 'invalid_opt_out_token' };
-    }
-
-    if (record.usedAtIso !== null) {
-      await this.auditSink.record({
-        auditEventId: randomUUID(),
-        occurredAt: nowIso,
-        kind: 'notification_opt_out_rejected',
-        tenantId: record.tenantId,
-        legalEntityId: record.legalEntityId,
-        userId: record.userId,
-        deduplicationKey: null,
-        outboxId: null,
-        maskedRecipient: null,
-        outcome: 'deny',
-        reasonCode: 'opt_out_token_already_used',
-      });
-      return { ok: false, reason: 'opt_out_token_already_used' };
-    }
-
-    if (now.getTime() >= record.expiresAtMs) {
-      await this.auditSink.record({
-        auditEventId: randomUUID(),
-        occurredAt: nowIso,
-        kind: 'notification_opt_out_rejected',
-        tenantId: record.tenantId,
-        legalEntityId: record.legalEntityId,
-        userId: record.userId,
-        deduplicationKey: null,
-        outboxId: null,
-        maskedRecipient: null,
-        outcome: 'deny',
-        reasonCode: 'opt_out_token_expired',
-      });
-      return { ok: false, reason: 'opt_out_token_expired' };
-    }
-
-    record.usedAtIso = nowIso;
-
-    const key = this.prefKey(record.tenantId, record.legalEntityId, record.userId);
-    const current = this.preferencesByKey.get(key);
-    const recipientEmail = current?.recipientEmail ?? 'opted-out@pap.local';
-    const explicitDisabled: ReminderStage[] = input.disableOverdueAlerts
-      ? ['advance_7d', 'urgent_2d', 'overdue_1d']
-      : ['advance_7d', 'urgent_2d'];
-
-    const disabledStages = deriveDisabledStages({
-      frequency: current?.frequency ?? 'overdue_only',
-      optionalRemindersOptedOut: true,
-      explicitDisabledStages: explicitDisabled,
     });
-
-    const updated = NotificationPreferencesSchema.parse({
-      tenantId: record.tenantId,
-      legalEntityId: record.legalEntityId,
-      userId: record.userId,
-      recipientEmail,
-      channel: 'email',
-      frequency: 'overdue_only',
-      optionalRemindersOptedOut: true,
-      disabledStages,
-      disabledAlertsSummaryPl: computeDisabledAlertsSummaryPl(disabledStages),
-      updatedAt: nowIso,
-    });
-
-    this.preferencesByKey.set(key, updated);
-
-    await this.auditSink.record({
-      auditEventId: randomUUID(),
-      occurredAt: nowIso,
-      kind: 'notification_opt_out_applied',
-      tenantId: record.tenantId,
-      legalEntityId: record.legalEntityId,
-      userId: record.userId,
-      deduplicationKey: null,
-      outboxId: null,
-      maskedRecipient: maskEmailForAudit(recipientEmail),
-      outcome: 'allow',
-      reasonCode: 'one_time_opt_out_applied',
-    });
-
-    return { ok: true, preferences: updated };
   }
 
   async enqueueScheduledReminders(
@@ -952,6 +1019,7 @@ export class NotificationsEngine {
   ): Promise<EnqueueScheduledRemindersResult> {
     parseIsoDateToUtcMidnightMs(input.evaluationDate);
     const normalizedUserId = parseUserId(input.userId);
+    const validatedRecipientEmail = SafeEmailAddressSchema.parse(input.recipientEmail.trim());
 
     const enqueuedEntries: NotificationOutboxEntry[] = [];
     let skippedDuplicatesCount = 0;
@@ -981,7 +1049,7 @@ export class NotificationsEngine {
         tenantId: obligation.tenantId,
         legalEntityId: obligation.legalEntityId,
         userId: normalizedUserId,
-        recipientEmail: input.recipientEmail,
+        recipientEmail: validatedRecipientEmail,
       });
 
       if (preferences.disabledStages.includes(stage)) {
@@ -998,56 +1066,59 @@ export class NotificationsEngine {
         stage,
       });
 
-      if (this.outboxByDedupKey.has(deduplicationKey)) {
-        skippedDuplicatesCount += 1;
-        continue;
-      }
+      await this.mutex.runExclusive([`dedup:${deduplicationKey}`], async () => {
+        if (this.outboxByDedupKey.has(deduplicationKey)) {
+          skippedDuplicatesCount += 1;
+          return;
+        }
 
-      const email = renderAuxiliaryReminderEmail({
-        obligation,
-        stage,
-        toAddress: preferences.recipientEmail,
-        fromAddress: this.fromAddress,
-        preferences,
-      });
+        const email = renderAuxiliaryReminderEmail({
+          obligation,
+          stage,
+          toAddress: preferences.recipientEmail,
+          fromAddress: this.fromAddress,
+          preferences,
+        });
 
-      const nowIso = this.clock.now().toISOString();
-      const outboxId = randomUUID();
-      const entry: NotificationOutboxEntry = {
-        outboxId,
-        deduplicationKey,
-        tenantId: obligation.tenantId,
-        legalEntityId: obligation.legalEntityId,
-        userId: normalizedUserId,
-        obligationId: obligation.obligationId,
-        stage,
-        scheduledForDate: input.evaluationDate,
-        status: 'pending',
-        retryCount: 0,
-        maxAttempts: this.defaultMaxAttempts,
-        nextAttemptAt: nowIso,
-        createdAt: nowIso,
-        lastUpdatedAt: nowIso,
-        email,
-        attempts: [],
-      };
+        const nowIso = this.clock.now().toISOString();
+        const outboxId = randomUUID();
+        const entry: NotificationOutboxEntry = {
+          outboxId,
+          deduplicationKey,
+          tenantId: obligation.tenantId,
+          legalEntityId: obligation.legalEntityId,
+          userId: normalizedUserId,
+          obligationId: obligation.obligationId,
+          stage,
+          scheduledForDate: input.evaluationDate,
+          status: 'pending',
+          retryCount: 0,
+          maxAttempts: this.defaultMaxAttempts,
+          nextAttemptAt: nowIso,
+          createdAt: nowIso,
+          lastUpdatedAt: nowIso,
+          email,
+          attempts: [],
+        };
 
-      this.outboxByDedupKey.set(deduplicationKey, entry);
-      this.outboxById.set(outboxId, entry);
-      enqueuedEntries.push(this.cloneOutboxEntry(entry));
+        // Fail-closed: record `notification_outbox_enqueued` BEFORE inserting into Outbox maps
+        await this.auditSink.record({
+          auditEventId: randomUUID(),
+          occurredAt: nowIso,
+          kind: 'notification_outbox_enqueued',
+          tenantId: entry.tenantId,
+          legalEntityId: entry.legalEntityId,
+          userId: entry.userId,
+          deduplicationKey: entry.deduplicationKey,
+          outboxId: entry.outboxId,
+          maskedRecipient: maskEmailForAudit(entry.email.toAddress),
+          outcome: 'allow',
+          reasonCode: `scheduled_${stage}`,
+        });
 
-      await this.auditSink.record({
-        auditEventId: randomUUID(),
-        occurredAt: nowIso,
-        kind: 'notification_outbox_enqueued',
-        tenantId: entry.tenantId,
-        legalEntityId: entry.legalEntityId,
-        userId: entry.userId,
-        deduplicationKey: entry.deduplicationKey,
-        outboxId: entry.outboxId,
-        maskedRecipient: maskEmailForAudit(entry.email.toAddress),
-        outcome: 'allow',
-        reasonCode: `scheduled_${stage}`,
+        this.outboxByDedupKey.set(deduplicationKey, entry);
+        this.outboxById.set(outboxId, entry);
+        enqueuedEntries.push(this.cloneOutboxEntry(entry));
       });
     }
 
@@ -1070,160 +1141,216 @@ export class NotificationsEngine {
     let retryScheduledCount = 0;
     let deadLetteredCount = 0;
     let blockedByPolicyCount = 0;
+    let suppressedByPreferencesCount = 0;
 
-    for (const entry of this.outboxById.values()) {
-      const isDue =
-        entry.status === 'pending' ||
-        (entry.status === 'retry_scheduled' &&
-          entry.nextAttemptAt !== null &&
-          new Date(entry.nextAttemptAt).getTime() <= nowMs);
+    const snapshotIds = [...this.outboxById.keys()];
 
-      if (!isDue) {
+    for (const outboxId of snapshotIds) {
+      // Atomic synchronous claim before any `await`: prevents overlapping worker runs
+      // (`Promise.all([processDueOutboxMessages(), processDueOutboxMessages()])`) from
+      // ever sending the same queued message twice.
+      if (this.inFlightOutboxIds.has(outboxId)) {
         continue;
       }
 
-      processedCount += 1;
-      const attemptNumber = entry.attempts.length + 1;
+      const initialCandidate = this.outboxById.get(outboxId);
+      if (!initialCandidate || !this.isEntryDue(initialCandidate, nowMs)) {
+        continue;
+      }
 
-      let deliveryResult: EmailTransportDeliveryResult;
+      this.inFlightOutboxIds.add(outboxId);
       try {
-        deliveryResult = await this.transport.sendEmail(entry.email, {
-          outboxId: entry.outboxId,
-          deduplicationKey: entry.deduplicationKey,
-          tenantId: entry.tenantId,
-          legalEntityId: entry.legalEntityId,
-        });
-      } catch (err) {
-        deliveryResult = {
-          ok: false,
-          outcome: 'transient_failure',
-          errorCode: 'transport_exception',
-          errorMessage: err instanceof Error ? err.message : 'Unknown transport failure',
-        };
-      }
+        await this.mutex.runExclusive([`outbox:${outboxId}`], async () => {
+          const entry = this.outboxById.get(outboxId);
+          if (!entry || !this.isEntryDue(entry, nowMs)) {
+            return;
+          }
 
-      if (deliveryResult.ok) {
-        const attempt: DeliveryAttemptRecord = {
-          attemptNumber,
-          attemptedAt: nowIso,
-          outcome: 'sent',
-          providerMessageId: deliveryResult.providerMessageId,
-          errorCode: null,
-          errorMessageRedacted: null,
-        };
-        this.mutateOutboxEntry(entry.outboxId, {
-          status: 'sent',
-          nextAttemptAt: null,
-          lastUpdatedAt: nowIso,
-          attempts: [...entry.attempts, attempt],
-        });
-        sentCount += 1;
+          processedCount += 1;
+          const attemptNumber = entry.attempts.length + 1;
 
-        await this.auditSink.record({
-          auditEventId: randomUUID(),
-          occurredAt: nowIso,
-          kind: 'notification_delivered',
-          tenantId: entry.tenantId,
-          legalEntityId: entry.legalEntityId,
-          userId: entry.userId,
-          deduplicationKey: entry.deduplicationKey,
-          outboxId: entry.outboxId,
-          maskedRecipient: maskEmailForAudit(entry.email.toAddress),
-          outcome: 'allow',
-          reasonCode: 'delivered',
-        });
-        continue;
-      }
+          // Re-check live user preferences immediately before sending (in case user opted out
+          // after the reminder was enqueued or between retry attempts).
+          const latestPrefs = this.preferencesByKey.get(
+            this.prefKey(entry.tenantId, entry.legalEntityId, entry.userId),
+          );
+          if (latestPrefs?.disabledStages.includes(entry.stage)) {
+            const suppressedAttempt: DeliveryAttemptRecord = {
+              attemptNumber,
+              attemptedAt: nowIso,
+              outcome: 'suppressed_by_preferences',
+              providerMessageId: null,
+              errorCode: null,
+              errorMessageRedacted: null,
+            };
 
-      const redactedError = redactErrorText(deliveryResult.errorMessage);
+            await this.auditSink.record({
+              auditEventId: randomUUID(),
+              occurredAt: nowIso,
+              kind: 'notification_suppressed_by_preferences',
+              tenantId: entry.tenantId,
+              legalEntityId: entry.legalEntityId,
+              userId: entry.userId,
+              deduplicationKey: entry.deduplicationKey,
+              outboxId: entry.outboxId,
+              maskedRecipient: maskEmailForAudit(entry.email.toAddress),
+              outcome: 'allow',
+              reasonCode: 'stage_disabled_before_send',
+            });
 
-      if (deliveryResult.outcome === 'blocked_recipient_policy') {
-        const attempt: DeliveryAttemptRecord = {
-          attemptNumber,
-          attemptedAt: nowIso,
-          outcome: 'blocked_recipient_policy',
-          providerMessageId: null,
-          errorCode: deliveryResult.errorCode,
-          errorMessageRedacted: redactedError,
-        };
-        this.mutateOutboxEntry(entry.outboxId, {
-          status: 'blocked_recipient_policy',
-          nextAttemptAt: null,
-          lastUpdatedAt: nowIso,
-          attempts: [...entry.attempts, attempt],
-        });
-        blockedByPolicyCount += 1;
-        continue;
-      }
+            this.mutateOutboxEntry(entry.outboxId, {
+              status: 'suppressed_by_preferences',
+              nextAttemptAt: null,
+              lastUpdatedAt: nowIso,
+              attempts: [...entry.attempts, suppressedAttempt],
+            });
+            suppressedByPreferencesCount += 1;
+            return;
+          }
 
-      const nextRetryCount = entry.retryCount + 1;
-      if (nextRetryCount >= entry.maxAttempts) {
-        const attempt: DeliveryAttemptRecord = {
-          attemptNumber,
-          attemptedAt: nowIso,
-          outcome: 'dead_letter',
-          providerMessageId: null,
-          errorCode: deliveryResult.errorCode,
-          errorMessageRedacted: redactedError,
-        };
-        this.mutateOutboxEntry(entry.outboxId, {
-          status: 'dead_letter',
-          retryCount: nextRetryCount,
-          nextAttemptAt: null,
-          lastUpdatedAt: nowIso,
-          attempts: [...entry.attempts, attempt],
-        });
-        deadLetteredCount += 1;
+          let deliveryResult: EmailTransportDeliveryResult;
+          try {
+            deliveryResult = await this.transport.sendEmail(entry.email, {
+              outboxId: entry.outboxId,
+              deduplicationKey: entry.deduplicationKey,
+              tenantId: entry.tenantId,
+              legalEntityId: entry.legalEntityId,
+            });
+          } catch (err) {
+            deliveryResult = {
+              ok: false,
+              outcome: 'transient_failure',
+              errorCode: 'transport_exception',
+              errorMessage: err instanceof Error ? err.message : 'Unknown transport failure',
+            };
+          }
 
-        await this.auditSink.record({
-          auditEventId: randomUUID(),
-          occurredAt: nowIso,
-          kind: 'notification_dead_lettered',
-          tenantId: entry.tenantId,
-          legalEntityId: entry.legalEntityId,
-          userId: entry.userId,
-          deduplicationKey: entry.deduplicationKey,
-          outboxId: entry.outboxId,
-          maskedRecipient: maskEmailForAudit(entry.email.toAddress),
-          outcome: 'error',
-          reasonCode: deliveryResult.errorCode,
-        });
-      } else {
-        const backoffDelayMs = Math.min(
-          this.maxRetryBackoffMs,
-          this.baseRetryBackoffMs * Math.pow(2, nextRetryCount - 1),
-        );
-        const nextAttemptAtIso = new Date(nowMs + backoffDelayMs).toISOString();
-        const attempt: DeliveryAttemptRecord = {
-          attemptNumber,
-          attemptedAt: nowIso,
-          outcome: 'transient_failure',
-          providerMessageId: null,
-          errorCode: deliveryResult.errorCode,
-          errorMessageRedacted: redactedError,
-        };
-        this.mutateOutboxEntry(entry.outboxId, {
-          status: 'retry_scheduled',
-          retryCount: nextRetryCount,
-          nextAttemptAt: nextAttemptAtIso,
-          lastUpdatedAt: nowIso,
-          attempts: [...entry.attempts, attempt],
-        });
-        retryScheduledCount += 1;
+          if (deliveryResult.ok) {
+            const attempt: DeliveryAttemptRecord = {
+              attemptNumber,
+              attemptedAt: nowIso,
+              outcome: 'sent',
+              providerMessageId: deliveryResult.providerMessageId,
+              errorCode: null,
+              errorMessageRedacted: null,
+            };
+            this.mutateOutboxEntry(entry.outboxId, {
+              status: 'sent',
+              nextAttemptAt: null,
+              lastUpdatedAt: nowIso,
+              attempts: [...entry.attempts, attempt],
+            });
+            sentCount += 1;
 
-        await this.auditSink.record({
-          auditEventId: randomUUID(),
-          occurredAt: nowIso,
-          kind: 'notification_retry_scheduled',
-          tenantId: entry.tenantId,
-          legalEntityId: entry.legalEntityId,
-          userId: entry.userId,
-          deduplicationKey: entry.deduplicationKey,
-          outboxId: entry.outboxId,
-          maskedRecipient: maskEmailForAudit(entry.email.toAddress),
-          outcome: 'error',
-          reasonCode: deliveryResult.errorCode,
+            await this.auditSink.record({
+              auditEventId: randomUUID(),
+              occurredAt: nowIso,
+              kind: 'notification_delivered',
+              tenantId: entry.tenantId,
+              legalEntityId: entry.legalEntityId,
+              userId: entry.userId,
+              deduplicationKey: entry.deduplicationKey,
+              outboxId: entry.outboxId,
+              maskedRecipient: maskEmailForAudit(entry.email.toAddress),
+              outcome: 'allow',
+              reasonCode: 'delivered',
+            });
+            return;
+          }
+
+          const redactedError = redactErrorText(deliveryResult.errorMessage);
+
+          if (deliveryResult.outcome === 'blocked_recipient_policy') {
+            const attempt: DeliveryAttemptRecord = {
+              attemptNumber,
+              attemptedAt: nowIso,
+              outcome: 'blocked_recipient_policy',
+              providerMessageId: null,
+              errorCode: deliveryResult.errorCode,
+              errorMessageRedacted: redactedError,
+            };
+            this.mutateOutboxEntry(entry.outboxId, {
+              status: 'blocked_recipient_policy',
+              nextAttemptAt: null,
+              lastUpdatedAt: nowIso,
+              attempts: [...entry.attempts, attempt],
+            });
+            blockedByPolicyCount += 1;
+            return;
+          }
+
+          const nextRetryCount = entry.retryCount + 1;
+          if (nextRetryCount >= entry.maxAttempts) {
+            const attempt: DeliveryAttemptRecord = {
+              attemptNumber,
+              attemptedAt: nowIso,
+              outcome: 'dead_letter',
+              providerMessageId: null,
+              errorCode: deliveryResult.errorCode,
+              errorMessageRedacted: redactedError,
+            };
+            this.mutateOutboxEntry(entry.outboxId, {
+              status: 'dead_letter',
+              retryCount: nextRetryCount,
+              nextAttemptAt: null,
+              lastUpdatedAt: nowIso,
+              attempts: [...entry.attempts, attempt],
+            });
+            deadLetteredCount += 1;
+
+            await this.auditSink.record({
+              auditEventId: randomUUID(),
+              occurredAt: nowIso,
+              kind: 'notification_dead_lettered',
+              tenantId: entry.tenantId,
+              legalEntityId: entry.legalEntityId,
+              userId: entry.userId,
+              deduplicationKey: entry.deduplicationKey,
+              outboxId: entry.outboxId,
+              maskedRecipient: maskEmailForAudit(entry.email.toAddress),
+              outcome: 'error',
+              reasonCode: deliveryResult.errorCode,
+            });
+          } else {
+            const backoffDelayMs = Math.min(
+              this.maxRetryBackoffMs,
+              this.baseRetryBackoffMs * Math.pow(2, nextRetryCount - 1),
+            );
+            const nextAttemptAtIso = new Date(nowMs + backoffDelayMs).toISOString();
+            const attempt: DeliveryAttemptRecord = {
+              attemptNumber,
+              attemptedAt: nowIso,
+              outcome: 'transient_failure',
+              providerMessageId: null,
+              errorCode: deliveryResult.errorCode,
+              errorMessageRedacted: redactedError,
+            };
+            this.mutateOutboxEntry(entry.outboxId, {
+              status: 'retry_scheduled',
+              retryCount: nextRetryCount,
+              nextAttemptAt: nextAttemptAtIso,
+              lastUpdatedAt: nowIso,
+              attempts: [...entry.attempts, attempt],
+            });
+            retryScheduledCount += 1;
+
+            await this.auditSink.record({
+              auditEventId: randomUUID(),
+              occurredAt: nowIso,
+              kind: 'notification_retry_scheduled',
+              tenantId: entry.tenantId,
+              legalEntityId: entry.legalEntityId,
+              userId: entry.userId,
+              deduplicationKey: entry.deduplicationKey,
+              outboxId: entry.outboxId,
+              maskedRecipient: maskEmailForAudit(entry.email.toAddress),
+              outcome: 'error',
+              reasonCode: deliveryResult.errorCode,
+            });
+          }
         });
+      } finally {
+        this.inFlightOutboxIds.delete(outboxId);
       }
     }
 
@@ -1233,6 +1360,7 @@ export class NotificationsEngine {
       retryScheduledCount,
       deadLetteredCount,
       blockedByPolicyCount,
+      suppressedByPreferencesCount,
     };
   }
 
@@ -1255,6 +1383,15 @@ export class NotificationsEngine {
       result.push(this.cloneOutboxEntry(entry));
     }
     return result;
+  }
+
+  private isEntryDue(entry: NotificationOutboxEntry, nowMs: number): boolean {
+    return (
+      entry.status === 'pending' ||
+      (entry.status === 'retry_scheduled' &&
+        entry.nextAttemptAt !== null &&
+        new Date(entry.nextAttemptAt).getTime() <= nowMs)
+    );
   }
 
   private mutateOutboxEntry(

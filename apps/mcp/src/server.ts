@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
 import { McpServer, type CallToolResult, type ServerContext } from '@modelcontextprotocol/server';
 import { getSystemStatus } from '@pap/application';
 import {
-   type McpGatewayToolResult,
+  resolveSafeRequestCorrelationId,
+  type McpGatewayToolResult,
   type PapMcpGateway,
 } from '@pap/application/mcp-gateway';
 import { SystemStatusSchema } from '@pap/contracts';
@@ -68,11 +68,12 @@ function extractCallContext(
   readonly clientId?: string | undefined;
 } {
   const httpAuth = ctx.http?.authInfo;
-  const headerRequestId = ctx.http?.req?.headers.get('x-request-id') ?? undefined;
+  const headerRequestId = ctx.http?.req?.headers.get('x-request-id');
+  const { correlationId } = resolveSafeRequestCorrelationId(headerRequestId);
   const token = httpAuth?.token ?? options?.getFallbackBearerToken?.() ?? undefined;
   return {
     rawBearerToken: token,
-    correlationId: headerRequestId && headerRequestId.trim().length > 0 ? headerRequestId : randomUUID(),
+    correlationId,
     clientId: httpAuth?.clientId,
   };
 }
@@ -107,7 +108,7 @@ export function createPapMcpServer(
     {
       title: 'Status systemu',
       description:
-        'Zwraca publiczny status aplikacji i informację o dostępności modułów. Nie udostępnia danych firm ani dokumentów.',
+        'Zwraca status techniczny aplikacji i informację o dostępności modułów. Nie udostępnia danych firm ani dokumentów.',
       inputSchema: z.object({}).strict(),
       outputSchema: SystemStatusSchema,
       annotations: { readOnlyHint: true, destructiveHint: false },

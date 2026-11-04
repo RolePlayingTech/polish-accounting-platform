@@ -1,16 +1,84 @@
 import { z } from 'zod';
 
+export function isRealIsoCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(value);
+  if (!match) {
+    return false;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utcMs = Date.UTC(year, month - 1, day);
+  if (!Number.isFinite(utcMs)) {
+    return false;
+  }
+  const date = new Date(utcMs);
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+export function isRealIsoUtcTimestamp(value: string): boolean {
+  const match = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?Z$/.exec(
+    value,
+  );
+  if (!match?.[1]) {
+    return false;
+  }
+  return isRealIsoCalendarDate(match[1]);
+}
+
+const OFFICIAL_POLISH_LEGAL_PUBLISHERS: ReadonlySet<string> = new Set([
+  'isap.sejm.gov.pl',
+  'dziennikustaw.gov.pl',
+  'www.dziennikustaw.gov.pl',
+  'monitorpolski.gov.pl',
+  'www.monitorpolski.gov.pl',
+  'podatki.gov.pl',
+  'www.podatki.gov.pl',
+  'zus.pl',
+  'www.zus.pl',
+]);
+
+export function isOfficialPolishLegalUrl(value: string): boolean {
+  if (!/^https:\/\/[^\s<>"]+$/.test(value)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.username !== '' ||
+      parsed.password !== '' ||
+      parsed.port !== ''
+    ) {
+      return false;
+    }
+    return OFFICIAL_POLISH_LEGAL_PUBLISHERS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export const UuidSelectorSchema = z
   .string()
   .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 
 export const YearMonthSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/);
 
-export const IsoDateSchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/);
+export const IsoDateSchema = z
+  .string()
+  .regex(/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/)
+  .refine(isRealIsoCalendarDate, {
+    message: 'Nieprawidłowa data kalendarzowa RRRR-MM-DD.',
+  });
 
 export const IsoUtcTimestampSchema = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/);
+  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/)
+  .refine(isRealIsoUtcTimestamp, {
+    message: 'Nieprawidłowy znacznik czasu UTC ISO-8601.',
+  });
 
 export const PlnDecimalStringSchema = z.string().regex(/^-?\d+\.\d{2}$/);
 
@@ -18,7 +86,26 @@ export const NonNegativePlnDecimalStringSchema = z.string().regex(/^\d+\.\d{2}$/
 
 export const Sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
-export const OfficialHttpsUrlSchema = z.string().regex(/^https:\/\/[^\s<>"]+$/);
+export const OfficialHttpsUrlSchema = z
+  .string()
+  .regex(/^https:\/\/[^\s<>"]+$/)
+  .refine(isOfficialPolishLegalUrl, {
+    message:
+      'Wymagany oficjalny adres HTTPS publikatora aktu prawnego lub instytucji (np. isap.sejm.gov.pl, dziennikustaw.gov.pl, podatki.gov.pl, zus.pl).',
+  });
+
+export const KsefReferenceNumberSchema = z
+  .string()
+  .max(80)
+  .regex(/^\d{10}-\d{8}-[A-Z0-9]{2,24}(?:-[A-Z0-9]{2,24}){1,3}$/)
+  .refine(
+    (value) => {
+      const dateSegment = value.slice(11, 19);
+      const iso = `${dateSegment.slice(0, 4)}-${dateSegment.slice(4, 6)}-${dateSegment.slice(6, 8)}`;
+      return isRealIsoCalendarDate(iso);
+    },
+    { message: 'Nieprawidłowa data w numerze referencyjnym KSeF.' },
+  );
 
 export const McpScopeSchema = z.enum(['pap:mcp:read', 'pap:mcp:prepare']);
 export type McpScope = z.infer<typeof McpScopeSchema>;
@@ -140,7 +227,7 @@ export const UnpaidInvoiceItemSchema = z
     vatAmountPln: NonNegativePlnDecimalStringSchema,
     grossAmountPln: NonNegativePlnDecimalStringSchema,
     remainingGrossAmountPln: NonNegativePlnDecimalStringSchema,
-    ksefReferenceNumber: z.string().max(80).nullable(),
+    ksefReferenceNumber: KsefReferenceNumberSchema.nullable(),
     invoiceNumber: UntrustedDocumentTextEnvelopeSchema,
     counterpartyName: UntrustedDocumentTextEnvelopeSchema,
     description: UntrustedDocumentTextEnvelopeSchema,
@@ -366,7 +453,31 @@ export const PrepareInvoiceDraftPayloadSchema = z
     expenseDescription: z.string().min(1).max(2000),
     suggestedCategory: ProposedPostingCategorySchema,
   })
-  .strict();
+  .strict()
+  .superRefine((invoice, ctx) => {
+    if (invoice.dueDate < invoice.issueDate) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['dueDate'],
+        message:
+          'Termin płatności (dueDate) nie może być wcześniejszy niż data wystawienia (issueDate).',
+      });
+    }
+    if (invoice.direction === 'sales' && invoice.suggestedCategory !== 'przychod_sprzedaz') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['suggestedCategory'],
+        message: 'Dla faktury sprzedaży (sales) jedyną spójną kategorią jest przychod_sprzedaz.',
+      });
+    }
+    if (invoice.direction === 'purchase' && invoice.suggestedCategory === 'przychod_sprzedaz') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['suggestedCategory'],
+        message: 'Faktura zakupu (purchase) nie może używać kategorii przychod_sprzedaz.',
+      });
+    }
+  });
 
 export type PrepareInvoiceDraftPayload = z.infer<typeof PrepareInvoiceDraftPayloadSchema>;
 
@@ -386,7 +497,7 @@ export type PrepareInvoiceAndPostingProposalInput = z.infer<
 
 export const ProposedAccountingPreviewSchema = z
   .object({
-    kpirColumnOrAccount: z.string().min(1).max(120),
+    kpirColumnOrAccount: z.string().min(1).max(160),
     kupAmountPln: NonNegativePlnDecimalStringSchema,
     nkupAmountPln: NonNegativePlnDecimalStringSchema,
     deductibleVatAmountPln: NonNegativePlnDecimalStringSchema,
@@ -397,13 +508,21 @@ export const ProposedAccountingPreviewSchema = z
 
 export type ProposedAccountingPreview = z.infer<typeof ProposedAccountingPreviewSchema>;
 
+export const PrepareProposalLifecycleStatusSchema = z.enum([
+  'pending_human_approval',
+  'confirmed',
+  'expired',
+]);
+
+export type PrepareProposalLifecycleStatus = z.infer<typeof PrepareProposalLifecycleStatusSchema>;
+
 export const PrepareInvoiceAndPostingProposalOutputSchema = z
   .object({
     proposalId: UuidSelectorSchema,
     tenantId: UuidSelectorSchema,
     legalEntityId: UuidSelectorSchema,
-    status: z.literal('pending_human_approval'),
-    ledgerPosted: z.literal(false),
+    status: PrepareProposalLifecycleStatusSchema,
+    ledgerPosted: z.boolean(),
     idempotencyKey: UuidSelectorSchema,
     idempotentReplay: z.boolean(),
     payloadHash: Sha256HexSchema,

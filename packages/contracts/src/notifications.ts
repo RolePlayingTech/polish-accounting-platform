@@ -6,17 +6,40 @@ import {
   UuidSelectorSchema,
 } from './mcp-tools.js';
 
+const SAFE_SINGLE_EMAIL_FORMAT_REGEX =
+  /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+
+const FORBIDDEN_AUTHORITY_SENDER_REGEX =
+  /(gov\.pl|zus\.pl|podatki|skarbow|ministerstwo|urzad|urząd|ksef)/i;
+
+export const SafeEmailAddressSchema = z
+  .string()
+  .min(3)
+  .max(254)
+  .regex(SAFE_SINGLE_EMAIL_FORMAT_REGEX)
+  .refine(
+    (value) => {
+      const localPart = value.split('@')[0] ?? '';
+      return !localPart.startsWith('.') && !localPart.endsWith('.') && !localPart.includes('..');
+    },
+    { message: 'Nieprawidłowy format pojedynczego adresu e-mail.' },
+  );
+
+export const SafeSenderEmailAddressSchema = SafeEmailAddressSchema.refine(
+  (value) => !/(?:^|[.@])xn--/i.test(value) && !FORBIDDEN_AUTHORITY_SENDER_REGEX.test(value),
+  {
+    message:
+      'Adres nadawcy nie może używać Punycode (xn--) ani sugerować domen organów administracji skarbowej/ZUS.',
+  },
+);
+
 export const NotificationChannelSchema = z.enum(['email']);
 export type NotificationChannel = z.infer<typeof NotificationChannelSchema>;
 
 export const ReminderStageSchema = z.enum(['advance_7d', 'urgent_2d', 'overdue_1d']);
 export type ReminderStage = z.infer<typeof ReminderStageSchema>;
 
-export const NotificationFrequencySchema = z.enum([
-  'standard',
-  'urgent_only',
-  'overdue_only',
-]);
+export const NotificationFrequencySchema = z.enum(['standard', 'urgent_only', 'overdue_only']);
 export type NotificationFrequency = z.infer<typeof NotificationFrequencySchema>;
 
 export const NotificationPreferencesSchema = z
@@ -24,7 +47,7 @@ export const NotificationPreferencesSchema = z
     tenantId: UuidSelectorSchema,
     legalEntityId: UuidSelectorSchema,
     userId: UuidSelectorSchema,
-    recipientEmail: z.string().min(3).max(254),
+    recipientEmail: SafeEmailAddressSchema,
     channel: NotificationChannelSchema,
     frequency: NotificationFrequencySchema,
     optionalRemindersOptedOut: z.boolean(),
@@ -59,6 +82,7 @@ export const OutboxMessageStatusSchema = z.enum([
   'retry_scheduled',
   'dead_letter',
   'blocked_recipient_policy',
+  'suppressed_by_preferences',
 ]);
 
 export type OutboxMessageStatus = z.infer<typeof OutboxMessageStatusSchema>;
@@ -68,6 +92,7 @@ export const DeliveryAttemptOutcomeSchema = z.enum([
   'transient_failure',
   'dead_letter',
   'blocked_recipient_policy',
+  'suppressed_by_preferences',
 ]);
 
 export type DeliveryAttemptOutcome = z.infer<typeof DeliveryAttemptOutcomeSchema>;
@@ -87,10 +112,14 @@ export type DeliveryAttemptRecord = z.infer<typeof DeliveryAttemptRecordSchema>;
 
 export const RenderedAuxiliaryEmailSchema = z
   .object({
-    fromAddress: z.string().min(3).max(254),
+    fromAddress: SafeSenderEmailAddressSchema,
     fromDisplayName: z.literal('Polish Accounting Platform (Powiadomienia)'),
-    toAddress: z.string().min(3).max(254),
-    subject: z.string().min(1).max(200),
+    toAddress: SafeEmailAddressSchema,
+    subject: z
+      .string()
+      .min(1)
+      .max(200)
+      .refine((s) => !/[\r\n]/.test(s), { message: 'Temat nie może zawierać znaków CRLF.' }),
     textBody: z.string().min(1),
     htmlBody: z.string().min(1),
     headers: z.record(z.string(), z.string()),

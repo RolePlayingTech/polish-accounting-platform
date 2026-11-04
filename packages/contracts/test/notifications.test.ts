@@ -3,10 +3,12 @@ import {
   MANDATORY_AUXILIARY_EMAIL_FOOTER_PL,
   NotificationPreferencesSchema,
   RenderedAuxiliaryEmailSchema,
+  SafeEmailAddressSchema,
+  SafeSenderEmailAddressSchema,
 } from '../src/notifications.js';
 
 describe('Notification contracts', () => {
-  it('enforces exact non-impersonating sender display name and auxiliary footer constant', () => {
+  it('enforces exact non-impersonating sender display name, single-address format, and auxiliary footer constant', () => {
     expect(MANDATORY_AUXILIARY_EMAIL_FOOTER_PL).toContain(
       'Wiadomość nie pochodzi z urzędu skarbowego, Ministerstwa Finansów ani ZUS.',
     );
@@ -22,6 +24,19 @@ describe('Notification contracts', () => {
         headers: {},
       }).success,
     ).toBe(false);
+
+    // Reject Punycode xn-- or authority domain in sender
+    expect(SafeSenderEmailAddressSchema.safeParse('powiadomienia@xn--gov-9la.pl').success).toBe(
+      false,
+    );
+    expect(SafeSenderEmailAddressSchema.safeParse('powiadomienia@mf.gov.pl').success).toBe(false);
+
+    // Reject CRLF, angle brackets, and comma-separated multiple recipients
+    expect(SafeEmailAddressSchema.safeParse('alert@pap.local\r\nBcc: evil@pap.local').success).toBe(
+      false,
+    );
+    expect(SafeEmailAddressSchema.safeParse('<alert@pap.local>').success).toBe(false);
+    expect(SafeEmailAddressSchema.safeParse('a@pap.local, b@pap.local').success).toBe(false);
 
     expect(
       RenderedAuxiliaryEmailSchema.safeParse({

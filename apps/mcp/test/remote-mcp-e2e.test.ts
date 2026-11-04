@@ -1,3 +1,4 @@
+import { createConnection } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import type {
@@ -190,7 +191,8 @@ function buildRemoteMcpTestStack() {
     deductibleVatAmountPln: '115.00',
     nonDeductibleVatAmountPln: '0.00',
     taxCategoryCode: 'KPiR_KOL_13_USLUGI_OBCE',
-    summaryPl: 'Wydatek związany wyłącznie z działalnością opodatkowaną: 100% VAT i 100% netto w KUP.',
+    summaryPl:
+      'Wydatek związany wyłącznie z działalnością opodatkowaną: 100% VAT i 100% netto w KUP.',
     calculationSteps: [
       {
         stepNumber: 1,
@@ -408,7 +410,9 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       name: 'get_monthly_tax_obligations',
       arguments: { tenantId: TENANT_A, legalEntityId: ENTITY_A, period: '2026-11' },
     });
-    expect(GetMonthlyTaxObligationsOutputSchema.parse(obligationsRes.structuredContent).obligations).toHaveLength(1);
+    expect(
+      GetMonthlyTaxObligationsOutputSchema.parse(obligationsRes.structuredContent).obligations,
+    ).toHaveLength(1);
 
     const explainRes = await mcpClient.callTool({
       name: 'explain_accounting_item',
@@ -427,9 +431,9 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       name: 'get_legal_basis',
       arguments: { obligationOrRuleCode: 'ZUS_DRA_JDG' },
     });
-    expect(GetLegalBasisOutputSchema.parse(basisRes.structuredContent).legalBasis.articleRef).toContain(
-      'art. 47',
-    );
+    expect(
+      GetLegalBasisOutputSchema.parse(basisRes.structuredContent).legalBasis.articleRef,
+    ).toContain('art. 47');
 
     // 5. Safe proposal prepare_invoice_and_posting_proposal + idempotent retry + prompt injection attempt
     const idemKey = '12121212-1212-4212-8212-121212121212';
@@ -500,9 +504,9 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       },
     });
     expect(unauthorizedConfirm.isError).toBe(true);
-    expect(
-      McpToolErrorEnvelopeSchema.parse(unauthorizedConfirm.structuredContent).errorCode,
-    ).toBe('human_confirmation_required');
+    expect(McpToolErrorEnvelopeSchema.parse(unauthorizedConfirm.structuredContent).errorCode).toBe(
+      'human_confirmation_required',
+    );
 
     // Out-of-band human reviewer approves in UI and issues one-time confirmationCode
     const humanChallenge = await stack.gateway.issueHumanConfirmationChallenge({
@@ -545,5 +549,159 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
     const auditEvents = stack.auditSink.listEvents();
     expect(auditEvents.length).toBeGreaterThanOrEqual(8);
     expect(JSON.stringify(auditEvents)).not.toContain(SECRET_ACCOUNTANT_TOKEN);
+  });
+
+  it('rejects missing Host header (400), oversized body (413 with Connection: close), sanitizes x-request-id, and fails closed (503) on audit outage', async () => {
+    const stack = buildRemoteMcpTestStack();
+    runningServer = await startPapMcpHttpServer({
+      port: 0,
+      maxRequestBodyBytes: 4096,
+      gateway: stack.gateway,
+      verifier: stack.verifier,
+      identityResolver: stack.identityResolver,
+    });
+
+    // 1a. Missing Host header in Web Standard Request -> 400 (never substitutes localhost!)
+    const webMissingHostRes = await handlePapMcpHttpRequest(
+      new Request('http://127.0.0.1:4110/api/v1/mcp', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${SECRET_ACCOUNTANT_TOKEN}`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+      }),
+      {
+        gateway: stack.gateway,
+        verifier: stack.verifier,
+        identityResolver: stack.identityResolver,
+      },
+    );
+    expect(webMissingHostRes.status).toBe(400);
+
+    // 1b. Raw TCP HTTP/1.0 request without a Host header reaches startPapMcpHttpServer JS listener -> 400 missing_host + audit
+    const rawHttp10Response = await new Promise<string>((resolve, reject) => {
+      const socket = createConnection(
+        { host: runningServer!.host, port: runningServer!.port },
+        () => {
+          socket.write(
+            [
+              'POST /mcp HTTP/1.0',
+              `Authorization: Bearer ${SECRET_ACCOUNTANT_TOKEN}`,
+              'Content-Type: application/json',
+              'Content-Length: 2',
+              '',
+              '{}',
+            ].join('\r\n'),
+          );
+        },
+      );
+      const chunks: Buffer[] = [];
+      socket.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      socket.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      socket.on('error', reject);
+    });
+    expect(rawHttp10Response).toMatch(/^HTTP\/1\.1 400 /);
+    expect(rawHttp10Response).toContain('missing_host');
+    expect(stack.auditSink.listEvents().some((e) => e.reasonCode === 'missing_host_header')).toBe(
+      true,
+    );
+
+    // 1c. Raw TCP HTTP/1.1 request without a Host header is also rejected with 400
+    const rawHttp11Response = await new Promise<string>((resolve, reject) => {
+      const socket = createConnection(
+        { host: runningServer!.host, port: runningServer!.port },
+        () => {
+          socket.write(
+            [
+              'POST /mcp HTTP/1.1',
+              `Authorization: Bearer ${SECRET_ACCOUNTANT_TOKEN}`,
+              'Content-Type: application/json',
+              'Content-Length: 2',
+              'Connection: close',
+              '',
+              '{}',
+            ].join('\r\n'),
+          );
+        },
+      );
+      const chunks: Buffer[] = [];
+      socket.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      socket.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      socket.on('error', reject);
+    });
+    expect(rawHttp11Response).toMatch(/^HTTP\/1\.1 400 /);
+
+    // 2. Oversized authenticated request body (> 4096 bytes) -> 413 with Connection: close and audit event
+    const oversizedPayload = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 99,
+      method: 'ping',
+      params: { pad: 'X'.repeat(6000) },
+    });
+    const tooLargeRes = await fetch(runningServer.mcpUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${SECRET_ACCOUNTANT_TOKEN}`,
+      },
+      body: oversizedPayload,
+    });
+    expect(tooLargeRes.status).toBe(413);
+    expect(tooLargeRes.headers.get('connection')?.toLowerCase()).toContain('close');
+    expect(
+      stack.auditSink.listEvents().some((e) => e.reasonCode === 'request_body_too_large'),
+    ).toBe(true);
+
+    // 3. Invalid x-request-id header with whitespace/JWT-like characters -> sanitized & audited
+    const badReqIdRes = await fetch(runningServer.mcpUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-request-id': 'Bearer injected space header',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'ping' }),
+    });
+    expect(badReqIdRes.status).toBe(401);
+    const badReqAudit = stack.auditSink
+      .listEvents()
+      .find((e) => e.reasonCode === 'invalid_x_request_id_sanitized');
+    expect(badReqAudit).toBeDefined();
+    expect(badReqAudit?.correlationId).toMatch(/^[0-9a-f-]{36}$/);
+
+    // 4. Failing auditSink during HTTP transport rejection -> controlled 503 fail-closed (no 500!)
+    const failingAuditGateway = new PapMcpGateway({
+      verifier: stack.verifier,
+      identityResolver: stack.identityResolver,
+      authorizationDataSource: {
+        async getFacts() {
+          return { membership: null, grants: [], platformRoleAssignments: [] };
+        },
+      },
+      dataSource: new InMemoryPapMcpDataSource(),
+      auditSink: {
+        async record() {
+          throw new Error('Simulated audit DB crash');
+        },
+      },
+    });
+    const failClosedRes = await handlePapMcpHttpRequest(
+      new Request('http://127.0.0.1:4110/api/v1/mcp', {
+        method: 'POST',
+        headers: {
+          host: '127.0.0.1:4110',
+          'content-type': 'application/json',
+        },
+        body: '{}',
+      }),
+      {
+        gateway: failingAuditGateway,
+        verifier: stack.verifier,
+        identityResolver: stack.identityResolver,
+      },
+    );
+    expect(failClosedRes.status).toBe(503);
+    const failClosedJson = (await failClosedRes.json()) as { error?: string };
+    expect(failClosedJson.error).toBe('audit_unavailable');
   });
 });

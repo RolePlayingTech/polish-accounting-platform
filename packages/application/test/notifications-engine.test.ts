@@ -8,6 +8,8 @@ import {
   InMemoryNotificationsAuditSink,
   NotificationsEngine,
   renderAuxiliaryReminderEmail,
+  type EmailDeliveryTransport,
+  type NotificationsAuditSink,
 } from '../src/notifications-engine.js';
 
 const TENANT_A = '11111111-1111-4111-8111-111111111111';
@@ -168,7 +170,9 @@ describe('NotificationsEngine & ControlledSandboxMailboxTransport', () => {
 
     expect(rendered.textBody).toContain('art. 109 ust. 3b');
     expect(rendered.textBody).toContain('Dz.U. 2024 poz. 361');
-    expect(rendered.textBody).toContain('https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20240000361');
+    expect(rendered.textBody).toContain(
+      'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20240000361',
+    );
     expect(rendered.textBody).toContain(MANDATORY_AUXILIARY_EMAIL_FOOTER_PL);
 
     expect(rendered.htmlBody).toContain('&lt;test-escaping&gt;');
@@ -351,5 +355,138 @@ describe('NotificationsEngine & ControlledSandboxMailboxTransport', () => {
     expect(policyEvents).toHaveLength(1);
     expect(policyEvents[0]?.maskedRecipient).toBe('j***@gmail.com');
     expect(JSON.stringify(auditSink.listEvents())).not.toContain('jan.kowalski@gmail.com');
+  });
+
+  it('prevents concurrent TOCTOU duplicate sends when processDueOutboxMessages runs in parallel (Promise.all)', async () => {
+    const clock = { now: () => new Date('2026-11-18T09:00:00Z') };
+    const mailbox = new ControlledSandboxMailboxTransport({ clock });
+    const delayedTransport: EmailDeliveryTransport = {
+      async sendEmail(email, metadata) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return mailbox.sendEmail(email, metadata);
+      },
+    };
+    const engine = new NotificationsEngine({ transport: delayedTransport, clock });
+    const obligation = createSampleObligation({ dueDate: '2026-11-25' });
+
+    await engine.enqueueScheduledReminders({
+      evaluationDate: '2026-11-18',
+      userId: USER_A,
+      recipientEmail: 'parallel-worker@pap.local',
+      obligations: [obligation],
+    });
+
+    const [workerA, workerB] = await Promise.all([
+      engine.processDueOutboxMessages(),
+      engine.processDueOutboxMessages(),
+    ]);
+
+    expect(workerA.sentCount + workerB.sentCount).toBe(1);
+    expect(workerA.processedCount + workerB.processedCount).toBe(1);
+    expect(mailbox.listDeliveredMessages()).toHaveLength(1);
+  });
+
+  it('fails closed without committing outbox or preference state if auditSink throws', async () => {
+    const clock = { now: () => new Date('2026-11-18T09:00:00Z') };
+    const mailbox = new ControlledSandboxMailboxTransport({ clock });
+    const failingAuditSink: NotificationsAuditSink = {
+      async record() {
+        throw new Error('Audit storage unavailable');
+      },
+    };
+    const engine = new NotificationsEngine({
+      transport: mailbox,
+      auditSink: failingAuditSink,
+      clock,
+    });
+
+    await expect(
+      engine.enqueueScheduledReminders({
+        evaluationDate: '2026-11-18',
+        userId: USER_A,
+        recipientEmail: 'ksiegowa@pap.local',
+        obligations: [createSampleObligation({ dueDate: '2026-11-25' })],
+      }),
+    ).rejects.toThrow('Audit storage unavailable');
+
+    // Outbox MUST remain completely empty because audit failed before state commit!
+    expect(engine.listOutboxEntries()).toHaveLength(0);
+  });
+
+  it('preserves previously disabled overdue_1d on opt-out token and suppresses already-queued reminders after live opt-out', async () => {
+    const clock = { now: () => new Date('2026-11-18T09:00:00Z') };
+    const mailbox = new ControlledSandboxMailboxTransport({ clock });
+    const engine = new NotificationsEngine({ transport: mailbox, clock });
+
+    // 1. User explicitly disables overdue_1d first, then clicks one-time opt-out link -> overdue_1d stays disabled!
+    await engine.configurePreferences({
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A,
+      userId: USER_A,
+      recipientEmail: 'pre-disabled@pap.local',
+      frequency: 'standard',
+      optionalRemindersOptedOut: false,
+      explicitDisabledStages: ['overdue_1d'],
+    });
+    const tok1 = await engine.issueOptOutToken({
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A,
+      userId: USER_A,
+      recipientEmail: 'pre-disabled@pap.local',
+      ttlMinutes: 60,
+    });
+    const applied1 = await engine.applyOptOutWithToken({ rawOptOutToken: tok1.rawOptOutToken });
+    expect(applied1.ok).toBe(true);
+    if (applied1.ok) {
+      expect(applied1.preferences.disabledStages).toEqual([
+        'advance_7d',
+        'urgent_2d',
+        'overdue_1d',
+      ]);
+    }
+
+    // 2. Enqueue advance_7d for a second user, THEN opt out BEFORE worker runs -> suppressed_by_preferences!
+    const userB = '66666666-6666-4666-8666-666666666666';
+    const enq = await engine.enqueueScheduledReminders({
+      evaluationDate: '2026-11-18',
+      userId: userB,
+      recipientEmail: 'live-optout@pap.local',
+      obligations: [createSampleObligation({ dueDate: '2026-11-25' })],
+    });
+    expect(enq.enqueuedEntries).toHaveLength(1);
+
+    const tok2 = await engine.issueOptOutToken({
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A,
+      userId: userB,
+      recipientEmail: 'live-optout@pap.local',
+      ttlMinutes: 60,
+    });
+    await engine.applyOptOutWithToken({ rawOptOutToken: tok2.rawOptOutToken });
+
+    const summary = await engine.processDueOutboxMessages();
+    expect(summary.sentCount).toBe(0);
+    expect(summary.suppressedByPreferencesCount).toBe(1);
+    expect(mailbox.listDeliveredMessages()).toHaveLength(0);
+    expect(engine.listOutboxEntries({ status: 'suppressed_by_preferences' })).toHaveLength(1);
+
+    // 3. Reject impossible calendar date 2026-02-31 and multi-address/CRLF recipientEmail
+    await expect(
+      engine.enqueueScheduledReminders({
+        evaluationDate: '2026-02-31',
+        userId: userB,
+        recipientEmail: 'live-optout@pap.local',
+        obligations: [],
+      }),
+    ).rejects.toThrow();
+
+    await expect(
+      engine.enqueueScheduledReminders({
+        evaluationDate: '2026-11-18',
+        userId: userB,
+        recipientEmail: 'a@pap.local, b@pap.local',
+        obligations: [],
+      }),
+    ).rejects.toThrow();
   });
 });
