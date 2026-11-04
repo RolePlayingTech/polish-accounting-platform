@@ -19,6 +19,7 @@ import {
 } from '@pap/contracts';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { AppModule } from '../src/app.module.js';
+import { OidcConfigError } from '../src/auth/oidc-config.js';
 
 describe('Sandbox OIDC (ES256 fail-closed) and REST authorization matrix', () => {
   describe('when PAP_SANDBOX_AUTH_ENABLED is disabled (default fail-closed)', () => {
@@ -56,8 +57,8 @@ describe('Sandbox OIDC (ES256 fail-closed) and REST authorization matrix', () =>
       expect(response.statusCode).toBe(404);
     });
 
-    it('keeps sandbox OIDC disabled even if PAP_SANDBOX_AUTH_ENABLED=true when PAP_OIDC_ENV=staging', async () => {
-      const stagingLikeModule = AppModule.register({
+    it('throws OidcConfigError fail-closed at startup if PAP_SANDBOX_AUTH_ENABLED=true co-occurs with PAP_OIDC_ENV=staging or PAP_OIDC_JWKS_URI', async () => {
+      const conflictingModule = AppModule.register({
         PAP_SANDBOX_AUTH_ENABLED: 'true',
         PAP_OIDC_ENV: 'staging',
         NODE_ENV: 'production',
@@ -65,25 +66,13 @@ describe('Sandbox OIDC (ES256 fail-closed) and REST authorization matrix', () =>
         PAP_OIDC_JWKS_URI: 'https://oidc.example.com/.well-known/jwks.json',
         PAP_OIDC_AUDIENCE: 'pap-api',
       });
-      const stagingApp = await NestFactory.create<NestFastifyApplication>(
-        stagingLikeModule,
-        new FastifyAdapter({ logger: false }),
-        { logger: false },
-      );
-      await stagingApp.init();
-      try {
-        const res = await stagingApp
-          .getHttpAdapter()
-          .getInstance()
-          .inject({
-            method: 'POST',
-            url: '/api/v1/oidc/token',
-            payload: { personaId: 'jan-testowy' },
-          });
-        expect(res.statusCode).toBe(404);
-      } finally {
-        await stagingApp.close();
-      }
+      await expect(
+        NestFactory.create<NestFastifyApplication>(
+          conflictingModule,
+          new FastifyAdapter({ logger: false }),
+          { logger: false, abortOnError: false },
+        ),
+      ).rejects.toThrow(OidcConfigError);
     });
   });
 

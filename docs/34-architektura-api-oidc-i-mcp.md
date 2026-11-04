@@ -20,8 +20,16 @@ Rozwiązanie realizuje ustalenia [ADR-001](adr/001-rdzen-i-mcp.md), [ADR-002](ad
 
 Do lokalnego rozwoju i izolowanych testów E2E `apps/api` zawiera opcjonalnego dostawcę OIDC w `apps/api/src/auth/`:
 
-- **Domyślnie wyłączony (fail-closed):** dopóki `PAP_SANDBOX_AUTH_ENABLED !== 'true'`, wszystkie trasy Sandbox OIDC zwracają **`404 Not Found`**. Włączenie jest również twardo zablokowane, gdy `PAP_OIDC_ENV=staging`.
+- **Domyślnie wyłączony i twardo odgrodzony od produkcji (fail-closed):** dopóki `PAP_SANDBOX_AUTH_ENABLED !== 'true'`, wszystkie trasy Sandbox OIDC zwracają **`404 Not Found`**. Start aplikacji rzuca natychmiastowy błąd konfiguracji `OidcConfigError`, jeżeli `PAP_SANDBOX_AUTH_ENABLED=true` współwystępuje z:
+  - skonfigurowanym zewnętrznym `PAP_OIDC_JWKS_URI`, lub
+  - `PAP_OIDC_ENV=staging` / `PAP_OIDC_ENV=production`, lub
+  - zewnętrznym (nie-loopbackowym) `PAP_OIDC_ISSUER` / `PAP_SANDBOX_OIDC_ISSUER`, lub `NODE_ENV=production` — **chyba że** jawnie ustawiono jednocześnie oba bezpieczniki prywatnego środowiska testowego: `PAP_OIDC_ENV=private_test` oraz `PAP_ALLOW_PRIVATE_TEST_SANDBOX_OIDC=true` (przy zewnętrznym `issuer` wymagany jest dodatkowo protokół `https://` i brak `PAP_OIDC_JWKS_URI`).
 - **Prawdziwa kryptografia asymetryczna `ES256`:** przy starcie `SandboxOidcService` generuje efemeryczną parę kluczy ECDSA P-256 (`jose` `generateKeyPair('ES256')`). Klucz prywatny nigdy nie opuszcza pamięci serwisu, natomiast zsanityzowany klucz publiczny JWK (`kty`, `crv`, `x`, `y`, `kid`, `alg: "ES256"`, `use: "sig"`) zasila standardowy `JwksOidcAccessTokenVerifier`. Brak jakichkolwiek furtek omijających weryfikację podpisu JWT, `iss`, `aud`, `typ: "at+jwt"`, `exp` i `iat`.
+- **Egzekwowanie zakresów OIDC (`scopes`) i aktywności konta na trasach REST:**
+  - Każde żądanie do chronionych tras REST i MCP sprawdza `userRecord.active === true` (konto nieaktywne otrzymuje natychmiast `403 Forbidden`).
+  - Odczyt tras chronionych (`GET`/`HEAD`) wymaga co najmniej jednego zakresu odczytowego (`pap:ui:full`, `pap:ui:accounting`, `pap:accounting`, `pap:api:read`, `pap:api:write` lub `pap:mcp:read`).
+  - Mutacje REST (`POST`/`PUT`/`PATCH`/`DELETE`) wymagają zakresu zapisu człowieka lub API (`pap:ui:full`, `pap:ui:accounting`, `pap:accounting` lub `pap:api:write`) — token posiadający wyłącznie `pap:mcp:read` lub `pap:mcp:prepare` otrzymuje `403 insufficient_scope`.
+  - Operacje zatwierdzania człowieka (`approve-and-post`, `mcp/proposals/*/challenge|confirm|reject`) oraz zarządzanie grantami (`/grants*`) wymagają ludzkiego zakresu UI (`pap:ui:full`, `pap:ui:accounting` lub `pap:accounting`) i bezwzględnie odrzucają token z zakresem `pap:mcp:agent_autonomous` (`403 agent_self_approval_forbidden`).
 
 ### Endpointy Sandbox OIDC (aktywne wyłącznie przy `PAP_SANDBOX_AUTH_ENABLED=true`)
 
@@ -55,7 +63,7 @@ Kontrolery w `apps/api/src/controllers/` delegują logikę do `AccountingWorkspa
   - `GET /api/v1/tenants/:tenantId/companies/:legalEntityId/audit-log`
 - **Dokumenty, KSeF i księgi podatkowe/rachunkowe (`DocumentsBooksController`):**
   - `GET`, `POST /api/v1/tenants/:tenantId/companies/:legalEntityId/documents` (obsługa ręcznego szkicu JSON oraz surowego KSeF XML `FA(3)` z detekcją duplikatów SHA-256 `409`)
-  - `GET .../documents/:documentId`, `POST .../documents/:documentId/approve-and-post`
+  - `GET .../documents/:documentId`, `POST .../documents/:documentId/approve-and-post` (weryfikacja zgodności `body.documentId`, walidacja NIP/kwot/stawek oraz zapis korekt człowieka przed księgowaniem w KPiR/VAT/Ryczałcie/UoR wraz z śladem w audycie)
   - `GET`, `POST .../kpir`, `POST .../kpir/storno` (19-kolumnowa PKPiR 2026 z obsługą numeru KSeF i czerwonego storna)
   - `GET .../zus`, `GET`, `POST .../ryczalt`, `GET .../vat` (rejestry VAT + podgląd `JPK_V7M(3)`), `GET`, `POST .../ledger` (księgi rachunkowe UoR, ZOiS, bilans, RZiS, zaliczka CIT; walidacja bilansowania `Wn = Ma` -> `422`)
 - **Finanse, kalendarz, powiadomienia i propozycje MCP (`OperationsAutomationController`):**
@@ -71,7 +79,10 @@ Kontrolery w `apps/api/src/controllers/` delegują logikę do `AccountingWorkspa
 
 ## 4. Zdalny serwer Streamable HTTP MCP (`/api/v1/mcp`)
 
-Moduł `apps/api/src/mcp/remote-mcp.registrar.ts` osadza bezstanowy handler `createPapMcpHttpEndpoint` (`@pap/mcp`) wewnątrz enkapsulowanego kontekstu Fastify na ścieżce `/api/v1/mcp` (`POST`, `GET`, `DELETE`), zachowując surowy bufor żądania i nagłówki HTTP.
+Moduł `apps/api/src/mcp/remote-mcp.registrar.ts` osadza bezstanowy handler `createPapMcpHttpEndpoint` (`@pap/mcp`) wewnątrz enkapsulowanego kontekstu Fastify na ścieżce `/api/v1/mcp` (`POST`, `GET`, `DELETE`).
+
+- **Pre-body auth & Host/Origin gate:** uwierzytelnienie Bearer JWT, sprawdzenie aktywności konta oraz walidacja nagłówków `Host` i `Origin` wykonują się przed odczytem strumienia treści żądania (brak buforowania do 1 MiB dla niezautoryzowanych wywołań).
+- **Konfiguracja dozwolonych hostów i originów:** domyślnie dopuszczony jest wyłącznie loopback (`localhost`, `127.0.0.1`, `[::1]`). Za prywatnym reverse proxy HTTPS listę rozszerza się zmiennymi `PAP_MCP_ALLOWED_HOSTS` oraz `PAP_MCP_ALLOWED_ORIGINS` (wartości rozdzielane przecinkami, np. `ksiegowosc.roleplayingtech.com`).
 
 Przykładowe połączenie klienta `@modelcontextprotocol/client`:
 
@@ -104,7 +115,7 @@ Udostępniane narzędzia MCP (9):
 
 ## 5. Gwarancje bezpieczeństwa AI, MCP i powiadomień
 
-1. **Brak autonomicznego księgowania przez AI (`prepare_*` vs `confirm_*`):** wywołanie `prepare_invoice_and_posting_proposal` tworzy wyłącznie rekord w stanie `pending_human_approval` (`ledgerPosted: false`). Zaksięgowanie w KPiR / rejestrze VAT następuje dopiero po przeglądzie propozycji przez uprawnionego człowieka, wygenerowaniu jednorazowego kodu wyzwania (`POST .../mcp/proposals/:proposalId/challenge`) i potwierdzeniu skrótu SHA-256 (`expectedPayloadHash`).
+1. **Brak autonomicznego księgowania przez AI (`prepare_*` vs `confirm_*`) i brak split-brain:** wywołanie `prepare_invoice_and_posting_proposal` tworzy wyłącznie rekord w stanie `pending_human_approval` (`ledgerPosted: false`). Stan propozycji i jednorazowych wyzwań człowieka jest dwukierunkowo zsynchronizowany pomiędzy `AccountingWorkspaceService` a `PapMcpGateway` (odrzucona propozycja w REST natychmiast blokuje `confirm_prepared_proposal` w MCP, zatwierdzenie w jednym kanale natychmiast zużywa wyzwanie w drugim, a `approvedByUserId` zawsze wskazuje rzeczywistego zatwierdzającego człowieka). Zatwierdzenie w `POST .../mcp/proposals/:proposalId/confirm` obowiązkowo wymaga zarówno `confirmationCode`, jak i dokładnego skrótu SHA-256 `expectedPayloadHash` porównywanego w stałym czasie (`timingSafeEqual`).
 2. **Obrona przed prompt injection z treści faktur:** wszystkie pola tekstowe pochodzące z dokumentów i przelewów (`invoiceNumber`, `counterpartyName`, `expenseDescription`, `transferTitle`) są oznaczane jako `untrusted_document_data`, oczyszczane ze znaków sterujących i skanowane pod kątem wzorców nadpisywania instrukcji (`promptInjectionSuspected`).
 3. **Izolacja powiadomień e-mail (fail-closed):** w środowisku testowym i demonstracyjnym wysyłka korzysta z `ControlledSandboxMailboxTransport` (pełny format RFC 5322 MIME z `Message-ID` i `Auto-Submitted: auto-generated`, outbox z kluczami idempotencji i obsługą opt-out). Każda próba wysyłki poza domeny rezerwowe IANA (`.example`, `.test`, `.invalid`, `.localhost`), np. na `@gmail.com`, jest odrzucana błędem `403 Forbidden` (`blocked_recipient_policy`). Tematy i nagłówki wiadomości nie zawierają pełnego NIP ani szczegółowych kwot podatkowych, a nadawca jawnie wyklucza podszywanie się pod organy KAS/ZUS/MF.
 

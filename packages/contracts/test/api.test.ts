@@ -181,6 +181,12 @@ describe('@pap/contracts/api schemas', () => {
     ).toThrow();
 
     expect(() =>
+      ConfirmMcpProposalRequestSchema.parse({
+        confirmationCode: 'PAP-HUMAN-valid-code-1234567890',
+      }),
+    ).toThrow();
+
+    expect(() =>
       UpdateNotificationPreferencesRequestSchema.parse({
         recipientEmail: 'not-an-email',
         frequency: 'standard',

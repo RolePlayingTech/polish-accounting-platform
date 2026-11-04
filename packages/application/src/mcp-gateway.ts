@@ -417,9 +417,10 @@ export interface StoredPreparedProposal {
   readonly createdAtIso: string;
   readonly expiresAtMs: number;
   readonly expiresAtIso: string;
-  status: 'pending_human_approval' | 'confirming' | 'confirmed';
+  status: 'pending_human_approval' | 'confirming' | 'confirmed' | 'rejected' | 'expired';
   ledgerEntryId: string | null;
   confirmedAtIso: string | null;
+  confirmedByUserId?: UserId | null | undefined;
   /** Sanitized invoice fields (stripped of Bidi overrides and control characters) for safe human UI review. */
   readonly invoice: PrepareInvoiceAndPostingProposalInput['invoice'];
   readonly proposedPosting: ProposedAccountingPreview;
@@ -1341,6 +1342,102 @@ export class PapMcpGateway {
         appliedRule: Object.freeze({ ...found.proposedPosting.appliedRule }),
       }),
     });
+  }
+
+  syncProposalFromWorkspace(proposal: StoredPreparedProposal): void {
+    const key = proposal.proposalId.toLowerCase();
+    this.proposalsById.set(key, {
+      ...proposal,
+      proposalId: key,
+      invoice: { ...proposal.invoice },
+      proposedPosting: {
+        ...proposal.proposedPosting,
+        appliedRule: { ...proposal.proposedPosting.appliedRule },
+      },
+    });
+  }
+
+  getHumanChallengeSnapshot(proposalId: string):
+    | {
+        readonly proposalId: string;
+        readonly tenantId: TenantId;
+        readonly legalEntityId: LegalEntityId;
+        readonly authorizedHumanUserId: UserId;
+        readonly expectedPayloadHash: string;
+        readonly codeSha256Hex: string;
+        readonly expiresAtMs: number;
+        readonly consumedAtIso: string | null;
+      }
+    | undefined {
+    const ch = this.humanChallengesByProposal.get(proposalId.toLowerCase());
+    if (!ch) {
+      return undefined;
+    }
+    return Object.freeze({
+      proposalId: ch.proposalId,
+      tenantId: ch.tenantId,
+      legalEntityId: ch.legalEntityId,
+      authorizedHumanUserId: ch.authorizedHumanUserId,
+      expectedPayloadHash: ch.expectedPayloadHash,
+      codeSha256Hex: ch.codeSha256Hex,
+      expiresAtMs: ch.expiresAtMs,
+      consumedAtIso: ch.consumedAtIso,
+    });
+  }
+
+  syncHumanChallengeFromWorkspace(challenge: {
+    readonly proposalId: string;
+    readonly tenantId: TenantId;
+    readonly legalEntityId: LegalEntityId;
+    readonly authorizedHumanUserId: UserId;
+    readonly expectedPayloadHash: string;
+    readonly codeSha256Hex: string;
+    readonly expiresAtMs: number;
+    readonly consumedAtIso: string | null;
+  }): void {
+    const key = challenge.proposalId.toLowerCase();
+    this.humanChallengesByProposal.set(key, {
+      challengeId: randomUUID(),
+      proposalId: key,
+      tenantId: challenge.tenantId,
+      legalEntityId: challenge.legalEntityId,
+      authorizedHumanUserId: challenge.authorizedHumanUserId,
+      expectedPayloadHash: challenge.expectedPayloadHash,
+      codeSha256Hex: challenge.codeSha256Hex,
+      expiresAtMs: challenge.expiresAtMs,
+      consumingInFlight: false,
+      consumedAtIso: challenge.consumedAtIso,
+    });
+  }
+
+  markProposalConfirmedFromWorkspace(params: {
+    readonly proposalId: string;
+    readonly ledgerEntryId: string;
+    readonly confirmedAtIso: string;
+    readonly confirmedByUserId: UserId;
+  }): void {
+    const key = params.proposalId.toLowerCase();
+    const existing = this.proposalsById.get(key);
+    if (existing) {
+      existing.status = 'confirmed';
+      existing.ledgerEntryId = params.ledgerEntryId;
+      existing.confirmedAtIso = params.confirmedAtIso;
+      existing.confirmedByUserId = params.confirmedByUserId;
+    }
+    const ch = this.humanChallengesByProposal.get(key);
+    if (ch) {
+      ch.consumingInFlight = false;
+      ch.consumedAtIso = params.confirmedAtIso;
+    }
+  }
+
+  markProposalRejectedFromWorkspace(params: { readonly proposalId: string }): void {
+    const key = params.proposalId.toLowerCase();
+    const existing = this.proposalsById.get(key);
+    if (existing) {
+      existing.status = 'rejected';
+    }
+    this.humanChallengesByProposal.delete(key);
   }
 
   async listMyCompanies(
@@ -2720,6 +2817,7 @@ export class PapMcpGateway {
         proposal.status = 'confirmed';
         proposal.ledgerEntryId = ledgerEntryId;
         proposal.confirmedAtIso = nowIso;
+        proposal.confirmedByUserId = auth.context.userId;
 
         const confirmedOutput = ConfirmPreparedProposalOutputSchema.parse({
           proposalId: proposal.proposalId,

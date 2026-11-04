@@ -22,6 +22,7 @@ import type {
 } from '@pap/contracts';
 import {
   JwtBearerAuthGuard,
+  RequireHumanApprovalScope,
   requireRequestActor,
   type JwtAuthenticatedRequest,
 } from '../auth/jwt-bearer.guard.js';
@@ -153,6 +154,7 @@ export class CompaniesAccessController {
   }
 
   @Post('/tenants/:tenantId/companies/:legalEntityId/grants')
+  @RequireHumanApprovalScope()
   @Header('Cache-Control', 'no-store')
   grantAccess(
     @Req() request: JwtAuthenticatedRequest,
@@ -170,6 +172,7 @@ export class CompaniesAccessController {
   }
 
   @Delete('/tenants/:tenantId/companies/:legalEntityId/grants/:grantId')
+  @RequireHumanApprovalScope()
   @Header('Cache-Control', 'no-store')
   deleteGrant(
     @Req() request: JwtAuthenticatedRequest,
@@ -187,6 +190,7 @@ export class CompaniesAccessController {
   }
 
   @Post('/tenants/:tenantId/companies/:legalEntityId/grants/:grantId/revoke')
+  @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   revokeGrantById(
@@ -205,6 +209,7 @@ export class CompaniesAccessController {
   }
 
   @Post('/tenants/:tenantId/companies/:legalEntityId/grants/revoke')
+  @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   revokeGrantFromBody(

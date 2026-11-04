@@ -18,6 +18,7 @@ import { HealthController } from './health.controller.js';
 import { RemoteMcpFastifyRegistrar } from './mcp/remote-mcp.registrar.js';
 import {
   ACCOUNTING_WORKSPACE_SERVICE,
+  API_RUNTIME_ENV,
   PAP_MCP_GATEWAY,
   createApiRuntimeServices,
   type ApiRuntimeServices,
@@ -31,8 +32,14 @@ function buildRuntimeProviders(
 ): Provider[] {
   return [
     {
+      provide: API_RUNTIME_ENV,
+      useFactory: () => explicitEnv ?? process.env,
+    },
+    {
       provide: API_RUNTIME_SERVICES,
-      useFactory: () => createApiRuntimeServices(explicitEnv ?? process.env),
+      useFactory: (runtimeEnv: Readonly<Record<string, string | undefined>>) =>
+        createApiRuntimeServices(runtimeEnv),
+      inject: [API_RUNTIME_ENV],
     },
     {
       provide: SandboxOidcService,

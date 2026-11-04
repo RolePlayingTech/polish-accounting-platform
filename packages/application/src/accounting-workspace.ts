@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   ACADEMY_COURSE,
   ACADEMY_DISCLAIMER,
@@ -416,6 +416,7 @@ export interface WorkspaceStoredMcpProposal {
   ledgerPosted: boolean;
   ledgerEntryId: string | null;
   confirmedAtIso: string | null;
+  confirmedByUserId?: UserId | null | undefined;
   rejectedAtIso: string | null;
   rejectedByUserId: string | null;
   rejectionReason: string | null;
@@ -540,6 +541,40 @@ export { NotificationsEngine as NotificationEngine, NotificationsEngine };
 export function sha256Hex(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
 }
+
+function constantTimeHexEquals(leftHex: string, rightHex: string): boolean {
+  if (leftHex.length !== rightHex.length || leftHex.length === 0 || leftHex.length % 2 !== 0) {
+    return false;
+  }
+  if (!/^[0-9a-f]+$/i.test(leftHex) || !/^[0-9a-f]+$/i.test(rightHex)) {
+    return false;
+  }
+  const leftBuf = Buffer.from(leftHex.toLowerCase(), 'hex');
+  const rightBuf = Buffer.from(rightHex.toLowerCase(), 'hex');
+  if (leftBuf.byteLength !== rightBuf.byteLength) {
+    return false;
+  }
+  return timingSafeEqual(leftBuf, rightBuf);
+}
+
+function isStrictIsoCalendarDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)) {
+    return false;
+  }
+  const [y, m, d] = value.split('-').map(Number);
+  if (!y || !m || !d) {
+    return false;
+  }
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
+}
+
+const HUMAN_APPROVAL_OIDC_SCOPES = new Set([
+  'pap:ui:full',
+  'pap:ui:accounting',
+  'pap:accounting',
+  'pap:api:write',
+]);
 
 export function deterministicUuidV4(seed: string): string {
   const hex = sha256Hex(seed).slice(0, 32).split('');
@@ -1169,6 +1204,7 @@ export class AccountingWorkspaceService {
   readonly notificationsEngine: NotificationsEngine;
   readonly notificationOutboxStore: InMemoryNotificationOutboxStore;
   private readonly internalNotificationsTransport: ControlledSandboxMailboxTransport;
+  private readonly boundMcpGateways = new Set<PapMcpGateway>();
 
   constructor(options: AccountingWorkspaceServiceOptions = {}) {
     this.clock = options.clock ?? systemClock;
@@ -1488,9 +1524,75 @@ export class AccountingWorkspaceService {
     };
   }
 
+  private assertHumanApprovalActorScopes(
+    actor: WorkspaceActorContext,
+    tenantIdValue: TenantId | null,
+    legalEntityIdValue: LegalEntityId | null,
+    action: string,
+  ): void {
+    const uId = parseUserId(actor.userId);
+    if (actor.scopes?.includes('pap:mcp:agent_autonomous')) {
+      this.recordAudit({
+        channel: 'mcp',
+        action,
+        actorUserId: uId,
+        actorDisplayLabel: this.resolveDisplayLabel(uId),
+        tenantId: tenantIdValue,
+        legalEntityId: legalEntityIdValue,
+        outcome: 'deny',
+        reasonCode: 'agent_self_approval_forbidden',
+        summaryPl: `Zablokowano próbę samozatwierdzenia przez autonomicznego agenta MCP (${action}).`,
+      });
+      throw new AccountingWorkspaceAccessError(
+        403,
+        'agent_self_approval_forbidden',
+        'Autonomiczny agent MCP nie może samodzielnie wystawiać wyzwań ani zatwierdzać księgowań.',
+      );
+    }
+    if (
+      actor.scopes !== undefined &&
+      !actor.scopes.some((s) => HUMAN_APPROVAL_OIDC_SCOPES.has(s))
+    ) {
+      this.recordAudit({
+        channel: 'security',
+        action,
+        actorUserId: uId,
+        actorDisplayLabel: this.resolveDisplayLabel(uId),
+        tenantId: tenantIdValue,
+        legalEntityId: legalEntityIdValue,
+        outcome: 'deny',
+        reasonCode: 'insufficient_scope',
+        summaryPl: `Odmowa operacji ${action}: token OIDC nie posiada wymaganego zakresu zatwierdzania człowieka.`,
+      });
+      throw new AccountingWorkspaceAccessError(
+        403,
+        'insufficient_scope',
+        'Operacja zatwierdzania wymaga ludzkiego zakresu OIDC (np. pap:ui:full lub pap:ui:accounting).',
+      );
+    }
+  }
+
   getMyCompanies(actor: WorkspaceActorContext): GetMyCompaniesResponse {
     const uId = parseUserId(actor.userId);
     const userRecord = this.store.getUserById(uId);
+    if (!userRecord || !userRecord.active) {
+      this.recordAudit({
+        channel: 'security',
+        action: 'get_my_companies',
+        actorUserId: uId,
+        actorDisplayLabel: userRecord?.displayName ?? uId,
+        tenantId: null,
+        legalEntityId: null,
+        outcome: 'deny',
+        reasonCode: 'inactive_user_account',
+        summaryPl: `Odmowa dostępu do katalogu firm dla nieaktywnego lub nieznanego konta ${uId}.`,
+      });
+      throw new AccountingWorkspaceAccessError(
+        403,
+        'inactive_user_account',
+        'Konto użytkownika jest nieaktywne lub nie posiada dostępu do platformy.',
+      );
+    }
     const now = this.clock.now();
     const companies: AccessibleCompanyItem[] = [];
     for (const company of this.store.listAllCompanies()) {
@@ -1503,8 +1605,8 @@ export class AccountingWorkspaceService {
       actor: {
         userId: uId,
         issuer: actor.issuer ?? 'http://127.0.0.1:4000',
-        subject: actor.subject ?? userRecord?.subject ?? uId,
-        displayName: actor.displayName ?? userRecord?.displayName ?? 'Użytkownik',
+        subject: actor.subject ?? userRecord.subject,
+        displayName: actor.displayName ?? userRecord.displayName,
       },
       companies,
     });
@@ -1513,6 +1615,25 @@ export class AccountingWorkspaceService {
   listTenantCompanies(actor: WorkspaceActorContext, rawTenantId: string): GetMyCompaniesResponse {
     const tId = parseTenantId(rawTenantId);
     const uId = parseUserId(actor.userId);
+    const userRecord = this.store.getUserById(uId);
+    if (!userRecord || !userRecord.active) {
+      this.recordAudit({
+        channel: 'security',
+        action: 'list_tenant_companies',
+        actorUserId: uId,
+        actorDisplayLabel: userRecord?.displayName ?? uId,
+        tenantId: tId,
+        legalEntityId: null,
+        outcome: 'deny',
+        reasonCode: 'inactive_user_account',
+        summaryPl: `Odmowa listowania firm tenanta ${tId}: konto użytkownika nieaktywne.`,
+      });
+      throw new AccountingWorkspaceAccessError(
+        403,
+        'inactive_user_account',
+        'Konto użytkownika jest nieaktywne.',
+      );
+    }
     const membership = this.store.getMembership(tId, uId);
     if (!membership || membership.status !== 'active') {
       this.recordAudit({
@@ -1540,13 +1661,12 @@ export class AccountingWorkspaceService {
         companies.push(item);
       }
     }
-    const userRecord = this.store.getUserById(uId);
     return GetMyCompaniesResponseSchema.parse({
       actor: {
         userId: uId,
         issuer: actor.issuer ?? 'http://127.0.0.1:4000',
-        subject: actor.subject ?? userRecord?.subject ?? uId,
-        displayName: actor.displayName ?? userRecord?.displayName ?? 'Użytkownik',
+        subject: actor.subject ?? userRecord.subject,
+        displayName: actor.displayName ?? userRecord.displayName,
       },
       companies,
     });
@@ -1559,6 +1679,25 @@ export class AccountingWorkspaceService {
   ): CreateCompanyResponse {
     const tId = parseTenantId(rawTenantId);
     const uId = parseUserId(actor.userId);
+    const actorUser = this.store.getUserById(uId);
+    if (!actorUser || !actorUser.active) {
+      this.recordAudit({
+        channel: 'security',
+        action: 'create_company',
+        actorUserId: uId,
+        actorDisplayLabel: actorUser?.displayName ?? uId,
+        tenantId: tId,
+        legalEntityId: null,
+        outcome: 'deny',
+        reasonCode: 'inactive_user_account',
+        summaryPl: `Odmowa utworzenia firmy w tenancie ${tId}: konto użytkownika nieaktywne.`,
+      });
+      throw new AccountingWorkspaceAccessError(
+        403,
+        'inactive_user_account',
+        'Konto użytkownika jest nieaktywne.',
+      );
+    }
     const membership = this.store.getMembership(tId, uId);
     if (
       !membership ||
@@ -2415,9 +2554,9 @@ export class AccountingWorkspaceService {
       } else if (req.sourceFormat === 'csv') {
         parsedDraft = parseSafeDocumentCsv(req.rawPayload, req.direction);
       } else {
-        let parsedJson: Record<string, unknown>;
+        let rawParsed: unknown;
         try {
-          parsedJson = JSON.parse(req.rawPayload) as Record<string, unknown>;
+          rawParsed = JSON.parse(req.rawPayload);
         } catch {
           throw new AccountingWorkspaceValidationError(
             400,
@@ -2425,27 +2564,147 @@ export class AccountingWorkspaceService {
             'Nieprawidłowy format JSON dokumentu.',
           );
         }
-        const docNo = String(parsedJson['documentNumber'] ?? `FV-JSON/${DEMO_DEFAULT_PERIOD}/01`);
-        const issueDt = String(parsedJson['issueDate'] ?? `${DEMO_DEFAULT_PERIOD}-15`);
+        if (typeof rawParsed !== 'object' || rawParsed === null || Array.isArray(rawParsed)) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_payload',
+            'Ładunek JSON dokumentu musi być obiektem JSON (nie może być null ani tablicą).',
+          );
+        }
+        const parsedJson = rawParsed as Record<string, unknown>;
+        const rawDocNo = parsedJson['documentNumber'];
+        if (
+          rawDocNo !== undefined &&
+          (typeof rawDocNo !== 'string' || rawDocNo.trim().length === 0 || rawDocNo.length > 128)
+        ) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole documentNumber w imporcie JSON musi być niepustym ciągiem znaków (maks. 128).',
+          );
+        }
+        const docNo =
+          typeof rawDocNo === 'string' ? rawDocNo.trim() : `FV-JSON/${DEMO_DEFAULT_PERIOD}/01`;
+
+        const rawIssueDate = parsedJson['issueDate'];
+        if (rawIssueDate !== undefined && !isStrictIsoCalendarDate(rawIssueDate)) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole issueDate w imporcie JSON musi być poprawną datą kalendarzową RRRR-MM-DD.',
+          );
+        }
+        const issueDt = rawIssueDate ?? `${DEMO_DEFAULT_PERIOD}-15`;
+
+        const rawEventDate = parsedJson['eventDate'];
+        if (rawEventDate !== undefined && !isStrictIsoCalendarDate(rawEventDate)) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole eventDate w imporcie JSON musi być poprawną datą kalendarzową RRRR-MM-DD.',
+          );
+        }
+        const eventDt = rawEventDate ?? issueDt;
+
+        const rawDueDate = parsedJson['dueDate'];
+        if (rawDueDate !== undefined && !isStrictIsoCalendarDate(rawDueDate)) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole dueDate w imporcie JSON musi być poprawną datą kalendarzową RRRR-MM-DD.',
+          );
+        }
+        const dueDt = rawDueDate ?? addDaysIso(issueDt, 14);
+        if (dueDt < issueDt) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Termin płatności (dueDate) nie może być wcześniejszy niż data wystawienia (issueDate).',
+          );
+        }
+
+        const rawCpName = parsedJson['counterpartyName'];
+        if (
+          rawCpName !== undefined &&
+          (typeof rawCpName !== 'string' || rawCpName.trim().length === 0 || rawCpName.length > 512)
+        ) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole counterpartyName w imporcie JSON musi być niepustym ciągiem znaków.',
+          );
+        }
+
+        let normalizedCpNip: string | undefined;
+        if (parsedJson['counterpartyNip'] !== undefined && parsedJson['counterpartyNip'] !== null) {
+          if (typeof parsedJson['counterpartyNip'] !== 'string') {
+            throw new AccountingWorkspaceValidationError(
+              400,
+              'invalid_json_document_fields',
+              'Pole counterpartyNip w imporcie JSON musi być ciągiem znaków.',
+            );
+          }
+          const nipRes = validatePolishNip(parsedJson['counterpartyNip']);
+          if (!nipRes.valid || !nipRes.normalizedNip) {
+            throw new AccountingWorkspaceValidationError(
+              400,
+              'invalid_nip',
+              nipRes.reason ?? 'Nieprawidłowy NIP kontrahenta w imporcie JSON.',
+            );
+          }
+          normalizedCpNip = nipRes.normalizedNip;
+        }
+
+        const rawNet = parsedJson['netGrosze'];
+        if (
+          rawNet !== undefined &&
+          (typeof rawNet !== 'number' || !Number.isSafeInteger(rawNet) || rawNet < 0)
+        ) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole netGrosze w imporcie JSON musi być nieujemną liczbą całkowitą w groszach.',
+          );
+        }
+        const netGroszeVal = typeof rawNet === 'number' ? rawNet : 100_00;
+
+        const rawDesc = parsedJson['description'];
+        if (
+          rawDesc !== undefined &&
+          (typeof rawDesc !== 'string' || rawDesc.trim().length === 0 || rawDesc.length > 1000)
+        ) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole description w imporcie JSON musi być niepustym ciągiem znaków.',
+          );
+        }
+
+        const rawDirection = parsedJson['direction'];
+        if (rawDirection !== undefined && rawDirection !== 'sales' && rawDirection !== 'purchase') {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_json_document_fields',
+            'Pole direction w imporcie JSON musi przyjmować wartość sales lub purchase.',
+          );
+        }
+
         parsedDraft = {
           documentNumber: docNo,
-          direction: req.direction ?? (parsedJson['direction'] === 'sales' ? 'sales' : 'purchase'),
+          direction: req.direction ?? (rawDirection === 'sales' ? 'sales' : 'purchase'),
           issueDate: issueDt,
-          eventDate: issueDt,
-          dueDate: String(parsedJson['dueDate'] ?? addDaysIso(issueDt, 14)),
-          counterpartyName: String(parsedJson['counterpartyName'] ?? 'Kontrahent JSON'),
-          counterpartyNip:
-            typeof parsedJson['counterpartyNip'] === 'string'
-              ? parsedJson['counterpartyNip']
-              : undefined,
+          eventDate: eventDt,
+          dueDate: dueDt,
+          counterpartyName: typeof rawCpName === 'string' ? rawCpName.trim() : 'Kontrahent JSON',
+          counterpartyNip: normalizedCpNip,
           ksefReferenceNumber: undefined,
           ksefMarker: 'BFK',
           lines: [
             {
-              description: String(parsedJson['description'] ?? `Pozycja ${docNo}`),
+              description: typeof rawDesc === 'string' ? rawDesc.trim() : `Pozycja ${docNo}`,
               quantity: '1',
               unit: 'szt.',
-              netGrosze: Number(parsedJson['netGrosze'] ?? 100_00),
+              netGrosze: netGroszeVal,
               vatRate: normalizeVatRateCode(String(parsedJson['vatRate'] ?? '23')),
               annex15Item: false,
             },
@@ -2595,7 +2854,120 @@ export class AccountingWorkspaceService {
       );
     }
 
-    const doc = existing.document;
+    let doc = existing.document;
+    const effectiveVatRateOverride = overrides?.vatRate ?? overrides?.vatRateCode;
+    const effectiveVatDeductionOverride = overrides?.vatDeductionMode ?? overrides?.deductionMode;
+    const mappedColumnQual: KpirExpenseQualificationKind | undefined =
+      overrides?.kpirColumnNumber === 10
+        ? 'goods_and_materials_col10'
+        : overrides?.kpirColumnNumber === 11
+          ? 'incidental_purchase_costs_col11'
+          : overrides?.kpirColumnNumber === 12
+            ? 'remuneration_col12'
+            : overrides?.kpirColumnNumber === 13
+              ? 'other_expenses_100_col13'
+              : undefined;
+    const effectiveKpirQualOverride =
+      overrides?.kpirQualification ?? overrides?.expenseQualification ?? mappedColumnQual;
+    const effectiveRyczaltRateOverride = overrides?.ryczaltRate ?? overrides?.ryczaltRateCode;
+
+    let normalizedOverrideNip = doc.counterpartyNip;
+    if (overrides?.counterpartyNip !== undefined) {
+      const nipCheck = validatePolishNip(overrides.counterpartyNip);
+      if (!nipCheck.valid || !nipCheck.normalizedNip) {
+        throw new AccountingWorkspaceValidationError(
+          400,
+          'invalid_nip',
+          nipCheck.reason ?? 'Nieprawidłowy NIP kontrahenta wskazany przy zatwierdzaniu dokumentu.',
+        );
+      }
+      normalizedOverrideNip = nipCheck.normalizedNip;
+    }
+
+    const hasDocFieldOverrides =
+      overrides?.documentNumber !== undefined ||
+      overrides?.issueDate !== undefined ||
+      overrides?.eventDate !== undefined ||
+      overrides?.dueDate !== undefined ||
+      overrides?.counterpartyName !== undefined ||
+      overrides?.counterpartyNip !== undefined ||
+      overrides?.description !== undefined ||
+      overrides?.netPln !== undefined ||
+      overrides?.vatPln !== undefined ||
+      effectiveVatRateOverride !== undefined;
+
+    if (hasDocFieldOverrides && overrides) {
+      const nextIssueDate = overrides.issueDate ?? doc.issueDate;
+      const nextEventDate = overrides.eventDate ?? overrides.issueDate ?? doc.eventDate;
+      const nextDueDate: string =
+        overrides.dueDate ??
+        (doc.dueDate && doc.dueDate >= nextIssueDate ? doc.dueDate : addDaysIso(nextIssueDate, 14));
+      if (nextDueDate < nextIssueDate) {
+        throw new AccountingWorkspaceValidationError(
+          400,
+          'invalid_due_date',
+          'Termin płatności (dueDate) nie może być wcześniejszy niż data wystawienia (issueDate).',
+        );
+      }
+
+      const nextRate: VatRateCode = effectiveVatRateOverride ?? doc.lines[0]?.vatRate ?? '23';
+      const nextNetGrosze =
+        overrides.netPln !== undefined ? parsePlnToGrosze(overrides.netPln) : doc.totalNetGrosze;
+      const nextVatGrosze =
+        overrides.vatPln !== undefined
+          ? parsePlnToGrosze(overrides.vatPln)
+          : overrides.netPln !== undefined || effectiveVatRateOverride !== undefined
+            ? calculateInvoiceLineFromNet(nextNetGrosze, nextRate).vatGrosze
+            : doc.totalVatGrosze;
+      const nextGrossGrosze = nextNetGrosze + nextVatGrosze;
+      const baseLine = doc.lines[0];
+      const nextLines =
+        overrides.netPln !== undefined ||
+        overrides.vatPln !== undefined ||
+        overrides.description !== undefined ||
+        effectiveVatRateOverride !== undefined ||
+        doc.lines.length === 1
+          ? [
+              {
+                lineNumber: 1,
+                description:
+                  overrides.description?.trim() ??
+                  baseLine?.description ??
+                  `Pozycja ${overrides.documentNumber ?? doc.documentNumber}`,
+                quantity: baseLine?.quantity ?? '1',
+                unit: baseLine?.unit ?? 'szt.',
+                netGrosze: nextNetGrosze,
+                vatRate: nextRate,
+                vatGrosze: nextVatGrosze,
+                grossGrosze: nextGrossGrosze,
+                annex15Item: baseLine?.annex15Item ?? false,
+              },
+            ]
+          : doc.lines;
+
+      const sanitizedCp =
+        overrides.counterpartyName !== undefined
+          ? sanitizeUntrustedDocumentTextForMcp(overrides.counterpartyName.trim(), {
+              field: 'counterpartyName',
+            }).sanitizedText || overrides.counterpartyName.trim()
+          : doc.counterpartyName;
+
+      doc = {
+        ...doc,
+        documentNumber: overrides.documentNumber?.trim() ?? doc.documentNumber,
+        issueDate: nextIssueDate,
+        eventDate: nextEventDate,
+        dueDate: nextDueDate,
+        counterpartyName: sanitizedCp,
+        ...(normalizedOverrideNip ? { counterpartyNip: normalizedOverrideNip } : {}),
+        lines: nextLines,
+        totalNetGrosze: nextNetGrosze,
+        totalVatGrosze: nextVatGrosze,
+        totalGrossGrosze: nextGrossGrosze,
+        totalGrossFormatted: formatPlnFromGrosze(nextGrossGrosze),
+      };
+    }
+
     const period = doc.eventDate.slice(0, 7);
     const vatActive = company.taxProfile.vatStatus === 'czynny';
     const category: ProposedPostingCategory =
@@ -2604,11 +2976,11 @@ export class AccountingWorkspaceService {
         : (overrides?.suggestedCategory ?? existing.aiProposal.suggestedCategory);
     const isCarMixed =
       category === 'eksploatacja_samochodu_mieszana' ||
-      overrides?.kpirQualification === 'vehicle_mixed_75_col13';
+      effectiveKpirQualOverride === 'vehicle_mixed_75_col13';
 
     const vatDeductionMode: VatDeductionMode = !vatActive
       ? 'none_0'
-      : (overrides?.vatDeductionMode ??
+      : (effectiveVatDeductionOverride ??
         (isCarMixed ? 'vehicle_mixed_50' : existing.aiProposal.vatDeductionMode));
 
     const vatEntryIds: string[] = [];
@@ -2689,8 +3061,8 @@ export class AccountingWorkspaceService {
         postingExplanation = kpirEntry.explanation;
       } else {
         const qualKind: Exclude<KpirExpenseQualificationKind, 'none'> =
-          overrides?.kpirQualification && overrides.kpirQualification !== 'none'
-            ? overrides.kpirQualification
+          effectiveKpirQualOverride && effectiveKpirQualOverride !== 'none'
+            ? effectiveKpirQualOverride
             : isCarMixed
               ? 'vehicle_mixed_75_col13'
               : category === 'towary_i_materialy'
@@ -2736,7 +3108,7 @@ export class AccountingWorkspaceService {
       }
     } else if (company.taxProfile.profileCode === 'jdg_ryczalt') {
       const rate: RyczaltRateCode =
-        overrides?.ryczaltRate ?? existing.aiProposal.ryczaltRate ?? '12';
+        effectiveRyczaltRateOverride ?? existing.aiProposal.ryczaltRate ?? '12';
       if (doc.direction === 'sales') {
         const revGrosze = vatActive ? doc.totalNetGrosze : doc.totalGrossGrosze;
         const ryczEntry = createRyczaltEntry({
@@ -2982,6 +3354,7 @@ export class AccountingWorkspaceService {
     const nowIso = this.nowIso();
     const updatedDoc = CompanyDocumentItemSchema.parse({
       ...existing,
+      document: doc,
       status: 'posted',
       updatedAt: nowIso,
       approvedByUserId: approverUserId,
@@ -3014,7 +3387,33 @@ export class AccountingWorkspaceService {
       'write',
       'approve_and_post_document',
     );
+    this.assertHumanApprovalActorScopes(actor, tId, leId, 'approve_and_post_document');
+
+    if (
+      rawRequest !== undefined &&
+      rawRequest !== null &&
+      typeof rawRequest === 'object' &&
+      !Array.isArray(rawRequest) &&
+      'documentId' in rawRequest &&
+      rawRequest.documentId !== undefined &&
+      rawRequest.documentId !== documentId
+    ) {
+      throw new AccountingWorkspaceValidationError(
+        400,
+        'document_id_mismatch',
+        'Identyfikator documentId w treści żądania nie zgadza się z parametrem ścieżki URL.',
+      );
+    }
+
     const req = rawRequest ? ApproveAndPostDocumentRequestSchema.parse(rawRequest) : undefined;
+    if (req?.documentId !== undefined && req.documentId !== documentId) {
+      throw new AccountingWorkspaceValidationError(
+        400,
+        'document_id_mismatch',
+        'Identyfikator documentId w treści żądania nie zgadza się z parametrem ścieżki URL.',
+      );
+    }
+
     const idx = company.documents.findIndex((d) => d.documentId === documentId);
     if (idx === -1) {
       throw new AccountingWorkspaceAccessError(
@@ -3024,7 +3423,26 @@ export class AccountingWorkspaceService {
       );
     }
 
+    const beforeDoc = company.documents[idx]!.document;
     const posted = this.postDocumentRecordInternal(company, idx, uId, req);
+    const corrections: string[] = [];
+    if (posted.document.totalNetGrosze !== beforeDoc.totalNetGrosze) {
+      corrections.push(
+        `netto ${formatPlnFromGrosze(beforeDoc.totalNetGrosze)} -> ${formatPlnFromGrosze(posted.document.totalNetGrosze)}`,
+      );
+    }
+    if (posted.document.totalVatGrosze !== beforeDoc.totalVatGrosze) {
+      corrections.push(
+        `VAT ${formatPlnFromGrosze(beforeDoc.totalVatGrosze)} -> ${formatPlnFromGrosze(posted.document.totalVatGrosze)}`,
+      );
+    }
+    if (posted.document.documentNumber !== beforeDoc.documentNumber) {
+      corrections.push(`nr ${beforeDoc.documentNumber} -> ${posted.document.documentNumber}`);
+    }
+    if (posted.document.counterpartyNip !== beforeDoc.counterpartyNip) {
+      corrections.push('skorygowano NIP kontrahenta');
+    }
+
     this.recordAudit({
       channel: 'accounting',
       action: 'document_approved_and_posted_by_human',
@@ -3033,8 +3451,12 @@ export class AccountingWorkspaceService {
       tenantId: tId,
       legalEntityId: leId,
       outcome: 'allow',
-      reasonCode: 'human_approved_posting',
-      summaryPl: `Człowiek zatwierdził i zaksięgował dokument ${posted.document.documentNumber} (${posted.document.totalGrossFormatted}).`,
+      reasonCode:
+        corrections.length > 0 ? 'human_corrected_and_approved_posting' : 'human_approved_posting',
+      summaryPl:
+        corrections.length > 0
+          ? `Człowiek skorygował propozycję (${corrections.join(', ')}) i zaksięgował dokument ${posted.document.documentNumber} (${posted.document.totalGrossFormatted}).`
+          : `Człowiek zatwierdził i zaksięgował dokument ${posted.document.documentNumber} (${posted.document.totalGrossFormatted}).`,
     });
     return posted;
   }
@@ -4759,7 +5181,7 @@ export class AccountingWorkspaceService {
       expenseDescription: descEnv.sanitizedText || input.invoice.expenseDescription,
     };
 
-    this.store.upsertMcpProposal({
+    const storedProposal: WorkspaceStoredMcpProposal = {
       proposalId,
       tenantId: tId,
       legalEntityId: leId,
@@ -4773,12 +5195,33 @@ export class AccountingWorkspaceService {
       ledgerPosted: false,
       ledgerEntryId: null,
       confirmedAtIso: null,
+      confirmedByUserId: null,
       rejectedAtIso: null,
       rejectedByUserId: null,
       rejectionReason: null,
       invoice: sanitizedInvoice,
       proposedPosting,
-    });
+    };
+    this.store.upsertMcpProposal(storedProposal);
+    for (const gw of this.boundMcpGateways) {
+      gw.syncProposalFromWorkspace({
+        proposalId: storedProposal.proposalId,
+        tenantId: storedProposal.tenantId,
+        legalEntityId: storedProposal.legalEntityId,
+        createdByUserId: storedProposal.createdByUserId,
+        idempotencyKey: storedProposal.idempotencyKey,
+        payloadHash: storedProposal.payloadHash,
+        createdAtIso: storedProposal.createdAtIso,
+        expiresAtMs: storedProposal.expiresAtMs,
+        expiresAtIso: storedProposal.expiresAtIso,
+        status: storedProposal.status,
+        ledgerEntryId: storedProposal.ledgerEntryId,
+        confirmedAtIso: storedProposal.confirmedAtIso,
+        confirmedByUserId: storedProposal.confirmedByUserId ?? null,
+        invoice: storedProposal.invoice,
+        proposedPosting: storedProposal.proposedPosting,
+      });
+    }
 
     const auditEv = this.recordAudit({
       channel: 'mcp',
@@ -4830,6 +5273,7 @@ export class AccountingWorkspaceService {
       'write',
       'issue_mcp_proposal_challenge',
     );
+    this.assertHumanApprovalActorScopes(actor, tId, leId, 'issue_mcp_proposal_challenge');
     const proposal = this.store.getMcpProposal(proposalId);
     if (!proposal || proposal.tenantId !== tId || proposal.legalEntityId !== leId) {
       throw new AccountingWorkspaceAccessError(
@@ -4844,11 +5288,21 @@ export class AccountingWorkspaceService {
         'Propozycja MCP nie oczekuje już na zatwierdzenie.',
       );
     }
+    const now = this.clock.now();
+    if (now.getTime() >= proposal.expiresAtMs) {
+      proposal.status = 'expired';
+      this.store.upsertMcpProposal(proposal);
+      throw new AccountingWorkspaceValidationError(
+        422,
+        'proposal_expired',
+        'Ważność propozycji MCP wygasła.',
+      );
+    }
 
     const confirmationCode = `PAP-HUMAN-${randomBytes(16).toString('hex')}`;
-    const now = this.clock.now();
     const expiresAtMs = now.getTime() + 15 * 60 * 1000;
     const expiresAtIso = new Date(expiresAtMs).toISOString();
+    const codeSha256Hex = sha256Hex(confirmationCode);
 
     this.store.saveHumanChallenge({
       proposalId: proposal.proposalId,
@@ -4856,11 +5310,23 @@ export class AccountingWorkspaceService {
       legalEntityId: leId,
       humanUserId: uId,
       expectedPayloadHash: proposal.payloadHash,
-      codeSha256Hex: sha256Hex(confirmationCode),
+      codeSha256Hex,
       expiresAtMs,
       expiresAtIso,
       consumedAtIso: null,
     });
+    for (const gw of this.boundMcpGateways) {
+      gw.syncHumanChallengeFromWorkspace({
+        proposalId: proposal.proposalId,
+        tenantId: tId,
+        legalEntityId: leId,
+        authorizedHumanUserId: uId,
+        expectedPayloadHash: proposal.payloadHash,
+        codeSha256Hex,
+        expiresAtMs,
+        consumedAtIso: null,
+      });
+    }
 
     const auditEv = this.recordAudit({
       channel: 'mcp',
@@ -4948,7 +5414,16 @@ export class AccountingWorkspaceService {
       'write',
       'confirm_mcp_proposal',
     );
-    const req = ConfirmMcpProposalRequestSchema.parse(rawRequest);
+    this.assertHumanApprovalActorScopes(actor, tId, leId, 'confirm_mcp_proposal');
+    const parsedReq = ConfirmMcpProposalRequestSchema.safeParse(rawRequest);
+    if (!parsedReq.success) {
+      throw new AccountingWorkspaceValidationError(
+        400,
+        'invalid_confirm_mcp_proposal_request',
+        parsedReq.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '),
+      );
+    }
+    const req = parsedReq.data;
     const proposal = this.store.getMcpProposal(proposalId);
     if (!proposal || proposal.tenantId !== tId || proposal.legalEntityId !== leId) {
       throw new AccountingWorkspaceAccessError(
@@ -4975,7 +5450,7 @@ export class AccountingWorkspaceService {
       );
     }
 
-    if (req.expectedPayloadHash && req.expectedPayloadHash !== proposal.payloadHash) {
+    if (!constantTimeHexEquals(req.expectedPayloadHash, proposal.payloadHash)) {
       throw new AccountingWorkspaceConflictError(
         'payload_hash_mismatch',
         'Skrót zawartości propozycji (payloadHash) nie zgadza się z przygotowanym szkicem.',
@@ -5007,8 +5482,8 @@ export class AccountingWorkspaceService {
       challenge.consumedAtIso !== null ||
       nowMs >= challenge.expiresAtMs ||
       challenge.humanUserId !== uId ||
-      challenge.expectedPayloadHash !== proposal.payloadHash ||
-      challenge.codeSha256Hex !== providedHash
+      !constantTimeHexEquals(challenge.expectedPayloadHash, proposal.payloadHash) ||
+      !constantTimeHexEquals(challenge.codeSha256Hex, providedHash)
     ) {
       this.recordAudit({
         channel: 'mcp',
@@ -5037,7 +5512,16 @@ export class AccountingWorkspaceService {
     proposal.ledgerPosted = true;
     proposal.ledgerEntryId = postedDocument.documentId;
     proposal.confirmedAtIso = nowIso;
+    proposal.confirmedByUserId = uId;
     this.store.upsertMcpProposal(proposal);
+    for (const gw of this.boundMcpGateways) {
+      gw.markProposalConfirmedFromWorkspace({
+        proposalId: proposal.proposalId,
+        ledgerEntryId: postedDocument.documentId,
+        confirmedAtIso: nowIso,
+        confirmedByUserId: uId,
+      });
+    }
 
     const auditEv = this.recordAudit({
       channel: 'mcp',
@@ -5085,6 +5569,7 @@ export class AccountingWorkspaceService {
       'write',
       'reject_mcp_proposal',
     );
+    this.assertHumanApprovalActorScopes(actor, tId, leId, 'reject_mcp_proposal');
     const req = rawRequest ? RejectMcpProposalRequestSchema.parse(rawRequest) : undefined;
     const proposal = this.store.getMcpProposal(proposalId);
     if (!proposal || proposal.tenantId !== tId || proposal.legalEntityId !== leId) {
@@ -5108,6 +5593,14 @@ export class AccountingWorkspaceService {
     proposal.rejectedByUserId = uId;
     proposal.rejectionReason = reason;
     this.store.upsertMcpProposal(proposal);
+    const existingChallenge = this.store.getHumanChallenge(proposal.proposalId);
+    if (existingChallenge) {
+      existingChallenge.consumedAtIso = nowIso;
+      this.store.saveHumanChallenge(existingChallenge);
+    }
+    for (const gw of this.boundMcpGateways) {
+      gw.markProposalRejectedFromWorkspace({ proposalId: proposal.proposalId });
+    }
 
     const auditEv = this.recordAudit({
       channel: 'mcp',
@@ -5148,12 +5641,17 @@ export class AccountingWorkspaceService {
       identity: VerifiedOidcIdentity,
     ): Promise<{ readonly userId: UserId } | null> => {
       const bySub = this.store.getUserBySubject(identity.subject);
-      if (bySub && bySub.active) {
-        return { userId: bySub.userId };
+      if (bySub) {
+        return bySub.active ? { userId: bySub.userId } : null;
       }
       const persona = resolveDemoPersonaSeed(identity.subject);
       if (persona) {
-        return { userId: parseUserId(persona.userId) };
+        const parsedId = parseUserId(persona.userId);
+        const byId = this.store.getUserById(parsedId);
+        if (byId && !byId.active) {
+          return null;
+        }
+        return { userId: parsedId };
       }
       return null;
     };
@@ -5445,6 +5943,69 @@ export class AccountingWorkspaceService {
       humanConfirmationTtlMs: options?.humanConfirmationTtlMs,
     });
 
+    for (const comp of this.store.listAllCompanies()) {
+      for (const existing of this.store.listMcpProposals(comp.tenantId, comp.legalEntityId)) {
+        gateway.syncProposalFromWorkspace({
+          proposalId: existing.proposalId,
+          tenantId: existing.tenantId,
+          legalEntityId: existing.legalEntityId,
+          createdByUserId: existing.createdByUserId,
+          idempotencyKey: existing.idempotencyKey,
+          payloadHash: existing.payloadHash,
+          createdAtIso: existing.createdAtIso,
+          expiresAtMs: existing.expiresAtMs,
+          expiresAtIso: existing.expiresAtIso,
+          status: existing.status,
+          ledgerEntryId: existing.ledgerEntryId,
+          confirmedAtIso: existing.confirmedAtIso,
+          confirmedByUserId: existing.confirmedByUserId ?? null,
+          invoice: existing.invoice,
+          proposedPosting: existing.proposedPosting,
+        });
+        const existingChallenge = this.store.getHumanChallenge(existing.proposalId);
+        if (existingChallenge) {
+          gateway.syncHumanChallengeFromWorkspace({
+            proposalId: existingChallenge.proposalId,
+            tenantId: existingChallenge.tenantId,
+            legalEntityId: existingChallenge.legalEntityId,
+            authorizedHumanUserId: existingChallenge.humanUserId,
+            expectedPayloadHash: existingChallenge.expectedPayloadHash,
+            codeSha256Hex: existingChallenge.codeSha256Hex,
+            expiresAtMs: existingChallenge.expiresAtMs,
+            consumedAtIso: existingChallenge.consumedAtIso,
+          });
+        }
+      }
+    }
+    this.boundMcpGateways.add(gateway);
+
+    const origIssueChallenge = gateway.issueHumanConfirmationChallenge.bind(gateway);
+    gateway.issueHumanConfirmationChallenge = async (input) => {
+      const result = await origIssueChallenge(input);
+      if (result.ok) {
+        const chSnap = gateway.getHumanChallengeSnapshot(input.proposalId);
+        if (chSnap) {
+          this.store.saveHumanChallenge({
+            proposalId: chSnap.proposalId,
+            tenantId: chSnap.tenantId,
+            legalEntityId: chSnap.legalEntityId,
+            humanUserId: chSnap.authorizedHumanUserId,
+            expectedPayloadHash: chSnap.expectedPayloadHash,
+            codeSha256Hex: chSnap.codeSha256Hex,
+            expiresAtMs: chSnap.expiresAtMs,
+            expiresAtIso: new Date(chSnap.expiresAtMs).toISOString(),
+            consumedAtIso: chSnap.consumedAtIso,
+          });
+          for (const gw of this.boundMcpGateways) {
+            if (gw !== gateway) {
+              gw.syncHumanChallengeFromWorkspace(chSnap);
+            }
+          }
+        }
+      }
+      return result;
+    };
+
     const origPrepare = gateway.prepareInvoiceAndPostingProposal.bind(gateway);
     gateway.prepareInvoiceAndPostingProposal = async (
       callContext: McpCallContext,
@@ -5468,12 +6029,18 @@ export class AccountingWorkspaceService {
             ledgerPosted: false,
             ledgerEntryId: null,
             confirmedAtIso: null,
+            confirmedByUserId: null,
             rejectedAtIso: null,
             rejectedByUserId: null,
             rejectionReason: null,
             invoice: snapshot.invoice,
             proposedPosting: snapshot.proposedPosting,
           });
+          for (const gw of this.boundMcpGateways) {
+            if (gw !== gateway) {
+              gw.syncProposalFromWorkspace(snapshot);
+            }
+          }
         }
       }
       return result;
@@ -5487,22 +6054,40 @@ export class AccountingWorkspaceService {
       const result = await origConfirm(callContext, rawInput);
       if (result.ok && !result.data.idempotentReplay) {
         const stored = this.store.getMcpProposal(result.data.proposalId);
+        const snapshot = gateway.getStoredProposalSnapshot(result.data.proposalId);
+        const approverUserId = snapshot?.confirmedByUserId ?? stored?.createdByUserId;
         const comp = this.store.getCompany(
           parseTenantId(result.data.tenantId),
           parseLegalEntityId(result.data.legalEntityId),
         );
-        if (stored && comp && stored.status === 'pending_human_approval') {
+        if (stored && comp && approverUserId && stored.status === 'pending_human_approval') {
+          const existingCh = this.store.getHumanChallenge(stored.proposalId);
+          if (existingCh) {
+            existingCh.consumedAtIso = result.data.confirmedAt;
+            this.store.saveHumanChallenge(existingCh);
+          }
           this.postConfirmedMcpInvoiceToCompany(
             comp,
             stored,
-            stored.createdByUserId,
+            approverUserId,
             result.data.ledgerEntryId,
           );
           stored.status = 'confirmed';
           stored.ledgerPosted = true;
           stored.ledgerEntryId = result.data.ledgerEntryId;
           stored.confirmedAtIso = result.data.confirmedAt;
+          stored.confirmedByUserId = approverUserId;
           this.store.upsertMcpProposal(stored);
+          for (const gw of this.boundMcpGateways) {
+            if (gw !== gateway) {
+              gw.markProposalConfirmedFromWorkspace({
+                proposalId: stored.proposalId,
+                ledgerEntryId: result.data.ledgerEntryId,
+                confirmedAtIso: result.data.confirmedAt,
+                confirmedByUserId: approverUserId,
+              });
+            }
+          }
         }
       }
       return result;

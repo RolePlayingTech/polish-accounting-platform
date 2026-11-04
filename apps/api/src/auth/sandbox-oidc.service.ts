@@ -17,7 +17,7 @@ import {
   type OidcDiscoveryDocument,
 } from '@pap/contracts';
 import { SignJWT, exportJWK, generateKeyPair, type CryptoKey, type JWK } from 'jose';
-import type { OidcVerifierConfig } from './oidc-config.js';
+import { OidcConfigError, type OidcVerifierConfig } from './oidc-config.js';
 
 export const DEFAULT_SANDBOX_OIDC_ISSUER = 'http://127.0.0.1:4000' as const;
 export const DEFAULT_SANDBOX_OIDC_AUDIENCE = 'pap-api' as const;
@@ -25,12 +25,96 @@ export const SANDBOX_SIGNING_KEY_ID = 'pap-sandbox-es256-v1' as const;
 const SANDBOX_TOKEN_TTL_SECONDS = 3_600;
 const PRIVATE_JWK_FIELDS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'] as const;
 const SAFE_SCOPE_PATTERN = /^[A-Za-z0-9:._-]+$/;
+const ALLOWED_SANDBOX_OIDC_ENVS = new Set(['local', 'dev', 'development', 'test', 'private_test']);
 
-function resolveSandboxEnabled(env: Readonly<Record<string, string | undefined>>): boolean {
-  if (env.PAP_OIDC_ENV === 'staging') {
+function isLoopbackIssuerUrl(rawUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new OidcConfigError(
+      `Invalid sandbox OIDC issuer URL (${rawUrl}); expected a valid http/https origin.`,
+    );
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new OidcConfigError(
+      `Invalid sandbox OIDC issuer protocol (${parsed.protocol}); expected http: or https:.`,
+    );
+  }
+  const host = parsed.hostname.toLowerCase();
+  return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+}
+
+function assertHttpsIssuerUrl(rawUrl: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new OidcConfigError(`Invalid sandbox OIDC issuer URL (${rawUrl}).`);
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new OidcConfigError(
+      `Non-loopback sandbox OIDC issuer (${rawUrl}) requires https:// even in private_test mode (fail-closed).`,
+    );
+  }
+}
+
+function validateAndResolveSandboxEnabled(
+  env: Readonly<Record<string, string | undefined>>,
+  resolvedIssuer: string,
+): boolean {
+  if (env.PAP_SANDBOX_AUTH_ENABLED !== 'true') {
     return false;
   }
-  return env.PAP_SANDBOX_AUTH_ENABLED === 'true';
+
+  const jwksUri = env.PAP_OIDC_JWKS_URI?.trim() ?? '';
+  if (jwksUri.length > 0) {
+    throw new OidcConfigError(
+      'PAP_SANDBOX_AUTH_ENABLED=true cannot be combined with PAP_OIDC_JWKS_URI; disable sandbox auth when an external OIDC IdP is configured (fail-closed).',
+    );
+  }
+
+  const oidcEnv = env.PAP_OIDC_ENV?.trim();
+  if (oidcEnv !== undefined && oidcEnv.length > 0 && !ALLOWED_SANDBOX_OIDC_ENVS.has(oidcEnv)) {
+    throw new OidcConfigError(
+      `PAP_SANDBOX_AUTH_ENABLED=true is forbidden when PAP_OIDC_ENV=${oidcEnv} (fail-closed).`,
+    );
+  }
+
+  const isExplicitPrivateTest =
+    oidcEnv === 'private_test' && env.PAP_ALLOW_PRIVATE_TEST_SANDBOX_OIDC === 'true';
+
+  if (env.NODE_ENV?.trim() === 'production' && !isExplicitPrivateTest) {
+    throw new OidcConfigError(
+      'PAP_SANDBOX_AUTH_ENABLED=true is forbidden when NODE_ENV=production unless both PAP_OIDC_ENV=private_test and PAP_ALLOW_PRIVATE_TEST_SANDBOX_OIDC=true are explicitly set (fail-closed).',
+    );
+  }
+
+  const explicitOidcIssuer = env.PAP_OIDC_ISSUER?.trim();
+  if (explicitOidcIssuer && explicitOidcIssuer.length > 0) {
+    const normalizedOidcIssuer = explicitOidcIssuer.endsWith('/')
+      ? explicitOidcIssuer.slice(0, -1)
+      : explicitOidcIssuer;
+    if (!isLoopbackIssuerUrl(normalizedOidcIssuer)) {
+      if (!isExplicitPrivateTest) {
+        throw new OidcConfigError(
+          `PAP_SANDBOX_AUTH_ENABLED=true cannot be combined with non-loopback PAP_OIDC_ISSUER (${normalizedOidcIssuer}) without PAP_OIDC_ENV=private_test and PAP_ALLOW_PRIVATE_TEST_SANDBOX_OIDC=true (fail-closed).`,
+        );
+      }
+      assertHttpsIssuerUrl(normalizedOidcIssuer);
+    }
+  }
+
+  if (!isLoopbackIssuerUrl(resolvedIssuer)) {
+    if (!isExplicitPrivateTest) {
+      throw new OidcConfigError(
+        `PAP_SANDBOX_AUTH_ENABLED=true cannot use non-loopback issuer (${resolvedIssuer}) without PAP_OIDC_ENV=private_test and PAP_ALLOW_PRIVATE_TEST_SANDBOX_OIDC=true (fail-closed).`,
+      );
+    }
+    assertHttpsIssuerUrl(resolvedIssuer);
+  }
+
+  return true;
 }
 
 function resolveCanonicalSandboxIssuer(env: Readonly<Record<string, string | undefined>>): string {
@@ -77,8 +161,9 @@ export class SandboxOidcService implements OnModuleInit {
     env: Readonly<Record<string, string | undefined>> = process.env,
     clock: Clock = systemClock,
   ) {
-    this.enabled = resolveSandboxEnabled(env);
-    this.issuer = resolveCanonicalSandboxIssuer(env);
+    const resolvedIssuer = resolveCanonicalSandboxIssuer(env);
+    this.enabled = validateAndResolveSandboxEnabled(env, resolvedIssuer);
+    this.issuer = resolvedIssuer;
     this.audience = env.PAP_OIDC_AUDIENCE?.split(',')[0]?.trim() || DEFAULT_SANDBOX_OIDC_AUDIENCE;
     this.clock = clock;
   }

@@ -24,6 +24,27 @@ import { OIDC_ACCESS_TOKEN_VERIFIER, SECURITY_AUDIT_RECORDER } from './company-a
 export const OPTIONAL_JWT_AUTH_KEY = 'pap:optional_jwt_auth';
 export const OptionalJwtAuth = () => SetMetadata(OPTIONAL_JWT_AUTH_KEY, true);
 
+export const REQUIRE_HUMAN_APPROVAL_SCOPE_KEY = 'pap:require_human_approval_scope';
+export const RequireHumanApprovalScope = () => SetMetadata(REQUIRE_HUMAN_APPROVAL_SCOPE_KEY, true);
+
+const REST_READ_SCOPES = new Set([
+  'pap:ui:full',
+  'pap:ui:accounting',
+  'pap:accounting',
+  'pap:api:read',
+  'pap:api:write',
+  'pap:mcp:read',
+]);
+
+const REST_WRITE_SCOPES = new Set([
+  'pap:ui:full',
+  'pap:ui:accounting',
+  'pap:accounting',
+  'pap:api:write',
+]);
+
+const HUMAN_APPROVAL_SCOPES = new Set(['pap:ui:full', 'pap:ui:accounting', 'pap:accounting']);
+
 export interface JwtAuthenticatedRequest extends FastifyRequest {
   papRequestId?: string;
   papActor?: WorkspaceActorContext;
@@ -196,6 +217,81 @@ export class JwtBearerAuthGuard implements CanActivate {
       });
     }
 
+    if (!resolvedUser.active) {
+      await this.recordDenial(requestId, params, 'authentication_failed');
+      throw new ForbiddenException({
+        statusCode: 403,
+        error: 'forbidden',
+        reasonCode: 'inactive_user_account',
+        message: 'Konto użytkownika jest nieaktywne lub zablokowane.',
+      });
+    }
+
+    if (!isOptional) {
+      const requiresHumanApproval =
+        this.reflector.getAllAndOverride<boolean | undefined>(REQUIRE_HUMAN_APPROVAL_SCOPE_KEY, [
+          context.getHandler(),
+          context.getClass(),
+        ]) === true;
+      const tokenScopes = identity.scopes ?? [];
+      const method = request.method.toUpperCase();
+      const isMutationMethod = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+
+      if (
+        (requiresHumanApproval || isMutationMethod) &&
+        tokenScopes.includes('pap:mcp:agent_autonomous')
+      ) {
+        await this.recordDenial(
+          requestId,
+          params,
+          'authorization_context_invalid',
+          resolvedUser.userId,
+        );
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'forbidden',
+          reasonCode: 'agent_self_approval_forbidden',
+          message:
+            'Autonomiczny agent MCP (pap:mcp:agent_autonomous) nie może zatwierdzać propozycji ani wykonywać bezpośrednich mutacji REST API.',
+        });
+      }
+
+      if (requiresHumanApproval) {
+        if (!tokenScopes.some((s) => HUMAN_APPROVAL_SCOPES.has(s))) {
+          await this.recordDenial(requestId, params, 'authentication_failed', resolvedUser.userId);
+          reply.header('WWW-Authenticate', 'Bearer error="insufficient_scope"');
+          throw new ForbiddenException({
+            statusCode: 403,
+            error: 'insufficient_scope',
+            reasonCode: 'insufficient_scope',
+            message:
+              'Operacja zatwierdzania lub zarządzania grantami wymaga ludzkiego zakresu OIDC (pap:ui:full lub pap:ui:accounting).',
+          });
+        }
+      } else if (isMutationMethod) {
+        if (!tokenScopes.some((s) => REST_WRITE_SCOPES.has(s))) {
+          await this.recordDenial(requestId, params, 'authentication_failed', resolvedUser.userId);
+          reply.header('WWW-Authenticate', 'Bearer error="insufficient_scope"');
+          throw new ForbiddenException({
+            statusCode: 403,
+            error: 'insufficient_scope',
+            reasonCode: 'insufficient_scope',
+            message:
+              'Mutacje na trasach REST wymagają zakresu zapisu człowieka lub API (np. pap:ui:full, pap:ui:accounting lub pap:api:write).',
+          });
+        }
+      } else if (!tokenScopes.some((s) => REST_READ_SCOPES.has(s))) {
+        await this.recordDenial(requestId, params, 'authentication_failed', resolvedUser.userId);
+        reply.header('WWW-Authenticate', 'Bearer error="insufficient_scope"');
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'insufficient_scope',
+          reasonCode: 'insufficient_scope',
+          message: 'Brak wymaganego zakresu OIDC do odczytu chronionych zasobów REST API.',
+        });
+      }
+    }
+
     request.papActor = {
       userId: resolvedUser.userId,
       issuer: identity.issuer,
@@ -213,15 +309,16 @@ export class JwtBearerAuthGuard implements CanActivate {
   private async recordDenial(
     requestId: string,
     params: Record<string, unknown>,
-    reason: 'transport_rejected' | 'authentication_failed',
+    reason: 'transport_rejected' | 'authentication_failed' | 'authorization_context_invalid',
+    actorId: ReturnType<typeof parseUserId> | null = null,
   ): Promise<void> {
     await this.securityAudit.recordDecision({
       requestId,
-      actorId: null,
+      actorId,
       tenantId: auditIdentifier(params.tenantId),
       legalEntityId: auditIdentifier(params.legalEntityId),
       action: 'unknown',
-      kind: 'transport',
+      kind: reason === 'transport_rejected' ? 'transport' : 'preflight',
       decision: 'deny',
       outcome: 'denied',
       reason,

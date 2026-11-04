@@ -11,12 +11,14 @@ import {
   Put,
   Query,
   Req,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import {
+  AccountingWorkspaceAccessError,
+  AccountingWorkspaceConflictError,
   AccountingWorkspaceValidationError,
   DEMO_DEFAULT_PERIOD,
-  sha256Hex,
   type AccountingWorkspaceService,
 } from '@pap/application';
 import type { PapMcpGateway } from '@pap/application/mcp-gateway';
@@ -31,14 +33,10 @@ import {
   type UpdateObligationStatusRequest,
 } from '@pap/contracts';
 import { ReminderStageSchema } from '@pap/contracts/notifications';
-import {
-  legalEntityId as parseLegalEntityId,
-  tenantId as parseTenantId,
-  userId as parseUserId,
-} from '@pap/domain';
 import { z } from 'zod';
 import {
   JwtBearerAuthGuard,
+  RequireHumanApprovalScope,
   requireRequestActor,
   type JwtAuthenticatedRequest,
 } from '../auth/jwt-bearer.guard.js';
@@ -386,6 +384,7 @@ export class OperationsAutomationController {
   }
 
   @Post('/mcp/proposals/:proposalId/challenge')
+  @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   async issueMcpProposalChallenge(
@@ -395,40 +394,65 @@ export class OperationsAutomationController {
     @Param('proposalId') proposalId: string,
   ) {
     const actor = requireRequestActor(request);
-    if (this.mcpGateway.getStoredProposalSnapshot(proposalId) && actor.rawBearerToken) {
-      const gatewayChallenge = await this.mcpGateway.issueHumanConfirmationChallenge({
-        humanBearerToken: actor.rawBearerToken,
-        tenantId,
-        legalEntityId,
-        proposalId,
-        correlationId: actor.requestId,
-      });
-      if (gatewayChallenge.ok) {
-        const expiresAtMs = new Date(gatewayChallenge.expiresAt).getTime();
-        this.workspace.store.saveHumanChallenge({
-          proposalId,
-          tenantId: parseTenantId(tenantId),
-          legalEntityId: parseLegalEntityId(legalEntityId),
-          humanUserId: parseUserId(actor.userId),
-          expectedPayloadHash: gatewayChallenge.payloadHash,
-          codeSha256Hex: sha256Hex(gatewayChallenge.confirmationCode),
-          expiresAtMs,
-          expiresAtIso: gatewayChallenge.expiresAt,
-          consumedAtIso: null,
-        });
-        return IssueMcpChallengeResponseSchema.parse({
-          proposalId,
-          confirmationCode: gatewayChallenge.confirmationCode,
-          payloadHash: gatewayChallenge.payloadHash,
-          expiresAt: gatewayChallenge.expiresAt,
-          auditEventId: gatewayChallenge.auditEventId,
-        });
+    if (!actor.rawBearerToken) {
+      return this.workspace.issueMcpProposalChallenge(actor, tenantId, legalEntityId, proposalId);
+    }
+
+    const gatewayChallenge = await this.mcpGateway.issueHumanConfirmationChallenge({
+      humanBearerToken: actor.rawBearerToken,
+      tenantId,
+      legalEntityId,
+      proposalId,
+      correlationId: actor.requestId,
+    });
+
+    if (!gatewayChallenge.ok) {
+      switch (gatewayChallenge.reason) {
+        case 'proposal_not_found_or_forbidden':
+        case 'invalid_proposal_selector':
+          throw new AccountingWorkspaceAccessError(
+            404,
+            'proposal_not_found_or_forbidden',
+            'Nie znaleziono propozycji MCP w bieżącej firmie.',
+          );
+        case 'proposal_already_processed':
+          throw new AccountingWorkspaceConflictError(
+            'proposal_already_processed',
+            'Propozycja MCP została już wcześniej przetworzona lub odrzucona.',
+          );
+        case 'proposal_expired':
+          throw new AccountingWorkspaceValidationError(
+            422,
+            'proposal_expired',
+            'Ważność propozycji MCP wygasła.',
+          );
+        case 'audit_unavailable':
+          throw new ServiceUnavailableException({
+            statusCode: 503,
+            error: 'service_unavailable',
+            reasonCode: 'audit_unavailable',
+            message: 'Podsystem audytu jest niedostępny (fail-closed).',
+          });
+        default:
+          throw new AccountingWorkspaceAccessError(
+            403,
+            gatewayChallenge.reason,
+            `Odmowa wystawienia jednorazowego wyzwania zatwierdzenia człowieka (${gatewayChallenge.reason}).`,
+          );
       }
     }
-    return this.workspace.issueMcpProposalChallenge(actor, tenantId, legalEntityId, proposalId);
+
+    return IssueMcpChallengeResponseSchema.parse({
+      proposalId,
+      confirmationCode: gatewayChallenge.confirmationCode,
+      payloadHash: gatewayChallenge.payloadHash,
+      expiresAt: gatewayChallenge.expiresAt,
+      auditEventId: gatewayChallenge.auditEventId,
+    });
   }
 
   @Post('/mcp/proposals/:proposalId/confirm')
+  @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   confirmMcpProposal(
@@ -449,6 +473,7 @@ export class OperationsAutomationController {
   }
 
   @Post('/mcp/proposals/:proposalId/reject')
+  @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   rejectMcpProposal(

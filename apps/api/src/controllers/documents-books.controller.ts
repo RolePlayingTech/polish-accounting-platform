@@ -21,55 +21,12 @@ import type {
 } from '@pap/contracts';
 import {
   JwtBearerAuthGuard,
+  RequireHumanApprovalScope,
   requireRequestActor,
   type JwtAuthenticatedRequest,
 } from '../auth/jwt-bearer.guard.js';
 import { ACCOUNTING_WORKSPACE_SERVICE } from '../runtime/workspace-runtime.js';
 import { parseOptionalPeriodParam } from './query-helpers.js';
-
-const APPROVE_REQUEST_ALLOWED_KEYS = new Set([
-  'documentId',
-  'suggestedCategory',
-  'vatDeductionMode',
-  'kpirQualification',
-  'ryczaltRate',
-  'ledgerAccountCode',
-  'correctedEntryId',
-  'correctionReason',
-]);
-
-const BFF_COMPAT_EXTRA_APPROVE_KEYS = new Set([
-  'counterpartyNip',
-  'counterpartyName',
-  'netPln',
-  'vatPln',
-  'description',
-  'kpirColumnNumber',
-  'vatRateCode',
-  'ryczaltRateCode',
-]);
-
-function normalizeApprovePayload(body: unknown): ApproveAndPostDocumentRequest | undefined {
-  if (body === undefined || body === null) {
-    return undefined;
-  }
-  if (typeof body !== 'object' || Array.isArray(body)) {
-    return body as ApproveAndPostDocumentRequest;
-  }
-  const raw = body as Record<string, unknown>;
-  const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(raw)) {
-    if (APPROVE_REQUEST_ALLOWED_KEYS.has(key)) {
-      cleaned[key] = value;
-      continue;
-    }
-    if (BFF_COMPAT_EXTRA_APPROVE_KEYS.has(key)) {
-      continue;
-    }
-    cleaned[key] = value;
-  }
-  return cleaned as ApproveAndPostDocumentRequest;
-}
 
 @Controller('/api/v1/tenants/:tenantId/companies/:legalEntityId')
 @UseGuards(JwtBearerAuthGuard)
@@ -121,6 +78,7 @@ export class DocumentsBooksController {
   }
 
   @Post('/documents/:documentId/approve-and-post')
+  @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   approveAndPostDocument(
@@ -131,12 +89,14 @@ export class DocumentsBooksController {
     @Body() body?: unknown,
   ) {
     const actor = requireRequestActor(request);
+    const overrides =
+      body === undefined || body === null ? undefined : (body as ApproveAndPostDocumentRequest);
     return this.workspace.approveAndPostDocument(
       actor,
       tenantId,
       legalEntityId,
       documentId,
-      normalizeApprovePayload(body),
+      overrides,
     );
   }
 

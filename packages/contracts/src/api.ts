@@ -740,11 +740,42 @@ export type CreateDocumentRequest = z.infer<typeof CreateDocumentRequestSchema>;
 
 export const ApproveAndPostDocumentRequestSchema = z
   .object({
-    documentId: UuidSelectorSchema.optional(),
+    documentId: z.string().min(1).max(128).optional(),
+    documentNumber: z.string().min(1).max(128).optional(),
+    issueDate: IsoCalendarDateSchema.optional(),
+    eventDate: IsoCalendarDateSchema.optional(),
+    dueDate: IsoCalendarDateSchema.optional(),
+    counterpartyName: z.string().min(1).max(512).optional(),
+    counterpartyNip: z.string().min(1).max(32).optional(),
+    description: z.string().min(1).max(1000).optional(),
+    netPln: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 100.00')
+      .optional(),
+    vatPln: z
+      .string()
+      .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 23.00')
+      .optional(),
+    vatRate: VatRateCodeSchema.optional(),
+    vatRateCode: VatRateCodeSchema.optional(),
     suggestedCategory: ProposedPostingCategorySchema.optional(),
     vatDeductionMode: VatDeductionModeSchema.optional(),
+    deductionMode: VatDeductionModeSchema.optional(),
     kpirQualification: KpirExpenseQualificationKindSchema.optional(),
+    expenseQualification: KpirExpenseQualificationKindSchema.optional(),
+    kpirColumnNumber: z
+      .union([
+        z.literal(7),
+        z.literal(8),
+        z.literal(10),
+        z.literal(11),
+        z.literal(12),
+        z.literal(13),
+        z.literal(16),
+      ])
+      .optional(),
     ryczaltRate: RyczaltRateCodeSchema.optional(),
+    ryczaltRateCode: RyczaltRateCodeSchema.optional(),
     ledgerAccountCode: z
       .string()
       .regex(/^\d{3}(-\d{1,4})?$/)
@@ -1294,8 +1325,8 @@ export type IssueMcpChallengeResponse = z.infer<typeof IssueMcpChallengeResponse
 
 export const ConfirmMcpProposalRequestSchema = z
   .object({
-    confirmationCode: z.string().min(16).max(256).optional(),
-    expectedPayloadHash: Sha256HexSchema.optional(),
+    confirmationCode: z.string().min(16).max(256),
+    expectedPayloadHash: Sha256HexSchema,
     idempotencyKey: UuidSelectorSchema.optional(),
   })
   .strict();

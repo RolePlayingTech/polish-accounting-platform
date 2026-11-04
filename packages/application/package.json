@@ -33,6 +33,7 @@
     "build": "tsc -b",
     "lint": "eslint src test",
     "typecheck": "tsc -b --pretty false",
+    "pretest": "tsc -b ../contracts/tsconfig.json ../domain/tsconfig.json",
     "test": "vitest run --config ../../vitest.config.ts",
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\""
   }
