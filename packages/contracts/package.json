@@ -7,6 +7,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./mcp-tools": {
+      "types": "./dist/mcp-tools.d.ts",
+      "import": "./dist/mcp-tools.js"
+    },
+    "./notifications": {
+      "types": "./dist/notifications.d.ts",
+      "import": "./dist/notifications.js"
     }
   },
   "dependencies": {
