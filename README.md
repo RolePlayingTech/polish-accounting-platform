@@ -1,153 +1,179 @@
 # Polish Accounting Platform 🇵🇱
 
-> **Kandydat Security Foundation 6D-3 (2026-10-30):** transakcyjne operacje (`UnitOfWork`), ograniczone role runtime PostgreSQL, podpisany kontekst sesji HMAC (`pap.context`), `FORCE ROW LEVEL SECURITY` oraz atomowy audyt decyzji `allow/deny` (`security_decision_event`) są zintegrowane w tej gałęzi przed odbiorem QA na izolowanym środowisku PostgreSQL 18.6 na Hetznerze ([plan odbioru QA](docs/6D3_SECURITY_QA_ACCEPTANCE_PLAN.md), [przekazanie walidacji](docs/6D3_VALIDATION_HANDOFF.md), [role/RLS](docs/27-runtime-security-6d3a.md), [audyt](docs/28-security-audit-6d3c.md)). Brak automatycznego deploymentu na staging i brak publicznych endpointów księgowych.
+> **Stan repozytorium na `main` (listopad 2026 r., po scaleniu PR `#45`–`#52`):** kompletny, modularny rdzeń polskiej platformy księgowo-podatkowej został zaimplementowany w monorepo TypeScript (`@pap/domain`, `@pap/contracts`, `@pap/application`, `@pap/db`, `@pap/ui`, `@pap/api`, `@pap/mcp`, `@pap/web`). Obejmuje obsługę trzech profili firmowych (**JDG KPiR**, **JDG Ryczałt**, **Sp. z o.o. — pełne księgi UoR i CIT**), wersjonowany rejestr **32 reguł prawa podatkowego 2025–2026** (42 wersje temporalne) z wyjaśnieniem „§ Dlaczego?”, obieg dokumentów z importem XML KSeF `FA(2)`/`FA(3)` i weryfikacją człowieka, 17- i 19-kolumnową PKPiR (`Dz.U. 2025 poz. 1299`), rejestry VAT i podgląd `JPK_V7M(2)/(3)`, rozrachunki z wyciągami CSV/MT940, kalendarz podatkowy (`art. 12 § 5` Ordynacji podatkowej), powiadomienia e-mail w izolowanej skrzynce `ControlledSandboxMailboxTransport` (RFC 5322), zdalny serwer **Streamable HTTP MCP** (`/api/v1/mcp`), system projektowy **„Księga Współczesna”** oraz **12-modułową Akademię Polskiej Księgowości** (37 lekcji, słownik pojęć, quizy i pomoc kontekstową `?`).
 >
-> **Status projektu: działający szkielet developerski i prywatny staging techniczny Web/API (Etap A); wdrożono politykę dostępu (`6C`), cykl członkostw/grantów (`6D-R`), serwerową weryfikację OIDC i mapowanie tożsamości (`6D-2`) oraz fundament bezpieczeństwa runtime/RLS/audytu (`6D-3`), natomiast interaktywne logowanie UI (`6E`) i publiczne endpointy firmowe nie są jeszcze uruchomione.**
->
-> **Stan weryfikacji źródeł prawnych: 29 października 2026 r.**\
-> **Język dokumentacji: polski. Jurysdykcja: Polska.**
+> **Zastrzeżenie operacyjne i prawne:** Aplikacja działa obecnie wyłącznie jako środowisko rozwojowe, edukacyjne i prywatny staging testowy na **danych w 100% syntetycznych**. System nie wysyła automatycznie deklaracji ani e-faktur do produkcyjnych bramek Ministerstwa Finansów (`KSeF`, `e-Deklaracje`), ZUS ani banków, nie wysyła wiadomości e-mail na zewnętrzne domeny i **nie stanowi doradztwa podatkowego, prawnego ani księgowego** w rozumieniu ustawy o doradztwie podatkowym.
 
-**Polish Accounting Platform** to projekt otwartoźródłowej aplikacji webowej do prowadzenia i organizowania polskiej księgowości, obiegu dokumentów oraz obsługi obowiązków podatkowych — zarówno z poziomu przeglądarki, jak i bezpiecznych narzędzi **Model Context Protocol (MCP)**. Aplikacja ma obsługiwać wiele podmiotów, różne formy prawne i różne reżimy podatkowo-księgowe, bez błędnego założenia, że każda firma rozlicza się tak samo.
+---
 
-## Cel
+## 1. Czym jest Polish Accounting Platform
 
-Jedno miejsce na faktury, rachunki, umowy, wyciągi bankowe, dowody księgowe, rozrachunki, ewidencje, terminy i dokumentację. Użytkownik powinien napisać agentowi: „Dodaj tę fakturę do spółki X, sprawdź jej poprawność i przygotuj propozycję dekretacji” — zobaczyć wynik z uzasadnieniem oraz **samodzielnie zatwierdzić** wykonanie operacji.
+**Polish Accounting Platform** to otwartoźródłowa aplikacja webowa oraz zestaw bezpiecznych narzędzi **Model Context Protocol (MCP)** do prowadzenia i organizowania polskiej księgowości, obiegu dokumentów oraz kontroli obowiązków podatkowych i składkowych.
 
-To nie jest wyłącznie „OCR do faktur”. Długoterminowym celem jest **silnik księgowy zgodny z polskimi wymaganiami, z weryfikowalnym źródłem każdej reguły**. Rozliczenia nie mogą opierać się na swobodnej interpretacji modelu językowego.
+Platforma łączy w jednym rdzeniu:
 
-## Dla kogo
+1. **Deterministyczny silnik podatkowy i księgowy (`@pap/domain`)** — operujący wyłącznie na liczbach całkowitych groszy (`bigint` / safe integer, zero arytmetyki zmiennoprzecinkowej `float`), rozstrzygający przepisy na dzień zdarzenia gospodarczego (`resolveRuleAtDate`) i zwracający pełny ślad obliczeniowy `LegalExplanation` z podstawą prawną (`ISAP` / `Dz.U.` / `M.P.`).
+2. **Kontrolę człowieka nad automatyzacją AI i OCR (`ADR-001`)** — ekstraktory OCR, parsery XML oraz agenci MCP mogą wyłącznie przygotowywać szkice i propozycje (`pending_human_approval`). Żaden model językowy nie liczy podatków w pamięci i nie wykonuje samodzielnego zapisu w księgach bez autoryzowanego zatwierdzenia przez człowieka.
+3. **Jednolity model bezpieczeństwa dla UI, REST API i MCP (`ADR-004`, `6D-3`, `0007`)** — kryptograficzna weryfikacja tokenów OIDC (`ES256`/`RS256`), deny-by-default polityka ról i grantów podmiotowych `(tenantId, legalEntityId)`, sesja BFF `HttpOnly` podpisana `HMAC-SHA256` oraz fundament PostgreSQL 18 z `FORCE ROW LEVEL SECURITY` na 27 tabelach i atomowym audytem decyzji `allow/deny`.
+4. **Wbudowaną warstwę edukacyjną** — publicznie dostępną **Akademię Polskiej Księgowości** (`/academy`) oraz przyciski pomocy kontekstowej `?` (`FieldHelpButton`) bezpośrednio przy polach formularzy podatkowych.
 
-- **JDG**: skala, podatek liniowy, ryczałt oraz przypadki historyczne wymagające odrębnej obsługi; podatnicy VAT czynni lub zwolnieni.
-- **Spółki**: cywilna, jawna, partnerska, komandytowa, komandytowo-akcyjna, z o.o., prosta akcyjna, akcyjna — z odmienną identyfikacją podatników i obowiązków.
-- **Inne podmioty**: fundacje, stowarzyszenia, spółdzielnie, fundacje rodzinne i pozostałe jednostki dopiero po opracowaniu i walidacji odpowiedniego profilu.
-- **Właściciele kilku podmiotów** oraz — w przyszłości — biura rachunkowe i osoby upoważnione.
+---
 
-**Ważne:** „obsługa wszystkich form” jest celem architektury, a nie obietnicą, że wszystkie formy zostaną prawidłowo zaimplementowane w pierwszej wersji. Zakres rzeczywistej zgodności będzie publikowany osobno dla każdego profilu działalności.
+## 2. Architektura monorepo
 
-## Najważniejsze możliwości
+Projekt wykorzystuje **TypeScript strict + Node.js 24 LTS (`24.22.1`), pnpm `12.15.0`, Turborepo, Next.js 16 / React 19, NestJS / Fastify, PostgreSQL 18 / Drizzle ORM oraz oficjalny `@modelcontextprotocol/sdk`** ([ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md)). Kierunek zależności między pakietami jest automatycznie egzekwowany przez reguły ESLint oraz test `test/architecture-boundaries.test.ts`:
 
-| Obszar                 | Planowane możliwości                                                                                                                                    |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dokumenty              | Drag & drop, PDF, XML KSeF, obrazy, e-mail (później), metadane, OCR/AI, wersje, wyszukiwanie, duplikaty, archiwizacja                                   |
-| Faktury / KSeF         | Import zakupów, wystawianie, korekty, zaliczki, statusy, numery KSeF, UPO, obsługa awarii i trybów szczególnych zgodnie z uprawnieniami                 |
-| Księgowość             | KPiR, ewidencja przychodów, pełne księgi i podwójny zapis jako odrębne moduły, konta, rozrachunki, środki trwałe                                        |
-| Podatki i raportowanie | VAT, JPK_V7, JPK_PD, PIT/CIT, wyliczenia i szkice deklaracji zależnie od profilu i wdrożonego zakresu                                                   |
-| Płatności              | Import CSV/MT940/CAMT, dopasowanie przelewów, salda, przypomnienia; PSD2 tylko za zgodą i przez uprawnionego dostawcę                                   |
-| ZUS i kadry            | Obowiązki właściciela, składki, terminy; kadry i płace dopiero w rozszerzonym zakresie                                                                  |
-| Prawo i zgodność       | Wersjonowane reguły z datą obowiązywania, linkiem do podstawy, testami i ścieżką zatwierdzania zmian                                                    |
-| MCP                    | Odczyt dokumentów i rozrachunków, przygotowanie propozycji, wyszukiwanie, kontrolowane operacje zapisu, obowiązkowe potwierdzanie czynności krytycznych |
-| Wiele firm             | Pełna izolacja danych firm, role, uprawnienia, historia zmian, audyt                                                                                    |
+```mermaid
+flowchart TD
+    UI_WEB["@pap/web (Next.js 16 App Router BFF + @pap/ui)"]
+    MCP_CLI["Klienci AI / MCP (Streamable HTTP / STDIO)"]
+    API["@pap/api (NestJS + Fastify: /api/v1/* + /api/v1/mcp + Sandbox OIDC ES256)"]
+    MCP_PKG["@pap/mcp (Adapter Streamable HTTP i STDIO)"]
+    APP["@pap/application (Use-case'y, AccountingWorkspaceService, PapMcpGateway, Notifications, UnitOfWork)"]
+    DOM["@pap/domain (Silnik podatkowy 2025-2026, Reguły prawne, Polityki dostępu, Akademia)"]
+    CON["@pap/contracts (Schematy Zod dla API, MCP, Powiadomień i Akademii)"]
+    DB["@pap/db (PostgreSQL 18 + Drizzle ORM, migracje 0000-0007, FORCE RLS, PostgresAccountingScope)"]
 
-## Co jest szczególnie ważne w Polsce w 2026 r.
+    UI_WEB -->|"Loopback / HTTPS + podpisana sesja BFF"| API
+    MCP_CLI -->|"Authorization: Bearer <JWT>"| API
+    MCP_CLI -->|"STDIO / Samodzielny HTTP"| MCP_PKG
+    API --> MCP_PKG
+    API --> APP
+    MCP_PKG --> APP
+    APP --> DOM
+    APP --> CON
+    DB --> APP
+    DB --> DOM
+    DB --> CON
+```
 
-- **KSeF 2.0**: obowiązek wystawiania faktur wdrożono od 1 lutego lub 1 kwietnia 2026 r. zależnie od grupy podatnika; dla określonych podatników z miesięczną sprzedażą fakturowaną do 10 000 zł brutto przewidziano przejściowy wyjątek do końca 2026 r. Odbieranie faktur w KSeF co do zasady obowiązuje od 1 lutego 2026 r., z wyjątkami ustawowymi. [MF — zasady KSeF](https://ksef.podatki.gov.pl/ksef-news/zasady-obowiazywania-ksef-i-przepisy-prawne/).
-- **JPK_V7M(3) i JPK_V7K(3)**: obowiązują od 1 lutego 2026 r.; uwzględniają numer KSeF i szczególne oznaczenia. [MF — struktury JPK](https://podatki.gov.pl/podatki-firmowe/jednolity-plik-kontrolny/jpk_vat-z-deklaracja/pliki-do-pobrania).
-- **JPK dla podatków dochodowych (JPK_PD)**: wprowadzany etapami; obejmuje m.in. JPK_KR_PD, JPK_PKPIR i JPK_EWP, z różnymi datami rozpoczęcia obowiązku. [MF — JPK_PD](https://podatki.gov.pl/podatki-firmowe/jednolity-plik-kontrolny/jpk_pd/jpk_pd).
-- **e-Doręczenia**: obowiązują różne terminy w zależności od rejestracji podmiotu, a od 1 października 2026 r. także wcześniej zarejestrowane JDG; samo założenie skrzynki bez aktywacji nie wystarcza. [Gov.pl — zasady z 20.10.2026](https://www.gov.pl/web/e-doreczenia/e-doreczenia--najwazniejsze-zasady-dla-przedsiebiorcow).
+| Pakiet / Aplikacja | Ścieżka                | Odpowiedzialność                                                                                                                                                                            |
+| ------------------ | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@pap/domain`      | `packages/domain`      | Czysta logika domenowa bez I/O: arytmetyka groszowa, 32 reguły prawne 2025–2026, kalkulatory KPiR/PIT/VAT/JPK/Ryczałt/ZUS/UoR/CIT, kalendarz `art. 12 § 5` OP, polityki grantów i Akademia. |
+| `@pap/contracts`   | `packages/contracts`   | Ścisłe kontrakty walidacyjne Zod (`strict()`) dla API, narzędzi MCP, powiadomień e-mail, dokumentów KSeF i modułów edukacyjnych.                                                            |
+| `@pap/application` | `packages/application` | Przypadki użycia, `AccountingWorkspaceService`, transakcyjny `UnitOfWork`, `PapMcpGateway` z sanitacją prompt injection oraz silnik powiadomień i kolejki Outbox.                           |
+| `@pap/db`          | `packages/db`          | Schemat PostgreSQL 18 / Drizzle ORM, migracje `0000`–`0007` (27 tabel z `FORCE RLS`), podpisany kontekst sesji HMAC `pap.context` oraz `PostgresAccountingScope`.                           |
+| `@pap/ui`          | `packages/ui`          | Biblioteka komponentów Design Systemu **„Księga Współczesna”** (`MoneyAmount`, `NipInput`, `LedgerTable`, `SplitVerificationView`, `FieldHelpButton`, `CriticalConfirmDialog`).             |
+| `@pap/api`         | `apps/api`             | Serwer HTTP NestJS/Fastify: chronione REST API `/api/v1/*`, wbudowany zdalny endpoint `/api/v1/mcp` oraz opcjonalny, odgrodzony bezpiecznikami `SandboxOidcService` (`ES256`).              |
+| `@pap/mcp`         | `apps/mcp`             | Serwer protokołu MCP obsługujący lokalny transport `STDIO` (`system_status`) oraz autoryzowany transport **Streamable HTTP** (9 narzędzi).                                                  |
+| `@pap/web`         | `apps/web`             | Interfejs webowy Next.js 16 (BFF z ciasteczkami `HttpOnly` podpisanymi `HMAC-SHA256`), pulpit operacyjny, ekrany księgowe, kolejka zatwierdzeń MCP oraz publiczna Akademia (`/academy`).    |
 
-**Zasada nadrzędna:** przepisy, stawki, schemy i terminy muszą być weryfikowane na dzień zdarzenia/okresu rozliczeniowego. Dokumentacja nie stanowi porady podatkowej ani gwarancji zgodności gotowego produktu.
+---
 
-## Jak będzie wyglądać praca
+## 3. Zrealizowane moduły funkcjonalne
 
-1. **Dodaj podmiot** i wskaż jego rzeczywistą formę prawną, typ ksiąg, status VAT i okresy obowiązywania ustawień.
-2. **Wgraj dokumenty** lub pobierz faktury z KSeF za zgodą właściciela uprawnień.
-3. **Otrzymaj propozycje** klasyfikacji, kwot, dekretacji i rozrachunków wraz z poziomem pewności i podstawą reguły.
-4. **Zweryfikuj** w kolejce zadań i zatwierdź lub popraw; automat nie może zaksięgować niepewnej operacji bez kontroli.
-5. **Sprawdź obowiązki** i wygeneruj raporty/deklaracje dostępne dla danego profilu.
-6. **Używaj MCP** do zapytań, importów i przygotowania operacji, zachowując te same uprawnienia i zatwierdzenia co w interfejsie webowym.
+| Obszar funkcjonalny             | Zaimplementowany zakres w repozytorium (`#45`–`#52`)                                                                                                                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Wielopodmiotowość i role**    | Izolacja organizacji (`tenantId`) i podmiotów (`legalEntityId`), role właściciela (`owner`) i księgowej (`accountant`) z jawnymi grantami `read` / `read + write` per firma, cofanie dostępu z natychmiastową blokadą i pełnym śladem audytu.   |
+| **Obsługiwane profile firm**    | **JDG KPiR** (skala podatkowa `12%/32%` z kwotą wolną `30 000 PLN` oraz podatek liniowy `19%`), **JDG Ryczałt** (stawki `17%`–`2%` wg PKWiU + monitor limitu zwolnienia VAT `240 000 PLN`), **Sp. z o.o.** (pełne księgi UoR i CIT `9%`/`19%`). |
+| **Obieg dokumentów i KSeF**     | Import faktur ustrukturyzowanych XML KSeF `FA(2)` / `FA(3)`, plików CSV oraz szkiców JSON, deduplikacja `SHA-256` (`409 Conflict`), walidacja NIP i dat ISO, widok `SplitVerificationView` oraz obowiązkowe zatwierdzenie przez człowieka.      |
+| **PKPiR 2025 / 2026**           | Obsługa dotychczasowego wzoru **17-kolumnowego** (`Dz.U. 2019 poz. 2544`) oraz nowego **19-kolumnowego wzoru PKPiR od 2026 r.** (`Dz.U. 2025 poz. 1299` — kol. 3 Nr KSeF, kol. 5 NIP), wydatek mieszany pojazdu (`50% VAT / 75% KUP`), storno.  |
+| **Rejestry VAT i `JPK_V7M`**    | Ewidencja sprzedaży i zakupów VAT (`23%`, `8%`, `5%`, `0%`, `zw.`, `np.`), automatyczny dobór schemy `JPK_V7M(2)` vs `JPK_V7M(3)` (od `02.2026`), oznaczenia `NrKSeF`/`OFF`/`BFK`/`DI`, kody `GTU_01`–`GTU_13`, `MPP` i pola `P_10`–`P_62`.     |
+| **Pełne księgi UoR i CIT**      | Zakładowy Plan Kont (Zespoły `0`–`8`), dziennik księgowań wymuszający równowagę podwójnego zapisu `Wn === Ma` (`422` przy niezbilansowaniu), zestawienie obrotów i sald, uproszczony Bilans (`Aktywa === Pasywa`), RZiS oraz zaliczka CIT.      |
+| **Rozrachunki i bankowość**     | Należności i zobowiązania z wiekowaniem przeterminowań, kontrola rachunku na Białej Liście KAS, oznaczenie obowiązkowego MPP (`> 15 000 PLN` brutto, zał. nr 15), import wyciągów CSV / MT940 i deterministyczne parowanie przelewów.           |
+| **ZUS i Kalendarz podatkowy**   | Kalkulatory Ulgi na start, Preferencyjnego ZUS i Dużego ZUS oraz składki zdrowotnej (skala `9%`, liniowy `4,9%`, progi ryczałtowe `60k`/`300k`), terminy z przesunięciem wg `art. 12 § 5` Ordynacji podatkowej (w tym wolna Wigilia `24.12`).   |
+| **Rejestr prawa i „Dlaczego?”** | **32 kody reguł prawnych (42 wersje temporalne 2025–2026)** powiązane z ISAP/Dz.U./M.P., blokada reguł niezweryfikowanych (`UnverifiedLegalRuleError`) oraz szuflada wyjaśniająca krok po kroku każde wyliczenie (`LegalExplanation`).          |
+| **Powiadomienia e-mail**        | Harmonogram przypomnień (`-7 dni`, `-2 dni`, `+1 dzień`), jednorazowy token `opt-out`, brak pełnego NIP i kwot w nagłówkach, zakaz podszywania się pod urzędy oraz izolowana skrzynka `ControlledSandboxMailboxTransport` (RFC 5322 MIME).      |
+| **Zdalny serwer MCP**           | Endpoint **Streamable HTTP** (`/api/v1/mcp`) oraz STDIO: 9 narzędzi, uwierzytelnianie Bearer JWT przed odczytem body, obrona przed _prompt injection_ / Unicode Bidi oraz dwuetapowe `prepare_*` -> zatwierdzenie kodem wyzwania człowieka.     |
+| **Design System i Akademia**    | Estetyka **„Księga Współczesna”** (WCAG 2.2 AA, `tabular-nums`, pełna responsywność `375px`) oraz **12-modułowa Akademia Polskiej Księgowości** (`/academy`: 37 lekcji, słownik pojęć, quizy i pomoc kontekstowa `?` przy polach formularzy).   |
 
-## Plan aplikacji
+---
 
-- **Frontend:** responsywna aplikacja webowa, dostępność WCAG 2.2 AA jako cel, język polski, widok właściciela i księgowego.
-- **Backend:** modułowy monolit z jasno odseparowanymi kontekstami domenowymi; jeden rdzeń księgowy dla UI, API i MCP.
-- **Dane:** relacyjna baza transakcyjna, niezmienialne zdarzenia/audyt, zaszyfrowany magazyn dokumentów, asynchroniczne procesy.
-- **AI/OCR:** sugestie i ekstrakcja danych, nigdy jedyne źródło obliczenia podatku ani księgowania.
-- **Reguły:** wersjonowane, testowalne i zatwierdzane przez człowieka przed wejściem w życie.
+## 4. Stos bezpieczeństwa i aktualne granice wdrożeniowe
 
-## Wybrana architektura techniczna (ADR-002)
+Zgodnie z zasadą uczciwości inżynieryjnej (`AGENTS.md` Zasada nr 9) rozróżniamy warstwy zaimplementowane i przetestowane w repozytorium od integracji wymagających odrębnej decyzji przed użyciem komercyjnym:
 
-Na potrzeby rozpoczęcia implementacji przyjmujemy **TypeScript strict + Node.js 24 LTS, Next.js/React, NestJS/Fastify, PostgreSQL/Drizzle, pg-boss, S3-compatible object storage, OIDC/Keycloak, oficjalny MCP SDK i monorepo pnpm/Turborepo**. Granice modułów zabezpieczają przed wiązaniem logiki podatkowej z frameworkiem, dostawcą OCR czy modelem AI. Pozwala to zacząć od prostego modułowego monolitu i osobno skalować API, MCP oraz workery.
+1. **Warstwa PostgreSQL 18 (`@pap/db`, migracje `0000`–`0007`):**
+   - **27 tabel objętych `FORCE ROW LEVEL SECURITY`** (11 tabel fundamentu tenantów, tożsamości i audytu `0001`–`0006` oraz 16 tabel rdzenia księgowego w `0007_accounting-core.sql`).
+   - Rozdział roli migratora (`pap_*_migrator`) od nieuprzywilejowanej roli uruchomieniowej (`pap_*_app` z `NOBYPASSRLS`, bez praw DDL, `TRUNCATE` i modyfikacji triggerów).
+   - Kryptograficznie podpisany kontekst sesji `HMAC-SHA256` (`pap.context` ustawiany transakcyjnie przez `SET LOCAL`), kanoniczny porządek blokad eliminujący wyścigi `TOCTOU`, wyzwalacze niezmienności oraz atomowy zapis decyzji `allow/deny` w `security_decision_event` (`PostgresAccountingScope`).
+2. **Warstwa uwierzytelniania OIDC, API i sesji BFF (`@pap/api`, `@pap/web`):**
+   - Weryfikacja tokenów dostępowych JWT (`ES256`/`RS256`, `at+jwt`) przez `JwksOidcAccessTokenVerifier`, blokada nagłówków spoofujących (`x-user-id`, `x-tenant-id` -> `401`) oraz egzekwowanie zakresów OIDC (oddzielenie zakresów agenta MCP od ludzkiego zatwierdzania `403 agent_self_approval_forbidden`).
+   - Wbudowany `SandboxOidcService` (`ES256`) jest domyślnie wyłączony (`404`) i posiada bezpiecznik podwójnego klucza blokujący uruchomienie w środowiskach produkcyjnych.
+   - Aplikacja `apps/web` przechowuje sesję wyłącznie w ciasteczkach `HttpOnly; SameSite=Lax` podpisanych `HMAC-SHA256` (`PAP_WEB_SESSION_SECRET`), weryfikuje `Origin`/`Referer` dla mutacji i ogranicza `API_BASE_URL` zamkniętą białą listą originów.
+3. **Co celowo pozostaje poza obecnym etapem testowym:**
+   - Serwer HTTP `apps/api` działa obecnie domyślnie na syntetycznym magazynie w pamięci (`InMemoryAccountingWorkspaceStore` w `AccountingWorkspaceService`); przepięcie runtime HTTP na trwały `PostgresAccountingScope` na prywatnym stagingu oraz podłączenie zewnętrznego dostawcy OIDC z MFA stanowi osobny krok infrastrukturalny.
+   - Brak produkcyjnej wysyłki kryptograficznej do bramek MF (`KSeF 2.0`, `e-Deklaracje`), ZUS (`PUE/eZUS`), banków (`PSD2`) oraz zewnętrznych serwerów SMTP.
+   - Brak modułu płatności/subskrypcji SaaS ([ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md)) oraz brak formalnej certyfikacji doradcy podatkowego dla reguł oznaczonych statusem `requires_expert_review`.
 
-- [ADR-002 — wybór technologii, porównanie wariantów i wdrożenia](docs/adr/002-stos-technologiczny-i-wdrozenia.md)
-- [16 — obowiązkowe zasady architektoniczne](docs/16-zasady-architektoniczne.md)
-- [17 — struktura repo i standardy pracy](docs/17-struktura-repo-i-standardy.md)
+---
 
-### Aktualny stan projektu i środowisk (podział obowiązków)
+## 5. Szybki start developerski i tryb CI
 
-- **Zaimplementowany kod w repozytorium:** monorepo pnpm/Turborepo, polski interfejs demonstracyjny `/app` z bezpieczną komunikacją serwerową Web–API po loopbacku dla prywatnego stagingu ([PR #23](https://github.com/RolePlayingTech/polish-accounting-platform/pull/23)), API statusu (`/health`, `/api/v1/system/status`) oraz lokalny serwer MCP STDIO z narzędziem `system_status` tylko do odczytu. Pakiety `domain` i `application` zawierają deny-by-default politykę grantów tenant/firma/akcja (`6C`), politykę autoryzacji administracyjnej, porty tożsamości i zaufanego źródła oraz transakcyjny `UnitOfWork` (`executeAuthorizedCompanyAction`, `manageAccess`). Pakiet `@pap/db` udostępnia Drizzle ORM, walidację połączeń loopback dla profili `local` (`pap_local`), `test` (`pap_test`) oraz jawnego profilu `staging` (`pap_staging` z rozdziałem ról `pap_staging_migrator` i `pap_staging_app` w `NODE_ENV=production` — [PR #24](https://github.com/RolePlayingTech/polish-accounting-platform/pull/24); połączenia `production` i hosty zdalne pozostają zablokowane), migracje `0000`–`0006` (`6A`, [model 6B](docs/22-schemat-tenantow-6b.md), [adapter 6D-1](docs/23-adapter-autoryzacji-6d1.md), cykl dostępu [6D-R](docs/24-bezpieczny-cykl-dostepu-6dr.md), tożsamość OIDC [6D-2](docs/25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) oraz Security Foundation `6D-3`: [transakcyjna autoryzacja 6D-3A](docs/26-transakcyjna-autoryzacja-6d3a.md), [bezpieczeństwo runtime i FORCE RLS 6D-3B](docs/27-runtime-security-6d3a.md) i [atomowy audyt decyzji 6D-3C](docs/28-security-audit-6d3c.md)). Rozwój lokalny przez `pnpm dev` nadal działa bez bazy i bez Dockera ([ADR-005](docs/adr/005-rozwoj-lokalny.md), [przewodnik developera](docs/19-przewodnik-developera.md)).
-- **Odbiór QA Security Foundation 6D-3:** integracja `6D-3` (obejmująca domknięcie uwag bezpieczeństwa `SEC-01`–`SEC-05` oraz review PostgreSQL) podlega weryfikacji integracyjnej na efemerycznym PostgreSQL 18.6 na Hetznerze zgodnie z [planem odbioru 6D-3](docs/6D3_SECURITY_QA_ACCEPTANCE_PLAN.md) oraz [polityką wewnętrznych merge](docs/internal-development-merge-policy.md).
-- **Działający prywatny staging techniczny:** na serwerze Hetzner (`hetz-1`) pod kanoniczną domeną `https://ksiegowosc.roleplayingtech.com` działa prywatny staging techniczny Etapu A (`@pap/web` i `@pap/api` za HTTPS i bramką HTTP Basic Auth właściciela, wyłącznie na danych syntetycznych, bez uruchomionej bazy PostgreSQL `pap_staging`, bez kont użytkowników końcowych i bez publicznych endpointów firmowych — [ADR-006: prywatny staging](docs/adr/006-prywatny-staging-hetzner.md)). Nie ma automatycznego deploymentu; każda migracja, administracja lub wdrożenie stagingu wymaga osobnej zgody właściciela.
-- **Izolowane CI na Hetznerze:** automatyczne uruchamianie **GitHub Actions jest tymczasowo wstrzymane** decyzją właściciela ([ADR-006: tymczasowe CI na Hetznerze](docs/adr/006-tymczasowe-ci-hetzner.md), [strategia testów](docs/20-strategia-testow.md)). Bieżące procesy CI — w tym testy integracyjne PostgreSQL 18 i testy migracji — realizujemy na serwerze Hetzner wyłącznie w odizolowanym, nietrwałym środowisku testowym z limitami zasobów, nigdy na usługach ani danych działającego stagingu.
-- **Docelowe funkcjonalności aplikacji (plan):** interaktywny przepływ logowania OIDC PKCE w UI i wybór firmy (`6E`), archiwum i upload dokumentów, KSeF 2.0, księgowość (KPiR, ryczałt, pełne księgi), deklaracje JPK, rozrachunki i bankowość, ZUS/kadry oraz autoryzowany serwer MCP dla operacji firmowych są docelowym zakresem produktu, a nie obecną implementacją.
+### Wymagania lokalne
 
-## Administracja i przyszłe abonamenty
+- **Node.js `24.22.1`** (`>=24.22.1 <25`) oraz **pnpm `12.15.0`** (w systemie Windows zalecane `pnpm-native.exe` z `npm_config_engine_strict=false` przy drobnym odchyleniu wersji pomocniczej Node).
+- Lokalny rozwój i podgląd aplikacji (`pnpm dev`) **nie wymagają lokalnej instalacji PostgreSQL ani Dockera** ([ADR-005](docs/adr/005-rozwoj-lokalny.md)).
 
-Projekt przewiduje oddzielone uprawnieniami trzy powierzchnie: **konsolę operatora platformy**, **ustawienia organizacji** i **obszar księgowości konkretnej firmy**. Operator techniczny nie uzyskuje automatycznie dostępu do faktur ani ksiąg klientów. Architektura umożliwi przyszłe plany, limity i płatności przez adapter, bez wiązania księgowości z dostawcą płatności. W pierwszym etapie to **założenia projektowe, nie działające funkcje**. Szczegóły: [ADR-003 — administracja i entitlementy](docs/adr/003-administracja-i-uprawnienia-produktowe.md).
+### Podstawowe polecenia
 
-## Zakres pierwszej wersji
+```bash
+# Instalacja zależności z zamrożonym lockfile
+pnpm install --frozen-lockfile
 
-**MVP — stabilny rdzeń:** wielopodmiotowość, konto i role, bezpieczne archiwum dokumentów, import XML/PDF/CSV, kontrola duplikatów, wyodrębnienie danych i walidacja, rejestr faktur, kalendarz zobowiązań, podstawowe raporty, odczyt i przygotowanie operacji przez MCP, audyt. Obsługa rzeczywistych ksiąg i wysyłka do MF będą udostępniane **profil po profilu** po testach zgodności. Pierwszy kandydat: **JDG z KPiR**, następnie **ryczałt**, a osobny tor dla **sp. z o.o. z pełnymi księgami**.
+# Uruchomienie lokalnego środowiska webowego Next.js (domyślnie http://localhost:3000)
+pnpm dev
 
-**Nie deklarujemy w MVP:** pełnej obsługi wszystkich form prawnych, autonomicznego składania deklaracji, kompletnej listy podatków i raportów, automatycznej integracji z każdym bankiem ani samodzielnego zastąpienia licencjonowanych/usługowych specjalistów.
+# Uruchomienie lokalnego serwera MCP (transport STDIO)
+pnpm dev:mcp
 
-## Dokumentacja
+# Sprawdzenie granic architektonicznych monorepo
+pnpm test:arch
 
-| Dokument                                                                                        | Zawartość                                                                          |
-| ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [01 — Wizja i zakres](docs/01-wizja-i-zakres.md)                                                | Cele, użytkownicy, granice produktu, miary sukcesu                                 |
-| [02 — Formy prawne i profile](docs/02-profile-podmiotow.md)                                     | Model rozdzielający podmiot, podatnika i sposób ewidencji                          |
-| [03 — Funkcje](docs/03-funkcjonalnosci.md)                                                      | Szczegółowy katalog funkcjonalności i priorytety                                   |
-| [04 — Przepływy](docs/04-przeplywy-uzytkownika.md)                                              | Przykłady procesów end-to-end                                                      |
-| [05 — Architektura](docs/05-architektura.md)                                                    | Komponenty, granice i przepływy danych                                             |
-| [06 — Dane](docs/06-model-danych.md)                                                            | Model pojęciowy, spójność, rozliczenia, wersjonowanie                              |
-| [07 — MCP](docs/07-mcp.md)                                                                      | Narzędzia, zasoby, autoryzacja i polityki zapisów                                  |
-| [08 — Integracje](docs/08-integracje.md)                                                        | KSeF, MF, REGON, NBP, rejestry i banki                                             |
-| [09 — Przepisy](docs/09-reguly-prawne.md)                                                       | Aktualizacja prawa, źródła, reguły, testy i kontrola                               |
-| [10 — Bezpieczeństwo](docs/10-bezpieczenstwo.md)                                                | RODO, ryzyka finansowe, szyfrowanie i audyt                                        |
-| [11 — UI/UX](docs/11-ui-ux.md)                                                                  | Mapa ekranów, stany, dostępność                                                    |
-| [21 — Kierunek wizualny](docs/21-kierunek-wizualny.md)                                          | Propozycje estetyki, charakter interfejsu, UX i proces walidacji                   |
-| [12 — Roadmapa](docs/12-roadmapa.md)                                                            | Fazy, zależności, zadania dla agentów                                              |
-| [13 — Testy i odbiór](docs/13-kryteria-akceptacji.md)                                           | Kryteria akceptacji i scenariusze testowe                                          |
-| [14 — Źródła](docs/14-zrodla.md)                                                                | Oficjalne strony i dokumentacja techniczna                                         |
-| [15 — Decyzje otwarte](docs/15-decyzje.md)                                                      | Decyzje projektowe do podjęcia                                                     |
-| [ADR-001](docs/adr/001-rdzen-i-mcp.md)                                                          | Oddzielenie księgowania od AI i MCP                                                |
-| [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md)                                      | Decyzja technologiczna, koszty, alternatywy i środowiska                           |
-| [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md)                               | Propozycja administracji, ról platformowych oraz abonamentów                       |
-| [16 — Standard architektury](docs/16-zasady-architektoniczne.md)                                | Zasady modułów, uprawnień, ksiąg, testów i skalowania                              |
-| [17 — Standard repo](docs/17-struktura-repo-i-standardy.md)                                     | Docelowe pakiety, importy, CI i komendy                                            |
-| [18 — Model zagrożeń i uprawnień](docs/18-model-zagrozen-i-uprawnien.md)                        | Granice zaufania, role, autoryzacja i testy negatywne (kontrakt projektowy)        |
-| [ADR-004](docs/adr/004-model-zagrozen-i-autoryzacji.md)                                         | Wspólna autoryzacja i granice zaufania (propozycja do przeglądu)                   |
-| [ADR-005](docs/adr/005-rozwoj-lokalny.md)                                                       | Historyczny etap local-only i nadal dostępny rozwój lokalny bez wymogu DB          |
-| [19 — Przewodnik developera](docs/19-przewodnik-developera.md)                                  | Wymagania środowiska, instalacja, uruchamianie web/API/MCP                         |
-| [20 — Strategia testów](docs/20-strategia-testow.md)                                            | Działające polecenia, testowane granice i ograniczenia pokrycia                    |
-| [22 — Schemat tenantów 6B](docs/22-schemat-tenantow-6b.md)                                      | Schemat PostgreSQL/Drizzle dla tenantów, firm, członkostw, profili i grantów       |
-| [23 — Adapter autoryzacji 6D-1](docs/23-adapter-autoryzacji-6d1.md)                             | Adapter PostgreSQL źródła autoryzacji i zakres odczytu                             |
-| [24 — Bezpieczny cykl dostępu 6D-R](docs/24-bezpieczny-cykl-dostepu-6dr.md)                     | Transakcyjny cykl członkostw i grantów, audyt i guardy SQL                         |
-| [25 — Uwierzytelnianie OIDC i tożsamość 6D-2](docs/25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) | Serwerowa walidacja OIDC/JWKS, mapowanie tożsamości i integracja z autoryzacją API |
-| [26 — Transakcyjna autoryzacja 6D-3A](docs/26-transakcyjna-autoryzacja-6d3a.md)                 | Transakcyjny UnitOfWork, kanoniczny porządek blokad i eliminacja TOCTOU            |
-| [27 — Bezpieczeństwo runtime 6D-3B](docs/27-runtime-security-6d3a.md)                           | Ograniczone role PostgreSQL, podpisany kontekst HMAC `pap.context` i `FORCE RLS`   |
-| [28 — Audyt decyzji 6D-3C](docs/28-security-audit-6d3c.md)                                      | Atomowy audyt `allow/deny` w `security_decision_event` i guardy SQL                |
-| [Przekazanie walidacji 6D-3](docs/6D3_VALIDATION_HANDOFF.md)                                    | Zakres, zależności i komendy walidacji kandydata Security Foundation 6D-3          |
-| [Plan QA Security Foundation 6D-3](docs/6D3_SECURITY_QA_ACCEPTANCE_PLAN.md)                     | Macierz testów bezpieczeństwa SEC-01–05 i warunki GO/NO-GO dla kandydata 6D-3      |
-| [ADR-006 (staging)](docs/adr/006-prywatny-staging-hetzner.md)                                   | Dwuetapowy model prywatnego stagingu na serwerze Hetzner (Etap A Web/API aktywny)  |
-| [ADR-006 (CI)](docs/adr/006-tymczasowe-ci-hetzner.md)                                           | Tymczasowe CI na izolowanym Hetznerze przy wstrzymanym GitHub Actions              |
-| [Audyt serwera Hetzner](docs/HETZNER_SERVER_AUDIT_2026-10-28.md)                                | Odczytowa inwentaryzacja hosta, usług, portów i domeny IDN (bez sekretów)          |
-| [Architektura stagingu Hetzner](docs/HETZNER_STAGING_ARCHITECTURE.md)                           | Rekomendowany model uruchomienia Web, API, PostgreSQL 18, TLS i backupów           |
-| [Plan wdrożenia Hetzner](docs/HETZNER_DEPLOYMENT_PLAN.md)                                       | Procedura pierwszej publikacji (Etap A i Etap B), CI/CD i ochrona `main`           |
-| [Checklista gotowości Hetzner](docs/HETZNER_READINESS_CHECKLIST.md)                             | Kryteria Go/No-Go, lista decyzji właściciela i warunki zatrzymania                 |
+# Jednostkowe i modułowe testy pakietów (Vitest)
+pnpm test
 
-## Status funkcji i bezpieczeństwa
+# Kontrola typów TypeScript i lintera ESLint
+pnpm typecheck
+pnpm lint
 
-Nie istnieją jeszcze funkcje księgowe, interaktywne logowanie użytkowników w UI, pełna izolacja danych firmowych przez RLS (6D-3B), połączenie z KSeF ani zdalny serwer MCP. Publiczne `AppModule` wystawia wyłącznie `/health` oraz `/api/v1/system/status` (`tenantAuthorization: 'not_available'`), natomiast serwerowy pipeline OIDC (`6D-2`) oraz transakcyjna autoryzacja `UnitOfWork` eliminująca TOCTOU (`6D-3A`) są weryfikowane na dedykowanym kontrolerze testowym i testach integracyjnych/współbieżnościowych PostgreSQL. Lokalny MCP udostępnia wyłącznie publiczny status systemu. Trasy `/settings` i `/platform` są statycznymi stronami zastępczymi bez endpointów administracyjnych. Nie przesyłaj do tego repozytorium prawdziwych faktur, numerów PESEL, danych klientów, certyfikatów KSeF ani tokenów. Błędy bezpieczeństwa zgłaszaj zgodnie z [SECURITY.md](SECURITY.md).
+# Testy integracyjne PostgreSQL 18 (wymagają izolowanej bazy testowej pap_test)
+pnpm test:integration
+```
 
-## Zasady open source
+### Tryb CI i środowisk (ADR-006)
 
-Projekt jest przygotowany do rozwoju publicznego. **Kod i dokumentacja** mogą być rozwijane na licencji [MIT](LICENSE). Dane podatników, klucze, testowe materiały z rzeczywistymi danymi i materiały objęte tajemnicą nie mogą trafiać do repozytorium. Zasady wkładu opisuje [CONTRIBUTING.md](CONTRIBUTING.md).
+- **GitHub Actions jest tymczasowo wyłączone z automatycznego CI** decyzją właściciela projektu ([ADR-006 — tymczasowe CI na Hetznerze](docs/adr/006-tymczasowe-ci-hetzner.md), [polityka wewnętrznych merge](docs/internal-development-merge-policy.md)).
+- Testy integracyjne PostgreSQL 18.6, weryfikacja migracji `0000`–`0007` oraz odbiór bezpieczeństwa `6D-3` odbywają się na serwerze Hetzner w **całkowicie odizolowanym, efemerycznym środowisku testowym** (`scripts/hetzner/with-ephemeral-pg18.sh` z limitami cgroups v2), nigdy na usługach ani danych prywatnego stagingu (`https://ksiegowosc.roleplayingtech.com`).
+- Nie istnieje automatyczny deployment; każde wdrożenie lub migracja na prywatnym stagingu wymaga osobnej zgody właściciela ([instrukcja wdrożenia i ograniczeń](docs/37-wdrozenie-kopie-zapasowe-i-ograniczenia.md)).
 
-## Repozytorium projektu
+---
 
-Repozytorium: [RolePlayingTech/polish-accounting-platform](https://github.com/RolePlayingTech/polish-accounting-platform). Dla agentów implementacyjnych przygotowano [AGENTS.md](AGENTS.md). Zadania prowadź w GitHub Issues.
+## 6. Mapa dokumentacji repozytorium
 
-## Rozpoczęcie rozwoju
+### Przewodniki produktowe, edukacyjne i operacyjne (aktualny stan kodu)
 
-Przeczytaj [roadmapę](docs/12-roadmapa.md), [architekturę](docs/05-architektura.md), [bezpieczeństwo](docs/10-bezpieczenstwo.md) i [kryteria akceptacji](docs/13-kryteria-akceptacji.md). Nie implementuj reguł podatkowych bez powiązania ich z [rejestrem źródeł](docs/14-zrodla.md), datą obowiązywania i zestawem testów. Dla zewnętrznego agenta implementacyjnego przygotuj osobny PR na jeden wydzielony moduł.
+| Dokument                                                                                                | Zawartość                                                                                                      |
+| ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **[36 — Przewodnik użytkownika, ról, MCP i FAQ](docs/36-przewodnik-uzytkownika-i-faq.md)**              | Praktyczna instrukcja obsługi aplikacji, ról `owner`/`accountant`, klienta MCP, Akademii oraz FAQ podatnika    |
+| **[37 — Wdrożenie, kopie zapasowe i ograniczenia](docs/37-wdrozenie-kopie-zapasowe-i-ograniczenia.md)** | Topologia prywatnego stagingu Hetzner, zmienne środowiskowe, backup/deploy/rollback oraz zgodność prawna (§16) |
+| **[Akademia Polskiej Księgowości — Program kursu](docs/kurs-ksiegowosci/README.md)**                    | Spis 12 modułów (37 lekcji), profili odbiorców, słownika oraz rejestru pomocy kontekstowej `fieldHelpId`       |
+| [31 — Design System „Księga Współczesna”](docs/31-design-system-ksiega-wspolczesna.md)                  | Tokeny wizualne, typografia kwot PLN, dostępność WCAG 2.2 AA i katalog komponentów `@pap/ui`                   |
+| [32 — Rejestr reguł prawnych 2025–2026 i matryca JDG](docs/32-rejestr-regul-prawnych-i-matryca-jdg.md)  | Katalog 32 kodów reguł (42 wersje), arytmetyka groszowa, `LegalExplanation` i matryca profilu pilota JDG KPiR  |
+| [33 — Zdalny serwer MCP i powiadomienia e-mail](docs/33-mcp-i-powiadomienia.md)                         | Architektura Streamable HTTP MCP, obrona przed prompt injection i silnik powiadomień `ControlledSandbox`       |
+| [34 — Architektura REST API, Sandbox OIDC i MCP](docs/34-architektura-api-oidc-i-mcp.md)                | Endpointy `/api/v1/*`, kryptografia `SandboxOidcService` (`ES256`), persony testowe i bramka `/api/v1/mcp`     |
+| [35 — Przewodnik interfejsu webowego (`apps/web`)](docs/35-przewodnik-interfejsu-web.md)                | Sesja BFF `HttpOnly`, ochrona SSRF/CSRF, mapa ekranów operacyjnych `/app/*` i integracja Akademii              |
+
+### Fundament bezpieczeństwa, architektura i roadmapa
+
+| Dokument                                                                                                                                                                | Zawartość                                                                                                 |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| [12 — Roadmapa i status wdrożenia](docs/12-roadmapa.md)                                                                                                                 | Zrealizowane etapy na `main` (`#45`–`#52`) vs zakres wymagający decyzji przed udostępnieniem komercyjnym  |
+| [13 — Kryteria akceptacji i macierz testów](docs/13-kryteria-akceptacji.md)                                                                                             | Wymagania przekrojowe, pokrycie scenariuszy pozytywnych/negatywnych i bramki compliance                   |
+| [16 — Zasady architektoniczne](docs/16-zasady-architektoniczne.md)                                                                                                      | Granice modułów, arytmetyka pieniężna, bezpieczeństwo i Definition of Done                                |
+| [17 — Struktura repo i standardy](docs/17-struktura-repo-i-standardy.md)                                                                                                | Organizacja monorepo, kierunek importów i konwencje kodu                                                  |
+| [18 — Model zagrożeń i uprawnień](docs/18-model-zagrozen-i-uprawnien.md)                                                                                                | Granice zaufania, macierz ról i wektory ataków (TOCTOU, prompt injection, cross-tenant)                   |
+| [19 — Przewodnik developera](docs/19-przewodnik-developera.md)                                                                                                          | Konfiguracja narzędzi lokalnych i uruchamianie pakietów                                                   |
+| [20 — Strategia testów](docs/20-strategia-testow.md)                                                                                                                    | Poziomy testów jednostkowych, architektonicznych, integracyjnych PG 18 i E2E                              |
+| [22–30 — Dokumentacja Security Foundation (`6B`–`6D-3`)](docs/30-security-foundation-integracja.md)                                                                     | Schemat tenantów, cykl dostępu `6D-R`, OIDC `6D-2`, `UnitOfWork`, `FORCE RLS` i atomowy audyt decyzji     |
+| [ADR-001](docs/adr/001-rdzen-i-mcp.md) / [ADR-002](docs/adr/002-stos-technologiczny-i-wdrozenia.md) / [ADR-003](docs/adr/003-administracja-i-uprawnienia-produktowe.md) | Kluczowe decyzje architektoniczne (rdzeń vs MCP, stos technologiczny, rozdział ról i przyszłe abonamenty) |
+| [ADR-006 (staging)](docs/adr/006-prywatny-staging-hetzner.md) / [ADR-006 (CI)](docs/adr/006-tymczasowe-ci-hetzner.md)                                                   | Zasady prywatnego stagingu oraz izolowanego CI PostgreSQL 18.6 na serwerze Hetzner                        |
+| [01–11, 14–15, 21 — Specyfikacje domenowe i UX](docs/01-wizja-i-zakres.md)                                                                                              | Pierwotna wizja, profile podmiotów, model pojęciowy, źródła prawa i kierunek wizualny                     |
+
+---
+
+## 7. Zasady bezpieczeństwa, licencja i wkład w projekt
+
+- **Zakaz publikacji danych rzeczywistych:** nigdy nie umieszczaj w repozytorium, zgłoszeniach Issue ani Pull Requestach prawdziwych faktur, numerów PESEL, prywatnych danych klientów, tokenów dostępowych, haseł ani certyfikatów KSeF/podpisów kwalifikowanych.
+- **Zgłaszanie podatności:** potencjalne błędy bezpieczeństwa zgłaszaj odpowiedzialnie zgodnie z procedurą w [SECURITY.md](SECURITY.md).
+- **Licencja i rozwój:** kod źródłowy oraz dokumentacja są udostępniane na licencji [MIT](LICENSE). Zasady współpracy opisuje [CONTRIBUTING.md](CONTRIBUTING.md), a reguły pracy agentów AI definiuje [AGENTS.md](AGENTS.md).
