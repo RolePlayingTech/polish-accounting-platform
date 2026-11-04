@@ -116,6 +116,39 @@ function createAccountingMockConnection(options?: { probeAlreadyExists?: boolean
           ],
         ];
       }
+      if (normalized.includes('update "accounting_document"')) {
+        return [
+          [
+            id(401),
+            TENANT_A,
+            ENTITY_A,
+            'sales_invoice',
+            'FV/2026/11/001',
+            '2026-11-04',
+            '2026-11-04',
+            '2026-11-18',
+            'Kontrahent Syntetyczny Sp. z o.o.',
+            '5260250995',
+            'ul. Prosta 1, 00-850 Warszawa',
+            'PLN',
+            100_000,
+            23_000,
+            123_000,
+            'a'.repeat(64),
+            'verified_posted',
+            'uslugi_it',
+            'Usługa programistyczna',
+            'none',
+            null,
+            'NONE',
+            null,
+            USER_A,
+            NOW_ISO,
+            USER_A,
+            NOW_ISO,
+          ],
+        ];
+      }
       if (normalized.includes('from "accounting_document"')) {
         return [
           [
@@ -541,6 +574,80 @@ describe('PostgresAccountingScope — izolacja TScope, sonda company_operation_p
           }),
         'Niezbilansowany dekret księgowy',
       );
+      await expectRejectedInWrite(
+        (scope) =>
+          scope.postJournalEntry({
+            entryNumber: 'DZ/2026/11/002',
+            period: '2026-11',
+            bookingDate: '2026-11-04',
+            documentDate: '2026-11-04',
+            documentNumber: 'FV/2026/11/002',
+            description: 'Błędna strona linii dekretu',
+            lines: [
+              {
+                ledgerAccountId: id(801),
+                accountCode: '201',
+                side: 'Wn',
+                amountGrosze: 100_000,
+                description: 'Rozrachunki z odbiorcami',
+              },
+              {
+                ledgerAccountId: id(802),
+                accountCode: '700',
+                side: 'NIEPOPRAWNA' as unknown as 'Ma',
+                amountGrosze: 100_000,
+                description: 'Niepoprawna strona',
+              },
+            ],
+          }),
+        'Nieprawidłowa strona dekretu w linii 2',
+      );
+    } finally {
+      await conn.cleanup();
+    }
+  });
+
+  it('zakłada blokadę wierszową FOR UPDATE i predykat statusu przy operacjach odczyt-walidacja-aktualizacja', async () => {
+    const conn = createAccountingMockConnection();
+    try {
+      const uow = new PostgresTransactionalUnitOfWork(
+        conn.db,
+        createSigner(),
+        createPostgresAccountingScope,
+      );
+
+      const outcome = await executeAuthorizedCompanyAction(
+        {
+          operationId: id(709),
+          rawBearerToken: 'valid-jwt',
+          tenantId: TENANT_A,
+          legalEntityId: ENTITY_A,
+          action: 'write',
+        },
+        {
+          verifier: {
+            verifyAccessToken: async () => ({
+              ok: true as const,
+              identity: { issuer: 'https://idp.example.test', subject: 'sub-accountant' },
+            }),
+          },
+          identityResolver: { resolveVerifiedIdentity: async () => ({ userId: USER_A }) },
+          unitOfWork: uow,
+        },
+        (_ctx, scope) => scope.verifyAndPostAccountingDocument({ documentId: id(401) }),
+      );
+
+      expect(outcome.allowed).toBe(true);
+      const selectDocQuery = conn.executedQueries.find(
+        (q) =>
+          q.query.toLowerCase().includes('from "accounting_document"') &&
+          q.query.toLowerCase().startsWith('select'),
+      );
+      expect(selectDocQuery?.query.toLowerCase()).toContain('for update');
+      const updateDocQuery = conn.executedQueries.find((q) =>
+        q.query.toLowerCase().startsWith('update "accounting_document"'),
+      );
+      expect(updateDocQuery?.query.toLowerCase()).toContain('"accounting_document"."status" in');
     } finally {
       await conn.cleanup();
     }

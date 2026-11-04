@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray } from 'drizzle-orm';
 import {
   accountingDocument,
   bankStatementImport,
@@ -422,6 +422,7 @@ export interface PostgresAccountingScope extends PostgresCompanyActionScope {
   confirmMcpPreparedProposal(
     input: ConfirmMcpPreparedProposalInput,
   ): Promise<McpPreparedProposalRecord>;
+  rejectMcpPreparedProposal(proposalId: string): Promise<McpPreparedProposalRecord>;
   expireMcpPreparedProposal(proposalId: string): Promise<McpPreparedProposalRecord>;
 
   getNotificationPreference(targetUserId?: string): Promise<NotificationPreferenceRecord | null>;
@@ -747,13 +748,17 @@ export function createPostgresAccountingScope(
             eq(accountingDocument.legalEntityId, context.legalEntityId),
             eq(accountingDocument.id, input.documentId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono dokumentu księgowego do zatwierdzenia.');
       }
-      if (!probe.inserted || current.status === 'verified_posted') {
+      if (!probe.inserted) {
         return deepFreeze(current);
+      }
+      if (current.status === 'verified_posted') {
+        throw new Error('Dokument księgowy został już zatwierdzony i zaksięgowany.');
       }
       if (current.status === 'archived') {
         throw new Error('Nie można zaksięgować zarchiwizowanego dokumentu.');
@@ -777,12 +782,13 @@ export function createPostgresAccountingScope(
             eq(accountingDocument.tenantId, context.tenantId),
             eq(accountingDocument.legalEntityId, context.legalEntityId),
             eq(accountingDocument.id, input.documentId),
+            inArray(accountingDocument.status, ['draft', 'ai_proposed']),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się zatwierdzić dokumentu księgowego.');
+        throw new Error('Nie udało się zatwierdzić dokumentu księgowego — nieprawidłowy stan.');
       }
       return deepFreeze(updated);
     },
@@ -798,13 +804,17 @@ export function createPostgresAccountingScope(
             eq(accountingDocument.legalEntityId, context.legalEntityId),
             eq(accountingDocument.id, documentId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono dokumentu księgowego do archiwizacji.');
       }
-      if (!probe.inserted || current.status === 'archived') {
+      if (!probe.inserted) {
         return deepFreeze(current);
+      }
+      if (current.status === 'archived') {
+        throw new Error('Dokument księgowy został już zarchiwizowany.');
       }
       const [updated] = await tx
         .update(accountingDocument)
@@ -814,12 +824,13 @@ export function createPostgresAccountingScope(
             eq(accountingDocument.tenantId, context.tenantId),
             eq(accountingDocument.legalEntityId, context.legalEntityId),
             eq(accountingDocument.id, documentId),
+            inArray(accountingDocument.status, ['draft', 'ai_proposed', 'verified_posted']),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się zarchiwizować dokumentu księgowego.');
+        throw new Error('Nie udało się zarchiwizować dokumentu księgowego — nieprawidłowy stan.');
       }
       return deepFreeze(updated);
     },
@@ -1215,6 +1226,11 @@ export function createPostgresAccountingScope(
       let totalDebit = 0;
       let totalCredit = 0;
       const normalizedLines = input.lines.map((line, index) => {
+        if (line.side !== 'Wn' && line.side !== 'Ma') {
+          throw new Error(
+            `Nieprawidłowa strona dekretu w linii ${index + 1}: oczekiwano 'Wn' lub 'Ma'.`,
+          );
+        }
         const amount = toSafeGrosze(line.amountGrosze, `lines[${index}].amountGrosze`);
         if (amount <= 0) {
           throw new Error('Kwota pojedynczej linii dekretu musi być dodatnia (w groszach).');
@@ -1437,13 +1453,17 @@ export function createPostgresAccountingScope(
             eq(settlementItem.legalEntityId, context.legalEntityId),
             eq(settlementItem.id, input.settlementId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono pozycji rozrachunkowej.');
       }
       if (!probe.inserted) {
         return deepFreeze(current);
+      }
+      if (current.status === 'settled' || current.remainingGrossGrosze <= 0) {
+        throw new Error('Rozrachunek jest już w pełni rozliczony.');
       }
       if (paidAmountGrosze > current.remainingGrossGrosze) {
         throw new Error('Kwota rozliczenia przekracza pozostałe saldo rozrachunku.');
@@ -1466,12 +1486,17 @@ export function createPostgresAccountingScope(
             eq(settlementItem.tenantId, context.tenantId),
             eq(settlementItem.legalEntityId, context.legalEntityId),
             eq(settlementItem.id, input.settlementId),
+            inArray(settlementItem.status, ['open', 'partial']),
+            eq(settlementItem.remainingGrossGrosze, current.remainingGrossGrosze),
+            gte(settlementItem.remainingGrossGrosze, paidAmountGrosze),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się zaktualizować salda rozrachunku.');
+        throw new Error(
+          'Nie udało się zaktualizować salda rozrachunku — wykryto równoległą zmianę.',
+        );
       }
       return deepFreeze(updated);
     },
@@ -1623,6 +1648,9 @@ export function createPostgresAccountingScope(
     async recordBankTransactionMatch(input) {
       const probe = await ensureWriteOperationProbe();
       const settledAmountGrosze = toSafeGrosze(input.settledAmountGrosze, 'settledAmountGrosze');
+      if (settledAmountGrosze < 0) {
+        throw new Error('Kwota rozliczenia transakcji bankowej nie może być ujemna.');
+      }
       const [current] = await tx
         .select()
         .from(bankTransaction)
@@ -1632,13 +1660,17 @@ export function createPostgresAccountingScope(
             eq(bankTransaction.legalEntityId, context.legalEntityId),
             eq(bankTransaction.id, input.transactionId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono transakcji bankowej.');
       }
       if (!probe.inserted) {
         return deepFreeze(current);
+      }
+      if (settledAmountGrosze > current.amountGrosze) {
+        throw new Error('Kwota rozliczenia przekracza kwotę transakcji bankowej.');
       }
 
       const [updated] = await tx
@@ -1656,12 +1688,17 @@ export function createPostgresAccountingScope(
             eq(bankTransaction.tenantId, context.tenantId),
             eq(bankTransaction.legalEntityId, context.legalEntityId),
             eq(bankTransaction.id, input.transactionId),
+            eq(bankTransaction.matchStatus, current.matchStatus),
+            eq(bankTransaction.settledAmountGrosze, current.settledAmountGrosze),
+            gte(bankTransaction.amountGrosze, settledAmountGrosze),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się zapisać dopasowania transakcji bankowej.');
+        throw new Error(
+          'Nie udało się zapisać dopasowania transakcji bankowej — wykryto równoległą zmianę.',
+        );
       }
       return deepFreeze(updated);
     },
@@ -1774,7 +1811,8 @@ export function createPostgresAccountingScope(
             eq(taxObligationItem.legalEntityId, context.legalEntityId),
             eq(taxObligationItem.id, input.obligationId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono pozycji obowiązku podatkowego.');
@@ -1796,12 +1834,15 @@ export function createPostgresAccountingScope(
             eq(taxObligationItem.tenantId, context.tenantId),
             eq(taxObligationItem.legalEntityId, context.legalEntityId),
             eq(taxObligationItem.id, input.obligationId),
+            eq(taxObligationItem.status, current.status),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się zmienić statusu obowiązku podatkowego.');
+        throw new Error(
+          'Nie udało się zmienić statusu obowiązku podatkowego — wykryto równoległą zmianę.',
+        );
       }
       return deepFreeze(updated);
     },
@@ -1911,22 +1952,32 @@ export function createPostgresAccountingScope(
             eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
             eq(mcpPreparedProposal.proposalId, input.proposalId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono propozycji MCP do zatwierdzenia.');
       }
-      if (!probe.inserted || current.status === 'confirmed') {
-        if (current.confirmationChallengeHash !== input.confirmationChallengeHash) {
-          throw new Error('Niezgodny skrót wyzwania zatwierdzającego propozycję MCP.');
+      if (current.confirmationChallengeHash !== input.confirmationChallengeHash) {
+        throw new Error('Niezgodny skrót wyzwania zatwierdzającego propozycję MCP.');
+      }
+      if (!probe.inserted) {
+        if (current.status !== 'confirmed') {
+          throw new Error('Powtórzenie operacji nie znalazło zatwierdzonej propozycji MCP.');
         }
         return deepFreeze(current);
+      }
+      if (current.status === 'confirmed') {
+        throw new Error('Propozycja MCP została już wcześniej zatwierdzona.');
+      }
+      if (current.status === 'rejected') {
+        throw new Error('Odrzucona propozycja MCP nie może zostać zatwierdzona.');
       }
       if (current.status === 'expired') {
         throw new Error('Propozycja MCP wygasła i nie może zostać zatwierdzona.');
       }
-      if (current.confirmationChallengeHash !== input.confirmationChallengeHash) {
-        throw new Error('Niezgodny skrót wyzwania zatwierdzającego propozycję MCP.');
+      if (current.status !== 'pending_human_approval') {
+        throw new Error('Propozycja MCP nie oczekuje na zatwierdzenie człowieka.');
       }
 
       const confirmedAt = input.confirmedAt ?? decisionTimestamp();
@@ -1947,12 +1998,61 @@ export function createPostgresAccountingScope(
             eq(mcpPreparedProposal.tenantId, context.tenantId),
             eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
             eq(mcpPreparedProposal.proposalId, input.proposalId),
+            eq(mcpPreparedProposal.status, 'pending_human_approval'),
+            eq(mcpPreparedProposal.confirmationChallengeHash, input.confirmationChallengeHash),
+            gt(mcpPreparedProposal.expiresAt, confirmedAt),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się zatwierdzić propozycji MCP.');
+        throw new Error('Nie udało się zatwierdzić propozycji MCP — nieprawidłowy stan.');
+      }
+      return deepFreeze(updated);
+    },
+
+    async rejectMcpPreparedProposal(proposalId) {
+      const probe = await ensureWriteOperationProbe();
+      const [current] = await tx
+        .select()
+        .from(mcpPreparedProposal)
+        .where(
+          and(
+            eq(mcpPreparedProposal.tenantId, context.tenantId),
+            eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
+            eq(mcpPreparedProposal.proposalId, proposalId),
+          ),
+        )
+        .for('update');
+      assertActive();
+      if (!current) {
+        throw new Error('Nie znaleziono propozycji MCP do odrzucenia.');
+      }
+      if (!probe.inserted) {
+        return deepFreeze(current);
+      }
+      if (current.status === 'confirmed') {
+        throw new Error('Zatwierdzona propozycja MCP nie może zostać odrzucona.');
+      }
+      if (current.status !== 'pending_human_approval') {
+        throw new Error('Propozycja MCP znajduje się już w stanie terminalnym.');
+      }
+
+      const [updated] = await tx
+        .update(mcpPreparedProposal)
+        .set({ status: 'rejected' })
+        .where(
+          and(
+            eq(mcpPreparedProposal.tenantId, context.tenantId),
+            eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
+            eq(mcpPreparedProposal.proposalId, proposalId),
+            eq(mcpPreparedProposal.status, 'pending_human_approval'),
+          ),
+        )
+        .returning();
+      assertActive();
+      if (!updated) {
+        throw new Error('Nie udało się odrzucić propozycji MCP — nieprawidłowy stan.');
       }
       return deepFreeze(updated);
     },
@@ -1968,16 +2068,20 @@ export function createPostgresAccountingScope(
             eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
             eq(mcpPreparedProposal.proposalId, proposalId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono propozycji MCP.');
       }
-      if (!probe.inserted || current.status === 'expired') {
+      if (!probe.inserted) {
         return deepFreeze(current);
       }
       if (current.status === 'confirmed') {
         throw new Error('Zatwierdzona propozycja MCP nie może zostać oznaczona jako wygasła.');
+      }
+      if (current.status !== 'pending_human_approval') {
+        throw new Error('Propozycja MCP znajduje się już w stanie terminalnym.');
       }
 
       const [updated] = await tx
@@ -1988,12 +2092,13 @@ export function createPostgresAccountingScope(
             eq(mcpPreparedProposal.tenantId, context.tenantId),
             eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
             eq(mcpPreparedProposal.proposalId, proposalId),
+            eq(mcpPreparedProposal.status, 'pending_human_approval'),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się wygasić propozycji MCP.');
+        throw new Error('Nie udało się wygasić propozycji MCP — nieprawidłowy stan.');
       }
       return deepFreeze(updated);
     },
@@ -2171,6 +2276,9 @@ export function createPostgresAccountingScope(
 
     async updateNotificationOutboxStatus(input) {
       const probe = await ensureWriteOperationProbe();
+      if (!Number.isSafeInteger(input.attemptCount) || input.attemptCount < 0) {
+        throw new Error('Licznik prób wysyłki Outbox musi być nieujemną liczbą całkowitą.');
+      }
       const [current] = await tx
         .select()
         .from(notificationOutbox)
@@ -2180,13 +2288,20 @@ export function createPostgresAccountingScope(
             eq(notificationOutbox.legalEntityId, context.legalEntityId),
             eq(notificationOutbox.id, input.outboxId),
           ),
-        );
+        )
+        .for('update');
       assertActive();
       if (!current) {
         throw new Error('Nie znaleziono pozycji kolejki Outbox.');
       }
       if (!probe.inserted) {
         return deepFreeze(current);
+      }
+      if (current.status === 'sent') {
+        throw new Error('Wysłana pozycja kolejki Outbox nie może zmienić statusu.');
+      }
+      if (input.attemptCount < current.attemptCount) {
+        throw new Error('Licznik prób wysyłki Outbox nie może maleć.');
       }
 
       const [updated] = await tx
@@ -2203,12 +2318,16 @@ export function createPostgresAccountingScope(
             eq(notificationOutbox.tenantId, context.tenantId),
             eq(notificationOutbox.legalEntityId, context.legalEntityId),
             eq(notificationOutbox.id, input.outboxId),
+            eq(notificationOutbox.status, current.status),
+            eq(notificationOutbox.attemptCount, current.attemptCount),
           ),
         )
         .returning();
       assertActive();
       if (!updated) {
-        throw new Error('Nie udało się zaktualizować statusu kolejki Outbox.');
+        throw new Error(
+          'Nie udało się zaktualizować statusu kolejki Outbox — wykryto równoległą zmianę.',
+        );
       }
       return deepFreeze(updated);
     },

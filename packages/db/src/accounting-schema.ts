@@ -995,7 +995,7 @@ export const mcpPreparedProposal = pgTable(
     idempotencyKey: uuid('idempotency_key').notNull(),
     payloadHash: text('payload_hash').notNull(),
     status: text('status', {
-      enum: ['pending_human_approval', 'confirmed', 'expired'],
+      enum: ['pending_human_approval', 'confirmed', 'rejected', 'expired'],
     })
       .notNull()
       .default('pending_human_approval'),
@@ -1049,7 +1049,7 @@ export const mcpPreparedProposal = pgTable(
     ),
     check(
       'mcp_prepared_proposal_status_check',
-      sql`${table.status} IN ('pending_human_approval', 'confirmed', 'expired')`,
+      sql`${table.status} IN ('pending_human_approval', 'confirmed', 'rejected', 'expired')`,
     ),
     check(
       'mcp_prepared_proposal_lifecycle_check',

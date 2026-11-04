@@ -313,14 +313,8 @@
           "name": "company_access_grant_membership_fk",
           "tableFrom": "company_access_grant",
           "tableTo": "tenant_membership",
-          "columnsFrom": [
-            "tenant_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "user_id"
-          ],
+          "columnsFrom": ["tenant_id", "user_id"],
+          "columnsTo": ["tenant_id", "user_id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -328,14 +322,8 @@
           "name": "company_access_grant_entity_fk",
           "tableFrom": "company_access_grant",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -401,14 +389,8 @@
           "name": "company_operation_probe_company_fk",
           "tableFrom": "company_operation_probe",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -494,14 +476,8 @@
           "name": "entity_profile_version_entity_fk",
           "tableFrom": "entity_profile_version",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -557,12 +533,8 @@
           "name": "legal_entity_tenant_id_tenant_id_fk",
           "tableFrom": "legal_entity",
           "tableTo": "tenant",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -572,10 +544,7 @@
         "legal_entity_tenant_id_id_unique": {
           "name": "legal_entity_tenant_id_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "id"]
         }
       },
       "policies": {},
@@ -803,12 +772,8 @@
           "name": "security_decision_event_access_management_operation_id_access_management_event_operation_id_fk",
           "tableFrom": "security_decision_event",
           "tableTo": "access_management_event",
-          "columnsFrom": [
-            "access_management_operation_id"
-          ],
-          "columnsTo": [
-            "operation_id"
-          ],
+          "columnsFrom": ["access_management_operation_id"],
+          "columnsTo": ["operation_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -903,12 +868,8 @@
           "name": "tenant_membership_tenant_id_tenant_id_fk",
           "tableFrom": "tenant_membership",
           "tableTo": "tenant",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -916,10 +877,7 @@
       "compositePrimaryKeys": {
         "tenant_membership_pk": {
           "name": "tenant_membership_pk",
-          "columns": [
-            "tenant_id",
-            "user_id"
-          ]
+          "columns": ["tenant_id", "user_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1010,12 +968,8 @@
           "name": "user_oidc_identity_user_id_app_user_id_fk",
           "tableFrom": "user_oidc_identity",
           "tableTo": "app_user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -1025,10 +979,7 @@
         "user_oidc_identity_issuer_subject_unique": {
           "name": "user_oidc_identity_issuer_subject_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "issuer",
-            "subject"
-          ]
+          "columns": ["issuer", "subject"]
         }
       },
       "policies": {},
@@ -1268,14 +1219,8 @@
           "name": "accounting_document_entity_fk",
           "tableFrom": "accounting_document",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -1285,20 +1230,12 @@
         "accounting_document_entity_id_unique": {
           "name": "accounting_document_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "accounting_document_sha256_unique": {
           "name": "accounting_document_sha256_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "sha256_hash"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "sha256_hash"]
         }
       },
       "policies": {},
@@ -1465,14 +1402,8 @@
           "name": "bank_statement_import_entity_fk",
           "tableFrom": "bank_statement_import",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -1482,20 +1413,12 @@
         "bank_statement_import_entity_id_unique": {
           "name": "bank_statement_import_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "bank_statement_import_sha256_unique": {
           "name": "bank_statement_import_sha256_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "sha256_hash"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "sha256_hash"]
         }
       },
       "policies": {},
@@ -1699,14 +1622,8 @@
           "name": "bank_transaction_entity_fk",
           "tableFrom": "bank_transaction",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -1714,16 +1631,8 @@
           "name": "bank_transaction_import_fk",
           "tableFrom": "bank_transaction",
           "tableTo": "bank_statement_import",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "statement_import_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "statement_import_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -1731,16 +1640,8 @@
           "name": "bank_transaction_settlement_fk",
           "tableFrom": "bank_transaction",
           "tableTo": "settlement_item",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "matched_settlement_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "matched_settlement_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -1748,16 +1649,8 @@
           "name": "bank_transaction_document_fk",
           "tableFrom": "bank_transaction",
           "tableTo": "accounting_document",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "matched_document_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "matched_document_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -1767,11 +1660,7 @@
         "bank_transaction_entity_id_unique": {
           "name": "bank_transaction_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         }
       },
       "policies": {},
@@ -1919,14 +1808,8 @@
           "name": "company_tax_settings_entity_fk",
           "tableFrom": "company_tax_settings",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -1936,19 +1819,12 @@
         "company_tax_settings_entity_id_unique": {
           "name": "company_tax_settings_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "company_tax_settings_entity_unique": {
           "name": "company_tax_settings_entity_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id"]
         }
       },
       "policies": {},
@@ -2143,14 +2019,8 @@
           "name": "journal_entry_entity_fk",
           "tableFrom": "journal_entry",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -2158,16 +2028,8 @@
           "name": "journal_entry_document_fk",
           "tableFrom": "journal_entry",
           "tableTo": "accounting_document",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "document_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "document_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -2175,16 +2037,8 @@
           "name": "journal_entry_storno_fk",
           "tableFrom": "journal_entry",
           "tableTo": "journal_entry",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "storno_of_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "storno_of_entry_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -2194,21 +2048,12 @@
         "journal_entry_entity_id_unique": {
           "name": "journal_entry_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "journal_entry_number_unique": {
           "name": "journal_entry_number_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "period",
-            "entry_number"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "period", "entry_number"]
         }
       },
       "policies": {},
@@ -2350,14 +2195,8 @@
           "name": "journal_line_entity_fk",
           "tableFrom": "journal_line",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -2365,16 +2204,8 @@
           "name": "journal_line_entry_fk",
           "tableFrom": "journal_line",
           "tableTo": "journal_entry",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "journal_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "journal_entry_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -2382,16 +2213,8 @@
           "name": "journal_line_account_fk",
           "tableFrom": "journal_line",
           "tableTo": "ledger_account",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "ledger_account_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "ledger_account_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -2401,21 +2224,12 @@
         "journal_line_entity_id_unique": {
           "name": "journal_line_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "journal_line_entry_lineno_unique": {
           "name": "journal_line_entry_lineno_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "journal_entry_id",
-            "line_no"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "journal_entry_id", "line_no"]
         }
       },
       "policies": {},
@@ -2670,14 +2484,8 @@
           "name": "kpir_entry_entity_fk",
           "tableFrom": "kpir_entry",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -2685,16 +2493,8 @@
           "name": "kpir_entry_document_fk",
           "tableFrom": "kpir_entry",
           "tableTo": "accounting_document",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "document_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "document_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -2702,16 +2502,8 @@
           "name": "kpir_entry_storno_fk",
           "tableFrom": "kpir_entry",
           "tableTo": "kpir_entry",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "storno_of_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "storno_of_entry_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -2721,21 +2513,12 @@
         "kpir_entry_entity_id_unique": {
           "name": "kpir_entry_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "kpir_entry_period_lp_unique": {
           "name": "kpir_entry_period_lp_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "period",
-            "lp"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "period", "lp"]
         }
       },
       "policies": {},
@@ -2838,14 +2621,8 @@
           "name": "ledger_account_entity_fk",
           "tableFrom": "ledger_account",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -2855,20 +2632,12 @@
         "ledger_account_entity_id_unique": {
           "name": "ledger_account_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "ledger_account_code_unique": {
           "name": "ledger_account_code_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "account_code"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "account_code"]
         }
       },
       "policies": {},
@@ -3039,14 +2808,8 @@
           "name": "mcp_prepared_proposal_entity_fk",
           "tableFrom": "mcp_prepared_proposal",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -3056,29 +2819,17 @@
         "mcp_prepared_proposal_entity_id_unique": {
           "name": "mcp_prepared_proposal_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "mcp_prepared_proposal_entity_proposal_unique": {
           "name": "mcp_prepared_proposal_entity_proposal_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "proposal_id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "proposal_id"]
         },
         "mcp_prepared_proposal_idempotency_unique": {
           "name": "mcp_prepared_proposal_idempotency_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "idempotency_key"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "idempotency_key"]
         }
       },
       "policies": {},
@@ -3093,7 +2844,7 @@
         },
         "mcp_prepared_proposal_status_check": {
           "name": "mcp_prepared_proposal_status_check",
-          "value": "\"mcp_prepared_proposal\".\"status\" IN ('pending_human_approval', 'confirmed', 'expired')"
+          "value": "\"mcp_prepared_proposal\".\"status\" IN ('pending_human_approval', 'confirmed', 'rejected', 'expired')"
         },
         "mcp_prepared_proposal_lifecycle_check": {
           "name": "mcp_prepared_proposal_lifecycle_check",
@@ -3260,14 +3011,8 @@
           "name": "notification_outbox_entity_fk",
           "tableFrom": "notification_outbox",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -3275,16 +3020,8 @@
           "name": "notification_outbox_obligation_fk",
           "tableFrom": "notification_outbox",
           "tableTo": "tax_obligation_item",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "obligation_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "obligation_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -3294,20 +3031,12 @@
         "notification_outbox_entity_id_unique": {
           "name": "notification_outbox_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "notification_outbox_dedup_unique": {
           "name": "notification_outbox_dedup_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "dedup_key"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "dedup_key"]
         }
       },
       "policies": {},
@@ -3418,14 +3147,8 @@
           "name": "notification_preference_entity_fk",
           "tableFrom": "notification_preference",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -3435,20 +3158,12 @@
         "notification_preference_entity_id_unique": {
           "name": "notification_preference_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "notification_preference_user_entity_unique": {
           "name": "notification_preference_user_entity_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "user_id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "user_id"]
         }
       },
       "policies": {},
@@ -3626,14 +3341,8 @@
           "name": "ryczalt_entry_entity_fk",
           "tableFrom": "ryczalt_entry",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -3641,16 +3350,8 @@
           "name": "ryczalt_entry_document_fk",
           "tableFrom": "ryczalt_entry",
           "tableTo": "accounting_document",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "document_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "document_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -3658,16 +3359,8 @@
           "name": "ryczalt_entry_corrected_fk",
           "tableFrom": "ryczalt_entry",
           "tableTo": "ryczalt_entry",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "corrected_entry_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "corrected_entry_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -3677,21 +3370,12 @@
         "ryczalt_entry_entity_id_unique": {
           "name": "ryczalt_entry_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "ryczalt_entry_period_lp_unique": {
           "name": "ryczalt_entry_period_lp_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "period",
-            "lp"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "period", "lp"]
         }
       },
       "policies": {},
@@ -3817,14 +3501,8 @@
           "name": "sandbox_mailbox_message_entity_fk",
           "tableFrom": "sandbox_mailbox_message",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -3832,16 +3510,8 @@
           "name": "sandbox_mailbox_message_outbox_fk",
           "tableFrom": "sandbox_mailbox_message",
           "tableTo": "notification_outbox",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "outbox_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "outbox_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -3851,11 +3521,7 @@
         "sandbox_mailbox_message_entity_id_unique": {
           "name": "sandbox_mailbox_message_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         }
       },
       "policies": {},
@@ -4027,14 +3693,8 @@
           "name": "settlement_item_entity_fk",
           "tableFrom": "settlement_item",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -4042,16 +3702,8 @@
           "name": "settlement_item_document_fk",
           "tableFrom": "settlement_item",
           "tableTo": "accounting_document",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "document_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "document_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -4061,11 +3713,7 @@
         "settlement_item_entity_id_unique": {
           "name": "settlement_item_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         }
       },
       "policies": {},
@@ -4231,14 +3879,8 @@
           "name": "tax_obligation_item_entity_fk",
           "tableFrom": "tax_obligation_item",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -4248,21 +3890,12 @@
         "tax_obligation_item_entity_id_unique": {
           "name": "tax_obligation_item_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         },
         "tax_obligation_item_period_code_unique": {
           "name": "tax_obligation_item_period_code_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "period",
-            "obligation_code"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "period", "obligation_code"]
         }
       },
       "policies": {},
@@ -4475,14 +4108,8 @@
           "name": "vat_register_entry_entity_fk",
           "tableFrom": "vat_register_entry",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -4490,16 +4117,8 @@
           "name": "vat_register_entry_document_fk",
           "tableFrom": "vat_register_entry",
           "tableTo": "accounting_document",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id",
-            "document_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id", "document_id"],
+          "columnsTo": ["tenant_id", "legal_entity_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -4509,11 +4128,7 @@
         "vat_register_entry_entity_id_unique": {
           "name": "vat_register_entry_entity_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "legal_entity_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "legal_entity_id", "id"]
         }
       },
       "policies": {},

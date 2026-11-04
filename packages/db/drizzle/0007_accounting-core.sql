@@ -300,7 +300,7 @@ CREATE TABLE "mcp_prepared_proposal" (
 	CONSTRAINT "mcp_prepared_proposal_idempotency_unique" UNIQUE("tenant_id","legal_entity_id","idempotency_key"),
 	CONSTRAINT "mcp_prepared_proposal_id_match_check" CHECK ("mcp_prepared_proposal"."proposal_id" = "mcp_prepared_proposal"."id"),
 	CONSTRAINT "mcp_prepared_proposal_hashes_check" CHECK ("mcp_prepared_proposal"."payload_hash" ~ '^[0-9a-f]{64}$' AND "mcp_prepared_proposal"."confirmation_challenge_hash" ~ '^[0-9a-f]{64}$'),
-	CONSTRAINT "mcp_prepared_proposal_status_check" CHECK ("mcp_prepared_proposal"."status" IN ('pending_human_approval', 'confirmed', 'expired')),
+	CONSTRAINT "mcp_prepared_proposal_status_check" CHECK ("mcp_prepared_proposal"."status" IN ('pending_human_approval', 'confirmed', 'rejected', 'expired')),
 	CONSTRAINT "mcp_prepared_proposal_lifecycle_check" CHECK (isfinite("mcp_prepared_proposal"."created_at") AND isfinite("mcp_prepared_proposal"."expires_at") AND "mcp_prepared_proposal"."expires_at" > "mcp_prepared_proposal"."created_at" AND (("mcp_prepared_proposal"."status" <> 'confirmed' AND "mcp_prepared_proposal"."confirmed_by" IS NULL AND "mcp_prepared_proposal"."confirmed_at" IS NULL AND "mcp_prepared_proposal"."ledger_entry_id" IS NULL) OR ("mcp_prepared_proposal"."status" = 'confirmed' AND "mcp_prepared_proposal"."confirmed_by" IS NOT NULL AND "mcp_prepared_proposal"."confirmed_at" IS NOT NULL AND isfinite("mcp_prepared_proposal"."confirmed_at") AND "mcp_prepared_proposal"."ledger_entry_id" IS NOT NULL)))
 );
 --> statement-breakpoint
@@ -601,18 +601,29 @@ $$;
 --> statement-breakpoint
 CREATE FUNCTION pap_guard_posted_document() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF OLD.status = 'archived' AND (
+    NEW IS DISTINCT FROM OLD
+    OR to_jsonb(NEW) IS DISTINCT FROM to_jsonb(OLD)
+  ) THEN
+    RAISE EXCEPTION 'Zarchiwizowany dokument księgowy jest niezmienny (stan terminalny)' USING ERRCODE = '23514';
+  END IF;
+
   IF OLD.status = 'verified_posted' AND (
     NEW.status NOT IN ('verified_posted', 'archived')
-    OR NEW.net_grosze IS DISTINCT FROM OLD.net_grosze
-    OR NEW.vat_grosze IS DISTINCT FROM OLD.vat_grosze
-    OR NEW.gross_grosze IS DISTINCT FROM OLD.gross_grosze
-    OR NEW.sha256_hash IS DISTINCT FROM OLD.sha256_hash
-    OR NEW.document_number IS DISTINCT FROM OLD.document_number
-    OR NEW.verified_by IS DISTINCT FROM OLD.verified_by
-    OR NEW.verified_at IS DISTINCT FROM OLD.verified_at
+    OR (to_jsonb(NEW) - 'status') IS DISTINCT FROM (to_jsonb(OLD) - 'status')
   ) THEN
-    RAISE EXCEPTION 'Zaksięgowany dokument może przejść wyłącznie do archiwum bez zmiany kwot' USING ERRCODE = '23514';
+    RAISE EXCEPTION 'Zaksięgowany dokument może przejść wyłącznie do archiwum bez zmiany jakichkolwiek innych pól' USING ERRCODE = '23514';
   END IF;
+
+  IF NEW.id IS DISTINCT FROM OLD.id
+    OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+    OR NEW.legal_entity_id IS DISTINCT FROM OLD.legal_entity_id
+    OR NEW.created_by IS DISTINCT FROM OLD.created_by
+    OR NEW.created_at IS DISTINCT FROM OLD.created_at
+  THEN
+    RAISE EXCEPTION 'Tożsamość i metadane utworzenia dokumentu księgowego są niezmienne' USING ERRCODE = '23514';
+  END IF;
+
   RETURN NEW;
 END;
 $$;
@@ -620,6 +631,30 @@ $$;
 CREATE TRIGGER accounting_document_posted_guard
 BEFORE UPDATE ON "accounting_document"
 FOR EACH ROW EXECUTE FUNCTION pap_guard_posted_document();
+--> statement-breakpoint
+CREATE FUNCTION pap_guard_mcp_prepared_proposal() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF OLD.status IN ('confirmed', 'rejected', 'expired') AND (
+    NEW IS DISTINCT FROM OLD
+    OR to_jsonb(NEW) IS DISTINCT FROM to_jsonb(OLD)
+  ) THEN
+    RAISE EXCEPTION 'Propozycja MCP w stanie terminalnym jest niezmienna' USING ERRCODE = '23514';
+  END IF;
+
+  IF (to_jsonb(NEW) - 'status' - 'confirmed_by' - 'confirmed_at' - 'ledger_entry_id')
+     IS DISTINCT FROM
+     (to_jsonb(OLD) - 'status' - 'confirmed_by' - 'confirmed_at' - 'ledger_entry_id')
+  THEN
+    RAISE EXCEPTION 'Ładunek i metadane przygotowanej propozycji MCP są niezmienne' USING ERRCODE = '23514';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+--> statement-breakpoint
+CREATE TRIGGER mcp_prepared_proposal_terminal_guard
+BEFORE UPDATE ON "mcp_prepared_proposal"
+FOR EACH ROW EXECUTE FUNCTION pap_guard_mcp_prepared_proposal();
 --> statement-breakpoint
 CREATE FUNCTION pap_require_accounting_write_audit() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER AS $$
@@ -703,6 +738,7 @@ BEGIN
     'pap_protect_append_only_accounting()',
     'pap_forbid_accounting_delete()',
     'pap_guard_posted_document()',
+    'pap_guard_mcp_prepared_proposal()',
     'pap_require_accounting_write_audit()'
   ]
   LOOP

@@ -134,7 +134,7 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
     runtime = connectDatabase(
       { PAP_DATABASE_ENV: 'test', DATABASE_URL: runtimeUrl },
       owner.dataSchema,
-      { maxConnections: 1 },
+      { maxConnections: 4 },
     );
     signer = new PostgresContextSigner({ keyId: 'accounting-core-integration', keyHex });
     services = await createPostgresSecurityServices(
@@ -554,6 +554,381 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
         );
       }),
       '23514',
+    );
+  });
+
+  it('P1-1: serializuje współbieżne zapisy w READ COMMITTED (maxConnections: 4) — blokuje nadpłatę rozrachunku i podwójne zatwierdzenie propozycji MCP', async () => {
+    const createTwoPartyBarrier = () => {
+      let arrived = 0;
+      let release!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return async () => {
+        arrived += 1;
+        if (arrived >= 2) {
+          release();
+        }
+        await ready;
+      };
+    };
+
+    // (a) Dwie równoległe wpłaty po 60_000 gr na rozrachunek 100_000 gr -> dokładnie 1 przechodzi, druga odrzucona
+    const setupSettlement = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+      (scope) =>
+        scope.createSettlementItem({
+          direction: 'receivable',
+          counterpartyName: 'Kontrahent Współbieżny Sp. z o.o.',
+          counterpartyNip: '5213007228',
+          documentNumber: 'FV/2026/11/RACE-SETTLEMENT',
+          issueDate: '2026-11-04',
+          dueDate: '2026-11-20',
+          originalGrossGrosze: 100_000,
+        }),
+    );
+    expect(setupSettlement.allowed).toBe(true);
+    if (!setupSettlement.allowed) throw new Error('Nie utworzono rozrachunku testowego');
+    const settlementId = setupSettlement.data.id;
+
+    const settlementBarrier = createTwoPartyBarrier();
+    const [paymentA, paymentB] = await Promise.all([
+      runAsActor(
+        { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+        async (scope) => {
+          await settlementBarrier();
+          const updated = await scope.applySettlementPayment({
+            settlementId,
+            paidAmountGrosze: 60_000,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return updated;
+        },
+      ),
+      runAsActor(
+        { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+        async (scope) => {
+          await settlementBarrier();
+          const updated = await scope.applySettlementPayment({
+            settlementId,
+            paidAmountGrosze: 60_000,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return updated;
+        },
+      ),
+    ]);
+
+    const allowedPayments = [paymentA, paymentB].filter((res) => res.allowed);
+    const rejectedPayments = [paymentA, paymentB].filter((res) => !res.allowed);
+    expect(allowedPayments).toHaveLength(1);
+    expect(rejectedPayments).toHaveLength(1);
+    if (allowedPayments[0]?.allowed) {
+      expect(allowedPayments[0].data.remainingGrossGrosze).toBe(40_000);
+      expect(allowedPayments[0].data.status).toBe('partial');
+    }
+
+    const [persistedSettlement] = await owner.client<
+      { remaining_gross_grosze: string; status: string }[]
+    >`
+      SELECT remaining_gross_grosze::text AS remaining_gross_grosze, status
+      FROM settlement_item
+      WHERE id = ${settlementId}
+    `;
+    expect(persistedSettlement).toEqual({
+      remaining_gross_grosze: '40000',
+      status: 'partial',
+    });
+
+    // (b) Dwa równoległe wywołania confirmMcpPreparedProposal dla tej samej propozycji -> dokładnie 1 przechodzi
+    const challengeHash = sha256Hex('mcp-race-challenge-token');
+    const setupMcp = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+      async (scope) => {
+        const entry1 = await scope.appendKpirEntry({
+          lp: 20,
+          period: '2026-11',
+          eventDate: '2026-11-04',
+          documentNumber: 'FV/MCP/RACE/1',
+          counterpartyName: 'Dostawca Chmury A',
+          counterpartyAddress: 'ul. Testowa 1, Warszawa',
+          description: 'Usługa chmurowa #1',
+          col13OtherExpensesGrosze: 50_000,
+          ruleCode: 'KPIR_COST_COL13_ART_22_1',
+          legalExplanationJson: { basis: 'art. 22 ust. 1 u.p.d.o.f.' },
+        });
+        const entry2 = await scope.appendKpirEntry({
+          lp: 21,
+          period: '2026-11',
+          eventDate: '2026-11-04',
+          documentNumber: 'FV/MCP/RACE/2',
+          counterpartyName: 'Dostawca Chmury B',
+          counterpartyAddress: 'ul. Testowa 2, Warszawa',
+          description: 'Usługa chmurowa #2',
+          col13OtherExpensesGrosze: 50_000,
+          ruleCode: 'KPIR_COST_COL13_ART_22_1',
+          legalExplanationJson: { basis: 'art. 22 ust. 1 u.p.d.o.f.' },
+        });
+        const prepared = await scope.saveMcpPreparedProposal({
+          idempotencyKey: randomUUID(),
+          payloadHash: sha256Hex('mcp-race-payload'),
+          invoiceJson: { documentNumber: 'FV/MCP/RACE', grossGrosze: 61_500 },
+          proposedPostingJson: { kpirColumn: 13 },
+          confirmationChallengeHash: challengeHash,
+          expiresAt: new Date(Date.now() + 3_600_000),
+        });
+        return {
+          proposalId: prepared.proposal.proposalId,
+          entry1Id: entry1.id,
+          entry2Id: entry2.id,
+        };
+      },
+    );
+    expect(setupMcp.allowed).toBe(true);
+    if (!setupMcp.allowed) throw new Error('Nie przygotowano propozycji MCP do testu wyścigu');
+
+    const mcpBarrier = createTwoPartyBarrier();
+    const [confirmA, confirmB] = await Promise.all([
+      runAsActor(
+        { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+        async (scope) => {
+          await mcpBarrier();
+          const confirmed = await scope.confirmMcpPreparedProposal({
+            proposalId: setupMcp.data.proposalId,
+            confirmationChallengeHash: challengeHash,
+            ledgerEntryId: setupMcp.data.entry1Id,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return confirmed;
+        },
+      ),
+      runAsActor(
+        { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+        async (scope) => {
+          await mcpBarrier();
+          const confirmed = await scope.confirmMcpPreparedProposal({
+            proposalId: setupMcp.data.proposalId,
+            confirmationChallengeHash: challengeHash,
+            ledgerEntryId: setupMcp.data.entry2Id,
+          });
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          return confirmed;
+        },
+      ),
+    ]);
+
+    const allowedConfirmations = [confirmA, confirmB].filter((res) => res.allowed);
+    const rejectedConfirmations = [confirmA, confirmB].filter((res) => !res.allowed);
+    expect(allowedConfirmations).toHaveLength(1);
+    expect(rejectedConfirmations).toHaveLength(1);
+    if (allowedConfirmations[0]?.allowed) {
+      expect(allowedConfirmations[0].data.status).toBe('confirmed');
+    }
+
+    const [persistedProposal] = await owner.client<{ status: string; ledger_entry_id: string }[]>`
+      SELECT status, ledger_entry_id
+      FROM mcp_prepared_proposal
+      WHERE proposal_id = ${setupMcp.data.proposalId}
+    `;
+    expect(persistedProposal?.status).toBe('confirmed');
+    expect([setupMcp.data.entry1Id, setupMcp.data.entry2Id]).toContain(
+      persistedProposal?.ledger_entry_id,
+    );
+  });
+
+  it('NEG (P1-2): pod rolą pap_test_app blokuje ścieżkę verified_posted -> archived -> draft, podmianę kolumn podatkowych na verified_posted oraz cofnięcie terminalnych statusów mcp_prepared_proposal', async () => {
+    const setupFixtures = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+      async (scope) => {
+        const toArchive = await scope.createAccountingDocument({
+          documentType: 'sales_invoice',
+          documentNumber: 'FV/2026/11/GUARD-ARCHIVE',
+          issueDate: '2026-11-04',
+          saleDate: '2026-11-04',
+          counterpartyName: 'Odbiorca Archiwalny Sp. z o.o.',
+          counterpartyNip: '5213007228',
+          netGrosze: 200_000,
+          vatGrosze: 46_000,
+          grossGrosze: 246_000,
+          sha256Hash: sha256Hex('FV/2026/11/GUARD-ARCHIVE'),
+          categoryCode: 'uslugi_it',
+        });
+        await scope.verifyAndPostAccountingDocument({ documentId: toArchive.document.id });
+        const archivedDoc = await scope.archiveAccountingDocument(toArchive.document.id);
+
+        const postedOnly = await scope.createAccountingDocument({
+          documentType: 'purchase_invoice',
+          documentNumber: 'FV/2026/11/GUARD-POSTED',
+          issueDate: '2026-11-04',
+          saleDate: '2026-11-04',
+          counterpartyName: 'Dostawca Chroniony Sp. z o.o.',
+          counterpartyNip: '5260250995',
+          netGrosze: 300_000,
+          vatGrosze: 69_000,
+          grossGrosze: 369_000,
+          sha256Hash: sha256Hex('FV/2026/11/GUARD-POSTED'),
+          categoryCode: 'uslugi_obce',
+        });
+        const postedDoc = await scope.verifyAndPostAccountingDocument({
+          documentId: postedOnly.document.id,
+        });
+
+        const kpirForMcp = await scope.appendKpirEntry({
+          lp: 30,
+          period: '2026-11',
+          eventDate: '2026-11-04',
+          documentId: postedDoc.id,
+          documentNumber: postedDoc.documentNumber,
+          counterpartyName: postedDoc.counterpartyName,
+          counterpartyAddress: 'ul. Chroniona 5, Warszawa',
+          description: 'Zakup usług obcych',
+          col13OtherExpensesGrosze: 300_000,
+          ruleCode: 'KPIR_COST_COL13_ART_22_1',
+          legalExplanationJson: { basis: 'art. 22 ust. 1 u.p.d.o.f.' },
+        });
+
+        const challengeConfirmed = sha256Hex('guard-mcp-confirmed');
+        const preparedToConfirm = await scope.saveMcpPreparedProposal({
+          idempotencyKey: randomUUID(),
+          payloadHash: sha256Hex('guard-mcp-payload-confirmed'),
+          invoiceJson: { documentNumber: 'FV/MCP/GUARD-1', grossGrosze: 369_000 },
+          proposedPostingJson: { kpirColumn: 13 },
+          confirmationChallengeHash: challengeConfirmed,
+          expiresAt: new Date(Date.now() + 3_600_000),
+        });
+        const confirmedProposal = await scope.confirmMcpPreparedProposal({
+          proposalId: preparedToConfirm.proposal.proposalId,
+          confirmationChallengeHash: challengeConfirmed,
+          ledgerEntryId: kpirForMcp.id,
+        });
+
+        const preparedToReject = await scope.saveMcpPreparedProposal({
+          idempotencyKey: randomUUID(),
+          payloadHash: sha256Hex('guard-mcp-payload-rejected'),
+          invoiceJson: { documentNumber: 'FV/MCP/GUARD-2', grossGrosze: 123_000 },
+          proposedPostingJson: { kpirColumn: 13 },
+          confirmationChallengeHash: sha256Hex('guard-mcp-rejected'),
+          expiresAt: new Date(Date.now() + 3_600_000),
+        });
+        const rejectedProposal = await scope.rejectMcpPreparedProposal(
+          preparedToReject.proposal.proposalId,
+        );
+
+        return { archivedDoc, postedDoc, confirmedProposal, rejectedProposal };
+      },
+    );
+    expect(setupFixtures.allowed).toBe(true);
+    if (!setupFixtures.allowed) throw new Error('Nie przygotowano danych do testu P1-2');
+    expect(setupFixtures.data.archivedDoc.status).toBe('archived');
+    expect(setupFixtures.data.postedDoc.status).toBe('verified_posted');
+    expect(setupFixtures.data.confirmedProposal.status).toBe('confirmed');
+    expect(setupFixtures.data.rejectedProposal.status).toBe('rejected');
+
+    const runRawRuntimeUpdate = async (
+      query: ReturnType<typeof statement>,
+    ): Promise<{ code: string | undefined; message: string }> => {
+      let caughtStatementError: unknown;
+      await runtime.db
+        .transaction(async (tx) => {
+          const fakeOpId = randomUUID();
+          const decisionAt = new Date().toISOString();
+          await signer.apply(tx, {
+            purpose: 'company',
+            actorUserId: actorA,
+            tenantId: tenantA,
+            legalEntityId: entityA1,
+            action: 'write',
+            operationId: fakeOpId,
+            decisionAt,
+          });
+          await applyLocalRlsSessionContext(tx, {
+            actorUserId: actorA,
+            tenantId: tenantA,
+            legalEntityId: entityA1,
+          });
+          try {
+            await tx.execute(query);
+          } catch (stmtErr) {
+            caughtStatementError = stmtErr;
+            throw stmtErr;
+          }
+        })
+        .catch(() => undefined);
+
+      let unwrapped = caughtStatementError;
+      while (unwrapped instanceof Error && 'cause' in unwrapped && unwrapped.cause) {
+        unwrapped = unwrapped.cause;
+      }
+      if (!(unwrapped instanceof Error)) {
+        throw new Error('Oczekiwano natychmiastowego błędu wyzwalacza BEFORE UPDATE');
+      }
+      return {
+        code: (unwrapped as { code?: string }).code,
+        message: unwrapped.message,
+      };
+    };
+
+    // (a) Próba cofnięcia zarchiwizowanego dokumentu do draft (verified_posted -> archived -> draft) pod pap_test_app
+    const archivedToDraftErr = await runRawRuntimeUpdate(statement`
+      UPDATE accounting_document
+      SET status = 'draft', verified_by = NULL, verified_at = NULL
+      WHERE id = ${setupFixtures.data.archivedDoc.id}
+    `);
+    expect(archivedToDraftErr.code).toBe('23514');
+    expect(archivedToDraftErr.message).toContain(
+      'Zarchiwizowany dokument księgowy jest niezmienny',
+    );
+
+    // (b) Próba podmiany counterparty_nip, issue_date oraz jednoczesnego archived + counterparty_nip na verified_posted
+    const nipTamperErr = await runRawRuntimeUpdate(statement`
+      UPDATE accounting_document
+      SET counterparty_nip = '1111111111'
+      WHERE id = ${setupFixtures.data.postedDoc.id}
+    `);
+    expect(nipTamperErr.code).toBe('23514');
+    expect(nipTamperErr.message).toContain(
+      'Zaksięgowany dokument może przejść wyłącznie do archiwum bez zmiany jakichkolwiek innych pól',
+    );
+
+    const issueDateTamperErr = await runRawRuntimeUpdate(statement`
+      UPDATE accounting_document
+      SET issue_date = '2026-11-01'
+      WHERE id = ${setupFixtures.data.postedDoc.id}
+    `);
+    expect(issueDateTamperErr.code).toBe('23514');
+    expect(issueDateTamperErr.message).toContain(
+      'Zaksięgowany dokument może przejść wyłącznie do archiwum bez zmiany jakichkolwiek innych pól',
+    );
+
+    const archiveWithTamperErr = await runRawRuntimeUpdate(statement`
+      UPDATE accounting_document
+      SET status = 'archived', counterparty_nip = '1111111111'
+      WHERE id = ${setupFixtures.data.postedDoc.id}
+    `);
+    expect(archiveWithTamperErr.code).toBe('23514');
+
+    // (c) Próba cofnięcia confirmed -> pending_human_approval oraz rejected -> pending_human_approval na mcp_prepared_proposal
+    const revertConfirmedMcpErr = await runRawRuntimeUpdate(statement`
+      UPDATE mcp_prepared_proposal
+      SET status = 'pending_human_approval',
+          confirmed_by = NULL,
+          confirmed_at = NULL,
+          ledger_entry_id = NULL
+      WHERE proposal_id = ${setupFixtures.data.confirmedProposal.proposalId}
+    `);
+    expect(revertConfirmedMcpErr.code).toBe('23514');
+    expect(revertConfirmedMcpErr.message).toContain(
+      'Propozycja MCP w stanie terminalnym jest niezmienna',
+    );
+
+    const revertRejectedMcpErr = await runRawRuntimeUpdate(statement`
+      UPDATE mcp_prepared_proposal
+      SET status = 'pending_human_approval'
+      WHERE proposal_id = ${setupFixtures.data.rejectedProposal.proposalId}
+    `);
+    expect(revertRejectedMcpErr.code).toBe('23514');
+    expect(revertRejectedMcpErr.message).toContain(
+      'Propozycja MCP w stanie terminalnym jest niezmienna',
     );
   });
 });

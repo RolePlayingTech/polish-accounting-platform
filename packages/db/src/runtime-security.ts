@@ -40,7 +40,12 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     NOT has_column_privilege('tenant_membership', 'valid_from', 'UPDATE') AND
     NOT has_column_privilege('tenant_membership', 'valid_until', 'UPDATE') AND
     has_function_privilege('pap_execute_access()', 'EXECUTE') AND
-    (SELECT count(*) = 27 AND bool_and(c.relrowsecurity AND c.relforcerowsecurity AND c.relowner <> r.oid)
+    (SELECT count(*) = 27 AND bool_and(
+        c.relrowsecurity
+        AND c.relforcerowsecurity
+        AND c.relowner <> r.oid
+        AND NOT has_table_privilege(c.oid, 'DELETE,TRUNCATE')
+      )
       FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace
         AND c.relname IN (
           'tenant','legal_entity','tenant_membership','entity_profile_version',
@@ -52,15 +57,12 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
           'mcp_prepared_proposal','notification_preference','notification_outbox',
           'sandbox_mailbox_message'
         )) AND
-    (SELECT count(*) = 16 AND NOT bool_or(has_table_privilege(c.oid, 'DELETE,TRUNCATE'))
-      FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace
-        AND c.relname IN (
-          'company_tax_settings','accounting_document','kpir_entry','ryczalt_entry',
-          'vat_register_entry','ledger_account','journal_entry','journal_line',
-          'settlement_item','bank_statement_import','bank_transaction','tax_obligation_item',
-          'mcp_prepared_proposal','notification_preference','notification_outbox',
-          'sandbox_mailbox_message'
-        )) AND
+    NOT EXISTS (
+      SELECT 1 FROM pg_class c
+      WHERE c.relnamespace IN (current_schema()::regnamespace, 'public'::regnamespace)
+        AND c.relkind IN ('r', 'p')
+        AND has_table_privilege(c.oid, 'DELETE,TRUNCATE')
+    ) AND
     (SELECT count(*) = 7 AND NOT bool_or(has_any_column_privilege(c.oid, 'UPDATE'))
       FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace
         AND c.relname IN (
