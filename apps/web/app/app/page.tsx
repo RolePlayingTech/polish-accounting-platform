@@ -1,226 +1,342 @@
 import Link from 'next/link';
-import { Card, StatusBadge } from '@pap/ui';
+import {
+  ActionQueue,
+  Card,
+  MoneyAmount,
+  ObligationTimeline,
+  StatusBadge,
+  type ActionQueueItem,
+  type TaxObligationItem,
+} from '@pap/ui';
+import { SystemStatusDiagnosticSection } from '../../components/system-status-section';
+import { AcademyDisclaimerBanner } from '../../components/ui-controls';
+import { WorkspaceShell } from '../../components/workspace-shell';
+import { mapDomainExplanationToBasisInfo } from '../../lib/field-help';
 import { readPublicSystemStatus } from '../../lib/read-system-status';
+import { readServerSession } from '../../lib/session';
+import { WorkspaceAccessError, getDashboardSnapshot } from '../../lib/synthetic-workspace';
 
-export const dynamic = 'force-dynamic';
+export default async function AppDashboardPage() {
+  const [systemStatus, session] = await Promise.all([
+    readPublicSystemStatus(),
+    readServerSession(),
+  ]);
 
-const navigation = [
-  { href: '/app', label: 'Przegląd', active: true },
-  { href: '/settings', label: 'Ustawienia organizacji', active: false },
-  { href: '/platform', label: 'Administracja platformy', active: false },
-];
+  let snapshot: ReturnType<typeof getDashboardSnapshot> | null = null;
+  let sessionError: string | null = null;
 
-export default async function WorkspacePage() {
-  const result = await readPublicSystemStatus();
-  const isAvailable = result.state === 'available';
-  const apiStatusLabel = isAvailable ? 'Dostępny' : 'Niedostępny';
+  if (session) {
+    try {
+      snapshot = getDashboardSnapshot(session);
+    } catch (err) {
+      sessionError =
+        err instanceof WorkspaceAccessError
+          ? err.message
+          : 'Nie udało się odczytać kontekstu wybranej firmy.';
+    }
+  }
+
+  if (!session || !snapshot) {
+    return (
+      <WorkspaceShell
+        activeHref="/app"
+        pageEyebrow="Pulpit księgowy · Księga Współczesna"
+        pageTitle="Warsztat księgowy i status platformy"
+        pageSubtitle="Zaloguj się na syntetyczną personę testową, aby pracować na księgach JDG i Sp. z o.o., lub przejdź bezpośrednio do Akademii Polskiej Księgowości."
+        sessionContext={null}
+        activeCompany={null}
+      >
+        <div className="space-y-6">
+          {sessionError ? (
+            <div
+              role="alert"
+              className="rounded-xl border border-[#e6b3b0] bg-[#fceeed] p-4 text-sm text-[#9e2a25]"
+            >
+              {sessionError}
+            </div>
+          ) : null}
+
+          <Card
+            as="div"
+            tone="accent"
+            eyebrow="Środowisko demonstracyjne na danych syntetycznych"
+            title="Rozpocznij pracę w księdze lub otwórz kurs księgowości"
+          >
+            <p className="max-w-3xl text-sm leading-relaxed text-[#464c48]">
+              Aplikacja obsługuje pełny obieg dokumentów z weryfikacją propozycji AI obok oryginału,
+              KPiR (19 kolumn KSeF 2026 / 17 kolumn 2019), ewidencję ryczałtu z kontrolą limitu 240
+              000 PLN, rejestry VAT i JPK_V7M(3), księgę główną Sp. z o.o., rozrachunki bankowe oraz
+              zatwierdzanie propozycji MCP przez człowieka.
+            </p>
+
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <Link
+                href="/login"
+                className="inline-flex min-h-10 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-4 py-2 text-sm font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+              >
+                Zaloguj się do środowiska testowego
+              </Link>
+              <Link
+                href="/academy"
+                className="inline-flex min-h-10 items-center rounded-md border border-[#858177] bg-white px-4 py-2 text-sm font-medium text-[#191c1a] hover:bg-[#f4f2ec] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+              >
+                Otwórz Akademię Księgowości
+              </Link>
+            </div>
+          </Card>
+
+          <SystemStatusDiagnosticSection status={systemStatus} />
+
+          <AcademyDisclaimerBanner />
+        </div>
+      </WorkspaceShell>
+    );
+  }
+
+  const queueItems: ActionQueueItem[] = [
+    ...snapshot.pendingDocuments.map((doc): ActionQueueItem => ({
+      id: `q-doc-${doc.documentId}`,
+      title: `${doc.documentNumber} · ${doc.counterpartyName}`,
+      description: doc.isDuplicateSha256
+        ? `Wykryto potencjalny duplikat skrótu SHA-256! Sprawdź dokument przed księgowaniem.`
+        : `${doc.description} — propozycja AI (${String(doc.aiConfidencePercent)}%) wymaga weryfikacji i zatwierdzenia człowieka.`,
+      category: doc.isDuplicateSha256 ? 'discrepancy' : 'document_verify',
+      urgency: doc.isDuplicateSha256 || doc.aiConfidence === 'low' ? 'urgent' : 'attention',
+      amountGrosze: doc.grossGrosze,
+      sourceLabel: doc.sourceChannel,
+      ctaLabel: 'Weryfikuj dokument',
+      href: `/app/documents/${doc.documentId}`,
+    })),
+    ...snapshot.pendingMcpProposals.map((prop): ActionQueueItem => ({
+      id: `q-mcp-${prop.proposalId}`,
+      title: `Propozycja MCP: ${prop.invoiceNumber} (${prop.counterpartyName})`,
+      description: `Szkic przygotowany przez ${prop.clientName}. AI/MCP nie zapisuje w księgach bez Twojego potwierdzenia.`,
+      category: 'mcp_approval',
+      urgency: prop.promptInjectionSuspected ? 'urgent' : 'attention',
+      amountGrosze: prop.grossGrosze,
+      sourceLabel: prop.toolName,
+      ctaLabel: 'Rozpatrz w kolejce MCP',
+      href: '/app/mcp',
+    })),
+  ];
+
+  const timelineItems: TaxObligationItem[] = snapshot.obligations.map((ob) => {
+    const isApplicable = ob.status === 'applicable';
+    const wasShifted = ob.shiftedFromNonWorkingDays.length > 0;
+    const shiftSummary = ob.shiftedFromNonWorkingDays
+      .map((s) => `${s.date}: ${s.reason}`)
+      .join(', ');
+
+    return {
+      id: `ob-${ob.code}-${ob.period}`,
+      dueDate: ob.effectiveDueDate,
+      title: ob.title,
+      authority: ob.category === 'zus' ? 'ZUS' : 'US',
+      status: !isApplicable
+        ? 'not_applicable'
+        : ob.isPaid
+          ? 'submitted'
+          : wasShifted
+            ? 'due_soon'
+            : 'upcoming',
+      relativeLabel: !isApplicable
+        ? 'Okres przejściowy / informacyjny'
+        : ob.isPaid
+          ? 'Oznaczono jako opłacone'
+          : wasShifted
+            ? `Przesunięto z ${ob.statutoryDueDate} (${shiftSummary})`
+            : `Termin ustawowy za ${ob.period}`,
+      amountGrosze: ob.code.includes('ZUS')
+        ? snapshot.estimatedZusGrosze
+        : ob.code.includes('VAT') || ob.code.includes('JPK_V7')
+          ? Math.max(0, snapshot.outputVatGrosze - snapshot.deductibleInputVatGrosze)
+          : ob.code.includes('PIT') || ob.code.includes('RYCZALT') || ob.code.includes('CIT')
+            ? snapshot.estimatedIncomeTaxGrosze
+            : null,
+      uncalculatedReason: isApplicable
+        ? 'Obowiązek ewidencyjny / deklaracyjny'
+        : ob.explanation.summary,
+      legalBasis: mapDomainExplanationToBasisInfo(ob.explanation, ob.title),
+    };
+  });
 
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[252px_1fr]">
-      <aside className="hidden border-r border-stone-200 bg-[#fbfcf8] lg:flex lg:flex-col">
-        <div className="flex h-[76px] items-center gap-3 border-b border-stone-200 px-6">
-          <div className="grid size-9 place-items-center rounded-xl bg-[#236948] text-sm font-bold tracking-tight text-white">
-            P
-          </div>
-          <div>
-            <p className="text-sm font-semibold tracking-tight text-stone-950">PAP</p>
-            <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-stone-500">
-              Accounting platform
-            </p>
-          </div>
+    <WorkspaceShell
+      activeHref="/app"
+      pageEyebrow={`Pulpit operacyjny · okres ${snapshot.period}`}
+      pageTitle="Do zrobienia dziś"
+      pageSubtitle="Najpierw decyzje wymagające zatwierdzenia człowieka i ustawowe terminy, poniżej wskaźniki finansowe wybranego podmiotu."
+      sessionContext={session.context}
+      activeCompany={snapshot.activeCompany}
+      accessibleCompanies={snapshot.accessibleCompanies}
+      pageActions={
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/app/documents"
+            className="inline-flex min-h-9 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-3.5 py-1.5 text-xs font-medium text-white hover:bg-[#164833]"
+          >
+            + Dodaj / importuj FA(3)
+          </Link>
+          <Link
+            href="/academy"
+            className="inline-flex min-h-9 items-center rounded-md border border-[#858177] bg-white px-3.5 py-1.5 text-xs font-medium text-[#191c1a] hover:bg-[#f4f2ec]"
+          >
+            Akademia Księgowości
+          </Link>
         </div>
-
-        <div className="px-4 pt-7">
-          <p className="px-3 text-[10px] font-semibold uppercase tracking-[0.18em] text-stone-400">
-            Obszary
-          </p>
-          <nav aria-label="Główna nawigacja" className="mt-3 space-y-1">
-            {navigation.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={item.active ? 'page' : undefined}
-                className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium transition ${
-                  item.active
-                    ? 'bg-[#eaf1e6] text-[#1d5f40]'
-                    : 'text-stone-600 hover:bg-stone-100 hover:text-stone-900'
-                }`}
-              >
-                <span
-                  aria-hidden="true"
-                  className={`size-1.5 rounded-full ${item.active ? 'bg-[#287451]' : 'bg-stone-300'}`}
-                />
-                {item.label}
-              </Link>
-            ))}
-          </nav>
-        </div>
-
-        <div className="mt-auto p-4">
-          <div className="rounded-2xl border border-[#e1e8da] bg-[#f2f5ed] p-4">
-            <p className="text-xs font-semibold text-[#315940]">Środowisko lokalne</p>
-            <p className="mt-1.5 text-[11px] leading-5 text-stone-600">
-              Dane demonstracyjne i połączenia produkcyjne są wyłączone.
-            </p>
-          </div>
-          <p className="px-2 pt-4 text-[10px] text-stone-400">Wersja 0.1.0</p>
-        </div>
-      </aside>
-
-      <div className="min-w-0">
-        <header className="flex h-[76px] items-center justify-between border-b border-stone-200 bg-white/80 px-5 backdrop-blur sm:px-8 lg:px-10">
-          <div className="flex items-center gap-3 lg:hidden">
-            <div className="grid size-8 place-items-center rounded-lg bg-[#236948] text-xs font-bold text-white">
-              P
+      }
+    >
+      <div className="space-y-6">
+        <div
+          data-testid="dashboard-financial-overview"
+          className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-5"
+        >
+          <Card as="div" eyebrow={`Przychody · ${snapshot.period}`}>
+            <div className="mt-1">
+              <MoneyAmount
+                amount={snapshot.monthlyRevenueGrosze}
+                inGrosze
+                size="lg"
+                variant="income"
+              />
             </div>
-            <span className="text-sm font-semibold">Polish Accounting Platform</span>
-          </div>
-          <div className="hidden text-xs text-stone-500 lg:block">
-            Obszar roboczy <span className="px-1.5 text-stone-300">/</span>{' '}
-            <span className="font-medium text-stone-700">Przegląd systemu</span>
-          </div>
-          <div className="ml-auto flex items-center gap-2 rounded-full border border-stone-200 bg-white px-3 py-1.5">
-            <span aria-hidden="true" className="size-1.5 rounded-full bg-[#85a86d]" />
-            <span className="text-[11px] font-medium text-stone-600">Etap fundamentu</span>
-          </div>
-        </header>
+            <p className="mt-1.5 text-xs text-[#636b66]">Sprzedaż netto ujęta w ewidencji</p>
+          </Card>
 
-        <main className="mx-auto max-w-[1320px] px-5 py-8 sm:px-8 sm:py-10 lg:px-10 lg:py-12">
-          <div className="mb-8 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
-            <div>
-              <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-[#558168]">
-                Panel roboczy
-              </p>
-              <h1 className="text-[28px] font-semibold tracking-[-0.04em] text-stone-950 sm:text-[34px]">
-                Przegląd systemu
-              </h1>
-              <p className="mt-2 max-w-[620px] text-sm leading-6 text-stone-600">
-                Pierwszy działający przepływ łączy interfejs z API. Dane firm i funkcje księgowe nie
-                są jeszcze dostępne.
-              </p>
+          <Card as="div" eyebrow={`Koszty KUP · ${snapshot.period}`}>
+            <div className="mt-1">
+              <MoneyAmount
+                amount={snapshot.monthlyKupCostsGrosze}
+                inGrosze
+                size="lg"
+                variant="expense"
+              />
             </div>
-            <StatusBadge
-              label={isAvailable ? 'API odpowiada' : 'API niedostępne'}
-              tone={isAvailable ? 'success' : 'neutral'}
+            <p className="mt-1.5 text-xs text-[#636b66]">
+              {snapshot.activeCompany.profileCode === 'jdg_ryczalt'
+                ? 'Ryczałt nie pomniejsza podstawy o KUP'
+                : 'Koszty podatkowe okresu'}
+            </p>
+          </Card>
+
+          <Card as="div" eyebrow="Bilans VAT (należny − naliczony)">
+            <div className="mt-1">
+              <MoneyAmount
+                amount={snapshot.outputVatGrosze - snapshot.deductibleInputVatGrosze}
+                inGrosze
+                size="lg"
+                variant="tax"
+              />
+            </div>
+            <p className="mt-1.5 font-mono text-xs tabular-nums text-[#636b66]">
+              Sprz.: {(snapshot.outputVatGrosze / 100).toFixed(2)} · Zak.:{' '}
+              {(snapshot.deductibleInputVatGrosze / 100).toFixed(2)} PLN
+            </p>
+          </Card>
+
+          <Card as="div" eyebrow={snapshot.incomeTaxLabelPl}>
+            <div className="mt-1">
+              <MoneyAmount
+                amount={snapshot.estimatedIncomeTaxGrosze}
+                inGrosze
+                size="lg"
+                variant="tax"
+              />
+            </div>
+            <p className="mt-1.5 text-xs text-[#636b66]">Wyliczenie deterministyczne z ksiąg</p>
+          </Card>
+
+          <Card as="div" eyebrow="Składki ZUS (DRA)">
+            <div className="mt-1">
+              <MoneyAmount amount={snapshot.estimatedZusGrosze} inGrosze size="lg" variant="tax" />
+            </div>
+            <p className="mt-1.5 text-xs text-[#636b66]">
+              {snapshot.activeCompany.zusScheme === 'not_applicable'
+                ? 'Sp. z o.o. — brak ZUS właścicielskiego JDG'
+                : `Schemat: ${snapshot.activeCompany.zusScheme}`}
+            </p>
+          </Card>
+        </div>
+
+        <ActionQueue
+          eyebrow="Weryfikacja człowieka (Zasada nr 5)"
+          title="Dokumenty z propozycją AI i oczekujące szkice MCP"
+          items={queueItems}
+        />
+
+        <div className="grid gap-6 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <ObligationTimeline
+              eyebrow="Kalendarz US / ZUS / KSeF"
+              title={`Terminy ustawowe za okres ${snapshot.period}`}
+              items={timelineItems}
             />
           </div>
 
-          <div className="grid gap-4 xl:grid-cols-[1.35fr_1fr_1fr]">
-            <Card className="relative overflow-hidden border-[#dfe8dc] bg-[#f1f5ee] p-6 sm:p-7">
-              <div className="absolute -right-10 -top-16 size-48 rounded-full border-[28px] border-white/45" />
-              <div className="relative">
-                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.15em] text-[#50735b]">
-                  <span aria-hidden="true" className="size-1.5 rounded-full bg-[#4d956a]" />
-                  Status platformy
-                </div>
-                <p className="mt-5 text-[22px] font-semibold tracking-[-0.03em] text-[#1c392a]">
-                  {isAvailable ? 'Fundament działa' : 'Oczekiwanie na API'}
-                </p>
-                <p className="mt-2 max-w-[420px] text-[13px] leading-6 text-stone-600">
-                  {isAvailable
-                    ? `API zwróciło poprawny kontrakt systemu w wersji ${result.status.version}.`
-                    : 'Interfejs nie otrzymał poprawnej odpowiedzi statusowej. Uruchom lokalne API i odśwież widok.'}
-                </p>
-                <div className="mt-6 flex flex-wrap gap-2">
-                  <span className="rounded-lg border border-white/80 bg-white/75 px-2.5 py-1.5 text-[10px] font-medium text-stone-600">
-                    REST · /api/v1/system/status
-                  </span>
-                  <span className="rounded-lg border border-white/80 bg-white/75 px-2.5 py-1.5 text-[10px] font-medium text-stone-600">
-                    Kontrakt walidowany przez Zod
-                  </span>
-                </div>
-              </div>
-            </Card>
+          <Card as="div" eyebrow="Szybkie przejścia do modułów" title="Księgi, rejestry i edukacja">
+            <ul className="space-y-2.5 text-sm">
+              <li>
+                <Link
+                  href="/app/kpir"
+                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
+                >
+                  <span>KPiR (19 kolumn 2026 / 17 kolumn)</span>
+                  <StatusBadge size="sm" tone="legal" label="Dz.U. 2025 poz. 1299" />
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/app/ryczalt"
+                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
+                >
+                  <span>Ewidencja ryczałtu i limit 240 tys. PLN</span>
+                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/app/vat"
+                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
+                >
+                  <span>Rejestry VAT i pola JPK_V7M(3)</span>
+                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/app/ledger"
+                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
+                >
+                  <span>Pełne księgi UoR, Bilans, RZiS i CIT</span>
+                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/app/finance"
+                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
+                >
+                  <span>Rozrachunki, wiekowanie i bank CSV/MT940</span>
+                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/app/mcp"
+                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
+                >
+                  <span>Podłącz Claude / Cursor / ChatGPT (MCP)</span>
+                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
+                </Link>
+              </li>
+            </ul>
+          </Card>
+        </div>
 
-            <Card eyebrow="Warstwa domenowa" title="Księgowość">
-              <div className="flex items-center justify-between">
-                <p className="text-[13px] text-stone-600">Księgi i dokumenty</p>
-                <StatusBadge label="Planowane" tone="neutral" />
-              </div>
-              <div className="mt-5 h-1.5 overflow-hidden rounded-full bg-stone-100">
-                <div className="h-full w-[12%] rounded-full bg-[#b7c8a4]" />
-              </div>
-              <p className="mt-3 text-[11px] leading-5 text-stone-500">
-                Najpierw zostaną wdrożone tożsamość i izolacja firm.
-              </p>
-            </Card>
+        <SystemStatusDiagnosticSection status={systemStatus} />
 
-            <Card eyebrow="Powierzchnia dostępu" title="MCP z autoryzacją">
-              <div className="flex items-center justify-between">
-                <p className="text-[13px] text-stone-600">Zdalne narzędzia</p>
-                <StatusBadge label="Planowane" tone="neutral" />
-              </div>
-              <div className="mt-5 flex items-center gap-2">
-                <span className="rounded-lg bg-stone-100 px-2.5 py-1.5 font-mono text-[10px] text-stone-500">
-                  OAuth · scopes · audit
-                </span>
-              </div>
-              <p className="mt-3 text-[11px] leading-5 text-stone-500">
-                Lokalny shell udostępnia wyłącznie publiczny status systemu.
-              </p>
-            </Card>
-          </div>
-
-          <div className="mt-5 grid gap-5 xl:grid-cols-[1.25fr_0.75fr]">
-            <Card eyebrow="Dostępność modułów" title="Zakres pierwszego etapu">
-              <div className="divide-y divide-stone-100">
-                {(
-                  [
-                    ['Interfejs webowy', 'Uruchomiony', true],
-                    ['Kontrakt i status API', apiStatusLabel, isAvailable],
-                    ['Tożsamość i izolacja firm', 'Przed implementacją', false],
-                    ['Księgowość i dokumenty', 'Nieaktywne', false],
-                    ['Zdalny MCP i autoryzacja', 'Nieaktywne', false],
-                  ] as const
-                ).map(([name, state, ready]) => (
-                  <div
-                    key={name}
-                    className="flex items-center justify-between gap-4 py-3.5 first:pt-1 last:pb-1"
-                  >
-                    <span className="text-[13px] font-medium text-stone-700">{name}</span>
-                    <span className="flex shrink-0 items-center gap-2 text-[11px] text-stone-500">
-                      <span
-                        aria-hidden="true"
-                        className={`size-1.5 rounded-full ${ready ? 'bg-emerald-500' : 'bg-stone-300'}`}
-                      />
-                      {state}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-
-            <Card
-              className="bg-[#fcfbf7]"
-              eyebrow="Następny kamień milowy"
-              title="Tożsamość i firmy"
-            >
-              <div className="mt-1 rounded-xl border border-stone-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[12px] font-semibold text-stone-800">
-                    Tenant · członkostwo · firma
-                  </span>
-                  <span className="rounded-md bg-[#f1f3ec] px-2 py-1 text-[10px] font-semibold text-stone-500">
-                    Issue #6
-                  </span>
-                </div>
-                <p className="mt-2 text-[11px] leading-5 text-stone-500">
-                  Serwerowa autoryzacja poprzedzi dostęp do dokumentów i ksiąg.
-                </p>
-              </div>
-              <p className="mt-4 text-[11px] leading-5 text-stone-500">
-                Status widoku pochodzi z API. Nie zawiera danych klientów, NIP ani informacji o
-                środowisku produkcyjnym.
-              </p>
-            </Card>
-          </div>
-
-          <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-stone-200 pt-5 text-[10px] text-stone-400 sm:flex-row">
-            <span>Polish Accounting Platform · Jurysdykcja: Polska</span>
-            <span>Wersja 0.1.0 · Dane syntetyczne</span>
-          </footer>
-        </main>
+        <AcademyDisclaimerBanner />
       </div>
-    </div>
+    </WorkspaceShell>
   );
 }

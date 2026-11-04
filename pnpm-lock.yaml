@@ -310,6 +310,9 @@ importers:
       '@pap/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@pap/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@pap/ui':
         specifier: workspace:*
         version: link:../../packages/ui

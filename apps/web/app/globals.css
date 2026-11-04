@@ -5,14 +5,20 @@
 
 :root {
   color-scheme: light;
-  --pap-ink: #17241f;
-  --pap-muted: #65716b;
-  --pap-line: #e5e8df;
-  --pap-canvas: #f6f7f2;
-  --pap-green: #236948;
-  --pap-green-dark: #1c5439;
-  --pap-lime: #d5e7bb;
-  --pap-warm: #fbfaf6;
+  --pap-canvas: #faf9f5;
+  --pap-canvas-subtle: #f4f2ec;
+  --pap-canvas-document: #efece4;
+  --pap-surface: #ffffff;
+  --pap-ink: #191c1a;
+  --pap-ink-secondary: #464c48;
+  --pap-muted: #636b66;
+  --pap-line: #e5e2d9;
+  --pap-line-strong: #858177;
+  --pap-green: #1d5c42;
+  --pap-green-dark: #164833;
+  --pap-green-surface: #e7f1ec;
+  --pap-legal-bg: #faf8f1;
+  --pap-legal-ink: #5b4618;
 }
 
 * {
@@ -40,11 +46,26 @@ body {
 }
 
 ::selection {
-  background: var(--pap-lime);
+  background: var(--pap-green-surface);
   color: var(--pap-ink);
 }
 
 a {
   color: inherit;
   text-decoration: none;
+}
+
+.pap-tabular {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
