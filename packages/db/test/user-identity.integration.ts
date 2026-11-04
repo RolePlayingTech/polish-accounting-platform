@@ -1,3 +1,7 @@
+import { randomBytes } from 'node:crypto';
+import { provisionDatabaseContextKey } from '../src/runtime-provisioning.js';
+import { PostgresSecurityAudit } from '../src/security-audit.js';
+import { PostgresContextSigner } from '../src/signed-context.js';
 import {
   authorizeAuthenticatedCompanyAction,
   createOidcAccessManagementActorSource,
@@ -44,14 +48,30 @@ const from = new Date('2026-01-01T00:00:00.000Z');
 
 describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na PostgreSQL', () => {
   let database: TestDatabase | undefined;
+  let signer: PostgresContextSigner | undefined;
   const connection = () => {
     if (!database) throw new Error('Brak testowej bazy PostgreSQL.');
     return database;
+  };
+  const getSigner = () => {
+    if (!signer) throw new Error('Brak signera kontekstu PostgreSQL.');
+    return signer;
   };
 
   beforeAll(async () => {
     database = await createTestDatabase();
     await applyMigrations(database.db, database.dataSchema);
+    const [roleRow] = await database.client<{ role_name: string }[]>`
+      SELECT session_user::text AS role_name
+    `;
+    const sessionRole = roleRow!.role_name;
+    const keyHex = randomBytes(32).toString('hex');
+    await provisionDatabaseContextKey(database.db, {
+      keyId: 'fixture-key',
+      keyHex,
+      runtimeRole: sessionRole,
+    });
+    signer = new PostgresContextSigner({ keyId: 'fixture-key', keyHex });
     await database.db.insert(tenant).values([
       { id: TENANT_A, name: 'Syntetyczny Tenant A' },
       { id: TENANT_B, name: 'Syntetyczny Tenant B' },
@@ -65,7 +85,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
 
   beforeEach(async () => {
     const { db, client: sql } = connection();
-    await sql`TRUNCATE access_management_event`;
+    await sql`TRUNCATE security_decision_event, access_management_event`;
     await db.delete(companyAccessGrant);
     await db.delete(tenantMembership);
     await db.delete(userOidcIdentity);
@@ -79,7 +99,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
   it('mapuje dokładnie parę (issuer, subject) na userId, rozróżnia wielkość liter i wystawców oraz egzekwuje UNIQUE', async () => {
     const { db, client: sql } = connection();
     const store = new PostgresUserIdentityStore(db);
-    const resolver = new PostgresUserIdentityResolver(db);
+    const resolver = new PostgresUserIdentityResolver(db, getSigner());
 
     expect(
       await store.provisionUserWithOidcIdentity({
@@ -133,7 +153,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
   it('obsługuje wiele jawnie powiązanych tożsamości jednego użytkownika i blokuje dostęp po cofnięciu powiązania lub wyłączeniu konta', async () => {
     const { db, client: sql } = connection();
     const store = new PostgresUserIdentityStore(db);
-    const resolver = new PostgresUserIdentityResolver(db);
+    const resolver = new PostgresUserIdentityResolver(db, getSigner());
 
     await store.provisionUserWithOidcIdentity({
       userId: USER_A,
@@ -209,10 +229,10 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
   it('wykonuje pełny łańcuch OIDC -> internal userId -> autoryzacja firmy i administracja dostępem na PostgreSQL', async () => {
     const { db } = connection();
     const identityStore = new PostgresUserIdentityStore(db);
-    const identityResolver = new PostgresUserIdentityResolver(db);
-    const companyAuthSource = new PostgresTenantAuthorizationDataSource(db);
+    const identityResolver = new PostgresUserIdentityResolver(db, getSigner());
+    const companyAuthSource = new PostgresTenantAuthorizationDataSource(db, getSigner());
     const accessAdminAuthSource = new PostgresAccessManagementAuthorizationDataSource(db);
-    const accessStore = new PostgresAccessManagementStore(db);
+    const accessStore = new PostgresAccessManagementStore(db, getSigner());
 
     await identityStore.provisionUserWithOidcIdentity({
       userId: OWNER_A,
@@ -369,6 +389,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
       {
         verifier: verifierFor('user-a-sub'),
         identityResolver,
+        securityAudit: new PostgresSecurityAudit(connection().db, getSigner()),
         authorizationDataSource: companyAuthSource,
       },
     );
@@ -389,6 +410,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
       {
         verifier: verifierFor('user-a-sub'),
         identityResolver,
+        securityAudit: new PostgresSecurityAudit(connection().db, getSigner()),
         authorizationDataSource: companyAuthSource,
       },
     );
@@ -410,6 +432,7 @@ describe('6D-2 — tożsamość OIDC, mapowanie na userId i autoryzacja na Postg
       {
         verifier: verifierFor('user-a-sub'),
         identityResolver,
+        securityAudit: new PostgresSecurityAudit(connection().db, getSigner()),
         authorizationDataSource: companyAuthSource,
       },
     );

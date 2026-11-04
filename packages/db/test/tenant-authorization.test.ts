@@ -32,7 +32,7 @@ const clients: ReturnType<typeof connectDatabase>['client'][] = [];
 function setup(rows: unknown[][]) {
   const { client, db } = connectDatabase({
     PAP_DATABASE_ENV: 'test',
-    DATABASE_URL: 'postgres://pap_test:synthetic_only@127.0.0.1:5432/pap_test',
+    DATABASE_URL: 'postgres://pap_test_app:synthetic_only@127.0.0.1:5432/pap_test',
   });
   clients.push(client);
   const values = vi.fn(async () => rows);

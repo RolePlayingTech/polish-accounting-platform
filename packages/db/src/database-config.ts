@@ -25,10 +25,10 @@ function expectedDatabaseUser(
   roleScope: DatabaseRoleScope,
 ): string {
   if (environment === 'local') {
-    return 'pap_local';
+    return roleScope === 'migrator' ? 'pap_local' : 'pap_local_app';
   }
   if (environment === 'test') {
-    return 'pap_test';
+    return roleScope === 'migrator' ? 'pap_test' : 'pap_test_app';
   }
   return roleScope === 'migrator' ? 'pap_staging_migrator' : 'pap_staging_app';
 }

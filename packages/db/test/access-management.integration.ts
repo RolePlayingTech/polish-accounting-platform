@@ -7,14 +7,19 @@ import {
 import { legalEntityId, tenantId, userId } from '@pap/domain';
 import { and, eq, sql as statement } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { PostgresAccessManagementStore } from '../src/access-management.js';
 import { applyMigrations } from '../src/migrations.js';
+import { provisionDatabaseContextKey } from '../src/runtime-provisioning.js';
+import { PostgresContextSigner } from '../src/signed-context.js';
 import {
   accessManagementEvent,
+  appUser,
   companyAccessGrant,
   legalEntity,
   tenant,
   tenantMembership,
+  userOidcIdentity,
 } from '../src/schema.js';
 import { PostgresTenantAuthorizationDataSource } from '../src/tenant-authorization.js';
 import {
@@ -28,6 +33,14 @@ const A = tenantId(id(1)),
   B = tenantId(id(2));
 const USER = userId(id(31)),
   ACTOR = userId(id(32));
+const ACTOR_VERIFIED = {
+  userId: ACTOR,
+  identity: { issuer: 'https://idp.example.test', subject: 'actor-sub' },
+} as const;
+const USER_VERIFIED = {
+  userId: USER,
+  identity: { issuer: 'https://idp.example.test', subject: 'user-sub' },
+} as const;
 const A1 = legalEntityId(id(11)),
   A2 = legalEntityId(id(12)),
   B1 = legalEntityId(id(21));
@@ -55,26 +68,34 @@ const grant = (
 
 describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
   let database: TestDatabase | undefined;
+  let signer: PostgresContextSigner | undefined;
   const connection = () => {
     if (!database) throw new Error('Brak testowej DB.');
     return database;
   };
+  const getSigner = () => {
+    if (!signer) throw new Error('Brak signera kontekstu DB.');
+    return signer;
+  };
   const run = (
     command: AccessManagementCommand,
-    store = new PostgresAccessManagementStore(connection().db),
+    store = new PostgresAccessManagementStore(connection().db, getSigner()),
   ) =>
     manageAccess(command, {
       store,
-      actors: { getVerifiedActor: async () => ({ userId: ACTOR }) },
+      actors: { getVerifiedActor: async () => ACTOR_VERIFIED },
       authorizer: { authorize: async (_actor, scoped) => scoped.tenantId === A },
     });
   const authorize = (entity = A1, action: 'read' | 'write' = 'read') =>
-    authorizeCompanyAction(new PostgresTenantAuthorizationDataSource(connection().db), {
-      tenantId: A,
-      userId: USER,
-      legalEntityId: entity,
-      action,
-    });
+    authorizeCompanyAction(
+      new PostgresTenantAuthorizationDataSource(connection().db, getSigner()),
+      {
+        tenantId: A,
+        userId: USER,
+        legalEntityId: entity,
+        action,
+      },
+    );
   const grants = () =>
     connection()
       .db.select()
@@ -97,6 +118,39 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
   beforeAll(async () => {
     database = await createTestDatabase();
     await applyMigrations(database.db, database.dataSchema);
+    const [roleRow] = await database.client<{ role_name: string }[]>`
+      SELECT session_user::text AS role_name
+    `;
+    const sessionRole = roleRow!.role_name;
+    const keyHex = randomBytes(32).toString('hex');
+    await provisionDatabaseContextKey(database.db, {
+      keyId: 'fixture-key',
+      keyHex,
+      runtimeRole: sessionRole,
+    });
+    signer = new PostgresContextSigner({ keyId: 'fixture-key', keyHex });
+    await database.db.insert(appUser).values([
+      { id: USER, status: 'active', createdAt: from },
+      { id: ACTOR, status: 'active', createdAt: from },
+    ]);
+    await database.db.insert(userOidcIdentity).values([
+      {
+        id: id(901),
+        userId: USER,
+        issuer: 'https://idp.example.test',
+        subject: 'user-sub',
+        status: 'active',
+        linkedAt: from,
+      },
+      {
+        id: id(902),
+        userId: ACTOR,
+        issuer: 'https://idp.example.test',
+        subject: 'actor-sub',
+        status: 'active',
+        linkedAt: from,
+      },
+    ]);
     await database.db.insert(tenant).values([
       { id: A, name: 'Syntetyczny A' },
       { id: B, name: 'Syntetyczny B' },
@@ -110,10 +164,11 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
   beforeEach(async () => {
     const { db, client: sql } = connection();
     // Wyłącznie tabela we własnym losowym namespace, nigdy dane zastanej bazy.
-    await sql`TRUNCATE access_management_event`;
+    await sql`TRUNCATE security_decision_event, access_management_event`;
     await db.delete(companyAccessGrant);
     await db.delete(tenantMembership);
     await db.insert(tenantMembership).values([
+      { tenantId: A, userId: ACTOR, role: 'tenant_owner', status: 'active', validFrom: from },
       { tenantId: A, userId: USER, role: 'tenant_admin', status: 'active', validFrom: from },
       { tenantId: B, userId: USER, role: 'tenant_owner', status: 'active', validFrom: from },
     ]);
@@ -176,7 +231,10 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
     ).toBeNull();
     expectOk(await run(reactivate()));
     expect(await authorize(A2, 'write')).toMatchObject({ allowed: false });
-    const facts = await new PostgresTenantAuthorizationDataSource(connection().db).getFacts({
+    const facts = await new PostgresTenantAuthorizationDataSource(
+      connection().db,
+      getSigner(),
+    ).getFacts({
       tenantId: A,
       userId: USER,
       legalEntityId: B1,
@@ -223,8 +281,8 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
     'odmawia grantu: członkostwo %s',
     async (state) => {
       const { db } = connection();
-      if (state === 'missing')
-        await db.delete(tenantMembership).where(eq(tenantMembership.tenantId, A));
+      const targetScope = and(eq(tenantMembership.tenantId, A), eq(tenantMembership.userId, USER));
+      if (state === 'missing') await db.delete(tenantMembership).where(targetScope);
       else
         await db
           .update(tenantMembership)
@@ -235,10 +293,10 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
                 ? { validUntil: new Date('2026-02-01') }
                 : { validFrom: new Date('2099-01-01') },
           )
-          .where(eq(tenantMembership.tenantId, A));
+          .where(targetScope);
       expect(await run(grant())).toEqual({
         ok: false,
-        reason: state === 'missing' ? 'membership_unavailable' : 'membership_inactive',
+        reason: state === 'missing' ? 'access_management_denied' : 'membership_inactive',
       });
       expect(await grants()).toHaveLength(0);
       expect(await events()).toHaveLength(0);
@@ -246,14 +304,28 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
   );
   it('odmawia reaktywacji aktywnego członkostwa oraz niepoprawnych dat', async () => {
     expect(await run(reactivate())).toEqual({ ok: false, reason: 'membership_not_revoked' });
-    expect(await run(grant({ validFrom: '2026-01-01T00:00:00.000Z' }))).toEqual({
+    expect(
+      await run(
+        grant({
+          validFrom: '2099-02-01T00:00:00.000Z',
+          validUntil: '2099-01-01T00:00:00.000Z',
+        }),
+      ),
+    ).toEqual({
       ok: false,
       reason: 'invalid_command',
     });
+    expect(await run(grant({ validFrom: '2026-01-01T00:00:00.000Z' }))).toEqual({
+      ok: false,
+      reason: 'access_management_denied',
+    });
     expectOk(await run(revoke()));
     expect(
-      await run({ ...base(), kind: 'reactivate_membership', validUntil: '2026-01-01' }),
+      await run({ ...base(), kind: 'reactivate_membership', validUntil: 'niepoprawna-data' }),
     ).toEqual({ ok: false, reason: 'invalid_command' });
+    expect(
+      await run({ ...base(), kind: 'reactivate_membership', validUntil: '2026-01-01' }),
+    ).toEqual({ ok: false, reason: 'access_management_denied' });
   });
   it('cofa konkretny grant, w tym przyszły; chroni wcześniejsze revoked_at', async () => {
     const receipt = expectOk(await run(grant({ validFrom: '2099-01-01T00:00:00.000Z' })));
@@ -314,7 +386,7 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
     expect(await events()).toHaveLength(0);
   });
   it('tenant_admin bez osobnej autoryzacji oraz brak aktora/autoryzatora nie zmieniają DB', async () => {
-    const store = new PostgresAccessManagementStore(connection().db);
+    const store = new PostgresAccessManagementStore(connection().db, getSigner());
     for (const deps of [
       { store },
       {
@@ -324,8 +396,13 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
       },
       {
         store,
-        actors: { getVerifiedActor: async () => ({ userId: USER }) },
+        actors: { getVerifiedActor: async () => USER_VERIFIED },
         authorizer: { authorize: async () => false },
+      },
+      {
+        store,
+        actors: { getVerifiedActor: async () => ({ userId: ACTOR }) },
+        authorizer: { authorize: async () => true },
       },
     ]) {
       expect(await manageAccess(revoke(), deps)).toEqual({
@@ -373,6 +450,17 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
 
   it('blokada członkostwa A nie blokuje operacji na innym członkostwie B', async () => {
     const { db } = connection();
+    await db
+      .update(tenantMembership)
+      .set({ role: 'tenant_member' })
+      .where(and(eq(tenantMembership.tenantId, B), eq(tenantMembership.userId, USER)));
+    await db.insert(tenantMembership).values({
+      tenantId: B,
+      userId: ACTOR,
+      role: 'tenant_owner',
+      status: 'active',
+      validFrom: from,
+    });
     const held = deferred<void>(),
       release = deferred<void>();
     const holder = db.transaction(async (tx) => {
@@ -389,8 +477,8 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
     try {
       const result = await Promise.race([
         manageAccess(grant({ tenantId: B, legalEntityId: B1 }), {
-          store: new PostgresAccessManagementStore(db),
-          actors: { getVerifiedActor: async () => ({ userId: ACTOR }) },
+          store: new PostgresAccessManagementStore(db, getSigner()),
+          actors: { getVerifiedActor: async () => ACTOR_VERIFIED },
           authorizer: { authorize: async (_actor, command) => command.tenantId === B },
         }),
         new Promise<never>((_resolve, reject) => {
@@ -439,9 +527,9 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
           return callback(tx);
         }),
     });
-    const p1 = run(first, new PostgresAccessManagementStore(wrapped(true)));
+    const p1 = run(first, new PostgresAccessManagementStore(wrapped(true), getSigner()));
     const holderPid = await held.promise;
-    const p2 = run(second, new PostgresAccessManagementStore(wrapped(false)));
+    const p2 = run(second, new PostgresAccessManagementStore(wrapped(false), getSigner()));
     try {
       const waiterPid = await waiting.promise;
       const deadline = Date.now() + 3000;

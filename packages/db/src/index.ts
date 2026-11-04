@@ -1,8 +1,15 @@
-export { connectDatabase } from './client.js';
+export { connectDatabase, type ConnectDatabaseOptions } from './client.js';
 export {
   PostgresAccessManagementAuthorizationDataSource,
   PostgresAccessManagementStore,
 } from './access-management.js';
+export {
+  PostgresTransactionalUnitOfWork,
+  ScopeClosedError,
+  type PostgresCompanyActionScope,
+  type PostgresCompanyActionScopeDriver,
+  type PostgresCompanyActionScopeFactory,
+} from './transactional-unit-of-work.js';
 export {
   PostgresUserIdentityResolver,
   PostgresUserIdentityStore,
@@ -26,3 +33,17 @@ export {
   type DatabaseRoleScope,
   type LoadDatabaseConfigOptions,
 } from './database-config.js';
+export * from './signed-context.js';
+export { securityDecisionEvent } from './schema.js';
+export { PostgresSecurityAudit } from './security-audit.js';
+export { companyOperationProbe } from './schema.js';
+export {
+  createPostgresCompanyActionScope,
+  recordCompanyOperationProbe,
+} from './company-operation-probe.js';
+export { configureRuntimePrivileges, provisionDatabaseContextKey } from './runtime-provisioning.js';
+export {
+  assertRuntimeDatabaseSecurity,
+  createPostgresSecurityServices,
+  type PostgresSecurityServices,
+} from './runtime-security.js';

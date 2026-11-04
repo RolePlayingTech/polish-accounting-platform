@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  boolean,
   check,
   foreignKey,
   index,
@@ -14,6 +15,19 @@ import {
 
 // Chwile czasu, z precyzją Date (milisekundy); okresy mają postać [od, do).
 const instant = (name: string) => timestamp(name, { withTimezone: true, precision: 3 });
+
+export const securityContextKey = pgTable(
+  'security_context_key',
+  {
+    keyId: text('key_id').primaryKey(),
+    secretHex: text('secret_hex').notNull(),
+    runtimeRole: text('runtime_role').notNull(),
+    enabled: boolean('enabled').notNull().default(true),
+  },
+  (table) => [
+    check('security_context_key_secret_hex_check', sql`${table.secretHex} ~ '^[a-f0-9]{64}$'`),
+  ],
+).enableRLS();
 
 export const appUser = pgTable(
   'app_user',
@@ -31,7 +45,7 @@ export const appUser = pgTable(
       sql`(${table.status} = 'active' AND ${table.disabledAt} IS NULL) OR (${table.status} = 'disabled' AND ${table.disabledAt} IS NOT NULL AND isfinite(${table.disabledAt}) AND ${table.disabledAt} >= ${table.createdAt})`,
     ),
   ],
-);
+).enableRLS();
 
 export const userOidcIdentity = pgTable(
   'user_oidc_identity',
@@ -64,7 +78,7 @@ export const userOidcIdentity = pgTable(
       sql`(${table.status} = 'active' AND ${table.revokedAt} IS NULL) OR (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL AND isfinite(${table.revokedAt}) AND ${table.revokedAt} >= ${table.linkedAt})`,
     ),
   ],
-);
+).enableRLS();
 
 export const accessManagementEvent = pgTable(
   'access_management_event',
@@ -79,21 +93,77 @@ export const accessManagementEvent = pgTable(
     grantId: uuid('grant_id'),
     occurredAt: instant('occurred_at').notNull(),
     requestKey: text('request_key').notNull(),
+    // NULL wyłącznie dla historycznych receipt sprzed protokołu SEC-01/02.
+    transactionId: text('transaction_id').default(sql`pg_current_xact_id()::text`),
     // Wyłącznie jawne pola stanu; bez HTTP, tokenów i dokumentów.
     stateChange: jsonb('state_change')
-      .$type<{ before: string; after: string; revokedGrants: number }>()
+      .$type<{
+        before: string;
+        after: string;
+        revokedGrants: number;
+        effects?: Readonly<
+          Record<
+            string,
+            {
+              table: 'tenant_membership' | 'company_access_grant';
+              operation: 'INSERT' | 'UPDATE';
+              old: Readonly<Record<string, unknown>> | null;
+              new: Readonly<Record<string, unknown>>;
+            }
+          >
+        >;
+      }>()
       .notNull(),
     receipt: jsonb('receipt').$type<import('@pap/application').AccessManagementReceipt>().notNull(),
   },
   (table) => [
     index('access_management_event_target_idx').on(table.tenantId, table.userId, table.occurredAt),
+    index('access_management_event_transaction_idx').on(
+      table.transactionId,
+      table.tenantId,
+      table.userId,
+    ),
     check(
       'access_management_event_kind_check',
       sql`${table.kind} IN ('revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant')`,
     ),
     check('access_management_event_time_check', sql`isfinite(${table.occurredAt})`),
   ],
-);
+).enableRLS();
+
+export const securityDecisionEvent = pgTable(
+  'security_decision_event',
+  {
+    id: uuid('id').primaryKey(),
+    requestId: uuid('request_id').notNull(),
+    operationId: uuid('operation_id'),
+    accessManagementOperationId: uuid('access_management_operation_id').references(
+      () => accessManagementEvent.operationId,
+      { onDelete: 'restrict' },
+    ),
+    actorId: uuid('actor_id'),
+    targetUserId: uuid('target_user_id'),
+    tenantId: uuid('tenant_id'),
+    legalEntityId: uuid('legal_entity_id'),
+    action: text('action').notNull(),
+    kind: text('kind').notNull(),
+    decision: text('decision').notNull(),
+    outcome: text('outcome').notNull(),
+    reason: text('reason').notNull(),
+    decidedAt: instant('decided_at').notNull(),
+    recordedAt: instant('recorded_at')
+      .notNull()
+      .default(sql`clock_timestamp()`),
+    transactionId: text('transaction_id')
+      .notNull()
+      .default(sql`pg_current_xact_id()::text`),
+  },
+  (table) => [
+    index('security_decision_request_idx').on(table.requestId, table.recordedAt),
+    index('security_decision_scope_idx').on(table.tenantId, table.legalEntityId, table.recordedAt),
+    index('security_decision_transaction_idx').on(table.transactionId),
+  ],
+).enableRLS();
 
 export const tenant = pgTable(
   'tenant',
@@ -103,7 +173,7 @@ export const tenant = pgTable(
     createdAt: instant('created_at').notNull().defaultNow(),
   },
   (table) => [check('tenant_name_not_blank', sql`btrim(${table.name}) <> ''`)],
-);
+).enableRLS();
 
 export const legalEntity = pgTable(
   'legal_entity',
@@ -119,7 +189,7 @@ export const legalEntity = pgTable(
     unique('legal_entity_tenant_id_id_unique').on(table.tenantId, table.id),
     check('legal_entity_name_not_blank', sql`btrim(${table.displayName}) <> ''`),
   ],
-);
+).enableRLS();
 
 export const tenantMembership = pgTable(
   'tenant_membership',
@@ -146,7 +216,7 @@ export const tenantMembership = pgTable(
       sql`isfinite(${table.validFrom}) AND (${table.validUntil} IS NULL OR (isfinite(${table.validUntil}) AND ${table.validUntil} > ${table.validFrom}))`,
     ),
   ],
-);
+).enableRLS();
 
 export const entityProfileVersion = pgTable(
   'entity_profile_version',
@@ -180,7 +250,7 @@ export const entityProfileVersion = pgTable(
     // EXCLUDE USING gist dla tej firmy i tstzrange(..., '[)') jest w jawnym SQL 0001.
     // Drizzle 0.45 nie odwzorowuje exclusion constraints w snapshotach.
   ],
-);
+).enableRLS();
 
 export const companyAccessGrant = pgTable(
   'company_access_grant',
@@ -227,4 +297,25 @@ export const companyAccessGrant = pgTable(
     ),
     index('company_access_grant_entity_idx').on(table.tenantId, table.legalEntityId),
   ],
-);
+).enableRLS();
+
+/** Przypadek syntetyczny granicy transakcji, bez danych księgowych i bez endpointu. */
+export const companyOperationProbe = pgTable(
+  'company_operation_probe',
+  {
+    operationId: uuid('operation_id').primaryKey(),
+    tenantId: uuid('tenant_id').notNull(),
+    legalEntityId: uuid('legal_entity_id').notNull(),
+    actorId: uuid('actor_id').notNull(),
+    createdAt: instant('created_at')
+      .notNull()
+      .default(sql`clock_timestamp()`),
+  },
+  (table) => [
+    foreignKey({
+      name: 'company_operation_probe_company_fk',
+      columns: [table.tenantId, table.legalEntityId],
+      foreignColumns: [legalEntity.tenantId, legalEntity.id],
+    }),
+  ],
+).enableRLS();

@@ -72,8 +72,16 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
     expect(scriptContent).toContain('--security-opt no-new-privileges:true');
     expect(scriptContent).toContain('/opt/pap-runtime/pnpm');
     expect(scriptContent).toContain('COREPACK_DEFAULT_TO_LATEST=0');
-    // PostgreSQL 18 definiuje VOLUME /var/lib/postgresql (nie /var/lib/postgresql/data)
+    // PostgreSQL 18 definiuje VOLUME /var/lib/postgresql (uid 70 postgres tworzy podkatalog 18/docker wewnątrz 0777 pgdata pod 0700 RUN_DIR)
+    expect(scriptContent).toContain('mkdir -m 0700 "${RUN_DIR}"');
+    expect(scriptContent).toContain('mkdir -m 0777 "${RUN_DIR}/pgdata"');
     expect(scriptContent).toContain('-v "${RUN_DIR}/pgdata:/var/lib/postgresql"');
+    expect(scriptContent).toContain('CREATE SCHEMA IF NOT EXISTS pap_lockdown');
+    expect(scriptContent).toContain('REVOKE ALL ON SCHEMA pap_lockdown FROM PUBLIC');
+    expect(scriptContent).toContain('pap_lockdown.pap_on_create_extension_lockdown()');
+    expect(scriptContent).not.toContain('public.pap_apply_pgcrypto_lockdown');
+    expect(scriptContent).not.toContain('public.pap_on_create_extension_lockdown');
+    expect(scriptContent).toContain('pap_lockdown_pgcrypto_on_extension');
     expect(scriptContent).not.toContain(':/var/lib/postgresql/data');
     expect(scriptContent).toContain('POSTGRES_PASSWORD_FILE=/run/secrets/pg_pass');
     expect(scriptContent).toContain('exec_container_super_psql');
@@ -547,6 +555,7 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
     const harness = [
       'set -euo pipefail',
       'REAL_TIMEOUT="$(command -v timeout)"',
+      'REAL_MKDIR="$(command -v mkdir)"',
       'SANDBOX="/tmp/pap-cleanup-harness-$$"',
       'trap \'rm -rf "$SANDBOX"\' EXIT',
       'UID_VAL="$(id -u)"',
@@ -623,6 +632,30 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
       '  exec "$REAL_TIMEOUT" --signal=TERM --kill-after=1s 0.2s "$@"',
       'fi',
       'exec "$REAL_TIMEOUT" "$@"',
+      'EOF',
+      'cat > "$SANDBOX/bin/mkdir" <<\'EOF\'',
+      '#!/usr/bin/env bash',
+      'if [[ -n "${SANDBOX_STATE:-}" && -d "${SANDBOX_STATE}" ]]; then',
+      '  printf "MKDIR:%s\\n" "$*" >> "${SANDBOX_STATE}/mkdir.log"',
+      'fi',
+      'case "$(uname -s)" in',
+      '  MINGW*|MSYS*|CYGWIN*)',
+      '    patched_args=()',
+      '    prev=""',
+      '    for arg in "$@"; do',
+      '      if [[ "$prev" == "-m" && "$arg" == "0777" ]]; then',
+      '        patched_args+=("0700")',
+      '      else',
+      '        patched_args+=("$arg")',
+      '      fi',
+      '      prev="$arg"',
+      '    done',
+      '    exec "$REAL_MKDIR" "${patched_args[@]}"',
+      '    ;;',
+      '  *)',
+      '    exec "$REAL_MKDIR" "$@"',
+      '    ;;',
+      'esac',
       'EOF',
       'mkdir -p "$SANDBOX/psql-bin"',
       'cat > "$SANDBOX/psql-bin/psql" <<\'EOF\'',
@@ -762,7 +795,7 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
       'EOF',
       'chmod +x "$SANDBOX/bin/"*',
       'export PATH="$SANDBOX/bin:$PATH"',
-      'export SANDBOX SANDBOX_STATE="$SANDBOX/state" UID_VAL VOL_MNT REAL_TIMEOUT',
+      'export SANDBOX SANDBOX_STATE="$SANDBOX/state" UID_VAL VOL_MNT REAL_TIMEOUT REAL_MKDIR',
       'export SCRIPT_UNDER_TEST="$1"',
       '',
       'invoke_runner() {',
@@ -815,9 +848,12 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
       'assert_clean_and_preserved',
       '',
       '# 1. Sukces w trybie fixture (exit 0)',
+      ': > "$SANDBOX_STATE/mkdir.log"',
       'PAP_ALLOW_HETZNER_EPHEMERAL_PG=1 invoke_runner --work-root "$WORK_DIR" --port 55432 \\',
       '  -- bash -c \'[[ "$PAP_DATABASE_ENV" == "test" && "$DATABASE_URL" == postgres://pap_test:*@127.0.0.1:55432/pap_test ]]\'',
       'assert_clean_and_preserved',
+      'grep -Eq "^MKDIR:-m 0700 .*/run-[0-9a-f]+$" "$SANDBOX_STATE/mkdir.log"',
+      'grep -Eq "^MKDIR:-m 0777 .*/run-[0-9a-f]+/pgdata$" "$SANDBOX_STATE/mkdir.log"',
       '',
       '# 1b. Sukces w trybie --mode strict-migrator --bootstrap-runtime-role (autoryzacja SCRAM z /run/secrets/pg_pass + pg_hba reject)',
       ': > "$SANDBOX_STATE/psql.log"',
@@ -828,6 +864,11 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
       'assert_clean_and_preserved',
       'grep -q "CREATE ROLE pap_test LOGIN" "$SANDBOX_STATE/psql.log"',
       'grep -q "CREATE ROLE pap_test_app LOGIN" "$SANDBOX_STATE/psql.log"',
+      'grep -q "CREATE SCHEMA IF NOT EXISTS pap_lockdown AUTHORIZATION CURRENT_USER;" "$SANDBOX_STATE/psql.log"',
+      'grep -q "pap_lockdown.pap_on_create_extension_lockdown" "$SANDBOX_STATE/psql.log"',
+      'grep -q "pap_lockdown_pgcrypto_on_extension" "$SANDBOX_STATE/psql.log"',
+      '! grep -q "public.pap_apply_pgcrypto_lockdown" "$SANDBOX_STATE/psql.log"',
+      '! grep -q "public.pap_on_create_extension_lockdown" "$SANDBOX_STATE/psql.log"',
       'grep -q "CMD:SELECT pg_reload_conf();" "$SANDBOX_STATE/psql.log"',
       'head -n 2 "$SANDBOX_STATE/mock_pg_hba.conf" | grep -q "host all postgres 0.0.0.0/0 reject"',
       'head -n 2 "$SANDBOX_STATE/mock_pg_hba.conf" | grep -q "host all postgres ::/0 reject"',

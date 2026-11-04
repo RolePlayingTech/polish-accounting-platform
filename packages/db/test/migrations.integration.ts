@@ -15,20 +15,23 @@ const expectedTables = [
   'access_management_event',
   'app_user',
   'company_access_grant',
+  'company_operation_probe',
   'entity_profile_version',
   'legal_entity',
+  'security_context_key',
+  'security_decision_event',
   'tenant',
   'tenant_membership',
   'user_oidc_identity',
 ];
 
 describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2', () => {
-  it('stosuje od zera dokładnie cztery migracje w kolejności i nie powiela obiektów', async () => {
+  it('stosuje od zera dokładnie siedem migracji w kolejności i nie powiela obiektów', async () => {
     const database = await createTestDatabase();
     const { client: sql, db, dataSchema } = database;
     try {
       const migrations = readMigrationFiles({ migrationsFolder });
-      expect(migrations).toHaveLength(4);
+      expect(migrations).toHaveLength(7);
       expect(
         readFileSync(new URL('../drizzle/0000_technical-baseline.sql', import.meta.url), 'utf8'),
       ).toContain('SELECT 1;');
@@ -113,7 +116,7 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2', () => {
       // Usuwamy wyłącznie własną tabelę konfliktową; ponowienie stosuje cały łańcuch.
       await sql`DROP TABLE tenant`;
       await applyMigrations(db, dataSchema);
-      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(4);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(7);
     } finally {
       await database.cleanup();
     }
