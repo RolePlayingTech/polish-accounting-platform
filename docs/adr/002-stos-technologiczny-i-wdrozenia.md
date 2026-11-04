@@ -5,7 +5,9 @@
 - **Powiązania:** [Issue #2](https://github.com/RolePlayingTech/polish-accounting-platform/issues/2), [ADR-001](001-rdzen-i-mcp.md), [zasady](../16-zasady-architektoniczne.md)
 - **Zakres:** budowa oprogramowania; brak wdrożenia i zakupów
 
-**Aktualizacja sposobu pracy (2026-10-27):** [ADR-005](005-rozwoj-lokalny.md) ustala bieżący rozwój wyłącznie lokalny, bez Dockera, przygotowywania serwera i deploymentu. Stos pozostaje zgodny z tym ADR; opis infrastruktury i stage/prod poniżej jest odroczonym kierunkiem.
+**Aktualizacja sposobu pracy (2026-10-27):** [ADR-005](005-rozwoj-lokalny.md) ustalał etap rozwoju wyłącznie lokalnego, bez Dockera, przygotowywania serwera i deploymentu.
+
+**Aktualizacja środowisk i CI (2026-10-29):** zgodnie z [ADR-006 (prywatny staging Hetzner)](006-prywatny-staging-hetzner.md) oraz [ADR-006 (tymczasowe CI na Hetznerze)](006-tymczasowe-ci-hetzner.md) pod `https://ksiegowosc.roleplayingtech.com` działa prywatny staging techniczny Web/API (Etap A za HTTPS i HTTP Basic Auth, wyłącznie dane syntetyczne, bez automatycznych wdrożeń), natomiast automatyczne uruchamianie GitHub Actions jest tymczasowo wstrzymane na rzecz izolowanego CI na serwerze Hetzner. Środowisko produkcyjne z rzeczywistymi księgami nadal nie istnieje.
 
 ## Kontekst i cele
 
