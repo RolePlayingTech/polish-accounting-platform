@@ -225,7 +225,7 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
         PAP_DB_SCHEMA: dataSchema,
         PAP_SANDBOX_AUTH_ENABLED: 'true',
       }),
-    ).rejects.toThrow(DatabaseConfigError);
+    ).rejects.toThrow(/Niepoprawna konfiguracja podpisu kontekstu DB/);
 
     await expect(
       createApiRuntimeServicesAsync({
@@ -360,7 +360,7 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     // 5. Zatwierdzenie oczekującej propozycji MCP przez człowieka (challenge + confirm)
     const challengeRes = await fetch(
       `${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/mcp/proposals/${DEMO_FIRMA_1_PENDING_MCP_PROPOSAL_ID}/challenge`,
-      { method: 'POST', headers: janHeaders1 },
+      { method: 'POST', headers: janHeaders1, body: JSON.stringify({}) },
     );
     expect(challengeRes.status).toBe(200);
     const challenge = IssueMcpChallengeResponseSchema.parse(await challengeRes.json());
