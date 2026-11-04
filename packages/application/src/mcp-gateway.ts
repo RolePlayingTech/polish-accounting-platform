@@ -60,6 +60,7 @@ import {
   type OidcAccessTokenVerifier,
   type UserIdentityResolver,
 } from './oidc-authentication.js';
+import type { SecurityAuditRecorder } from './security-audit.js';
 import { getSystemStatus } from './system-status.js';
 import {
   systemClock,
@@ -985,6 +986,7 @@ export interface PapMcpGatewayDependencies {
   readonly identityResolver: UserIdentityResolver;
   readonly authorizationDataSource: TenantAuthorizationDataSource;
   readonly dataSource: PapMcpDataSource;
+  readonly securityAudit?: SecurityAuditRecorder | undefined;
   readonly auditSink?: McpAuditSink | undefined;
   readonly clock?: Clock | undefined;
   readonly proposalTtlMs?: number | undefined;
@@ -996,6 +998,7 @@ export class PapMcpGateway {
   private readonly identityResolver: UserIdentityResolver;
   private readonly authorizationDataSource: TenantAuthorizationDataSource;
   private readonly dataSource: PapMcpDataSource;
+  private readonly securityAudit: SecurityAuditRecorder;
   private readonly auditSink: McpAuditSink;
   private readonly clock: Clock;
   private readonly proposalTtlMs: number;
@@ -1020,6 +1023,29 @@ export class PapMcpGateway {
     this.dataSource = deps.dataSource;
     this.auditSink = deps.auditSink ?? new InMemoryMcpAuditSink();
     this.clock = deps.clock ?? systemClock;
+    this.securityAudit = deps.securityAudit ?? {
+      recordDecision: async (event) => {
+        const safeCorr = resolveSafeRequestCorrelationId(event.requestId ?? undefined);
+        await this.auditSink.record({
+          auditEventId: randomUUID(),
+          occurredAt: this.clock.now().toISOString(),
+          source: 'mcp',
+          toolName: '_security_decision_preflight',
+          correlationId: safeCorr.correlationId,
+          actorUserId: event.actorId,
+          actorIssuer: null,
+          actorSubject: null,
+          tenantId: event.tenantId,
+          legalEntityId: event.legalEntityId,
+          outcome: event.decision,
+          reasonCode: event.reason,
+          idempotencyKey: null,
+          proposalId: null,
+          payloadHash: null,
+          promptInjectionSuspected: false,
+        });
+      },
+    };
     this.proposalTtlMs = Math.max(60_000, deps.proposalTtlMs ?? 24 * 60 * 60 * 1000);
     this.humanConfirmationTtlMs = Math.max(30_000, deps.humanConfirmationTtlMs ?? 15 * 60 * 1000);
   }
@@ -1085,6 +1111,7 @@ export class PapMcpGateway {
 
     const auth = await authorizeAuthenticatedCompanyAction(
       {
+        requestId: correlationId,
         rawBearerToken: input.humanBearerToken,
         tenantId: input.tenantId,
         legalEntityId: input.legalEntityId,
@@ -1093,6 +1120,7 @@ export class PapMcpGateway {
       {
         verifier: this.verifier,
         identityResolver: this.identityResolver,
+        securityAudit: this.securityAudit,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
       },
@@ -1109,6 +1137,9 @@ export class PapMcpGateway {
     }
 
     if (!auth.allowed) {
+      if (auth.reason === 'authorization_audit_unavailable') {
+        return { ok: false, reason: 'audit_unavailable' };
+      }
       const denyAuditId = await this.recordAudit({
         toolName: '_human_confirmation_challenge',
         correlationId,
@@ -1443,6 +1474,7 @@ export class PapMcpGateway {
     const input = parsed.data;
     const auth = await authorizeAuthenticatedCompanyAction(
       {
+        requestId: correlationId,
         rawBearerToken: callContext.rawBearerToken,
         tenantId: input.tenantId,
         legalEntityId: input.legalEntityId,
@@ -1452,6 +1484,7 @@ export class PapMcpGateway {
       {
         verifier: this.verifier,
         identityResolver: this.identityResolver,
+        securityAudit: this.securityAudit,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
       },
@@ -1616,6 +1649,7 @@ export class PapMcpGateway {
     const input = parsed.data;
     const auth = await authorizeAuthenticatedCompanyAction(
       {
+        requestId: correlationId,
         rawBearerToken: callContext.rawBearerToken,
         tenantId: input.tenantId,
         legalEntityId: input.legalEntityId,
@@ -1625,6 +1659,7 @@ export class PapMcpGateway {
       {
         verifier: this.verifier,
         identityResolver: this.identityResolver,
+        securityAudit: this.securityAudit,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
       },
@@ -1691,6 +1726,7 @@ export class PapMcpGateway {
     const input = parsed.data;
     const auth = await authorizeAuthenticatedCompanyAction(
       {
+        requestId: correlationId,
         rawBearerToken: callContext.rawBearerToken,
         tenantId: input.tenantId,
         legalEntityId: input.legalEntityId,
@@ -1700,6 +1736,7 @@ export class PapMcpGateway {
       {
         verifier: this.verifier,
         identityResolver: this.identityResolver,
+        securityAudit: this.securityAudit,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
       },
@@ -1816,6 +1853,7 @@ export class PapMcpGateway {
       }
       const auth = await authorizeAuthenticatedCompanyAction(
         {
+          requestId: correlationId,
           rawBearerToken: callContext.rawBearerToken,
           tenantId: input.tenantId,
           legalEntityId: input.legalEntityId,
@@ -1825,6 +1863,7 @@ export class PapMcpGateway {
         {
           verifier: this.verifier,
           identityResolver: this.identityResolver,
+          securityAudit: this.securityAudit,
           authorizationDataSource: this.authorizationDataSource,
           clock: this.clock,
         },
@@ -1944,6 +1983,7 @@ export class PapMcpGateway {
     const input = parsed.data;
     const auth = await authorizeAuthenticatedCompanyAction(
       {
+        requestId: correlationId,
         rawBearerToken: callContext.rawBearerToken,
         tenantId: input.tenantId,
         legalEntityId: input.legalEntityId,
@@ -1953,6 +1993,7 @@ export class PapMcpGateway {
       {
         verifier: this.verifier,
         identityResolver: this.identityResolver,
+        securityAudit: this.securityAudit,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
       },
@@ -2104,6 +2145,7 @@ export class PapMcpGateway {
     const normalizedIdemKey = input.idempotencyKey.toLowerCase();
     const auth = await authorizeAuthenticatedCompanyAction(
       {
+        requestId: correlationId,
         rawBearerToken: callContext.rawBearerToken,
         tenantId: input.tenantId,
         legalEntityId: input.legalEntityId,
@@ -2113,6 +2155,7 @@ export class PapMcpGateway {
       {
         verifier: this.verifier,
         identityResolver: this.identityResolver,
+        securityAudit: this.securityAudit,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
       },
@@ -2409,6 +2452,7 @@ export class PapMcpGateway {
     const input: ConfirmPreparedProposalInput = parsed.data;
     const auth = await authorizeAuthenticatedCompanyAction(
       {
+        requestId: correlationId,
         rawBearerToken: callContext.rawBearerToken,
         tenantId: input.tenantId,
         legalEntityId: input.legalEntityId,
@@ -2418,6 +2462,7 @@ export class PapMcpGateway {
       {
         verifier: this.verifier,
         identityResolver: this.identityResolver,
+        securityAudit: this.securityAudit,
         authorizationDataSource: this.authorizationDataSource,
         clock: this.clock,
       },
@@ -2746,6 +2791,10 @@ export class PapMcpGateway {
     >,
     idempotencyKey: string | null = null,
   ): Promise<{ readonly ok: false; readonly error: McpToolErrorEnvelope }> {
+    if (failure.reason === 'authorization_audit_unavailable') {
+      return this.auditUnavailableError();
+    }
+
     const errorCode: McpToolErrorCode =
       failure.reason === 'insufficient_scope'
         ? 'insufficient_scope'

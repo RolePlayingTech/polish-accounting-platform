@@ -148,10 +148,13 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
         baseDb.transaction(async (tx) => {
           await tx.execute(statement`SET LOCAL lock_timeout = '4s'`);
           await tx.execute(statement`SET LOCAL statement_timeout = '5s'`);
-          await tx.execute(statement`SET LOCAL deadlock_timeout = '50ms'`);
-          const pid = Number(
-            (await tx.execute<{ pid: number }>(statement`SELECT pg_backend_pid() AS pid`))[0]!.pid,
+          const [sessionInfo] = await tx.execute<{ pid: number; rolsuper: boolean }>(
+            statement`SELECT pg_backend_pid() AS pid, (SELECT rolsuper FROM pg_catalog.pg_roles WHERE rolname = current_user) AS rolsuper`,
           );
+          if (sessionInfo?.rolsuper === true) {
+            await tx.execute(statement`SET LOCAL deadlock_timeout = '50ms'`);
+          }
+          const pid = Number(sessionInfo!.pid);
           if (onBegin) {
             await onBegin(tx, pid);
           }
@@ -468,12 +471,14 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
         ownerHold.resolve(pid);
         await releaseOwnerHold.promise;
       }),
+      getOwnerSigner(),
     );
 
     const adminStore = new PostgresAccessManagementStore(
       wrapDbWithTimeouts(db, async (_tx, pid) => {
         adminWait.resolve(pid);
       }),
+      getOwnerSigner(),
     );
 
     const ownerRevoking = runOidcManageAccess(
@@ -558,11 +563,13 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       wrapDbWithTimeouts(db, async (_tx, pid) => {
         currentAdminPid = pid;
       }),
+      getOwnerSigner(),
     );
     const ownerWaitingStore = new PostgresAccessManagementStore(
       wrapDbWithTimeouts(db, async (_tx, pid) => {
         ownerRevokePid.resolve(pid);
       }),
+      getOwnerSigner(),
     );
 
     const baseAuthorizer = createTenantAccessManagementAuthorizer();
@@ -680,6 +687,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       wrapDbWithTimeouts(db, async (_tx, pid) => {
         adminTxStarted.resolve(pid);
       }),
+      getOwnerSigner(),
     );
 
     const adminDelegationAttempt = runOidcManageAccess(
@@ -745,6 +753,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       wrapDbWithTimeouts(db, async (_tx, pid) => {
         actorTxPid.resolve(pid);
       }),
+      getOwnerSigner(),
     );
 
     const ownerAction = runOidcManageAccess(
@@ -904,11 +913,13 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
         member1Held.resolve(pid);
         await releaseMember1.promise;
       }),
+      getOwnerSigner(),
     );
     const adminStore = new PostgresAccessManagementStore(
       wrapDbWithTimeouts(db, async (_tx, pid) => {
         adminWaitPid.resolve(pid);
       }),
+      getOwnerSigner(),
     );
 
     const pOwnerRevoke = runOidcManageAccess(
@@ -1496,6 +1507,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
           }
           await bothInsideTx.promise;
         }),
+        getOwnerSigner(),
       );
 
       // OWNER cofa członkostwo ADMINA (actor=ownerUid, target=adminUid),
@@ -1721,12 +1733,14 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
         ownerHold.resolve(pid);
         await releaseOwner.promise;
       }),
+      getOwnerSigner(),
     );
 
     const memberUow = new PostgresTransactionalUnitOfWork(
       wrapDbWithTimeouts(db, async (_tx, pid) => {
         memberTxPid.resolve(pid);
       }),
+      getOwnerSigner(),
     );
 
     const revokeGrantPromise = runOidcManageAccess(
@@ -1882,7 +1896,14 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       { store: rtOwnerStore13A, authorizer: pausingOwnerAuthorizer13A },
     );
 
-    const holderPid13A = await ownerLocked13A.promise;
+    const holderPid13A = await Promise.race([
+      ownerLocked13A.promise,
+      revoke13APromise.then((res) => {
+        throw new Error(
+          `13A revoke_grant zakończyło się przed zajęciem blokady: ${JSON.stringify(res)}`,
+        );
+      }),
+    ]);
     const blockedWriteOpId = nextId();
     const blockedWriteReqId = nextId();
     let blockedCallbackRan = false;
@@ -1904,7 +1925,14 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
     );
 
     try {
-      const waiterPid13A = await memberWaitPid13A.promise;
+      const waiterPid13A = await Promise.race([
+        memberWaitPid13A.promise,
+        write13APromise.then((res) => {
+          throw new Error(
+            `13A write zakończyło się przed wejściem do transakcji: ${JSON.stringify(res)}`,
+          );
+        }),
+      ]);
       await waitForBlockedBy(holderPid13A, waiterPid13A);
     } finally {
       releaseOwner13A.resolve();
@@ -1993,7 +2021,14 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       },
     );
 
-    const holderPid13B = await memberInScope13B.promise;
+    const holderPid13B = await Promise.race([
+      memberInScope13B.promise,
+      winningWritePromise.then((res) => {
+        throw new Error(
+          `13B write zakończyło się przed wejściem w zakres firmy: ${JSON.stringify(res)}`,
+        );
+      }),
+    ]);
     const revoke13BPromise = runRuntimeManageAccess(
       'token:sub-owner-a',
       {
@@ -2006,7 +2041,14 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
     );
 
     try {
-      const waiterPid13B = await ownerWaitPid13B.promise;
+      const waiterPid13B = await Promise.race([
+        ownerWaitPid13B.promise,
+        revoke13BPromise.then((res) => {
+          throw new Error(
+            `13B revoke_membership zakończyło się przed wejściem do transakcji: ${JSON.stringify(res)}`,
+          );
+        }),
+      ]);
       await waitForBlockedBy(holderPid13B, waiterPid13B);
     } finally {
       releaseMember13B.resolve();
@@ -2053,5 +2095,5 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       status: 'forbidden',
       reason: 'active_membership_required',
     });
-  });
+  }, 20_000);
 });
