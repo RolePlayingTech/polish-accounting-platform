@@ -124,6 +124,9 @@ export default defineConfig([
                 'configureRuntimePrivileges',
                 'PostgresAccessManagementStore',
                 'PostgresSecurityAudit',
+                'PostgresCompanyActionScopeDriver',
+                'createPostgresCompanyActionScope',
+                'createPostgresAccountingScope',
               ],
               message:
                 'Kontrolery, guardy i serwisy HTTP nie mogą bezpośrednio importować signera kontekstu ani adaptera UnitOfWork/transakcji; wstrzykuj porty przez composition root.',

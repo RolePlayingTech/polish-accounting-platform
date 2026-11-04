@@ -13,25 +13,41 @@ const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 const expectedTables = [
   '__drizzle_migrations',
   'access_management_event',
+  'accounting_document',
   'app_user',
+  'bank_statement_import',
+  'bank_transaction',
   'company_access_grant',
   'company_operation_probe',
+  'company_tax_settings',
   'entity_profile_version',
+  'journal_entry',
+  'journal_line',
+  'kpir_entry',
+  'ledger_account',
   'legal_entity',
+  'mcp_prepared_proposal',
+  'notification_outbox',
+  'notification_preference',
+  'ryczalt_entry',
+  'sandbox_mailbox_message',
   'security_context_key',
   'security_decision_event',
+  'settlement_item',
+  'tax_obligation_item',
   'tenant',
   'tenant_membership',
   'user_oidc_identity',
+  'vat_register_entry',
 ];
 
-describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2', () => {
-  it('stosuje od zera dokładnie siedem migracji w kolejności i nie powiela obiektów', async () => {
+describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', () => {
+  it('stosuje od zera dokładnie osiem migracji w kolejności i nie powiela obiektów', async () => {
     const database = await createTestDatabase();
     const { client: sql, db, dataSchema } = database;
     try {
       const migrations = readMigrationFiles({ migrationsFolder });
-      expect(migrations).toHaveLength(7);
+      expect(migrations).toHaveLength(8);
       expect(
         readFileSync(new URL('../drizzle/0000_technical-baseline.sql', import.meta.url), 'utf8'),
       ).toContain('SELECT 1;');
@@ -116,13 +132,13 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2', () => {
       // Usuwamy wyłącznie własną tabelę konfliktową; ponowienie stosuje cały łańcuch.
       await sql`DROP TABLE tenant`;
       await applyMigrations(db, dataSchema);
-      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(7);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(8);
     } finally {
       await database.cleanup();
     }
   }, 30_000);
 
-  it('addytywne 0002 i 0003 zachowują dane i hashe wcześniejszych migracji; reaktywacja starego revoked nie wznawia grantu', async () => {
+  it('addytywne 0002..0007 zachowują dane i hashe wcześniejszych migracji; reaktywacja starego revoked nie wznawia grantu', async () => {
     const database = await createTestDatabase();
     const prefix = join(tmpdir(), 'pap-6d-r-');
     const folder = await mkdtemp(prefix);
@@ -146,7 +162,7 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2', () => {
       await sql`INSERT INTO tenant (id, name) VALUES (${tenant}, 'Dane syntetyczne sprzed 0002')`;
       await sql`INSERT INTO legal_entity (id, tenant_id, display_name) VALUES (${entity}, ${tenant}, 'Firma syntetyczna')`;
       await sql`INSERT INTO tenant_membership (tenant_id, user_id, role, status, valid_from) VALUES (${tenant}, ${user}, 'tenant_member', 'revoked', '2026-01-01')`;
-      await sql`INSERT INTO company_access_grant (grant_id, tenant_id, user_id, legal_entity_id, action, valid_from) VALUES ('00000000-0000-4000-8000-000000000004', ${tenant}, ${user}, ${entity}, 'read', '2026-01-01')`;
+      await sql`INSERT INTO company_access_grant (grant_id, tenant_id, user_id, legal_entity_id, action, valid_from) VALUES ('00000000-0000-4000-8000-000000000004', ${tenant}, ${user}, '00000000-0000-4000-8000-000000000003', 'read', '2026-01-01')`;
       await applyMigrations(db, dataSchema);
       expect(
         Array.from(

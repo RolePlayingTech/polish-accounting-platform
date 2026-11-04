@@ -97,6 +97,26 @@ BEGIN
     data_schema, runtime_name);
   EXECUTE format('GRANT INSERT ON %I.company_operation_probe TO %I', data_schema, runtime_name);
   EXECUTE format('GRANT INSERT ON %I.security_decision_event TO %I', data_schema, runtime_name);
+  -- 0007 Accounting Core: biała lista SELECT + INSERT dla 16 tabel księgowych (zero DELETE/TRUNCATE).
+  FOREACH table_name IN ARRAY ARRAY[
+    'company_tax_settings', 'accounting_document', 'kpir_entry', 'ryczalt_entry',
+    'vat_register_entry', 'ledger_account', 'journal_entry', 'journal_line',
+    'settlement_item', 'bank_statement_import', 'bank_transaction', 'tax_obligation_item',
+    'mcp_prepared_proposal', 'notification_preference', 'notification_outbox',
+    'sandbox_mailbox_message'
+  ]
+  LOOP
+    EXECUTE format('GRANT SELECT, INSERT ON %I.%I TO %I', data_schema, table_name, runtime_name);
+  END LOOP;
+  -- 0007 Accounting Core: biała lista UPDATE wyłącznie dla tabel ze zmiennym statusem (bez rejestrów append-only).
+  FOREACH table_name IN ARRAY ARRAY[
+    'company_tax_settings', 'accounting_document', 'ledger_account', 'settlement_item',
+    'bank_transaction', 'tax_obligation_item', 'mcp_prepared_proposal',
+    'notification_preference', 'notification_outbox'
+  ]
+  LOOP
+    EXECUTE format('GRANT UPDATE ON %I.%I TO %I', data_schema, table_name, runtime_name);
+  END LOOP;
   EXECUTE format('GRANT EXECUTE ON FUNCTION %I.pap_context(), %I.pap_admin_allowed(uuid),
     %I.pap_company_allowed(uuid,uuid,text), %I.pap_resolve_identity(text,text),
     %I.pap_execute_access(), %I.pap_security_protocol_version() TO %I',
