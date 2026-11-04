@@ -118,7 +118,11 @@ export const accessManagementEvent = pgTable(
   },
   (table) => [
     index('access_management_event_target_idx').on(table.tenantId, table.userId, table.occurredAt),
-    index('access_management_event_transaction_idx').on(table.transactionId, table.tenantId, table.userId),
+    index('access_management_event_transaction_idx').on(
+      table.transactionId,
+      table.tenantId,
+      table.userId,
+    ),
     check(
       'access_management_event_kind_check',
       sql`${table.kind} IN ('revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant')`,

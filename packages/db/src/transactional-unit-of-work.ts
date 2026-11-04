@@ -1,6 +1,7 @@
 import {
   auditIdentifier,
   freezeTransactionActor,
+  SecurityAuditUnavailableError,
   type AccessManagementStore,
   type CompanyActionAuthorizationSession,
   type CompanyActionUnitOfWork,
@@ -44,9 +45,9 @@ type Database = ReturnType<typeof connectDatabase>['db'];
  * - przyszłych repozytoriów Fazy 2 (KPiR, VAT, dokumenty, księgi) przez rozszerzalne `scopeFactory`
  *   bez jakiejkolwiek ekspozycji surowego `PostgresTransaction`, signera ani sesji autoryzacyjnej.
  */
-export class PostgresTransactionalUnitOfWork<TScope = PostgresCompanyActionScope>
-  implements CompanyActionUnitOfWork<TScope>
-{
+export class PostgresTransactionalUnitOfWork<
+  TScope = PostgresCompanyActionScope,
+> implements CompanyActionUnitOfWork<TScope> {
   readonly #db: Pick<Database, 'transaction'>;
   readonly #signer: PostgresContextSigner | undefined;
   readonly #scopeFactory: PostgresCompanyActionScopeFactory<TScope>;
@@ -231,7 +232,11 @@ export class PostgresTransactionalUnitOfWork<TScope = PostgresCompanyActionScope
         });
 
         try {
-          return await work(session);
+          const result = await work(session);
+          if (shouldCommit(result) && (!sessionApplied || !decisionRecorded)) {
+            throw new SecurityAuditUnavailableError();
+          }
+          return result;
         } finally {
           scopeActive = false;
         }

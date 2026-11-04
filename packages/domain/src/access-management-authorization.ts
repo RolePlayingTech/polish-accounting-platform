@@ -109,7 +109,10 @@ export function decideAccessManagementAuthorization(
 
     case 'reactivate_membership': {
       const requestedEnd = input.requestedValidUntil ?? null;
-      if (requestedEnd !== null && (!isValidDate(requestedEnd) || requestedEnd.getTime() <= (replayAt?.getTime() ?? now))) {
+      if (
+        requestedEnd !== null &&
+        (!isValidDate(requestedEnd) || requestedEnd.getTime() <= (replayAt?.getTime() ?? now))
+      ) {
         return { allowed: false, reason: 'authorization_context_invalid' };
       }
       if (!isEndWithinDelegatorLimit(requestedEnd, actorMembership.validUntil)) {

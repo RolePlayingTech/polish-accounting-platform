@@ -1,7 +1,10 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq, sql as statement } from 'drizzle-orm';
-import { executeAuthorizedCompanyAction } from '@pap/application';
+import {
+  ConfirmedTransactionRollbackError,
+  executeAuthorizedCompanyAction,
+} from '@pap/application';
 import { legalEntityId, tenantId, userId } from '@pap/domain';
 import { connectDatabase } from '../src/client.js';
 import {
@@ -196,10 +199,24 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS, izolacja TScope
         )
     `;
     expect(exposedPgcryptoFunctions).toHaveLength(0);
-    await expectDatabaseError(
-      sql.unsafe("SELECT hmac('a'::bytea, 'b'::bytea, 'sha256')"),
-      '42501',
-    );
+    await expectDatabaseError(sql.unsafe("SELECT hmac('a'::bytea, 'b'::bytea, 'sha256')"), '42501');
+    const lockdownSchemas = await owner.client<
+      { rolsuper: boolean; public_usage: boolean; runtime_usage: boolean }[]
+    >`
+      SELECT r.rolsuper,
+             has_schema_privilege('public', n.oid, 'USAGE') AS public_usage,
+             has_schema_privilege(${runtimeRole}, n.oid, 'USAGE') AS runtime_usage
+      FROM pg_namespace n
+      JOIN pg_roles r ON r.oid = n.nspowner
+      WHERE n.nspname = 'pap_lockdown'
+    `;
+    if (lockdownSchemas.length > 0) {
+      expect(lockdownSchemas[0]).toEqual({
+        rolsuper: true,
+        public_usage: false,
+        runtime_usage: false,
+      });
+    }
 
     for (const query of [
       'CREATE TABLE unauthorized_table(id int)',
@@ -316,28 +333,30 @@ describe('6D-3A — rzeczywisty login runtime, ACL, podpis, RLS, izolacja TScope
 
     // 1) NEG-SEC04-04: bezpośrednie wywołanie runCompanyActionInTransaction bez recordAuthorizationDecision wycofuje TX (także przed 23514)
     const omittedInUow = randomUUID();
-    await services.unitOfWork.runCompanyActionInTransaction(
-      async (session) => {
-        expect(await session.verifyActorAccount(verifiedActor)).toBe(true);
-        const facts = await session.getLockedFacts({
-          userId: actor,
-          tenantId: tenantA,
-          legalEntityId: entityA,
-          action: 'write',
-        });
-        const scope = await session.enterAuthorizedCompanyScope({
-          operationId: omittedInUow,
-          decisionAt: facts.now.toISOString(),
-          actorUserId: actor,
-          tenantId: tenantA,
-          legalEntityId: entityA,
-          action: 'write',
-        });
-        await scope.recordOperationProbe(omittedInUow);
-        return true;
-      },
-      (result) => result,
-    );
+    await expect(
+      services.unitOfWork.runCompanyActionInTransaction(
+        async (session) => {
+          expect(await session.verifyActorAccount(verifiedActor)).toBe(true);
+          const facts = await session.getLockedFacts({
+            userId: actor,
+            tenantId: tenantA,
+            legalEntityId: entityA,
+            action: 'write',
+          });
+          const scope = await session.enterAuthorizedCompanyScope({
+            operationId: omittedInUow,
+            decisionAt: facts.now.toISOString(),
+            actorUserId: actor,
+            tenantId: tenantA,
+            legalEntityId: entityA,
+            action: 'write',
+          });
+          await scope.recordOperationProbe(omittedInUow);
+          return true;
+        },
+        (result) => result,
+      ),
+    ).rejects.toBeInstanceOf(ConfirmedTransactionRollbackError);
     expect(
       await owner.db
         .select()

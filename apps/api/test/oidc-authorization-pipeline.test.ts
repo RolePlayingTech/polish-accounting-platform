@@ -327,9 +327,7 @@ class ControlledAuthState
       return false;
     }
     const entry = this.identities.get(`${actor.identity.issuer}\u0000${actor.identity.subject}`);
-    return Boolean(
-      entry && entry.userId === actor.userId && entry.userActive && entry.linkActive,
-    );
+    return Boolean(entry && entry.userId === actor.userId && entry.userActive && entry.linkActive);
   }
 
   async runCompanyActionInTransaction<TResult>(

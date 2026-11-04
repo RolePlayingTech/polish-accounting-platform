@@ -313,14 +313,8 @@
           "name": "company_access_grant_membership_fk",
           "tableFrom": "company_access_grant",
           "tableTo": "tenant_membership",
-          "columnsFrom": [
-            "tenant_id",
-            "user_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "user_id"
-          ],
+          "columnsFrom": ["tenant_id", "user_id"],
+          "columnsTo": ["tenant_id", "user_id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         },
@@ -328,14 +322,8 @@
           "name": "company_access_grant_entity_fk",
           "tableFrom": "company_access_grant",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -401,14 +389,8 @@
           "name": "company_operation_probe_company_fk",
           "tableFrom": "company_operation_probe",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "no action",
           "onUpdate": "no action"
         }
@@ -494,14 +476,8 @@
           "name": "entity_profile_version_entity_fk",
           "tableFrom": "entity_profile_version",
           "tableTo": "legal_entity",
-          "columnsFrom": [
-            "tenant_id",
-            "legal_entity_id"
-          ],
-          "columnsTo": [
-            "tenant_id",
-            "id"
-          ],
+          "columnsFrom": ["tenant_id", "legal_entity_id"],
+          "columnsTo": ["tenant_id", "id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -557,12 +533,8 @@
           "name": "legal_entity_tenant_id_tenant_id_fk",
           "tableFrom": "legal_entity",
           "tableTo": "tenant",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -572,10 +544,7 @@
         "legal_entity_tenant_id_id_unique": {
           "name": "legal_entity_tenant_id_id_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "tenant_id",
-            "id"
-          ]
+          "columns": ["tenant_id", "id"]
         }
       },
       "policies": {},
@@ -803,12 +772,8 @@
           "name": "security_decision_event_access_management_operation_id_access_management_event_operation_id_fk",
           "tableFrom": "security_decision_event",
           "tableTo": "access_management_event",
-          "columnsFrom": [
-            "access_management_operation_id"
-          ],
-          "columnsTo": [
-            "operation_id"
-          ],
+          "columnsFrom": ["access_management_operation_id"],
+          "columnsTo": ["operation_id"],
           "onDelete": "restrict",
           "onUpdate": "no action"
         }
@@ -903,12 +868,8 @@
           "name": "tenant_membership_tenant_id_tenant_id_fk",
           "tableFrom": "tenant_membership",
           "tableTo": "tenant",
-          "columnsFrom": [
-            "tenant_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["tenant_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -916,10 +877,7 @@
       "compositePrimaryKeys": {
         "tenant_membership_pk": {
           "name": "tenant_membership_pk",
-          "columns": [
-            "tenant_id",
-            "user_id"
-          ]
+          "columns": ["tenant_id", "user_id"]
         }
       },
       "uniqueConstraints": {},
@@ -1010,12 +968,8 @@
           "name": "user_oidc_identity_user_id_app_user_id_fk",
           "tableFrom": "user_oidc_identity",
           "tableTo": "app_user",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
+          "columnsFrom": ["user_id"],
+          "columnsTo": ["id"],
           "onDelete": "restrict",
           "onUpdate": "restrict"
         }
@@ -1025,10 +979,7 @@
         "user_oidc_identity_issuer_subject_unique": {
           "name": "user_oidc_identity_issuer_subject_unique",
           "nullsNotDistinct": false,
-          "columns": [
-            "issuer",
-            "subject"
-          ]
+          "columns": ["issuer", "subject"]
         }
       },
       "policies": {},

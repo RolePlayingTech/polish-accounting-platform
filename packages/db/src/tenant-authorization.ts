@@ -13,18 +13,26 @@ type AuthorizationDatabase = Pick<ReturnType<typeof connectDatabase>['db'], 'sel
 
 /** Źródło faktów dla serwera; UUID wykonującego musi pochodzić ze zweryfikowanej tożsamości. */
 export class PostgresTenantAuthorizationDataSource implements TenantAuthorizationDataSource {
+  readonly #db: AuthorizationDatabase &
+    Partial<Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>>;
+  readonly #signer: PostgresContextSigner | undefined;
+
   constructor(
-    private readonly db: AuthorizationDatabase &
+    db: AuthorizationDatabase &
       Partial<Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>>,
-    private readonly signer?: PostgresContextSigner,
-  ) {}
+    signer?: PostgresContextSigner,
+  ) {
+    this.#db = db;
+    this.#signer = signer;
+    Object.freeze(this);
+  }
 
   async getFacts(query: TenantAuthorizationQuery): Promise<TenantAuthorizationFacts> {
     try {
-      if (this.signer) {
-        if (!this.db.transaction) throw new Error('Brak transakcji źródła faktów.');
-        return await this.db.transaction(async (tx) => {
-          await this.signer!.apply(tx, {
+      if (this.#signer) {
+        if (!this.#db.transaction) throw new Error('Brak transakcji źródła faktów.');
+        return await this.#db.transaction(async (tx) => {
+          await this.#signer!.apply(tx, {
             purpose: 'facts',
             actorUserId: query.userId,
             tenantId: query.tenantId,
@@ -36,7 +44,7 @@ export class PostgresTenantAuthorizationDataSource implements TenantAuthorizatio
       }
       // Jeden SELECT: członkostwo i granty z tego samego snapshotu, bez cache.
       // Warunki grantu w JOIN zachowują członkostwo również przy braku grantu.
-      const rows = await this.db
+      const rows = await this.#db
         .select({ membership: tenantMembership, grant: companyAccessGrant })
         .from(tenantMembership)
         .leftJoin(

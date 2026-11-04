@@ -7,7 +7,10 @@ import {
 } from '@pap/application';
 import { legalEntityId, tenantId, userId } from '@pap/domain';
 import { describe, expect, it, vi } from 'vitest';
-import { PostgresAccessManagementStore } from '../src/access-management.js';
+import {
+  PostgresAccessManagementAuthorizationDataSource,
+  PostgresAccessManagementStore,
+} from '../src/access-management.js';
 import { connectDatabase } from '../src/client.js';
 import {
   ScopeClosedError,
@@ -15,10 +18,13 @@ import {
   type PostgresCompanyActionScope,
 } from '../src/company-operation-probe.js';
 import * as dbPublicExports from '../src/index.js';
+import { PostgresSecurityAudit } from '../src/security-audit.js';
 import { PostgresContextSigner } from '../src/signed-context.js';
+import { PostgresTenantAuthorizationDataSource } from '../src/tenant-authorization.js';
 import { verifyAndLockActorInTx, type PostgresTransaction } from '../src/transaction-primitives.js';
 import * as uowModuleExports from '../src/transactional-unit-of-work.js';
 import { PostgresTransactionalUnitOfWork } from '../src/transactional-unit-of-work.js';
+import { PostgresUserIdentityResolver, PostgresUserIdentityStore } from '../src/user-identity.js';
 
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
 const TENANT_A = tenantId(id(1));
@@ -38,9 +44,7 @@ const CONTEXT_BINDING_ROW = {
 const createTestSigner = () =>
   new PostgresContextSigner({ keyId: 'sec04-test-key', keyHex: 'cd'.repeat(32) });
 
-function createMockedConnection(options?: {
-  onSecurityAuditInsert?: () => Promise<void> | void;
-}) {
+function createMockedConnection(options?: { onSecurityAuditInsert?: () => Promise<void> | void }) {
   const { db, client } = connectDatabase({
     PAP_DATABASE_ENV: 'test',
     DATABASE_URL: 'postgres://pap_test_app:synthetic_only@127.0.0.1:5432/pap_test',
@@ -63,10 +67,7 @@ function createMockedConnection(options?: {
     }
   }) as unknown as typeof client.begin);
 
-  vi.spyOn(client, 'unsafe').mockImplementation(((
-    query: string,
-    parameters: unknown[] = [],
-  ) => {
+  vi.spyOn(client, 'unsafe').mockImplementation(((query: string, parameters: unknown[] = []) => {
     executedQueries.push(query);
     const pendingRows = (async () => {
       let rows: unknown[] = [];
@@ -416,9 +417,7 @@ describe('SEC-04 residual — izolacja uchwytu TScope, zamknięcie po callbacku 
           ((err as ConfirmedTransactionRollbackError).cause as Error).message ===
             'Wymagana zweryfikowana tożsamość OIDC aktora.',
       );
-      expect(
-        conn.executedQueries.some((q) => q.includes("set_config('pap.context'")),
-      ).toBe(false);
+      expect(conn.executedQueries.some((q) => q.includes("set_config('pap.context'"))).toBe(false);
       expect(conn.beginCommittedCount).toBe(0);
       expect(conn.beginRolledBackCount).toBe(1);
 
@@ -433,69 +432,83 @@ describe('SEC-04 residual — izolacja uchwytu TScope, zamknięcie po callbacku 
       expect(storeResult).toEqual({ ok: false, reason: 'access_management_denied' });
       expect(conn.executedQueries.some((q) => q.includes('pap_execute_access()'))).toBe(false);
       expect(conn.beginRolledBackCount).toBe(2);
+
+      // P2-1: wszystkie sąsiednie klasy @pap/db ukrywają #db i #signer przed refleksją i są zamrożone
+      const testSigner = createTestSigner();
+      for (const instance of [
+        store,
+        new PostgresAccessManagementAuthorizationDataSource(conn.db),
+        new PostgresUserIdentityResolver(conn.db, testSigner),
+        new PostgresUserIdentityStore(conn.db),
+        new PostgresTenantAuthorizationDataSource(conn.db, testSigner),
+        new PostgresSecurityAudit(conn.db, testSigner),
+      ]) {
+        expect(Object.isFrozen(instance)).toBe(true);
+        expect(Object.getOwnPropertyNames(instance)).toEqual([]);
+        expect(Object.getOwnPropertySymbols(instance)).toEqual([]);
+      }
     } finally {
       await conn.cleanup();
     }
   });
 
-  it('NEG-SEC04-04: bezpośrednie runCompanyActionInTransaction (także dla action=read) nie może wykonać COMMIT bez enterAuthorizedCompanyScope i recordAuthorizationDecision', async () => {
+  it('NEG-SEC04-04: bezpośrednie runCompanyActionInTransaction (także dla action=read) wycofuje TX i rzuca ConfirmedTransactionRollbackError bez zwracania niezaudytowanego wyniku', async () => {
     const conn = createMockedConnection();
     try {
       const uow = new PostgresTransactionalUnitOfWork(conn.db, createTestSigner());
 
       // 1) Pominięty recordAuthorizationDecision przy action='read' mimo shouldCommit=() => true
-      const omittedAuditResult = await uow.runCompanyActionInTransaction(
-        async (session) => {
-          expect(
-            await session.verifyActorAccount({
+      await expect(
+        uow.runCompanyActionInTransaction(
+          async (session) => {
+            expect(
+              await session.verifyActorAccount({
+                userId: USER_A,
+                identity: { issuer: 'https://idp.example.test', subject: 'sub-user-a' },
+              }),
+            ).toBe(true);
+            const facts = await session.getLockedFacts({
               userId: USER_A,
-              identity: { issuer: 'https://idp.example.test', subject: 'sub-user-a' },
-            }),
-          ).toBe(true);
-          const facts = await session.getLockedFacts({
-            userId: USER_A,
-            tenantId: TENANT_A,
-            legalEntityId: ENTITY_A1,
-            action: 'read',
-          });
-          await session.enterAuthorizedCompanyScope({
-            decisionAt: facts.now.toISOString(),
-            actorUserId: USER_A,
-            tenantId: TENANT_A,
-            legalEntityId: ENTITY_A1,
-            action: 'read',
-          });
-          return { readWithoutAudit: true };
-        },
-        () => true,
-      );
-
-      expect(omittedAuditResult).toEqual({ readWithoutAudit: true });
-      // Mimo shouldCommit=() => true transakcja została fizycznie wycofana!
+              tenantId: TENANT_A,
+              legalEntityId: ENTITY_A1,
+              action: 'read',
+            });
+            await session.enterAuthorizedCompanyScope({
+              decisionAt: facts.now.toISOString(),
+              actorUserId: USER_A,
+              tenantId: TENANT_A,
+              legalEntityId: ENTITY_A1,
+              action: 'read',
+            });
+            return { readWithoutAudit: true };
+          },
+          () => true,
+        ),
+      ).rejects.toBeInstanceOf(ConfirmedTransactionRollbackError);
       expect(conn.beginCommittedCount).toBe(0);
       expect(conn.beginRolledBackCount).toBe(1);
 
       // 2) Pominięty enterAuthorizedCompanyScope przy action='read' mimo shouldCommit=() => true
-      const omittedScopeResult = await uow.runCompanyActionInTransaction(
-        async (session) => {
-          expect(
-            await session.verifyActorAccount({
+      await expect(
+        uow.runCompanyActionInTransaction(
+          async (session) => {
+            expect(
+              await session.verifyActorAccount({
+                userId: USER_A,
+                identity: { issuer: 'https://idp.example.test', subject: 'sub-user-a' },
+              }),
+            ).toBe(true);
+            await session.getLockedFacts({
               userId: USER_A,
-              identity: { issuer: 'https://idp.example.test', subject: 'sub-user-a' },
-            }),
-          ).toBe(true);
-          await session.getLockedFacts({
-            userId: USER_A,
-            tenantId: TENANT_A,
-            legalEntityId: ENTITY_A1,
-            action: 'read',
-          });
-          return { readWithoutScope: true };
-        },
-        () => true,
-      );
-
-      expect(omittedScopeResult).toEqual({ readWithoutScope: true });
+              tenantId: TENANT_A,
+              legalEntityId: ENTITY_A1,
+              action: 'read',
+            });
+            return { readWithoutScope: true };
+          },
+          () => true,
+        ),
+      ).rejects.toBeInstanceOf(ConfirmedTransactionRollbackError);
       expect(conn.beginCommittedCount).toBe(0);
       expect(conn.beginRolledBackCount).toBe(2);
     } finally {

@@ -910,13 +910,19 @@ SQL
 
     # P1-1 (H1): blokada domyślnego PUBLIC EXECUTE na funkcjach pgcrypto (instalowanego w 0004 przez pap_test NOSUPERUSER)
     # z zachowaniem EXECUTE wyłącznie na hmac(bytea, bytea, text) dla migratora pap_test.
+    # Schemat pap_lockdown należy wyłącznie do superusera postgres (poza własnością pg_database_owner / pap_test),
+    # a funkcja event triggera nie wywołuje żadnych funkcji spoza pg_catalog.*.
     if ! exec_container_super_psql pap_test <<'SQL'
-CREATE OR REPLACE FUNCTION public.pap_apply_pgcrypto_lockdown()
-RETURNS void
+CREATE SCHEMA IF NOT EXISTS pap_lockdown AUTHORIZATION CURRENT_USER;
+REVOKE ALL ON SCHEMA pap_lockdown FROM PUBLIC;
+REVOKE ALL ON SCHEMA pap_lockdown FROM pap_test;
+
+CREATE OR REPLACE FUNCTION pap_lockdown.pap_on_create_extension_lockdown()
+RETURNS event_trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog
-AS $fn$
+AS $et$
 DECLARE
   migrator_name text;
   fn_rec record;
@@ -937,7 +943,7 @@ BEGIN
        AND dep.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
        AND dep.deptype = 'e'
        AND ext.extname = 'pgcrypto'
-       AND pg_catalog.pg_has_role(current_user, p.proowner, 'USAGE')
+       AND pg_catalog.pg_has_role(CURRENT_USER, p.proowner, 'USAGE')
   LOOP
     EXECUTE pg_catalog.format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', fn_rec.regproc);
     IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'pap_test_app') THEN
@@ -948,28 +954,52 @@ BEGIN
     END IF;
   END LOOP;
 END;
-$fn$;
-REVOKE ALL ON FUNCTION public.pap_apply_pgcrypto_lockdown() FROM PUBLIC;
-
-CREATE OR REPLACE FUNCTION public.pap_on_create_extension_lockdown()
-RETURNS event_trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog
-AS $et$
-BEGIN
-  PERFORM public.pap_apply_pgcrypto_lockdown();
-END;
 $et$;
-REVOKE ALL ON FUNCTION public.pap_on_create_extension_lockdown() FROM PUBLIC;
+REVOKE ALL ON FUNCTION pap_lockdown.pap_on_create_extension_lockdown() FROM PUBLIC;
 
 DROP EVENT TRIGGER IF EXISTS pap_lockdown_pgcrypto_on_extension;
 CREATE EVENT TRIGGER pap_lockdown_pgcrypto_on_extension
   ON ddl_command_end
   WHEN TAG IN ('CREATE EXTENSION')
-  EXECUTE FUNCTION public.pap_on_create_extension_lockdown();
+  EXECUTE FUNCTION pap_lockdown.pap_on_create_extension_lockdown();
 
-DO $$ BEGIN PERFORM public.pap_apply_pgcrypto_lockdown(); END; $$;
+DO $lockdown_init$
+DECLARE
+  migrator_name text;
+  fn_rec record;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'pap_test_app') THEN
+    REVOKE ALL ON SCHEMA pap_lockdown FROM pap_test_app;
+  END IF;
+
+  SELECT r.rolname INTO migrator_name
+    FROM pg_catalog.pg_database d
+    JOIN pg_catalog.pg_roles r ON r.oid = d.datdba
+   WHERE d.datname = pg_catalog.current_database();
+
+  FOR fn_rec IN
+    SELECT p.oid::pg_catalog.regprocedure AS regproc,
+           p.proname,
+           pg_catalog.pg_get_function_identity_arguments(p.oid) AS args
+      FROM pg_catalog.pg_depend dep
+      JOIN pg_catalog.pg_extension ext ON ext.oid = dep.refobjid
+      JOIN pg_catalog.pg_proc p ON p.oid = dep.objid
+     WHERE dep.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
+       AND dep.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+       AND dep.deptype = 'e'
+       AND ext.extname = 'pgcrypto'
+       AND pg_catalog.pg_has_role(CURRENT_USER, p.proowner, 'USAGE')
+  LOOP
+    EXECUTE pg_catalog.format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', fn_rec.regproc);
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'pap_test_app') THEN
+      EXECUTE pg_catalog.format('REVOKE ALL ON FUNCTION %s FROM pap_test_app', fn_rec.regproc);
+    END IF;
+    IF migrator_name IS NOT NULL AND fn_rec.proname = 'hmac' AND fn_rec.args = 'bytea, bytea, text' THEN
+      EXECUTE pg_catalog.format('GRANT EXECUTE ON FUNCTION %s TO %I', fn_rec.regproc, migrator_name);
+    END IF;
+  END LOOP;
+END;
+$lockdown_init$;
 SQL
     then
       log_error "Instalacja blokady pgcrypto (P1-1/H1) w bazie pap_test nie powiodła się."

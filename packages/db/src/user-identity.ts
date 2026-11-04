@@ -18,10 +18,17 @@ function isExactNonBlank(value: unknown): value is string {
  * i nigdy nie dopasowuje użytkowników po adresie e-mail ani nazwie.
  */
 export class PostgresUserIdentityResolver implements UserIdentityResolver {
+  readonly #db: IdentityReadDatabase & Partial<IdentityWriteDatabase>;
+  readonly #signer: PostgresContextSigner | undefined;
+
   constructor(
-    private readonly db: IdentityReadDatabase & Partial<IdentityWriteDatabase>,
-    private readonly signer?: PostgresContextSigner,
-  ) {}
+    db: IdentityReadDatabase & Partial<IdentityWriteDatabase>,
+    signer?: PostgresContextSigner,
+  ) {
+    this.#db = db;
+    this.#signer = signer;
+    Object.freeze(this);
+  }
 
   async resolveVerifiedIdentity(
     identity: VerifiedOidcIdentity,
@@ -31,10 +38,10 @@ export class PostgresUserIdentityResolver implements UserIdentityResolver {
     }
 
     try {
-      if (this.signer) {
-        if (!this.db.transaction) throw new Error('Brak transakcji resolvera.');
-        return await this.db.transaction(async (tx) => {
-          await this.signer!.apply(tx, {
+      if (this.#signer) {
+        if (!this.#db.transaction) throw new Error('Brak transakcji resolvera.');
+        return await this.#db.transaction(async (tx) => {
+          await this.#signer!.apply(tx, {
             purpose: 'identity',
             issuer: identity.issuer,
             subject: identity.subject,
@@ -45,7 +52,7 @@ export class PostgresUserIdentityResolver implements UserIdentityResolver {
           return row?.user_id ? Object.freeze({ userId: userId(row.user_id) }) : null;
         });
       }
-      const rows = await this.db
+      const rows = await this.#db
         .select({
           userId: appUser.id,
           userStatus: appUser.status,
@@ -144,7 +151,12 @@ function extractPostgresUniqueConflictReason(
  * Kontrolowany adapter provisioningu i wyłączania kont, całkowicie oddzielony od weryfikacji tokenów.
  */
 export class PostgresUserIdentityStore {
-  constructor(private readonly db: IdentityWriteDatabase) {}
+  readonly #db: IdentityWriteDatabase;
+
+  constructor(db: IdentityWriteDatabase) {
+    this.#db = db;
+    Object.freeze(this);
+  }
 
   async provisionUserWithOidcIdentity(
     input: ProvisionUserOidcIdentityInput,
@@ -162,7 +174,7 @@ export class PostgresUserIdentityStore {
     }
 
     try {
-      return await this.db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
+      return await this.#db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
         const [existingUser] = await tx
           .select({ id: appUser.id })
           .from(appUser)
@@ -236,7 +248,7 @@ export class PostgresUserIdentityStore {
     }
 
     try {
-      return await this.db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
+      return await this.#db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
         const [user] = await tx
           .select()
           .from(appUser)
@@ -300,7 +312,7 @@ export class PostgresUserIdentityStore {
     }
 
     try {
-      return await this.db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
+      return await this.#db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
         const [user] = await tx
           .select()
           .from(appUser)
@@ -347,7 +359,7 @@ export class PostgresUserIdentityStore {
     }
 
     try {
-      return await this.db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
+      return await this.#db.transaction(async (tx): Promise<UserIdentityStoreResult> => {
         const [user] = await tx
           .select()
           .from(appUser)

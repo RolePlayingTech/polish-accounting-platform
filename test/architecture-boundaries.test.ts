@@ -207,6 +207,12 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
       'loadDatabaseContextSigner',
       'PostgresTransactionalUnitOfWork',
       'runManagedTransaction',
+      'connectDatabase',
+      'createPostgresSecurityServices',
+      'provisionDatabaseContextKey',
+      'configureRuntimePrivileges',
+      'PostgresAccessManagementStore',
+      'PostgresSecurityAudit',
     ])(
       'blocks direct value and type imports of %s from @pap/db in controllers and guards',
       async (restrictedSymbol) => {

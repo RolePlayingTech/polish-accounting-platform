@@ -1,8 +1,5 @@
 import { and, eq } from 'drizzle-orm';
-import type {
-  AuthenticatedCompanyActionContext,
-  CompanyRlsSessionContext,
-} from '@pap/application';
+import type { AuthenticatedCompanyActionContext, CompanyRlsSessionContext } from '@pap/application';
 import { userId } from '@pap/domain';
 import { companyOperationProbe } from './schema.js';
 import type { PostgresTransaction } from './transaction-primitives.js';
@@ -100,7 +97,11 @@ export async function recordCompanyOperationProbe(
   context: AuthenticatedCompanyActionContext,
   scope: PostgresCompanyActionScope,
   rawOperationId: string,
-): Promise<{ readonly operationId: string; readonly inserted: boolean; readonly created: boolean }> {
+): Promise<{
+  readonly operationId: string;
+  readonly inserted: boolean;
+  readonly created: boolean;
+}> {
   if (context.action !== 'write') {
     throw new Error('Próba wymaga jawnego prawa zapisu.');
   }

@@ -197,8 +197,9 @@ export interface CompanyActionUnitOfWork<TScope = unknown> {
   ): Promise<TResult>;
 }
 
-export interface ExecuteAuthorizedCompanyActionDependencies<TScope = unknown>
-  extends AuthenticateOidcActorDependencies {
+export interface ExecuteAuthorizedCompanyActionDependencies<
+  TScope = unknown,
+> extends AuthenticateOidcActorDependencies {
   readonly unitOfWork: CompanyActionUnitOfWork<TScope>;
 }
 

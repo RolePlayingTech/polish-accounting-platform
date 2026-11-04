@@ -82,9 +82,12 @@ export async function appendSecurityDecision(
       throw new SecurityAuditUnavailableError();
     }
     if (
-      row.kind === 'company' && row.action === 'write' && row.outcome === 'committed' &&
+      row.kind === 'company' &&
+      row.action === 'write' &&
+      row.outcome === 'committed' &&
       (row.operationId === null || row.legalEntityId === null)
-    ) throw new SecurityAuditUnavailableError();
+    )
+      throw new SecurityAuditUnavailableError();
     if (
       (row.outcome === 'rolled_back' || row.outcome === 'outcome_unknown') &&
       row.accessManagementOperationId !== null
@@ -119,14 +122,18 @@ export async function appendSecurityDecision(
 
 /** Osobne, krótkie TX odmów/rollbacków. Nie trzyma połączenia z przerwanej TX. */
 export class PostgresSecurityAudit implements SecurityAuditRecorder {
-  constructor(
-    private readonly db: Pick<Database, 'transaction'>,
-    private readonly signer?: PostgresContextSigner,
-  ) {}
+  readonly #db: Pick<Database, 'transaction'>;
+  readonly #signer: PostgresContextSigner | undefined;
+
+  constructor(db: Pick<Database, 'transaction'>, signer?: PostgresContextSigner) {
+    this.#db = db;
+    this.#signer = signer;
+    Object.freeze(this);
+  }
 
   async recordDecision(event: SecurityAuditEvent): Promise<void> {
     try {
-      await this.db.transaction((tx) => appendSecurityDecision(tx, event, this.signer));
+      await this.#db.transaction((tx) => appendSecurityDecision(tx, event, this.#signer));
     } catch {
       throw new SecurityAuditUnavailableError();
     }

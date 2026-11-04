@@ -118,6 +118,12 @@ export default defineConfig([
                 'loadDatabaseContextSigner',
                 'PostgresTransactionalUnitOfWork',
                 'runManagedTransaction',
+                'connectDatabase',
+                'createPostgresSecurityServices',
+                'provisionDatabaseContextKey',
+                'configureRuntimePrivileges',
+                'PostgresAccessManagementStore',
+                'PostgresSecurityAudit',
               ],
               message:
                 'Kontrolery, guardy i serwisy HTTP nie mogą bezpośrednio importować signera kontekstu ani adaptera UnitOfWork/transakcji; wstrzykuj porty przez composition root.',

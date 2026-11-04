@@ -20,7 +20,12 @@ import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import type { PostgresContextSigner } from './signed-context.js';
 import { appendSecurityDecision, PostgresSecurityAudit } from './security-audit.js';
-import { accessManagementEvent, companyAccessGrant, legalEntity, tenantMembership } from './schema.js';
+import {
+  accessManagementEvent,
+  companyAccessGrant,
+  legalEntity,
+  tenantMembership,
+} from './schema.js';
 import {
   applyLocalRlsSessionContext,
   readTransactionClockNow,
@@ -91,14 +96,19 @@ interface LockedAccessManagementSnapshot {
  * zawsze korzysta z transakcyjnego `AccessManagementTransaction`, eliminując okno TOCTOU.
  */
 export class PostgresAccessManagementAuthorizationDataSource implements AccessManagementAuthorizationDataSource {
-  constructor(private readonly db: Pick<Database, 'select'>) {}
+  readonly #db: Pick<Database, 'select'>;
+
+  constructor(db: Pick<Database, 'select'>) {
+    this.#db = db;
+    Object.freeze(this);
+  }
 
   async getAuthorizationFacts(
     actor: AccessManagementActor,
     command: AccessManagementCommand,
   ): Promise<AccessManagementAuthorizationFacts> {
     try {
-      const memberships = await this.db
+      const memberships = await this.#db
         .select()
         .from(tenantMembership)
         .where(
@@ -111,7 +121,7 @@ export class PostgresAccessManagementAuthorizationDataSource implements AccessMa
       const actorMembershipRow = memberships.find((row) => row.userId === actor.userId);
       const targetMembershipRow = memberships.find((row) => row.userId === command.userId);
 
-      const actorGrantsRows = await this.db
+      const actorGrantsRows = await this.#db
         .select()
         .from(companyAccessGrant)
         .where(
@@ -123,7 +133,7 @@ export class PostgresAccessManagementAuthorizationDataSource implements AccessMa
 
       let targetGrant: AccessManagementAuthorizationFacts['targetGrant'] = null;
       if (command.kind === 'revoke_grant') {
-        const [grantRow] = await this.db
+        const [grantRow] = await this.#db
           .select({
             legalEntityId: companyAccessGrant.legalEntityId,
             action: companyAccessGrant.action,
@@ -171,13 +181,17 @@ export class PostgresAccessManagementAuthorizationDataSource implements AccessMa
  * 5) mutację oraz atomowy zapis audytu `access_management_event` przed COMMIT.
  */
 export class PostgresAccessManagementStore implements AccessManagementStore {
-  constructor(
-    private readonly db: Pick<Database, 'transaction'>,
-    private readonly signer?: PostgresContextSigner,
-  ) {}
+  readonly #db: Pick<Database, 'transaction'>;
+  readonly #signer: PostgresContextSigner | undefined;
+
+  constructor(db: Pick<Database, 'transaction'>, signer?: PostgresContextSigner) {
+    this.#db = db;
+    this.#signer = signer;
+    Object.freeze(this);
+  }
 
   recordDeniedDecision(event: SecurityAuditEvent): Promise<void> {
-    return new PostgresSecurityAudit(this.db, this.signer).recordDecision(event);
+    return new PostgresSecurityAudit(this.#db, this.#signer).recordDecision(event);
   }
 
   async runInTransaction(
@@ -185,9 +199,9 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
   ): Promise<AccessManagementResult> {
     try {
       return await runManagedTransaction(
-        this.db,
+        this.#db,
         async (tx) => {
-          const txAdapter = this.createTransactionAdapter(tx);
+          const txAdapter = this.#createTransactionAdapter(tx);
           return work(txAdapter);
         },
         (result) => result.ok === true,
@@ -220,7 +234,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
     });
   }
 
-  private createTransactionAdapter(tx: PostgresTransaction): AccessManagementTransaction {
+  #createTransactionAdapter(tx: PostgresTransaction): AccessManagementTransaction {
     let verifiedActorKey: string | null = null;
     let lockedSnapshot: LockedAccessManagementSnapshot | null = null;
     let cachedFacts: AccessManagementAuthorizationFacts | undefined;
@@ -250,7 +264,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
           reason: 'authorized_tenant_administration',
           decidedAt: now.toISOString(),
         },
-        this.signer,
+        this.#signer,
       );
 
     const verifyActorAccount = async (rawActor: AccessManagementActor): Promise<boolean> => {
@@ -264,7 +278,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
       if (verifiedActorKey === key) {
         return true;
       }
-      await this.signer?.apply(tx, { purpose: 'actor', actorUserId: actor.userId });
+      await this.#signer?.apply(tx, { purpose: 'actor', actorUserId: actor.userId });
       const active = await verifyAndLockActorInTx(tx, actor);
       if (active) {
         verifiedActorKey = key;
@@ -293,7 +307,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
           };
         }
       }
-      await this.signer?.apply(tx, {
+      await this.#signer?.apply(tx, {
         purpose: 'facts',
         actorUserId: actor.userId,
         tenantId: command.tenantId,
@@ -505,17 +519,31 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
 
       // Receipt jest append-only. Dopiero dokładne dopasowanie pozwala autoryzować
       // odczyt wyniku zamiast ponownej propozycji grantu z datą już w przeszłości.
-      const [previous] = await tx.select({
-        actorId: accessManagementEvent.actorId,
-        tenantId: accessManagementEvent.tenantId,
-        userId: accessManagementEvent.userId,
-        requestKey: accessManagementEvent.requestKey,
-        occurredAt: accessManagementEvent.occurredAt,
-      }).from(accessManagementEvent).where(eq(accessManagementEvent.operationId, command.operationId));
+      const [previous] = await tx
+        .select({
+          actorId: accessManagementEvent.actorId,
+          tenantId: accessManagementEvent.tenantId,
+          userId: accessManagementEvent.userId,
+          requestKey: accessManagementEvent.requestKey,
+          occurredAt: accessManagementEvent.occurredAt,
+        })
+        .from(accessManagementEvent)
+        .where(eq(accessManagementEvent.operationId, command.operationId));
       let committedOperationAt: Date | undefined;
-      if (previous && previous.actorId === actor.userId && previous.tenantId === command.tenantId && previous.userId === command.userId) {
+      if (
+        previous &&
+        previous.actorId === actor.userId &&
+        previous.tenantId === command.tenantId &&
+        previous.userId === command.userId
+      ) {
         try {
-          if (JSON.stringify(copyAccessManagementCommand(JSON.parse(previous.requestKey) as AccessManagementCommand)) === JSON.stringify(command)) {
+          if (
+            JSON.stringify(
+              copyAccessManagementCommand(
+                JSON.parse(previous.requestKey) as AccessManagementCommand,
+              ),
+            ) === JSON.stringify(command)
+          ) {
             committedOperationAt = previous.occurredAt;
           }
         } catch {
@@ -577,7 +605,7 @@ export class PostgresAccessManagementStore implements AccessManagementStore {
         }))
       )
         return { ok: false, reason: 'access_management_denied' };
-      await this.signer?.apply(tx, {
+      await this.#signer?.apply(tx, {
         purpose: 'access',
         actorUserId: actor.userId,
         tenantId: command.tenantId,

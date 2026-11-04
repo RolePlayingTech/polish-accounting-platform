@@ -76,7 +76,11 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
     expect(scriptContent).toContain('mkdir -m 0700 "${RUN_DIR}"');
     expect(scriptContent).toContain('mkdir -m 0777 "${RUN_DIR}/pgdata"');
     expect(scriptContent).toContain('-v "${RUN_DIR}/pgdata:/var/lib/postgresql"');
-    expect(scriptContent).toContain('pap_apply_pgcrypto_lockdown');
+    expect(scriptContent).toContain('CREATE SCHEMA IF NOT EXISTS pap_lockdown');
+    expect(scriptContent).toContain('REVOKE ALL ON SCHEMA pap_lockdown FROM PUBLIC');
+    expect(scriptContent).toContain('pap_lockdown.pap_on_create_extension_lockdown()');
+    expect(scriptContent).not.toContain('public.pap_apply_pgcrypto_lockdown');
+    expect(scriptContent).not.toContain('public.pap_on_create_extension_lockdown');
     expect(scriptContent).toContain('pap_lockdown_pgcrypto_on_extension');
     expect(scriptContent).not.toContain(':/var/lib/postgresql/data');
     expect(scriptContent).toContain('POSTGRES_PASSWORD_FILE=/run/secrets/pg_pass');
@@ -860,8 +864,11 @@ describe('Hetzner ephemeral PostgreSQL 18.6 runner security contract', () => {
       'assert_clean_and_preserved',
       'grep -q "CREATE ROLE pap_test LOGIN" "$SANDBOX_STATE/psql.log"',
       'grep -q "CREATE ROLE pap_test_app LOGIN" "$SANDBOX_STATE/psql.log"',
-      'grep -q "pap_apply_pgcrypto_lockdown" "$SANDBOX_STATE/psql.log"',
+      'grep -q "CREATE SCHEMA IF NOT EXISTS pap_lockdown AUTHORIZATION CURRENT_USER;" "$SANDBOX_STATE/psql.log"',
+      'grep -q "pap_lockdown.pap_on_create_extension_lockdown" "$SANDBOX_STATE/psql.log"',
       'grep -q "pap_lockdown_pgcrypto_on_extension" "$SANDBOX_STATE/psql.log"',
+      '! grep -q "public.pap_apply_pgcrypto_lockdown" "$SANDBOX_STATE/psql.log"',
+      '! grep -q "public.pap_on_create_extension_lockdown" "$SANDBOX_STATE/psql.log"',
       'grep -q "CMD:SELECT pg_reload_conf();" "$SANDBOX_STATE/psql.log"',
       'head -n 2 "$SANDBOX_STATE/mock_pg_hba.conf" | grep -q "host all postgres 0.0.0.0/0 reject"',
       'head -n 2 "$SANDBOX_STATE/mock_pg_hba.conf" | grep -q "host all postgres ::/0 reject"',

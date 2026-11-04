@@ -183,7 +183,11 @@ describe('Kontrakt plików migracji', () => {
       new URL('../sql/bootstrap-runtime-role.sql', import.meta.url),
       'utf8',
     );
-    expect(bootstrapRole).toContain('pap_apply_pgcrypto_lockdown');
+    expect(bootstrapRole).toContain('CREATE SCHEMA IF NOT EXISTS pap_lockdown');
+    expect(bootstrapRole).toContain('REVOKE ALL ON SCHEMA pap_lockdown FROM PUBLIC');
+    expect(bootstrapRole).toContain('pap_lockdown.pap_on_create_extension_lockdown()');
     expect(bootstrapRole).toContain('pap_lockdown_pgcrypto_on_extension');
+    expect(bootstrapRole).not.toContain('public.pap_apply_pgcrypto_lockdown');
+    expect(bootstrapRole).not.toContain('public.pap_on_create_extension_lockdown');
   });
 });

@@ -11,18 +11,27 @@ import {
 import { legalEntityId, tenantId, userId, type UserId } from '@pap/domain';
 import { and, eq, sql as statement } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { PostgresAccessManagementStore } from '../src/access-management.js';
 import { connectDatabase } from '../src/client.js';
+import { recordCompanyOperationProbe } from '../src/company-operation-probe.js';
 import { applyMigrations } from '../src/migrations.js';
+import {
+  configureRuntimePrivileges,
+  provisionDatabaseContextKey,
+} from '../src/runtime-provisioning.js';
 import {
   accessManagementEvent,
   appUser,
   companyAccessGrant,
+  companyOperationProbe,
   legalEntity,
+  securityDecisionEvent,
   tenant,
   tenantMembership,
   userOidcIdentity,
 } from '../src/schema.js';
+import { PostgresContextSigner } from '../src/signed-context.js';
 import { PostgresTransactionalUnitOfWork } from '../src/transactional-unit-of-work.js';
 import { PostgresUserIdentityResolver, PostgresUserIdentityStore } from '../src/user-identity.js';
 import { createTestDatabase, type TestDatabase } from './integration-database.js';
@@ -59,7 +68,14 @@ function deferred<T = void>() {
 }
 
 describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na PostgreSQL', () => {
+  const RUNTIME_ROLE = 'pap_test_app';
   let database: TestDatabase | undefined;
+  let ownerSigner: PostgresContextSigner | undefined;
+  let runtimePool: ReturnType<typeof connectDatabase> | undefined;
+  let runtimeSigner: PostgresContextSigner | undefined;
+  let createdRuntimeRole = false;
+  let databasePublicPrivileges: string[] = [];
+  let publicSchemaCreate = false;
   let seq = 1000;
   const nextId = () => id(seq++);
 
@@ -68,6 +84,20 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       throw new Error('Brak testowej bazy PostgreSQL.');
     }
     return database;
+  };
+
+  const getOwnerSigner = () => {
+    if (!ownerSigner) {
+      throw new Error('Brak signera kontekstu właściciela schematu.');
+    }
+    return ownerSigner;
+  };
+
+  const getRuntimeEnv = () => {
+    if (!runtimePool || !runtimeSigner) {
+      throw new Error('Brak skonfigurowanego połączenia roli runtime pap_test_app.');
+    }
+    return { runtimePool, runtimeSigner };
   };
 
   const verifier: OidcAccessTokenVerifier = {
@@ -216,8 +246,9 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
     },
   ): Promise<AccessManagementResult> {
     const { db } = connection();
-    const store = options?.store ?? new PostgresAccessManagementStore(db);
-    const identityResolver = options?.identityResolver ?? new PostgresUserIdentityResolver(db);
+    const store = options?.store ?? new PostgresAccessManagementStore(db, getOwnerSigner());
+    const identityResolver =
+      options?.identityResolver ?? new PostgresUserIdentityResolver(db, getOwnerSigner());
     const authorizer = createTenantAccessManagementAuthorizer();
     return manageAccess(command, {
       store,
@@ -231,7 +262,72 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
 
   beforeAll(async () => {
     database = await createTestDatabase();
+    const { client: sql } = database;
+    const preprovisionedRuntimeUrl = process.env.PAP_EPHEMERAL_RUNTIME_DATABASE_URL?.trim();
+    let runtimeUrl: string;
+
+    if (preprovisionedRuntimeUrl) {
+      runtimeUrl = preprovisionedRuntimeUrl;
+    } else {
+      if ((await sql`SELECT 1 FROM pg_roles WHERE rolname = ${RUNTIME_ROLE}`).length > 0) {
+        throw new Error('Test wymaga wolnej nazwy pap_test_app na odizolowanej instancji.');
+      }
+      databasePublicPrivileges = Array.from(
+        await sql`SELECT privilege_type FROM pg_database,
+          LATERAL aclexplode(coalesce(datacl, acldefault('d', datdba))) a
+          WHERE datname = current_database() AND a.grantee = 0`,
+        (r) => String(r.privilege_type),
+      );
+      publicSchemaCreate =
+        (
+          await sql`SELECT 1 FROM pg_namespace,
+            LATERAL aclexplode(coalesce(nspacl, acldefault('n', nspowner))) a
+            WHERE nspname = 'public' AND a.grantee = 0 AND a.privilege_type = 'CREATE'`
+        ).length > 0;
+      const password = randomBytes(24).toString('hex');
+      await sql.unsafe(`CREATE ROLE pap_test_app LOGIN PASSWORD '${password}'
+        NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
+      createdRuntimeRole = true;
+      const url = new URL(process.env.DATABASE_URL!);
+      url.username = RUNTIME_ROLE;
+      url.password = password;
+      runtimeUrl = url.toString();
+    }
+
     await applyMigrations(database.db, database.dataSchema);
+    const [roleRow] = await sql<{ role_name: string }[]>`
+      SELECT session_user::text AS role_name
+    `;
+    const sessionRole = roleRow!.role_name;
+    const ownerKeyHex = randomBytes(32).toString('hex');
+    await provisionDatabaseContextKey(database.db, {
+      keyId: 'fixture-owner-key',
+      keyHex: ownerKeyHex,
+      runtimeRole: sessionRole,
+    });
+    ownerSigner = new PostgresContextSigner({ keyId: 'fixture-owner-key', keyHex: ownerKeyHex });
+
+    const runtimeKeyHex = randomBytes(32).toString('hex');
+    if (sessionRole === RUNTIME_ROLE) {
+      runtimeSigner = ownerSigner;
+    } else {
+      await provisionDatabaseContextKey(database.db, {
+        keyId: 'fixture-runtime-key',
+        keyHex: runtimeKeyHex,
+        runtimeRole: RUNTIME_ROLE,
+      });
+      runtimeSigner = new PostgresContextSigner({
+        keyId: 'fixture-runtime-key',
+        keyHex: runtimeKeyHex,
+      });
+    }
+    await configureRuntimePrivileges(database.db, RUNTIME_ROLE);
+    runtimePool = connectDatabase(
+      { PAP_DATABASE_ENV: 'test', DATABASE_URL: runtimeUrl },
+      database.dataSchema,
+      { maxConnections: 4 },
+    );
+
     await database.db.insert(tenant).values([
       { id: TENANT_A, name: 'Syntetyczny Tenant A (6D-3A)' },
       { id: TENANT_B, name: 'Syntetyczny Tenant B (6D-3A)' },
@@ -245,7 +341,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
 
   beforeEach(async () => {
     const { db, client: sql } = connection();
-    await sql`TRUNCATE security_decision_event, access_management_event`;
+    await sql`TRUNCATE company_operation_probe, security_decision_event, access_management_event`;
     await db.delete(companyAccessGrant);
     await db.delete(tenantMembership);
     await db.delete(userOidcIdentity);
@@ -254,6 +350,20 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
   });
 
   afterAll(async () => {
+    await runtimePool?.client.end({ timeout: 1 });
+    if (createdRuntimeRole && database) {
+      await database.client.unsafe('DROP OWNED BY pap_test_app');
+      await database.client.unsafe('DROP ROLE pap_test_app');
+      for (const privilege of databasePublicPrivileges) {
+        if (!['CONNECT', 'TEMPORARY', 'CREATE'].includes(privilege)) {
+          throw new Error('Nieznany ACL bazy.');
+        }
+        await database.client.unsafe(`GRANT ${privilege} ON DATABASE pap_test TO PUBLIC`);
+      }
+      if (publicSchemaCreate) {
+        await database.client.unsafe('GRANT CREATE ON SCHEMA public TO PUBLIC');
+      }
+    }
     await database?.cleanup();
   });
 
@@ -277,7 +387,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
     // --- 1A: Bariera po rozwiązaniu OIDC (przed otwarciem transakcji DB) ---
     const afterOidcResolved = deferred();
     const resumeAfterRevoke = deferred();
-    const baseResolver = new PostgresUserIdentityResolver(db);
+    const baseResolver = new PostgresUserIdentityResolver(db, getOwnerSigner());
     const barrierResolver: UserIdentityResolver = {
       async resolveVerifiedIdentity(identity) {
         const resolved = await baseResolver.resolveVerifiedIdentity(identity);
@@ -613,7 +723,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
   it('Scenariusz 3: wyłączenie konta app_user lub cofnięcie powiązania OIDC między uwierzytelnieniem a transakcją blokuje operację', async () => {
     const { db } = connection();
     const identityStore = new PostgresUserIdentityStore(db);
-    const baseResolver = new PostgresUserIdentityResolver(db);
+    const baseResolver = new PostgresUserIdentityResolver(db, getOwnerSigner());
 
     // 3A: Równoległe disableUserAccount trzymające FOR UPDATE na app_user blokuje FOR SHARE w verifyActorAccount
     const oidcPassed = deferred();
@@ -867,8 +977,8 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
 
   it('Scenariusz 5: reaktywacja członkostwa nie pozwala wykorzystać starych grantów ani do odczytu danych, ani do delegacji administracyjnej', async () => {
     const { db } = connection();
-    const uow = new PostgresTransactionalUnitOfWork(db);
-    const identityResolver = new PostgresUserIdentityResolver(db);
+    const uow = new PostgresTransactionalUnitOfWork(db, getOwnerSigner());
+    const identityResolver = new PostgresUserIdentityResolver(db, getOwnerSigner());
 
     // Nadajemy grant read zarówno dla ADMIN_LOW, jak i dla MEMBER_1
     for (const uid of [ADMIN_LOW, MEMBER_1]) {
@@ -1022,8 +1132,8 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       }),
     ).toMatchObject({ ok: true });
 
-    const uow = new PostgresTransactionalUnitOfWork(db);
-    const identityResolver = new PostgresUserIdentityResolver(db);
+    const uow = new PostgresTransactionalUnitOfWork(db, getOwnerSigner());
+    const identityResolver = new PostgresUserIdentityResolver(db, getOwnerSigner());
     const readInTenantA = await executeAuthorizedCompanyAction(
       {
         rawBearerToken: 'token:sub-member-1',
@@ -1193,8 +1303,8 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
     }
 
     // Domyślny brak dostępu księgowego dla tenant_owner, tenant_admin i platform_operator w UnitOfWork
-    const uow = new PostgresTransactionalUnitOfWork(db);
-    const identityResolver = new PostgresUserIdentityResolver(db);
+    const uow = new PostgresTransactionalUnitOfWork(db, getOwnerSigner());
+    const identityResolver = new PostgresUserIdentityResolver(db, getOwnerSigner());
     for (const token of ['token:sub-owner-a', 'token:sub-admin-high', 'token:sub-platform-op']) {
       const decision = await executeAuthorizedCompanyAction(
         {
@@ -1428,10 +1538,10 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
     });
 
     try {
-      const store = new PostgresAccessManagementStore(singlePool.db);
+      const store = new PostgresAccessManagementStore(singlePool.db, getOwnerSigner());
       const uow = new PostgresTransactionalUnitOfWork(
         singlePool.db,
-        undefined,
+        getOwnerSigner(),
         ({ tx, assertActive }) =>
           Object.freeze({
             async failWithDivisionByZero() {
@@ -1457,7 +1567,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
             },
           }),
       );
-      const identityResolver = new PostgresUserIdentityResolver(singlePool.db);
+      const identityResolver = new PostgresUserIdentityResolver(singlePool.db, getOwnerSigner());
 
       const initialPidRows = await singlePool.client<
         { pid: number }[]
@@ -1578,7 +1688,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
 
   it('Scenariusz 12: executeAuthorizedCompanyAction eliminuje TOCTOU dla odczytu/zapisu danych firmy przy równoległym cofnięciu grantu', async () => {
     const { db } = connection();
-    const identityResolver = new PostgresUserIdentityResolver(db);
+    const identityResolver = new PostgresUserIdentityResolver(db, getOwnerSigner());
     const memberGrantId = nextId();
 
     expect(
@@ -1643,9 +1753,9 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
         action: 'write',
       },
       { verifier, identityResolver, unitOfWork: memberUow },
-      async () => {
+      async (ctx, scope) => {
         writeOperationExecuted = true;
-        return { saved: true };
+        return recordCompanyOperationProbe(ctx, scope, ctx.operationId!);
       },
     );
 
@@ -1663,6 +1773,285 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
       allowed: false,
       status: 'forbidden',
       reason: 'explicit_company_grant_required',
+    });
+  });
+
+  it('Scenariusz 13 (QA-RACE-01): wyścigi równoległego cofnięcia dostępu i zapisu firmowego na nieuprzywilejowanej roli runtime pap_test_app pod FORCE RLS i podpisanym pap.context', async () => {
+    const { db } = connection();
+    const { runtimePool: rt, runtimeSigner: rtSigner } = getRuntimeEnv();
+
+    const [roleInfo] = await rt.client<
+      {
+        current_role_name: string;
+        session_role_name: string;
+        rolsuper: boolean;
+        rolbypassrls: boolean;
+      }[]
+    >`
+      SELECT current_user::text AS current_role_name,
+             session_user::text AS session_role_name,
+             r.rolsuper,
+             r.rolbypassrls
+      FROM pg_roles r
+      WHERE r.rolname = session_user
+    `;
+    expect(roleInfo).toEqual({
+      current_role_name: RUNTIME_ROLE,
+      session_role_name: RUNTIME_ROLE,
+      rolsuper: false,
+      rolbypassrls: false,
+    });
+    expect(await rt.client`SELECT * FROM tenant_membership`).toHaveLength(0);
+
+    const rtIdentityResolver = new PostgresUserIdentityResolver(rt.db, rtSigner);
+    const rtAccessStore = new PostgresAccessManagementStore(rt.db, rtSigner);
+    const rtBaseAuthorizer = createTenantAccessManagementAuthorizer();
+
+    const runRuntimeManageAccess = (
+      token: string,
+      command: AccessManagementCommand,
+      overrides?: {
+        readonly store?: PostgresAccessManagementStore;
+        readonly authorizer?: ReturnType<typeof createTenantAccessManagementAuthorizer>;
+      },
+    ) =>
+      manageAccess(command, {
+        store: overrides?.store ?? rtAccessStore,
+        actors: createOidcAccessManagementActorSource(token, {
+          verifier,
+          identityResolver: rtIdentityResolver,
+        }),
+        authorizer: overrides?.authorizer ?? rtBaseAuthorizer,
+      });
+
+    // --- 13A: Równoległy revoke_grant na pap_test_app blokuje (FOR UPDATE) późniejszy zapis write na pap_test_app ---
+    const member1GrantId = nextId();
+    expect(
+      await runRuntimeManageAccess('token:sub-owner-a', {
+        kind: 'grant',
+        operationId: nextId(),
+        tenantId: TENANT_A,
+        userId: MEMBER_1,
+        grantId: member1GrantId,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+        validFrom: null,
+        validUntil: null,
+      }),
+    ).toMatchObject({ ok: true });
+
+    let currentOwnerPid13A = 0;
+    const ownerLocked13A = deferred<number>();
+    const releaseOwner13A = deferred();
+    const memberWaitPid13A = deferred<number>();
+
+    const rtOwnerStore13A = new PostgresAccessManagementStore(
+      wrapDbWithTimeouts(rt.db, async (_tx, pid) => {
+        currentOwnerPid13A = pid;
+      }),
+      rtSigner,
+    );
+    const pausingOwnerAuthorizer13A = {
+      async authorize(
+        actor: Parameters<typeof rtBaseAuthorizer.authorize>[0],
+        cmd: Parameters<typeof rtBaseAuthorizer.authorize>[1],
+        tx?: Parameters<typeof rtBaseAuthorizer.authorize>[2],
+      ) {
+        const allowed = await rtBaseAuthorizer.authorize(actor, cmd, tx);
+        ownerLocked13A.resolve(currentOwnerPid13A);
+        await releaseOwner13A.promise;
+        return allowed;
+      },
+    };
+    const rtMemberUow13A = new PostgresTransactionalUnitOfWork(
+      wrapDbWithTimeouts(rt.db, async (_tx, pid) => {
+        memberWaitPid13A.resolve(pid);
+      }),
+      rtSigner,
+    );
+
+    const revoke13APromise = runRuntimeManageAccess(
+      'token:sub-owner-a',
+      {
+        kind: 'revoke_grant',
+        operationId: nextId(),
+        tenantId: TENANT_A,
+        userId: MEMBER_1,
+        grantId: member1GrantId,
+      },
+      { store: rtOwnerStore13A, authorizer: pausingOwnerAuthorizer13A },
+    );
+
+    const holderPid13A = await ownerLocked13A.promise;
+    const blockedWriteOpId = nextId();
+    const blockedWriteReqId = nextId();
+    let blockedCallbackRan = false;
+
+    const write13APromise = executeAuthorizedCompanyAction(
+      {
+        requestId: blockedWriteReqId,
+        operationId: blockedWriteOpId,
+        rawBearerToken: 'token:sub-member-1',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      { verifier, identityResolver: rtIdentityResolver, unitOfWork: rtMemberUow13A },
+      async (ctx, scope) => {
+        blockedCallbackRan = true;
+        return recordCompanyOperationProbe(ctx, scope, ctx.operationId!);
+      },
+    );
+
+    try {
+      const waiterPid13A = await memberWaitPid13A.promise;
+      await waitForBlockedBy(holderPid13A, waiterPid13A);
+    } finally {
+      releaseOwner13A.resolve();
+    }
+
+    const [revoke13ARes, write13ARes] = await Promise.all([revoke13APromise, write13APromise]);
+    expect(revoke13ARes).toMatchObject({ ok: true });
+    expect(blockedCallbackRan).toBe(false);
+    expect(write13ARes).toEqual({
+      allowed: false,
+      status: 'forbidden',
+      reason: 'explicit_company_grant_required',
+    });
+    expect(
+      await db
+        .select()
+        .from(companyOperationProbe)
+        .where(eq(companyOperationProbe.operationId, blockedWriteOpId)),
+    ).toHaveLength(0);
+    expect(
+      await db
+        .select({
+          decision: securityDecisionEvent.decision,
+          outcome: securityDecisionEvent.outcome,
+          reason: securityDecisionEvent.reason,
+        })
+        .from(securityDecisionEvent)
+        .where(eq(securityDecisionEvent.requestId, blockedWriteReqId)),
+    ).toEqual([
+      {
+        decision: 'deny',
+        outcome: 'denied',
+        reason: 'explicit_company_grant_required',
+      },
+    ]);
+
+    // --- 13B: Aktywny zapis write na pap_test_app trzyma FOR SHARE; równoległe revoke_membership czeka aż write zatwierdzi efekt i audyt ---
+    const member2GrantId = nextId();
+    expect(
+      await runRuntimeManageAccess('token:sub-owner-a', {
+        kind: 'grant',
+        operationId: nextId(),
+        tenantId: TENANT_A,
+        userId: MEMBER_2,
+        grantId: member2GrantId,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+        validFrom: null,
+        validUntil: null,
+      }),
+    ).toMatchObject({ ok: true });
+
+    let currentMemberPid13B = 0;
+    const memberInScope13B = deferred<number>();
+    const releaseMember13B = deferred();
+    const ownerWaitPid13B = deferred<number>();
+
+    const rtMemberUow13B = new PostgresTransactionalUnitOfWork(
+      wrapDbWithTimeouts(rt.db, async (_tx, pid) => {
+        currentMemberPid13B = pid;
+      }),
+      rtSigner,
+    );
+    const rtOwnerStore13B = new PostgresAccessManagementStore(
+      wrapDbWithTimeouts(rt.db, async (_tx, pid) => {
+        ownerWaitPid13B.resolve(pid);
+      }),
+      rtSigner,
+    );
+
+    const winningWriteOpId = nextId();
+    const winningWritePromise = executeAuthorizedCompanyAction(
+      {
+        operationId: winningWriteOpId,
+        rawBearerToken: 'token:sub-member-2',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      { verifier, identityResolver: rtIdentityResolver, unitOfWork: rtMemberUow13B },
+      async (ctx, scope) => {
+        const probeRes = await recordCompanyOperationProbe(ctx, scope, ctx.operationId!);
+        memberInScope13B.resolve(currentMemberPid13B);
+        await releaseMember13B.promise;
+        return probeRes;
+      },
+    );
+
+    const holderPid13B = await memberInScope13B.promise;
+    const revoke13BPromise = runRuntimeManageAccess(
+      'token:sub-owner-a',
+      {
+        kind: 'revoke_membership',
+        operationId: nextId(),
+        tenantId: TENANT_A,
+        userId: MEMBER_2,
+      },
+      { store: rtOwnerStore13B },
+    );
+
+    try {
+      const waiterPid13B = await ownerWaitPid13B.promise;
+      await waitForBlockedBy(holderPid13B, waiterPid13B);
+    } finally {
+      releaseMember13B.resolve();
+    }
+
+    const [winningWriteRes, revoke13BRes] = await Promise.all([
+      winningWritePromise,
+      revoke13BPromise,
+    ]);
+    expect(winningWriteRes).toMatchObject({
+      allowed: true,
+      data: { created: true },
+    });
+    expect(revoke13BRes).toMatchObject({ ok: true });
+    if (winningWriteRes.allowed && revoke13BRes.ok && winningWriteRes.context.decisionAt) {
+      expect(revoke13BRes.receipt.occurredAt >= winningWriteRes.context.decisionAt).toBe(true);
+    }
+    expect(
+      await db
+        .select()
+        .from(companyOperationProbe)
+        .where(eq(companyOperationProbe.operationId, winningWriteOpId)),
+    ).toHaveLength(1);
+
+    const postRevokeWrite = await executeAuthorizedCompanyAction(
+      {
+        operationId: nextId(),
+        rawBearerToken: 'token:sub-member-2',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      {
+        verifier,
+        identityResolver: rtIdentityResolver,
+        unitOfWork: new PostgresTransactionalUnitOfWork(rt.db, rtSigner),
+      },
+      async () => {
+        throw new Error('Nie wolno wykonać po cofnięciu członkostwa');
+      },
+    );
+    expect(postRevokeWrite).toEqual({
+      allowed: false,
+      status: 'forbidden',
+      reason: 'active_membership_required',
     });
   });
 });
