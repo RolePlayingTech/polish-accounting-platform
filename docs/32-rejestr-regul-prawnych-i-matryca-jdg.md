@@ -1,0 +1,140 @@
+# 32. Wersjonowany rejestr reguł prawnych (2025–2026) i matryca profilu pilota JDG KPiR
+
+**Status:** wdrożony w warstwie czystej domeny (`@pap/domain`) oraz kontraktach (`@pap/contracts`) w ramach realizacji **Issue #1** (profil pilota JDG KPiR), **Issue #4** (rejestr źródeł prawa i proces aktualizacji reguł) oraz **Issue #44** (Strumień S2 — deterministyczny silnik polskiej księgowości i podatków).
+
+Dokument opisuje:
+1. architekturę wersjonowanego rejestru reguł prawnych obowiązujących w latach **2025–2026** oraz mechanizm wyjaśnienia **„Dlaczego? / Podstawa prawna”** (`LegalExplanation`),
+2. kompletny katalog **32 wersji reguł prawnych** (25 unikalnych kodów reguł) zweryfikowanych w oficjalnych źródłach urzędowych (ISAP / Dz.U., Monitor Polski, MF / `podatki.gov.pl`, `ksef.podatki.gov.pl`, `zus.pl`, `gov.pl`),
+3. cykl życia aktualizacji reguł podatkowych i zasady ekspozycji read-only dla adapterów MCP / AI (**Issue #4**),
+4. kanoniczną matrycę profilu pilota **JDG KPiR** (`supported` / `reviewed` / `experimental` / `excluded`) wraz z syntetycznymi przypadkami referencyjnymi (**Issue #1**).
+
+---
+
+## 1. Architektura deterministycznego silnika i zasada „Zero Float / Stan prawny na dzień zdarzenia”
+
+### 1.1. Arytmetyka groszowa i dwa reżimy zaokrągleń
+Zgodnie z [zasadami architektonicznymi](16-zasady-architektoniczne.md) moduł `packages/domain/src/money.ts` realizuje wszystkie operacje pieniężne wyłącznie na bezpiecznych liczbach całkowitych groszy (`Number.isSafeInteger` + pośrednia arytmetyka `bigint` przy mnożeniu przez stopy procentowe w punktach bazowych `bps` oraz proporcjach ułamkowych):
+- **Zaokrąglenie handlowe / ewidencyjne (faktury VAT, KPiR, ewidencja ryczałtu, księgi rachunkowe UoR):** dokładność do **1 grosza** metodą `half_up` (`0,5 gr` zaokrąglane w górę z zachowaniem znaku przy korektach).
+- **Zaokrąglenie podatkowe (`roundTaxAmountOrdynacjaArt63` — art. 63 § 1 Ordynacji podatkowej):** podstawy opodatkowania oraz kwoty podatków i zaliczek deklaracyjnych (PIT, CIT, ryczałt PPE, pola deklaracyjne `P_38`/`P_48`/`P_51`/`P_53` w `JPK_V7M`) zaokrąglane są do **pełnych złotych** (wielokrotność `100 gr`): końcówki `< 50 gr` pomija się, a końcówki `>= 50 gr` podwyższa się do pełnych złotych.
+
+### 1.2. Rozstrzyganie stanu prawnego według daty zdarzenia (`eventDate`)
+Silnik `resolveRuleAtDate(ruleCode, eventDate, options)` wybiera wersję reguły na podstawie daty zdarzenia gospodarczego lub okresu rozliczeniowego (`validFrom <= eventDate <= validTo`), a nie bieżącej daty zegara systemowego. Pozwala to w tym samym uruchomieniu:
+- rozliczyć sprzedaż z października 2025 r. według limitu zwolnienia VAT `200 000 zł` i rozporządzenia PKPiR z 2019 r. (`Dz.U. 2019 poz. 2544`),
+- rozliczyć styczeń 2026 r. na schemie `JPK_V7M(2)` i ze składką zdrowotną minimalną `314,96 zł` (koniec roku składkowego 2025 trwającego do `2026-01-31`!),
+- rozliczyć luty–grudzień 2026 r. na schemie `JPK_V7M(3)` (`Dz.U. 2025 poz. 1800`), z nowym limitem VAT `240 000 zł` (`Dz.U. 2025 poz. 896`), nowym rozporządzeniem PKPiR (`Dz.U. 2025 poz. 1299`), limitem zdrowotnej na liniowym `14 100 zł` (`M.P. 2025 poz. 1274`) oraz minimalną składką zdrowotną `432,54 zł`.
+
+### 1.3. Strażnik bezpieczeństwa weryfikacji (`Fail-Closed`) i wyjaśnienie `LegalExplanation`
+Każda wersja reguły posiada pole `verificationStatus`:
+- `verified` — potwierdzona w źródle urzędowym z podaniem aktu, pozycji Dz.U./M.P. i artykułu; dopuszczona do deterministycznych wyliczeń,
+- `requires_expert_review` — przepis bazowy zweryfikowany, lecz wynik wymaga indywidualnej decyzji lub dokumentu podatnika (np. indywidualna stopa wypadkowa `ZUS IWA` przy `>= 10` ubezpieczonych albo odliczenie `100%` VAT od pojazdu bez potwierdzonego `VAT-26` i kilometrówki); kalkulator ustawia `explanation.requiresHumanApproval = true`,
+- `unverified` — automatycznie **blokowana** przez `UnverifiedLegalRuleError` przy każdym wiążącym wyliczeniu (`allowUnverified: false`).
+
+Każdy kalkulator domenowy (`VAT`, `KPiR`, `PIT`, `Ryczałt`, `ZUS`, `UoR / CIT`, `Kalendarz podatkowy`) zwraca ustrukturyzowany obiekt `LegalExplanation` zawierający:
+- listę zastosowanych reguł (`appliedRules`) wraz z cytowaniem podstawy prawnej i linkiem do źródła urzędowego (`sourceUrl`),
+- uporządkowane kroki wyliczenia (`steps`: wzór matematyczny, parametry wejściowe, sformatowany wynik w PLN i wynik w groszach),
+- ostrzeżenia i wyjątki ustawowe (`warnings`) oraz flagę `requiresHumanApproval`.
+
+---
+
+## 2. Rejestr zweryfikowanych źródeł i reguł prawnych 2025–2026 (Issue #4)
+
+Źródło w kodzie: [`packages/domain/src/legal-rules/registry.ts`](../packages/domain/src/legal-rules/registry.ts) (stan weryfikacji: `2026-11-04`).
+
+| Lp. | `id` wersji reguły | `ruleCode` | Okres ważności (`validFrom` → `validTo`) | Podstawa prawna (akt, Dz.U./M.P., przepis) | Status | Kluczowe parametry / zmiana 2025 vs 2026 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | `ordynacja-art-63-rounding-2025` | `ORDYNACJA_ART_63_TAX_ROUNDING` | `2025-01-01` → otwarty | Ordynacja podatkowa (`Dz.U. 2025 poz. 111`), `art. 63 § 1` | `verified` | Zaokrąglanie podstaw i podatków do pełnych złotych (`< 50 gr` w dół, `>= 50 gr` w górę) |
+| 2 | `ordynacja-art-12-deadline-shift-2025` | `ORDYNACJA_ART_12_DEADLINE_SHIFT` | `2025-01-01` → otwarty | Ordynacja podatkowa (`Dz.U. 2025 poz. 111`), `art. 12 § 5` (oraz `art. 31` u.s.u.s.) | `verified` | Przesunięcie terminu z soboty lub święta na kolejny dzień roboczy |
+| 3 | `statutory-holidays-pl-2025` | `STATUTORY_HOLIDAYS_POLAND` | `2025-01-01` → otwarty | Ustawa o dniach wolnych od pracy (`Dz.U. 2024 poz. 1965`), `art. 1 pkt 1` | `verified` | Święta stałe i ruchome + **wolna Wigilia 24 grudnia od 2025 r.** |
+| 4 | `vat-rates-2025-2026` | `VAT_RATES_STANDARD_AND_REDUCED` | `2025-01-01` → `2026-12-31` | Ustawa o VAT (`Dz.U. 2025 poz. 775`), `art. 41` i `art. 146ef ust. 1` | `verified` | Stawki `23%`, `8%`, `5%`, `0%`, `zw.`, `np.` |
+| 5 | `vat-exemption-limit-art-113-2025` | `VAT_EXEMPTION_LIMIT_ART_113` | `2025-01-01` → `2025-12-31` | Ustawa o VAT (`Dz.U. 2024 poz. 361`), `art. 113 ust. 1, 5, 9, 13` | `verified` | Limit zwolnienia podmiotowego VAT w 2025 r.: **200 000 zł** |
+| 6 | `vat-exemption-limit-art-113-2026` | `VAT_EXEMPTION_LIMIT_ART_113` | `2026-01-01` → otwarty | Nowelizacja ustawy o VAT z 24.06.2025 r. (`Dz.U. 2025 poz. 896`), `art. 1 pkt 1` | `verified` | Podwyższony limit zwolnienia VAT od 2026 r.: **240 000 zł** (+ proporcja dni `art. 113 ust. 9`) |
+| 7 | `vat-vehicle-deduction-art-86a-2025` | `VAT_VEHICLE_DEDUCTION_ART_86A` | `2025-01-01` → otwarty | Ustawa o VAT (`Dz.U. 2025 poz. 775`), `art. 86a ust. 1, 3 i 4` | `verified` | `50%` odliczenia VAT w użytku mieszanym; `100%` wyłącznie z `VAT-26` i ewidencją przebiegu |
+| 8 | `vat-mpp-art-108a-2025` | `VAT_SPLIT_PAYMENT_MPP_ART_108A` | `2025-01-01` → otwarty | Ustawa o VAT (`Dz.U. 2025 poz. 775`), `art. 108a ust. 1a` | `verified` | Obowiązkowy MPP przy fakturze **powyżej 15 000,00 zł brutto** i towarach/usługach z załącznika nr 15 |
+| 9 | `vat-jpk-v7-schema-v2-2025` | `VAT_JPK_V7_DEADLINE_AND_SCHEMA` | `2025-01-01` → `2026-01-31` | Ustawa o VAT (`Dz.U. 2025 poz. 775`), `art. 99 ust. 11c`, `art. 109 ust. 3b` | `verified` | Termin do 25. dnia miesiąca, struktura `JPK_V7M(2)` / `JPK_V7K(2)` |
+| 10 | `vat-jpk-v7-schema-v3-2026` | `VAT_JPK_V7_DEADLINE_AND_SCHEMA` | `2026-02-01` → otwarty | Rozporządzenie MFiG z 12.12.2025 r. (`Dz.U. 2025 poz. 1800`), `§ 1` | `verified` | Od lutego 2026 r. struktura **`JPK_V7M(3)` / `JPK_V7K(3)`** z oznaczeniami `NrKSeF`, `OFF`, `BFK`, `DI` |
+| 11 | `small-taxpayer-limit-2025` | `SMALL_TAXPAYER_LIMIT_2M_EUR` | `2025-01-01` → `2025-12-31` | CIT `art. 4a pkt 10` / PIT `art. 5a pkt 20` / VAT `art. 2 pkt 25` | `verified` | 2 mln EUR wg kursu NBP z 01.10.2024 (`4,2846`): **8 569 000 zł** brutto |
+| 12 | `small-taxpayer-limit-2026` | `SMALL_TAXPAYER_LIMIT_2M_EUR` | `2026-01-01` → `2026-12-31` | CIT `art. 4a pkt 10` / PIT `art. 5a pkt 20` / VAT `art. 2 pkt 25` | `verified` | 2 mln EUR wg kursu NBP z 01.10.2025 (`4,2586`): **8 517 000 zł** brutto |
+| 13 | `pit-tax-scale-art-27-2025-2026` | `PIT_TAX_SCALE_ART_27` | `2025-01-01` → `2026-12-31` | Ustawa o PIT (`Dz.U. 2025 poz. 163`), `art. 27 ust. 1`, `art. 44 ust. 3` | `verified` | `12%` do `120 000 zł` (kwota wolna `30 000 zł`, zmniejszająca `3 600 zł`), `32%` ponad `120 000 zł` |
+| 14 | `pit-flat-tax-art-30c-2025-2026` | `PIT_FLAT_TAX_ART_30C` | `2025-01-01` → `2026-12-31` | Ustawa o PIT (`Dz.U. 2025 poz. 163`), `art. 30c ust. 1–2` | `verified` | Stawka liniowa `19%`, brak kwoty wolnej |
+| 15 | `pit-flat-health-limit-2025` | `PIT_FLAT_HEALTH_DEDUCTION_LIMIT` | `2025-01-01` → `2025-12-31` | Obwieszczenie MF z 17.12.2024 r. (`M.P. 2024 poz. 1084`), `art. 30c ust. 2 pkt 2` PIT | `verified` | Roczny limit odliczenia zdrowotnej na liniowym w 2025 r.: **12 900 zł** |
+| 16 | `pit-flat-health-limit-2026` | `PIT_FLAT_HEALTH_DEDUCTION_LIMIT` | `2026-01-01` → `2026-12-31` | Obwieszczenie MF z 12.12.2025 r. (`M.P. 2025 poz. 1274`), `art. 30c ust. 2 pkt 2` PIT | `verified` | Roczny limit odliczenia zdrowotnej na liniowym w 2026 r.: **14 100 zł** |
+| 17 | `pit-advance-deadline-art-44-2025` | `PIT_ADVANCE_DEADLINE_ART_44` | `2025-01-01` → otwarty | Ustawa o PIT (`Dz.U. 2025 poz. 163`), `art. 44 ust. 6` | `verified` | Zaliczka PIT do **20. dnia** następnego miesiąca (za grudzień do 20 stycznia) |
+| 18 | `kpir-regulation-2019-2025` | `KPIR_REGULATION_COLUMNS` | `2025-01-01` → `2025-12-31` | Rozporządzenie MF z 23.12.2019 r. (`Dz.U. 2019 poz. 2544`), `§ 2, § 11, Zał. 1` | `verified` | Wzór 17-kolumnowy PKPiR obowiązujący do końca 2025 r. |
+| 19 | `kpir-regulation-2026` | `KPIR_REGULATION_COLUMNS` | `2026-01-01` → otwarty | Rozporządzenie MFiG z 06.09.2025 r. (`Dz.U. 2025 poz. 1299`), `§ 2, § 6, Zał. 1` | `verified` | Nowe rozporządzenie PKPiR od 2026 r. z polami numeru KSeF i NIP kontrahenta |
+| 20 | `pit-car-mixed-75-art-23-2025` | `PIT_CAR_MIXED_EXPENSE_75_ART_23` | `2025-01-01` → otwarty | Ustawa o PIT (`Dz.U. 2025 poz. 163`), `art. 23 ust. 1 pkt 46a` i `pkt 43 lit. a` | `verified` | `75%` KUP od kwoty netto powiększonej o `50%` nieodliczonego VAT |
+| 21 | `pit-nkup-exclusions-art-23-2025` | `PIT_NKUP_EXCLUSIONS_ART_23` | `2025-01-01` → otwarty | Ustawa o PIT (`Dz.U. 2025 poz. 163`), `art. 23 ust. 1 pkt 15, 18, 23` | `verified` | Wyłączenia z KUP (reprezentacja, kary, odsetki budżetowe) |
+| 22 | `ryczalt-rates-art-12-2025` | `RYCZALT_RATES_ART_12` | `2025-01-01` → otwarty | Ustawa o ryczałcie (`Dz.U. 2025 poz. 843`), `art. 12 ust. 1 pkt 1–8` | `verified` | Stawki `17%`, `15%`, `14%`, `12,5%`, `12%`, `10%`, `8,5%`, `5,5%`, `3%`, `2%` |
+| 23 | `ryczalt-health-deduction-50-art-11-2025` | `RYCZALT_HEALTH_DEDUCTION_50_ART_11` | `2025-01-01` → otwarty | Ustawa o ryczałcie (`Dz.U. 2025 poz. 843`), `art. 11 ust. 1, 1a i 2` | `verified` | Odliczenie ZUS społecznego i **50% zapłaconej zdrowotnej** proporcjonalnie do udziału stawek |
+| 24 | `ryczalt-deadline-art-21-2025` | `RYCZALT_DEADLINE_ART_21` | `2025-01-01` → otwarty | Ustawa o ryczałcie (`Dz.U. 2025 poz. 843`), `art. 21 ust. 1 i 1a` | `verified` | Termin wpłaty ryczałtu do **20. dnia** następnego miesiąca (za grudzień do 20 stycznia) |
+| 25 | `zus-ulga-na-start-2025` | `ZUS_ULGA_NA_START_ART_18_PP` | `2025-01-01` → otwarty | Prawo przedsiębiorców (`Dz.U. 2025 poz. 1480`), `art. 18 ust. 1` | `verified` | 6 pełnych miesięcy kalendarzowych bez składek społecznych (`0,00 zł`), płatna tylko zdrowotna |
+| 26 | `zus-preferencyjny-2025` | `ZUS_PREFERENCYJNY_ART_18A` | `2025-01-01` → `2025-12-31` | Ustawa o sus `art. 18a ust. 1` + Rozp. RM (`Dz.U. 2024 poz. 1362`) | `verified` | 2025: min. płaca `4 666 zł` → podstawa `1 399,80 zł`, społeczne z chorobowym **`442,90 zł`**, FP `0 zł` |
+| 27 | `zus-preferencyjny-2026` | `ZUS_PREFERENCYJNY_ART_18A` | `2026-01-01` → `2026-12-31` | Ustawa o sus `art. 18a ust. 1` + Rozp. RM (`Dz.U. 2025 poz. 1242`) | `verified` | 2026: min. płaca `4 806 zł` → podstawa `1 441,80 zł`, społeczne z chorobowym **`456,18 zł`**, FP `0 zł` |
+| 28 | `zus-duzy-2025` | `ZUS_DUZY_ART_18_UST_8` | `2025-01-01` → `2025-12-31` | Ustawa o sus (`Dz.U. 2025 poz. 350`), `art. 18 ust. 8` | `verified` | 2025: `60% * 8 673 zł = 5 203,80 zł` → społeczne `1 646,47 zł` + FP `127,49 zł` = **`1 773,96 zł`** |
+| 29 | `zus-duzy-2026` | `ZUS_DUZY_ART_18_UST_8` | `2026-01-01` → `2026-12-31` | Ustawa o sus (`Dz.U. 2025 poz. 350`), `art. 18 ust. 8` | `verified` | 2026: `60% * 9 420 zł = 5 652,00 zł` → społeczne `1 788,29 zł` + FP `138,47 zł` = **`1 926,76 zł`** |
+| 30 | `zus-social-rates-art-22-2025-2026` | `ZUS_SOCIAL_RATES_ART_22` | `2025-01-01` → `2027-03-31` | Ustawa o sus (`Dz.U. 2025 poz. 350`), `art. 22 ust. 1` | `verified` | Emerytalna `19,52%`, rentowa `8,00%`, chorobowa `2,45%`, wypadkowa do 9 osób `1,67%`, FP/FS `2,45%` |
+| 31 | `zus-individual-accident-rate-iwa-2025` | `ZUS_INDIVIDUAL_ACCIDENT_RATE_IWA` | `2025-01-01` → otwarty | Ustawa wypadkowa (`Dz.U. 2022 poz. 2189`), `art. 28 ust. 2`, `art. 31` | `requires_expert_review` | Płatnicy `>= 10` ubezpieczonych / indywidualna stopa ZUS IWA — wymusza zatwierdzenie księgowego |
+| 32 | `zus-health-scale-flat-*` (3 wersje) | `ZUS_HEALTH_SCALE_AND_FLAT_ART_79A_81` | `2025-01` / `2025-02..2026-01` / `2026-02..2027-01` | Ustawa zdrowotna (`Dz.U. 2025 poz. 1461`), `art. 79a`, `art. 81 ust. 2–2d` | `verified` | Skala `9%`, liniowy `4,9%`; min. składka: `01.2025` = **`381,78 zł`**, `02.2025–01.2026` = **`314,96 zł`**, `02.2026–01.2027` = **`432,54 zł`** |
+| 33 | `zus-health-ryczalt-2025` / `2026` | `ZUS_HEALTH_RYCZALT_ART_81_UST_2E` | `2025` oraz `2026` | Ustawa zdrowotna (`Dz.U. 2025 poz. 1461`), `art. 81 ust. 2e–2f` | `verified` | 3 progi (`60k`/`300k`): w 2025 r. **`461,66 / 769,43 / 1 384,97 zł`**; w 2026 r. **`498,35 / 830,58 / 1 495,04 zł`** |
+| 34 | `zus-dra-deadline-art-47-2025` | `ZUS_DRA_DEADLINE_ART_47` | `2025-01-01` → otwarty | Ustawa o sus (`Dz.U. 2025 poz. 350`), `art. 47 ust. 1 pkt 2–3` | `verified` | Osoby prawne (np. sp. z o.o.) do **15. dnia**; pozostali płatnicy (JDG) do **20. dnia** |
+| 35 | `ksef-mandatory-schedule-2026` | `KSEF_MANDATORY_SCHEDULE_2026` | `2025-01-01` → `2026-12-31` | Ustawa KSeF 2.0 z 05.08.2025 r. (`Dz.U. 2025 poz. 1203`), `art. 106ga` VAT | `verified` | Odbiór od `2026-02-01`; wystawianie od `2026-02-01` (`> 200 mln zł`) i `2026-04-01` (pozostali; wyłączenie `<= 10 000 zł/mies.` do `2026-12-31`) |
+| 36 | `jpk-income-tax-schedule-2025-2027` | `JPK_INCOME_TAX_SCHEDULE` | `2025-01-01` → `2027-12-31` | PIT `art. 24a ust. 1e` / Ryczałt `art. 15 ust. 12` / CIT `art. 9 ust. 1c` | `verified` | Od 2026 r. elektroniczne księgi `JPK_PKPIR` / `JPK_EWP` / `JPK_KR_PD` dla podatników na `JPK_V7M` |
+| 37 | `edoreczenia-schedule-2025-2026` | `EDORECZENIA_SCHEDULE` | `2025-01-01` → otwarty | Ustawa o doręczeniach elektronicznych (`Dz.U. 2024 poz. 1045, 1841`) | `verified` | KRS sprzed 2025 r. od `2025-04-01`; CEIDG sprzed 2025 r. najpóźniej od **`2026-10-01`** |
+| 38 | `uor-double-entry-and-balance-2025` | `UOR_DOUBLE_ENTRY_AND_BALANCE` | `2025-01-01` → otwarty | Ustawa o rachunkowości (`Dz.U. 2024 poz. 1863`), `art. 5, 15, 18, 25` | `verified` | Podwójny zapis `SUM(Wn) === SUM(Ma)`, blokada zamkniętych okresów, `Aktywa === Pasywa` |
+| 39 | `cit-rates-art-19-2025-2026` | `CIT_RATES_ART_19` | `2025-01-01` → otwarty | Ustawa o CIT (`Dz.U. 2025 poz. 278`), `art. 19 ust. 1`, `art. 25 ust. 1a` | `verified` | CIT `9%` (mały podatnik do 2 mln EUR) vs `19%`, zaliczki do 20. dnia miesiąca |
+
+*(W rejestrze w `registry.ts` znajduje się łącznie 32 niezależne rekordy wersjonowanych reguł `LegalRule` obejmujące powyższe warianty roczne 2025 i 2026).*
+
+---
+
+## 3. Proces aktualizacji reguł prawnych i granice AI / MCP (Issue #4)
+
+### 3.1. Cykl życia zmiany prawnej (Workflow 6-krokowy)
+1. **Sygnał i weryfikacja źródła pierwszego wyboru:** publikacja ustawy/rozporządzenia w Dzienniku Ustaw / ISAP, obwieszczenia w Monitorze Polskim, schemy XSD na `podatki.gov.pl` / `ksef.podatki.gov.pl` lub komunikatu ZUS/GUS. Artykuły prasowe i podsumowania LLM traktowane są wyłącznie jako sygnał do sprawdzenia źródła urzędowego.
+2. **Niemutowalność historii:** istniejącej wersji reguły za zamknięte/historyczne okresy **nie nadpisuje się** w celu zmiany nowych stawek. Zamyka się jej przedział `validTo` (np. `2025-12-31`) i dodaje nowy rekord wersji z `validFrom` (np. `2026-01-01`), nowym `version` i nową pozycją Dz.U./M.P.
+3. **Przypadki referencyjne przed aktywacją:** każda nowa wersja reguły musi posiadać co najmniej 1–2 deterministyczne przypadki referencyjne w `referenceTestCases` oraz testy jednostkowe w `packages/domain/test/` sprawdzające dzień graniczny `validTo` starej wersji oraz `validFrom` nowej wersji.
+4. **Przegląd ekspercki (Human Gate):** zmiana parametrów podatkowych w `packages/domain/src/legal-rules/` wymaga osobnego review merytorycznego (księgowy / właściciel projektu). Do chwili zatwierdzenia reguła ma status `unverified` (twarda blokada użycia) lub `requires_expert_review` (wymuszenie zatwierdzenia wyniku przez człowieka).
+5. **Ślad obliczeniowy (`LegalExplanation`):** każde wyliczenie przechowuje dokładne `id` i `version` użytych reguł, dzięki czemu historyczną zaliczkę lub rejestr z 2025 r. można odtworzyć identycznie po wejściu przepisów na rok 2026 lub 2027.
+6. **Wycofanie awaryjne (Rollback):** cofnięcie błędnie wprowadzonej przyszłej wersji reguły nie narusza danych księgowych z wcześniejszych okresów, a ponowne przeliczenie otwartego miesiąca generuje nowy ślad `LegalExplanation`.
+
+### 3.2. Zasady ekspozycji przez MCP i asystentów AI
+- Narzędzia MCP udostępniają rejestr reguł oraz kalkulatory domenowe wyłącznie w trybie **deterministycznym i odczytowym / propozycyjnym** (`read-only` / `prepare`).
+- Agent AI / LLM **nigdy nie wylicza podatków w pamięci modelu** ani nie zgaduje podstawy prawnej — wywołuje deterministyczny kalkulator `@pap/domain` i prezentuje zwrócony przez niego obiekt `LegalExplanation`.
+- Zatwierdzenie księgowania, zamknięcie okresu, wygenerowanie finalnego pliku JPK oraz wysyłka do KSeF/MF/ZUS wymaga odrębnej autoryzowanej akcji człowieka (`prepare -> human review -> approve -> execute`).
+
+---
+
+## 4. Matryca profilu pilota: Jednoosobowa Działalność Gospodarcza — JDG KPiR (Issue #1)
+
+Profil pilota obejmuje polskiego przedsiębiorcę wpisanego do CEIDG prowadzącego Podatkową Księgę Przychodów i Rozchodów (`jdg_kpir_skala` oraz `jdg_kpir_liniowy`), uzupełnionego w silniku domenowym o profil ryczałtu (`jdg_ryczalt`) oraz bazowy moduł pełnych ksiąg (`spzoo_pelne_ksiegi`).
+
+### 4.1. Poziomy wsparcia scenariuszy w profilu pilota JDG KPiR (2025–2026)
+
+| Obszar księgowy / podatkowy | Scenariusz | Poziom wsparcia | Moduł w `@pap/domain` | Uwagi i warunki brzegowe |
+| --- | --- | --- | --- | --- |
+| **Przychody KPiR** | Sprzedaż krajowa B2B/B2C w PLN (kol. 7) oraz pozostałe przychody (kol. 8) | `supported` | `kpir` | Obsługa obu rozporządzeń PKPiR: 2025 (`Dz.U. 2019 poz. 2544`) i 2026 (`Dz.U. 2025 poz. 1299` z KSeF i NIP) |
+| **Koszty KPiR (100%)** | Zakup towarów handlowych i materiałów (kol. 10), koszty uboczne (kol. 11), wynagrodzenia (kol. 12), pozostałe wydatki 100% (kol. 13), koszty B+R (kol. 16) | `supported` | `kpir` | Czynny podatnik VAT księguje netto; podatnik zwolniony z VAT księguje brutto |
+| **Samochód osobowy — użytek mieszany** | Odliczenie `50%` VAT (`art. 86a`) + zaliczenie `75%` z `(netto + 50% nieodliczonego VAT)` do kol. 13 KPiR (`art. 23 ust. 1 pkt 46a` i `pkt 43`) | `supported` | `vat`, `kpir` | Dokładny podział nieparzystego grosza VAT `half_up` między rejestr VAT a podstawę kosztową KPiR |
+| **Samochód osobowy — 100% służbowy** | Odliczenie `100%` VAT i `100%` KUP przy zgłoszeniu `VAT-26`, regulaminie i kilometrówce | `reviewed` | `vat`, `kpir` | Brak flagi `hasVat26AndMileageLog: true` automatycznie wymusza `requiresHumanApproval = true` |
+| **Wyłączenia NKUP i korekty** | Wyłączenie wydatków reprezentacyjnych/kar (`art. 23 ust. 1`) oraz korekty stornem czerwonym z obowiązkowym uzasadnieniem | `supported` | `kpir` | Zakaz zapisywania ujemnych kwot w KPiR bez jawnej flagi korekty, ID korygowanego wpisu i powodu |
+| **Zaliczki PIT (Skala i Liniowy)** | Zaliczki narastająco: Skala `12%`/`32%` z kwotą wolną `30 000 zł`; Liniowy `19%` z limitem zdrowotnej (`12 900 zł` w 2025 r., `14 100 zł` w 2026 r.), stratą z lat ubiegłych i ZUS społecznym | `supported` | `kpir` | Zaokrąglenia podstawy i zaliczki wg `art. 63 § 1` Ordynacji podatkowej |
+| **VAT krajowy i JPK_V7M** | Rejestr sprzedaży i zakupów (`23%`, `8%`, `5%`, `0%`, `zw.`, `np.`), kontrola obowiązkowego MPP `> 15 000 zł`, agregacja `P_38`/`P_48`/`P_51`/`P_53` | `supported` | `vat` | Automatyczne przełączenie schemy `JPK_V7M(2)` → `JPK_V7M(3)` od `2026-02` i walidacja oznaczeń KSeF |
+| **Zwolnienie podmiotowe VAT (`art. 113`)** | Monitorowanie limitu `200 000 zł` (2025) / `240 000 zł` (2026), proporcja dni w roku rozpoczęcia (`art. 113 ust. 9`), blokada wyłączeń z `art. 113 ust. 13` | `supported` | `vat` | Alerty przy przekroczeniu `90%` limitu oraz wykrycie transakcji przekraczającej próg |
+| **Składki ZUS i zdrowotna JDG** | Ulga na start, Preferencyjny ZUS, Duży ZUS, FP/FS `2,45%`, składka zdrowotna Skala (`9%`), Liniowy (`4,9%`) i Ryczałt (3 progi) z obsługą roku składkowego od 1 lutego | `supported` | `zus` | Indywidualna stopa wypadkowa `>= 10` ubezpieczonych oznaczona jako `reviewed` (`requiresHumanApproval`) |
+| **Ryczałt ewidencjonowany (dodatkowy profil JDG)** | Ewidencja przychodów wg stawek `17%`–`2%`, proporcjonalne odliczenie ZUS i `50%` zdrowotnej wg `art. 11 ust. 2` z konserwacją do 1 grosza | `supported` | `ryczalt` | Pełna obsługa wielostawkowych przychodów w jednym miesiącu |
+| **Kalendarz podatkowy, KSeF i e-Doręczenia** | Terminy ZUS (15./20.), PIT/CIT/PPE (20.), JPK_V7 (25.), KSeF 2026, JPK_PD i e-Doręczenia z przesunięciem z weekendów i świąt ruchomych (`art. 12 § 5` OP) | `supported` | `tax-calendar` | Uwzględnia Wielkanoc, Boże Ciało oraz wolną Wigilię 24 grudnia od 2025 r. |
+| **Rozrachunki i wyciągi bankowe** | Parser polskiego CSV (`;`, przecinek dziesiętny) i MT940 (`:60F:`, `:61:`, `:86:`, `:62F:`), parowanie po numerze faktury, NIP/IBAN i kwocie | `supported` | `bank-reconciliation` | Obsługa płatności częściowych, nadpłat oraz flagi `ambiguous_manual_review` przy kolizji |
+| **Środki trwałe, leasing z limitami CO2, różnice kursowe, WNT/WDT/OSS, IP Box, Mały ZUS Plus, kadry i płace** | Amortyzacja KŚT, limity leasingowe `100k/150k/225k`, transakcje walutowe/unijne, ulga IP Box `5%`, rozliczanie umów o pracę/zlecenia | `excluded` (poza zakresem pilota S2) | — | Jawnie wyłączone z automatycznego rozliczania w pierwszym pilocie JDG; wymagają osobnych modułów w kolejnych etapach roadmapy |
+
+### 4.2. Syntetyczne scenariusze referencyjne profilu pilota
+
+1. **Programista B2B — JDG KPiR Podatek Liniowy 19%, czynny VAT (`2026-04`):**
+   - Sprzedaż usług IT: `20 000,00 zł` netto + `4 600,00 zł` VAT (`23%`), faktura w KSeF (`NrKSeF`, obowiązek od `2026-04-01`).
+   - Paliwo do samochodu osobowego w użytku mieszanym: `200,00 zł` netto + `46,00 zł` VAT → odliczenie VAT `23,00 zł`, koszt KPiR kol. 13 = `75% * 223,00 zł = 167,25 zł`.
+   - Duży ZUS z chorobowym za kwiecień 2026 r.: społeczne `1 788,29 zł` + FP/FS `138,47 zł` = `1 926,76 zł` + składka zdrowotna `4,9%` od dochodu z marca (nie mniej niż `432,54 zł`), termin ZUS DRA do `2026-05-20`, `JPK_V7M(3)` do `2026-05-25`.
+2. **Specjalista usługowy — JDG KPiR Skala Podatkowa, zwolniony z VAT art. 113 (`2026-08`):**
+   - Sprzedaż narastająco w 2026 r. `220 000,00 zł` mieści się w podwyższonym limicie `240 000,00 zł` (`Dz.U. 2025 poz. 896`), lecz przekracza `90%` progu — system generuje ostrzeżenie `VAT_LIMIT_ABOVE_90_PERCENT`.
+   - Wydatki dokumentowane fakturami ujmowane są w KPiR w kwotach **brutto** (brak prawa do odliczenia VAT naliczonego).
+   - Przy dochodzie do `30 000,00 zł` zaliczka PIT wynosi `0 zł`; po przekroczeniu `120 000,00 zł` nadwyżka liczona jest stawką `32%` z ostrzeżeniem `PIT_SECOND_BRACKET_32_EXCEEDED`.
+3. **Konsultant wielostawkowy — JDG Ryczałt (`12%` + `8,5%`, `2026-04`):**
+   - Przychód `8 000,00 zł` (`12%`) oraz `2 000,00 zł` (`8,5%`), zapłacone społeczne ZUS `1 788,29 zł`, zapłacona zdrowotna II próg `830,58 zł` (`50%` do odliczenia = `415,29 zł`).
+   - Odliczenia rozdzielane są w stosunku `80% / 20%` bez utraty ani jednego grosza (`143 063 gr + 35 766 gr = 178 829 gr` oraz `33 223 gr + 8 306 gr = 41 529 gr`), a należny ryczałt po zaokrągleniu do pełnych złotych wynosi `881 zł`.
