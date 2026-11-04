@@ -17,7 +17,7 @@
 - [x] `E0-02` Wybór i specyfikacja pierwszego profilu pilota (**JDG KPiR** — skala `12%/32%` oraz podatek liniowy `19%`) wraz z rozszerzeniem o profil **JDG Ryczałt** i **Sp. z o.o. (pełne księgi UoR)** (`@pap/domain`, `docs/32-rejestr-regul-prawnych-i-matryca-jdg.md`, PR `#47`, Issue `#1`).
 - [x] `E0-03` Matryca profilu JDG (księgi 2025/2026, VAT, ZUS, składka zdrowotna, granice odpowiedzialności) oraz referencyjne przypadki syntetyczne w groszach PLN (`@pap/domain`, PR `#47`).
 - [x] `E0-04` Wybór stosu technologicznego i modelu wdrożeń: [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md) (PR `#9`, Issue `#2`), uzupełniony o model ról administracyjnych [ADR-003](adr/003-administracja-i-uprawnienia-produktowe.md) oraz model środowisk Hetzner [ADR-006](adr/006-prywatny-staging-hetzner.md).
-- [x] `E0-05` Wersjonowany rejestr **32 kodów reguł prawnych (42 wersje temporalne na lata 2025–2026)** powiązanych z oficjalnymi publikatorami (`ISAP` / `Dz.U.` / `M.P.`), mechanizm wyjaśnienia `LegalExplanation` („§ Dlaczego?”) i 6-krokowy proces aktualizacji prawa (`@pap/domain/legal-rules`, `docs/32-rejestr-regul-prawnych-i-matryca-jdg.md`, PR `#47`, Issue `#4`).
+- [x] `E0-05` Wersjonowany rejestr **32 kodów reguł prawnych (42 wersje temporalne na lata 2025–2026)** powiązanych z oficjalnymi publikatorami (`ISAP` / `Dz.U.` / `M.P.`), mechanizm wyjaśnienia `LegalExplanation` („§ Dlaczego?”) i 6-krokowy proces aktualizacji prawa (`@pap/domain` — moduł `legal-rules`, `docs/32-rejestr-regul-prawnych-i-matryca-jdg.md`, PR `#47`, Issue `#4`).
 - [x] `E0-06` Model zagrożeń, matryca ról → narzędzi MCP → operacji domenowych i granice zaufania (`docs/18-model-zagrozen-i-uprawnien.md`, [ADR-004](adr/004-model-zagrozen-i-autoryzacji.md), PR `#11`, Issue `#3`).
 
 ---
@@ -31,7 +31,7 @@
 - [x] `E1-05` Kolejka weryfikacji dokumentów (`Szkic`, `Propozycja AI`, `Zweryfikowany i zaksięgowany`), wyszukiwanie, filtrowanie oraz ekran weryfikacji `SplitVerificationView` z obowiązkowym modalem zatwierdzenia przez człowieka (`@pap/ui`, `@pap/web`, PR `#46`, `#51`).
 - [x] `E1-06` Prezentacja propozycji ekstrakcji ze wskaźnikiem pewności pola, kwalifikacją podatkową (w tym pojazd mieszany `50% VAT / 75% KUP`) i twardym zakazem samoczynnego zapisu do ksiąg bez akcji `approve-and-post` (`@pap/application`, `@pap/api`, `@pap/web`, PR `#51`, `#52`).
 - [x] `E1-07` Import wyciągów bankowych `CSV` i `MT940`, kontrola rachunków na Białej Liście KAS, oznaczanie obowiązkowego MPP (`> 15 000 PLN` brutto) oraz deterministyczne parowanie przelewów z rozrachunkami (`@pap/domain`, `@pap/application`, `@pap/api`, `@pap/web`, PR `#47`, `#51`, `#52`).
-- [x] `E1-08` Design System **„Księga Współczesna”** (`@pap/ui`, WCAG 2.2 AA, `tabular-nums`, responsywność `375px`), pulpit operacyjny „Do zrobienia dziś” (`/app`), kalendarz zobowiązań (`art. 12 § 5` OP), skrzynka powiadomień Sandbox RFC 5322 oraz **12-modułowa Akademia Polskiej Księgowości** (`/academy`, 37 lekcji, pomoc kontekstowa `?` `FieldHelpButton`, PR `#45`, `#46`, `#49`, `#51`, Issue `#13`).
+- [x] `E1-08` Design System **„Księga Współczesna”** (`@pap/ui`, WCAG 2.2 AA, `tabular-nums`, responsywność `375px`), pulpit operacyjny „Do zrobienia dziś” (`/app`), kalendarz zobowiązań (`art. 12 § 5` OP), skrzynka powiadomień Sandbox RFC 5322 oraz **12-modułowa Akademia Polskiej Księgowości** (`@pap/domain/academy`, `/academy`, 37 lekcji, pomoc kontekstowa `?` `FieldHelpButton`, PR `#45`, `#46`, `#49`, `#51`, Issue `#13`).
 
 ---
 
@@ -47,12 +47,12 @@
 
 ## Etap 3 — polska zgodność podatkowa: profil JDG KPiR i VAT
 
-- [x] `E3-01` Zweryfikowana matryca JDG KPiR na lata 2025–2026, arytmetyka groszowa i zaokrąglenia podatkowe wg `art. 63 § 1` Ordynacji podatkowej (`@pap/domain/kpir`, PR `#47`).
-- [x] `E3-02` Rejestry sprzedaży i zakupów VAT (`23%`, `8%`, `5%`, `0%`, `zw.`, `np.`), rozliczenie 50% VAT od samochodów osobowych (`art. 86a` VAT) oraz reguły dla podatników zwolnionych podmiotowo do **240 000 PLN** od 2026 r. (`art. 113 ust. 1` VAT, `@pap/domain/vat`, PR `#47`).
+- [x] `E3-01` Zweryfikowana matryca JDG KPiR na lata 2025–2026, arytmetyka groszowa i zaokrąglenia podatkowe wg `art. 63 § 1` Ordynacji podatkowej (`@pap/domain` — moduł `kpir`, PR `#47`).
+- [x] `E3-02` Rejestry sprzedaży i zakupów VAT (`23%`, `8%`, `5%`, `0%`, `zw.`, `np.`), rozliczenie 50% VAT od samochodów osobowych (`art. 86a` VAT) oraz reguły dla podatników zwolnionych podmiotowo do **240 000 PLN** od 2026 r. (`art. 113 ust. 1` VAT, `@pap/domain` — moduł `vat`, PR `#47`).
 - [x] `E3-03` Parser i walidator faktur ustrukturyzowanych XML **KSeF `FA(2)` oraz `FA(3)`**, obsługa numerów referencyjnych KSeF i trybów `OFF` / `BFK` / `DI` w obiegu dokumentów (`@pap/domain`, `@pap/application`, `@pap/api`, PR `#47`, `#52`).
 - [ ] `E3-03b` _(Poza bieżącym etapem testowym)_ Bezpośrednia komunikacja sieciowa i uwierzytelnianie kryptograficzne (pieczęć/podpis kwalifikowany/token KSeF 2.0) z bramkami Ministerstwa Finansów oraz pobieranie urzędowych UPO.
 - [x] `E3-05` Podatkowa Księga Przychodów i Rozchodów w układzie **17-kolumnowym (2025, `Dz.U. 2019 poz. 2544`)** oraz nowym układzie **19-kolumnowym (od 2026 r., `Dz.U. 2025 poz. 1299`)**, czerwone storno z uzasadnieniem, narastające zaliczki PIT (skala `12%/32%`, liniowy `19%`) oraz kalkulator składek ZUS/zdrowotnej (`@pap/domain`, `@pap/web`, PR `#47`, `#51`).
-- [x] `E3-06` Generator i podgląd danych deklaracyjno-ewidencyjnych **`JPK_V7M(2)` oraz `JPK_V7M(3)`** (obowiązującego od lutego 2026 r. wg `Dz.U. 2025 poz. 1800`, pola `P_10`–`P_62`, oznaczenia KSeF i GTU) powiązany z rejestrami VAT (`@pap/domain/vat`, `@pap/web`, PR `#47`, `#51`).
+- [x] `E3-06` Generator i podgląd danych deklaracyjno-ewidencyjnych **`JPK_V7M(2)` oraz `JPK_V7M(3)`** (obowiązującego od lutego 2026 r. wg `Dz.U. 2025 poz. 1800`, pola `P_10`–`P_62`, oznaczenia KSeF i GTU) powiązany z rejestrami VAT (`@pap/domain` — moduł `vat`, `@pap/web`, PR `#47`, `#51`).
 - [ ] `E3-07` _(Wymaga osobnej decyzji właściciela przed udostępnieniem komercyjnym)_ Formalny odbiór i certyfikacja profili przez licencjonowanego doradcę podatkowego, pełny eksport i wysyłka kryptograficzna plików XML `JPK_PKPIR`/`JPK_V7M` do bramki e-Deklaracje MF oraz audyt RODO pod kątem przetwarzania danych rzeczywistych.
 
 ---
@@ -60,7 +60,7 @@
 ## Etap 4 — kolejne profile podatkowe i pełne księgi rachunkowe
 
 - [x] `E4-01` **JDG na ryczałcie od przychodów ewidencjonowanych:** ewidencja przychodów wg stawek `17%`–`2%` (`art. 12` ustawy o ryczałcie), proporcjonalne odliczenie składek ZUS społecznych i **50% zapłaconej składki zdrowotnej** (`art. 11`), progi zdrowotne `60 000 PLN` / `300 000 PLN` oraz wizualny monitor limitu zwolnienia VAT `240 000 PLN` (`@pap/domain`, `@pap/web`, PR `#47`, `#51`).
-- [x] `E4-02` **Pełne księgi rachunkowe (Ustawa o rachunkowości):** Zakładowy Plan Kont (Zespoły `0`–`8`), wielopozycyjny dziennik księgowań z twardą walidacją równowagi podwójnego zapisu `SUM(Wn) === SUM(Ma)` (`422` przy niezgodności), Zestawienie Obrotów i Sald (ZOiS), uproszczony Bilans (`Aktywa === Pasywa`) oraz Rachunek Zysków i Strat (`@pap/domain/ledger`, `@pap/db`, `@pap/api`, `@pap/web`, PR `#47`, `#50`–`#52`).
+- [x] `E4-02` **Pełne księgi rachunkowe (Ustawa o rachunkowości):** Zakładowy Plan Kont (Zespoły `0`–`8`), wielopozycyjny dziennik księgowań z twardą walidacją równowagi podwójnego zapisu `SUM(Wn) === SUM(Ma)` (`422` przy niezgodności), Zestawienie Obrotów i Sald (ZOiS), uproszczony Bilans (`Aktywa === Pasywa`) oraz Rachunek Zysków i Strat (`@pap/domain` — moduł `full-ledger`, `@pap/db`, `@pap/api`, `@pap/web`, PR `#47`, `#50`–`#52`).
 - [x] `E4-03` **Spółka z o.o. (CIT klasyczny):** kalkulacja miesięcznej zaliczki CIT (`9%` mały podatnik do 2 mln EUR vs `19%` stawka podstawowa, wyłączenia NKUP i `75%` limitu samochodowego wg `art. 16 ust. 1 pkt 51` CIT, PR `#47`, `#51`, `#52`). _(Generowanie pełnych struktur XML `JPK_KR_PD` / `JPK_ST_KR` i `e-Sprawozdań Finansowych` z podpisem zarządu pozostaje w backlogu przedprodukcyjnym)._
 - [ ] `E4-04` _(Planowane)_ Spółki osobowe i cywilne w pełnym rozliczeniu wielowspólnikowym (rozdział ksiąg podmiotu od indywidualnych zaliczek PIT i składek ZUS poszczególnych wspólników — obecnie ujęte edukacyjnie w Akademii).
 - [ ] `E4-05` _(Planowane)_ Automatyczne odpytywanie zewnętrznego API Białej Listy KAS (MF WL API), GUS REGON i tabel kursowych NBP w czasie rzeczywistym (obecnie walidacja opiera się na deterministycznych regułach i danych kontrolowanego środowiska).

@@ -57,7 +57,7 @@ Widok `/app/kpir` (przeznaczony dla JDG na skali podatkowej i podatku liniowym) 
 - **Przełącznik układu rozporządzenia PKPiR:**
   - **Wzór 2026 (19 kolumn wg `Dz.U. 2025 poz. 1299`):** zawiera dedykowaną **Kolumnę 3 na Numer KSeF**, Kolumnę 4 na numer innego dowodu, **Kolumnę 5 na NIP kontrahenta**, Kolumny 9–11 na przychody oraz Kolumny 12–16 na wydatki (w tym Kolumnę 15 na pozostałe wydatki KUP i Kolumnę 18 na koszty działalności B+R).
   - **Wzór 2019/2025 (17 kolumn wg `Dz.U. 2019 poz. 2544`):** historyczny układ obowiązujący dla zdarzeń do `2025-12-31` (przychód ze sprzedaży w Kol. 7, pozostałe wydatki w Kol. 13).
-- **Szufladę wyjaśnienia „§ Dlaczego?”:** przy każdym wierszu KPiR kliknięcie przycisku `§ Dlaczego?` otwiera dokładny ślad wyliczenia w groszach i PLN (np. jak z faktury za paliwo `246,00 PLN` brutto wyliczono `20,00 PLN` odliczonego VAT i `169,50 PLN` kosztu podatkowego KUP) wraz z klikalnym linkiem do aktu prawnego w ISAP.
+- **Szufladę wyjaśnienia „§ Dlaczego?”:** przy każdym wierszu KPiR kliknięcie przycisku `§ Dlaczego?` otwiera dokładny ślad wyliczenia w groszach i PLN (np. jak z faktury za paliwo `246,00 PLN` brutto — `200,00 PLN` netto + `46,00 PLN` VAT 23%, użytek mieszany `50% VAT / 75% KUP` — wyliczono **`23,00 PLN`** odliczonego VAT i **`167,25 PLN`** kosztu podatkowego KUP) wraz z klikalnym linkiem do aktu prawnego w ISAP.
 - **Symulację porównawczą zaliczki PIT** (skala `12%`/`32%` z kwotą wolną `30 000 PLN` vs podatek liniowy `19%` z limitem odliczenia składki zdrowotnej `14 100 PLN` w 2026 r.) oraz formularz **czerwonego storna / korekty** z obowiązkowym podaniem przyczyny.
 
 ### 2.3. Ewidencja przychodów ryczałtowych i monitor limitu VAT (`/app/ryczalt`)
@@ -97,7 +97,7 @@ W module `/app/finance`:
 
 - **`/app/calendar`:** prezentuje miesięczne zobowiązania firmy (np. ZUS DRA do `15.` dnia miesiąca dla Sp. z o.o. lub do `20.` dnia dla JDG, zaliczki PIT/CIT/ryczałt do `20.` dnia, `JPK_V7M` do `25.` dnia). Gdy ustawowy dzień płatności wypada w sobotę, niedzielę lub święto ustawowo wolne od pracy (w tym **wolną Wigilię 24 grudnia** obowiązującą od 2025 r.), system wskazuje przesunięcie na najbliższy dzień roboczy zgodnie z `art. 12 § 5` Ordynacji podatkowej i pozwala oznaczyć zobowiązanie jako opłacone.
 - **`/app/rules`:** umożliwia przeszukiwanie wszystkich **32 kodów reguł prawnych (42 wersji temporalnych)** z filtrami kategorii, okresu obowiązywania i bezpośrednimi linkami do `ISAP` / `Dz.U.`.
-- **`/app/notifications`:** pozwala skonfigurować preferencje przypomnień (`7 dni przed`, `2 dni przed`, `po terminie` lub całkowity `opt-out`), ręcznie wyzwolić wysyłkę należnych alertów (`dispatch-due`) i podejrzeć surowe wiadomości **MIME RFC 5322** (`text/plain` + `text/html`, bez pełnego NIP i bez kwot w temacie wiadomości) przechwycone w bezpiecznej skrzynce **`ControlledSandboxMailboxTransport`**.
+- **`/app/notifications`:** pozwala skonfigurować w formularzu 4 progi przypomnień (`Wyprzedzenie 7 dni przed terminem`, `Pilne przypomnienie 2 dni przed terminem`, `W dniu ustawowego terminu (0 dni)` oraz `Monit zaległości 3 dni po terminie`, a także całkowity `opt-out` — przy czym silnik domenowy mapuje wysyłki na etapy wyprzedzające i po terminie: `advance_7d`, `urgent_2d`, `overdue_1d`), ręcznie wyzwolić wysyłkę należnych alertów (`dispatch-due`) i podejrzeć surowe wiadomości **MIME RFC 5322** (`text/plain` + `text/html`, bez pełnego NIP i bez kwot w temacie wiadomości) przechwycone w bezpiecznej skrzynce **`ControlledSandboxMailboxTransport`**.
 
 ---
 
@@ -120,7 +120,7 @@ Platforma egzekwuje ścisły rozdział uprawnień administracyjnych i operacyjny
 3. Wskaż użytkownika (np. `marta-ksiegowa`) oraz poziom uprawnień:
    - **`read` (`accounting_read`):** wyłącznie wgląd w dokumenty, ewidencje i podsumowania podatkowe — każda próba zapisu lub zatwierdzenia dokumentu zwróci `403 Forbidden`,
    - **`read + write` (`accounting_write`):** prawo weryfikacji i księgowania dokumentów, dodawania wpisów oraz parowania płatności w danej firmie.
-4. Aby odebrać dostęp, kliknij **Cofnij grant** i potwierdź operację w oknie `ConfirmOperationDialog`. Cofnięcie działa natychmiastowo (transakcyjnie z blokadą wiersza i zapisem w audycie), a w przypadku odebrania członkostwa w całej organizacji wszystkie granty firmowe tego użytkownika są trwale unieważniane (`6D-R`).
+4. Aby odebrać dostęp, kliknij **Cofnij dostęp** i potwierdź operację w oknie modalnym `CriticalConfirmDialog` przyciskiem **Tak, cofnij grant dostępu**. Cofnięcie działa natychmiastowo (transakcyjnie z blokadą wiersza i zapisem w audycie), a w przypadku odebrania członkostwa w całej organizacji wszystkie granty firmowe tego użytkownika są trwale unieważniane (`6D-R`).
 5. Każda decyzja `allow/deny` z UI, REST API oraz MCP jest widoczna w sekcji **Dziennik audytu** na tym samym ekranie.
 
 ---
@@ -160,26 +160,28 @@ _(W lokalnym środowisku deweloperskim z włączonym `PAP_SANDBOX_AUTH_ENABLED=t
 
 ### 4.3. Katalog 9 narzędzi MCP i dwuetapowe zatwierdzanie przez człowieka
 
-| Narzędzie MCP                          | Wymagany scope    | Działanie                                                                                                                                                                         |
-| -------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `system_status`                        | `pap:mcp:read`    | Zwraca stan systemu i zweryfikowaną tożsamość zalogowanego aktora.                                                                                                                |
-| `list_my_companies`                    | `pap:mcp:read`    | Zwraca wyłącznie firmy dostępne dla użytkownika (z zamaskowanym NIP).                                                                                                             |
-| `list_unpaid_invoices`                 | `pap:mcp:read`    | Zwraca nierozliczone faktury w PLN (pola tekstowe są oczyszczone ze znaków Bidi i oznaczone jako niezaufane dane dokumentu).                                                      |
-| `get_monthly_tax_obligations`          | `pap:mcp:read`    | Wylicza terminy ZUS, PIT/CIT i VAT na dany miesiąc wraz z podstawą prawną.                                                                                                        |
-| `explain_accounting_item`              | `pap:mcp:read`    | Wyjaśnia krok po kroku wyliczenie KUP/NKUP i VAT dla wskazanej pozycji.                                                                                                           |
-| `get_legal_basis`                      | `pap:mcp:read`    | Zwraca treść i parametry zweryfikowanej reguły prawnej z linkiem ISAP na wskazany dzień.                                                                                          |
-| `get_month_close_checklist`            | `pap:mcp:read`    | Sprawdza listę kontrolną zamknięcia miesiąca (niezatwierdzone szkice, niesparowane przelewy).                                                                                     |
-| `prepare_invoice_and_posting_proposal` | `pap:mcp:prepare` | **Krok 1 zapisu:** tworzy propozycję księgowania w stanie `pending_human_approval` (`ledgerPosted: false`) i zwraca `proposalId` oraz `payloadHash`. **Nie modyfikuje ksiąg.**    |
-| `confirm_prepared_proposal`            | `pap:mcp:prepare` | **Krok 2 zapisu:** finalizuje propozycję wyłącznie po podaniu ważnego jednorazowego `confirmationCode` wygenerowanego przez człowieka oraz zgodnego skrótu `expectedPayloadHash`. |
+| Narzędzie MCP                          | Wymagany scope                                              | Działanie                                                                                                                                                                         |
+| -------------------------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `system_status`                        | `pap:mcp:read` _(na HTTP `/api/v1/mcp`; w STDIO publiczne)_ | Przyjmuje `{}` i zwraca wyłącznie `SystemStatusSchema` (`{ service, status, version, modules }`) — nie zwraca tożsamości zalogowanego aktora.                                     |
+| `list_my_companies`                    | `pap:mcp:read`                                              | Zwraca wyłącznie firmy dostępne dla użytkownika (z zamaskowanym NIP).                                                                                                             |
+| `list_unpaid_invoices`                 | `pap:mcp:read`                                              | Zwraca nierozliczone faktury w PLN (pola tekstowe są oczyszczone ze znaków Bidi i oznaczone jako niezaufane dane dokumentu).                                                      |
+| `get_monthly_tax_obligations`          | `pap:mcp:read`                                              | Wylicza terminy ZUS, PIT/CIT i VAT na dany miesiąc wraz z podstawą prawną.                                                                                                        |
+| `explain_accounting_item`              | `pap:mcp:read`                                              | Wyjaśnia krok po kroku wyliczenie KUP/NKUP i VAT dla wskazanej pozycji.                                                                                                           |
+| `get_legal_basis`                      | `pap:mcp:read`                                              | Zwraca treść i parametry zweryfikowanej reguły prawnej z linkiem ISAP na wskazany dzień.                                                                                          |
+| `get_month_close_checklist`            | `pap:mcp:read`                                              | Sprawdza listę kontrolną zamknięcia miesiąca (niezatwierdzone szkice, niesparowane przelewy).                                                                                     |
+| `prepare_invoice_and_posting_proposal` | `pap:mcp:prepare`                                           | **Krok 1 zapisu:** tworzy propozycję księgowania w stanie `pending_human_approval` (`ledgerPosted: false`) i zwraca `proposalId` oraz `payloadHash`. **Nie modyfikuje ksiąg.**    |
+| `confirm_prepared_proposal`            | `pap:mcp:prepare`                                           | **Krok 2 zapisu:** finalizuje propozycję wyłącznie po podaniu ważnego jednorazowego `confirmationCode` wygenerowanego przez człowieka oraz zgodnego skrótu `expectedPayloadHash`. |
 
 **Jak bezpiecznie zatwierdzić propozycję przygotowaną przez agenta AI:**
 
 1. Poproś swojego asystenta AI o przygotowanie szkicu faktury narzędziem `prepare_invoice_and_posting_proposal`. Agent otrzyma `proposalId` oraz `payloadHash`, ale dokument **nie trafi jeszcze do ksiąg**.
 2. Otwórz w przeglądarce ekran **`/app/mcp`** (zalogowany jako człowiek z uprawnieniem `write` do tej firmy).
-3. Sprawdź kwoty, NIP, stawkę VAT i kwalifikację kosztu na karcie oczekującej propozycji:
-   - możesz od razu zatwierdzić lub odrzucić propozycję bezpośrednio w interfejsie webowym, **albo**
-   - kliknąć **„Wydaj kod wyzwania dla klienta MCP”**, co wygeneruje krótkotrwały, jednorazowy kod potwierdzenia (`confirmationCode` z czasem wygaśnięcia `expiresAt`).
-4. Przekaż ten jednorazowy kod agentowi (lub wpisz go w oknie zatwierdzania). Jeżeli ktokolwiek zmieniłby w międzyczasie choćby 1 grosz w ładunku propozycji, porównanie `expectedPayloadHash` odrzuci operację. Token posiadający autonomiczny znacznik `pap:mcp:agent_autonomous` ma twardy zakaz wydawania wyzwań i samoakceptacji (`403 agent_self_approval_forbidden`).
+3. Sprawdź kwoty, NIP, stawkę VAT i kwalifikację kosztu na karcie oczekującej propozycji, a następnie kliknij przycisk **`1. Wygeneruj kod potwierdzenia człowieka`**, który wystawi jednorazowy kod wyzwania (`confirmationCode`, TTL 5 minut).
+4. Sfinalizuj zatwierdzenie (nie istnieje jedno-klikowe zatwierdzenie bez kodu):
+   - przekaż wygenerowany jednorazowy kod klientowi MCP, aby wywołał `confirm_prepared_proposal` wraz z `expectedPayloadHash`, **albo**
+   - wpisz/wklej ten kod w polu obok na karcie w `/app/mcp` i kliknij **`2. Zatwierdź propozycję z kodem człowieka`** (analogicznie w widoku szczegółowym `/approvals/proposals/[proposalId]`: **`Wygeneruj kod potwierdzenia (TTL 5 min)`** -> **`Zatwierdź i zaksięguj propozycję`**).
+   - _Uwaga dot. odrzucania propozycji:_ na ekranie `/app/mcp` nie ma osobnego przycisku odrzucenia — odrzucenie oczekującej propozycji jest dostępne przez endpoint REST `POST /api/v1/tenants/:tenantId/companies/:legalEntityId/mcp/proposals/:proposalId/reject`.
+   - Jeżeli ktokolwiek zmieniłby w międzyczasie choćby 1 grosz w ładunku propozycji, porównanie `expectedPayloadHash` odrzuci operację. Token posiadający autonomiczny znacznik `pap:mcp:agent_autonomous` ma twardy zakaz wydawania wyzwań i samoakceptacji (`403 agent_self_approval_forbidden`).
 
 ---
 

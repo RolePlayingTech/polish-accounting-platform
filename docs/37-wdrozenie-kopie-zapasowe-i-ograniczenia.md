@@ -96,6 +96,8 @@ Używana **wyłącznie** na czas wykonywania jawnych migracji schematu Drizzle (
 ## 3. Procedury operacyjne: kopie zapasowe, wdrożenie, testy dymne i rollback
 
 > **Warunek wstępny:** poniższe polecenia na hoście `hetz-1` wykonuje wyłącznie właściciel projektu lub upoważniony operator po uzyskaniu jawnej zgody na konkretny numer SHA wydania.
+>
+> **Lokalizacja skryptów:** skrypty `/var/www/pap-staging/bin/pap-{db-backup,db-restore-drill,deploy-release,smoke-test,rollback}.sh` to narzędzia operacyjne zainstalowane bezpośrednio na hoście stagingu (`hetz-1`), natomiast w repozytorium Git w katalogu `scripts/hetzner/` wersjonowany jest skrypt izolowanego CI `with-ephemeral-pg18.sh`.
 
 ### 3.1. Kopia zapasowa bazy danych przed wdrożeniem (`pap-db-backup.sh`)
 
@@ -184,7 +186,7 @@ Poniższe zestawienie stanowi jawne oświadczenie o granicach odpowiedzialności
    - System **nie łączy się** na żywo z rachunkami bankowymi przez interfejsy `PSD2` i nie zleca przelewów bankowych (obsługuje wyłącznie kontrolowany import plików wyciągów `CSV` i `MT940`).
 2. **Blokada zewnętrznej wysyłki wiadomości e-mail (Fail-Closed):**
    - Silnik powiadomień używa wyłącznie izolowanego transportu **`ControlledSandboxMailboxTransport`** przechowującego wiadomości w formacie **MIME RFC 5322** do inspekcji wewnątrz aplikacji (`/app/notifications`).
-   - Każda próba zaadresowania wiadomości poza dozwolone domeny testowe/rezerwowe (`pap.local`, `*.pap.local`, `.example`, `.test`, `.invalid`, `.localhost`), np. na rzeczywistą skrzynkę `@gmail.com` lub domenę firmową, kończy się natychmiastową blokadą **`403 Forbidden` (`blocked_recipient_policy`)** i zredagowanym wpisem w audycie.
+   - Bazowy transport `ControlledSandboxMailboxTransport` w `@pap/application` dopuszcza domyślnie `['pap.local', '*.pap.local', 'example.test']`, natomiast wrapper warstwy REST API (`SANDBOX_ALLOWED_EMAIL_DOMAINS` w `AccountingWorkspaceService`) dopuszcza domyślnie wyłącznie domeny rezerwowe RFC 2606 (`*.example`, `*.invalid`, `*.test`, `*.localhost`) — w efekcie wywołanie REST API z adresem `@pap.local` bez jawnej zmiany konfiguracji oraz każda próba wysyłki na rzeczywistą skrzynkę zewnętrzną (np. `@gmail.com` lub domenę firmową) kończą się natychmiastową blokadą **`403 Forbidden` (`blocked_recipient_policy`)** i zredagowanym wpisem w audycie.
    - Szablony wiadomości nie zawierają w tematach i nagłówkach pełnego numeru NIP ani kwot podatków oraz posiadają obowiązkową stopkę informującą, że powiadomienie nie pochodzi z urzędu skarbowego, Ministerstwa Finansów ani ZUS.
 3. **Wyłącznie dane syntetyczne — zakaz wprowadzania danych rzeczywistych:**
    - Środowisko rozwojowe oraz prywatny staging `https://ksiegowosc.roleplayingtech.com` nie są środowiskiem produkcyjnym RODO.
