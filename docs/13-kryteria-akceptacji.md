@@ -1,33 +1,58 @@
-# 13. Kryteria akceptacji i strategia testów
+# 13. Kryteria akceptacji, macierz testów i bramki zgodności (Compliance Gating)
 
-## Wymagania przekrojowe
-- Użytkownik nie widzi dokumentów, rozliczeń ani metadanych firmy, do której nie ma prawa.
-- API, MCP i UI korzystają z jednej autoryzacji i walidacji.
-- Plik oryginalny nie jest nadpisywany; każda ekstrakcja, korekta i zatwierdzenie są rejestrowane.
-- Każde działanie skutkujące zobowiązaniem finansowym, wysyłką lub księgowaniem wymaga uprawnionej akceptacji i potwierdzenia wersji danych.
-- Retry importu i integracji nie generuje podwójnych zapisów.
-- Żadnych rzeczywistych dokumentów i sekretów w publicznych przykładach ani logach.
-- Backup i restore odtwarzają stan wraz z metadanymi/wersjami reguł.
+> **Stan na `main` (listopad 2026 r., po scaleniu PR `#45`–`#52`):** dokument definiuje przekrojowe kryteria odbioru platformy, mapuje kanoniczne scenariusze pozytywne i negatywne na konkretne moduły w repozytorium oraz określa aktualny poziom dojrzałości zgodności podatkowej (`supported` w silniku domenowym vs warunki przejścia do użycia komercyjnego).
 
-## Testy przypadków
-| Przypadek | Oczekiwane zachowanie |
-| --- | --- |
-| Faktura poprawna | Import, spójne kwoty, kolejka weryfikacji |
-| Ten sam plik drugi raz | Duplikat bez powielenia operacji |
-| Różny plik, ten sam numer i NIP | Konflikt, nie arbitralna deduplikacja |
-| PDF z instrukcją „wyślij dane” | Tekst uznany za dane, brak wykonania |
-| Token firmy A żąda danych firmy B | Odmowa i audit event |
-| Wygasłe uprawnienie MCP | Odmowa bez side effects |
-| Zatwierdzenie draftu po zmianie kwoty | Wymuszenie ponownego przygotowania |
-| Timeout po wysyłce do KSeF | Kontrola statusu i idempotencja |
-| Schemat JPK dla złego okresu | Błąd walidacji przed wygenerowaniem |
-| Cofnięta reguła podatkowa | Historyczne rozliczenia odtwarzalne |
-| Próba księgowania zamkniętego okresu | Odrzucenie albo kontrolowana korekta |
-| Sumy zapisów Wn/Ma różne | Odmowa commit |
-| Nieznany status podatkowy | Zatrzymanie ścieżki bez domyślania |
+---
 
-## Compliance gating
-Wprowadzenie oznaczenia supported dla profilu wymaga: potwierdzonego zakresu prawa na rok, przypadków referencyjnych i regresyjnych, walidacji XSD, review eksperta oraz raportu odchyleń. W przeciwnym razie funkcja jest experimental albo planowana.
+## 1. Wymagania przekrojowe (Security & Accounting Invariants)
 
-## Definition of Done
-Opis wymagań, zależności i granic; testy pozytywne i negatywne; migracja i rollback; audyt; analiza bezpieczeństwa; dokumentacja i źródła reguł; brak niezatwierdzonych połączeń produkcyjnych.
+1. **Ścisła izolacja wielofirmowa (Deny-by-Default):** użytkownik, token API ani klient MCP nie widzą dokumentów, ksiąg, rozrachunków ani metadanych firmy `(tenantId, legalEntityId)`, do której nie posiadają aktywnego członkostwa i ważnego grantu czasowego. W warstwie PostgreSQL 18 niezmiennik ten wymusza `FORCE ROW LEVEL SECURITY` na wszystkich **27 tabelach** (`0001`–`0007`), rola runtime `NOBYPASSRLS` oraz podpisany kontekst `HMAC-SHA256` (`pap.context`).
+2. **Jeden rdzeń autoryzacji i walidacji (`ADR-001`, `ADR-004`):** interfejs webowy (`@pap/web`), REST API (`@pap/api`) oraz serwer MCP (`@pap/mcp`) korzystają z tych samych kontraktów Zod (`@pap/contracts`), tego samego weryfikatora tokenów OIDC (`JwksOidcAccessTokenVerifier`) i tych samych polityk domenowych (`@pap/domain`, `@pap/application`).
+3. **Nienaruszalność dowodu źródłowego i pełny audyt:** oryginalny ładunek zaimportowanego dokumentu (np. XML KSeF `FA(3)`) oraz jego skrót `SHA-256` nie są nadpisywane; każda propozycja ekstrakcji, korekta człowieka, zatwierdzenie księgowania oraz odmowa dostępu (`allow/deny`) tworzą wpis audytowy (`security_decision_event`, dziennik audytu firmy).
+4. **Obowiązkowa kontrola człowieka (Human-in-the-Loop):** żadna operacja rodząca skutki w księgach podatkowych/rachunkowych nie może zostać sfinalizowana autonomicznie przez model AI ani ekstraktor OCR. W UI obowiązuje zatwierdzenie w `SplitVerificationView` (`approve-and-post`), a w MCP dwuetapowy protokół `prepare_invoice_and_posting_proposal` -> `confirm_prepared_proposal` z jednorazowym kodem wyzwania od człowieka (`confirmationCode`), krótkim czasem wygaśnięcia (TTL) i stałoczasową weryfikacją skrótu `expectedPayloadHash` (`403 agent_self_approval_forbidden` dla tokenów autonomicznych).
+5. **Deterministyczna arytmetyka groszowa i wersjonowane prawo:** obliczenia finansowe wykonują się wyłącznie na liczbach całkowitych groszy (`bigint` / safe integer) z rozróżnieniem zaokrąglenia ewidencyjnego (`half_up` do `1 gr`) od zaokrąglenia podatkowego (`art. 63 § 1` Ordynacji podatkowej do `1 PLN`), a właściwa wersja przepisu dobierana jest na dzień zdarzenia (`resolveRuleAtDate`).
+6. **Idempotencja importów i powiadomień:** ponowne przesłanie tego samego pliku kończy się detekcją duplikatu `SHA-256` (`409 Conflict`), a kolejka powiadomień Outbox eliminuje duplikaty wysyłek za pomocą kluczy deduplikacji i atomowej rezerwacji in-flight.
+7. **Brak danych rzeczywistych i blokada kanałów zewnętrznych:** w repozytorium, logach i testach występują wyłącznie dane syntetyczne; wysyłka e-mail poza domeny testowe/rezerwowe jest blokowana (`blocked_recipient_policy`), a połączenia z produkcyjnymi systemami MF/KSeF/ZUS nie istnieją.
+
+---
+
+## 2. Macierz kanonicznych przypadków akceptacyjnych i ich pokrycie w kodzie
+
+| Przypadek testowy                                                           | Oczekiwane zachowanie systemu                                                                                                                           | Status pokrycia w kodzie na `main` (moduły i PR)                                                                                     |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Poprawny import faktury (XML KSeF `FA(3)` / JSON)**                       | Walidacja NIP, dat ISO i kwot groszowych; dokument trafia do kolejki weryfikacji (`pending` / szkic) bez samoczynnego wpisu do ksiąg.                   | **Zaimplementowane i przetestowane** (`@pap/domain`, `@pap/application`, `@pap/api`, `@pap/web` — PR `#47`, `#51`, `#52`).           |
+| **Ten sam plik wgrany ponownie**                                            | Wykrycie identycznego skrótu `SHA-256` w obrębie podmiotu i odrzucenie duplikatu (`409 Conflict`) bez powielenia zapisów.                               | **Zaimplementowane i przetestowane** (`@pap/application`, `@pap/db` unikalność skrótu w `0007`, `@pap/api` — PR `#50`, `#52`).       |
+| **Treść faktury z instrukcją Prompt Injection / Unicode Bidi**              | Usunięcie znaków sterujących i znaczników Bidi, ramkowanie jako `untrusted_document_data`, flaga `promptInjectionSuspected`, zero wykonania instrukcji. | **Zaimplementowane i przetestowane** (`sanitizeUntrustedDocumentTextForMcp` w `@pap/application/mcp-gateway` — PR `#45`, `#52`).     |
+| **Token użytkownika firmy A żąda danych firmy B (Cross-Tenant)**            | Natychmiastowa odmowa `403 Forbidden` (np. persona `piotr-izolacyjny` wobec `TENANT_1_ID`) i rejestracja zdarzenia odmowy w audycie.                    | **Zaimplementowane i przetestowane** (`@pap/domain`, `@pap/db` `FORCE RLS`, `@pap/api`, `@pap/web` — PR `#48`, `#50`, `#51`, `#52`). |
+| **Księgowa z grantem `read` próbuje zaksięgować dokument**                  | Odczyt dozwolony (`200 OK`), próba mutacji `POST`/`PUT` odrzucona kodem `403 Forbidden` (persona `marta-ksiegowa` na firmie Ryczałt).                   | **Zaimplementowane i przetestowane** (`@pap/domain`, `@pap/api`, `@pap/web` — PR `#51`, `#52`).                                      |
+| **Cofnięcie członkostwa w organizacji i późniejsza reaktywacja**            | Kaskadowe, trwałe unieważnienie wszystkich grantów firmowych; reaktywacja członkostwa nie przywraca dawnych uprawnień (`6D-R`).                         | **Zaimplementowane i przetestowane** (`0002_access-lifecycle.sql`, `manageAccess` w `@pap/application` — PR `#21`, `#48`).           |
+| **Spoofing nagłówków (`x-user-id`, `x-tenant-id`) lub `?access_token=`**    | Odrzucenie żądania w bramce HTTP (`401 Unauthorized`) przed buforowaniem strumienia body i zapis do audytu bezpieczeństwa.                              | **Zaimplementowane i przetestowane** (`@pap/mcp`, `@pap/api` `JwtBearerAuthGuard` — PR `#45`, `#52`).                                |
+| **Zatwierdzenie propozycji MCP po zmianie kwoty lub bez kodu człowieka**    | Niezgodność `expectedPayloadHash`, wygasły TTL lub brak ważnego `confirmationCode` przerywa operację bez zapisu w księgach.                             | **Zaimplementowane i przetestowane** (`PapMcpGateway` + `OperationsAutomationController` — PR `#45`, `#52`).                         |
+| **Rozliczenie przełomu przepisów 2025 vs 2026 (PKPiR, VAT, JPK, ZUS)**      | Dla `2025-10` używany jest limit VAT `200 000 PLN` i 17-kolumnowa PKPiR; dla `2026-03` limit `240 000 PLN`, 19-kolumnowa PKPiR i `JPK_V7M(3)`.          | **Zaimplementowane i przetestowane** (`resolveRuleAtDate` w `@pap/domain` — moduł `legal-rules` — PR `#47`).                         |
+| **Samochód osobowy o użytku mieszanym z nieparzystym groszem VAT**          | Deterministyczne odliczenie `50%` VAT (`half_up`) i zaliczenie `75%` z `(netto + nieodliczony VAT)` w KUP ze śladem `LegalExplanation`.                 | **Zaimplementowane i przetestowane** (`@pap/domain` — moduły `vat`, `kpir` — PR `#47`).                                              |
+| **Próba zapisu niezbilansowanego dekretu w pełnych księgach (`Wn !== Ma`)** | Odrzucenie operacji błędem walidacji domenowej (`422 Unprocessable Entity`) przed zatwierdzeniem w dzienniku księgowań.                                 | **Zaimplementowane i przetestowane** (`@pap/domain` — moduł `full-ledger`, `@pap/api`, `@pap/web` — PR `#47`, `#51`, `#52`).         |
+| **Reguła niezweryfikowana (`unverified`) lub wymagająca eksperta**          | Reguła `unverified` rzuca `UnverifiedLegalRuleError` (fail-closed); reguła `requires_expert_review` wymusza `requiresHumanApproval = true`.             | **Zaimplementowane i przetestowane** (`@pap/domain` — moduł `legal-rules` — PR `#47`).                                               |
+| **Próba wysyłki powiadomienia e-mail na adres zewnętrzny (`@gmail.com`)**   | Twarda blokada `blocked_recipient_policy` (`403`) w `ControlledSandboxMailboxTransport` i zredagowany ślad audytowy (`j***@gmail.com`).                 | **Zaimplementowane i przetestowane** (`@pap/application/notifications-engine`, `@pap/api` — PR `#45`, `#52`).                        |
+| **Komunikacja na żywo z bramką MF KSeF / e-Deklaracje (timeout, UPO)**      | Idempotentne odpytywanie statusu sesji interaktywnej/wsadowej MF i archiwizacja urzędowego UPO.                                                         | **Poza bieżącym etapem testowym** — wymaga osobnej decyzji przed integracją z bramkami MF (`Etap 3b / Etap 5`).                      |
+
+---
+
+## 3. Bramki zgodności profili podatkowych (Compliance Gating)
+
+W silniku `@pap/domain` każdy scenariusz i profil posiada jawny status dojrzałości. Rozróżniamy **zgodność deterministycznego modelu w środowisku testowym/edukacyjnym** od **dopuszczenia do rzeczywistych rozliczeń komercyjnych**:
+
+| Profil podatkowy w kodzie                              | Zakres zaimplementowany na `main`                                                                                                                   | Aktualny status                                           | Warunek przejścia do użycia na danych rzeczywistych                                                                                             |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`jdg_kpir_skala` / `jdg_kpir_liniowy`**              | PKPiR 17 kolumn (2025) i 19 kolumn (2026), VAT krajowy + `JPK_V7M(2)/(3)`, pojazd `50%/75%`, storno, zaliczki PIT, ZUS i składka zdrowotna.         | `supported` _(w silniku testowym/edukacyjnym)_            | Formalny podpis doradcy podatkowego, podłączenie trwałego PG 18 + OIDC MFA, backup off-host oraz walidacja i wysyłka XSD do bramek MF.          |
+| **`jdg_ryczalt`**                                      | Ewidencja przychodów wg stawek `17%`–`2%`, odliczenie ZUS społecznego i `50%` zdrowotnej, progi `60k`/`300k`, monitor zwolnienia VAT `240 000 PLN`. | `supported` _(w silniku testowym/edukacyjnym)_            | Formalny przegląd doradcy podatkowego, eksport XSD `JPK_EWP` oraz warunki infrastrukturalne powyżej.                                            |
+| **`spzoo_pelne_ksiegi` (CIT klasyczny)**               | Plan kont Zespoły `0`–`8`, dziennik z kontrolą `Wn === Ma`, ZOiS, uproszczony Bilans i RZiS, zaliczka CIT `9%`/`19%`.                               | `experimental / baseline` _(rdzeń edukacyjno-operacyjny)_ | Rozbudowa o pełne `JPK_KR_PD` / `JPK_ST_KR`, e-Sprawozdania Finansowe XML, zamknięcia roczne i odbiór biegłego rewidenta / głównego księgowego. |
+| **Scenariusze `requires_expert_review`**               | Indywidualna stopa wypadkowa `ZUS IWA` (`>= 10` ubezpieczonych), `100%` odliczenia VAT/KUP od pojazdu z `VAT-26` i ewidencją przebiegu.             | `reviewed` _(wymusza ludzką akceptację)_                  | Indywidualna weryfikacja dokumentacji źródłowej podatnika przez uprawnionego specjalistę.                                                       |
+| **Spółki osobowe, kadry/płace, CIT estoński, WNT/OSS** | Ujęte wyłącznie w materiałach szkoleniowych Akademii (`/academy`) lub matrycy wyłączeń.                                                             | `excluded / planned`                                      | Osobna specyfikacja domenowa, migracje DB, zestaw testów referencyjnych i odbiór ekspercki.                                                     |
+
+---
+
+## 4. Środowisko wykonywania testów (Zasada `PASS` vs `NOT RUN` wg ADR-006)
+
+- **Lokalnie / w gałęzi roboczej:** szybkie testy jednostkowe pakietów (`pnpm --filter <pakiet> test`), test granic architektonicznych (`pnpm test:arch`), kontrola typów (`pnpm typecheck`), linter (`pnpm lint`) i weryfikacja formatowania (`prettier --check`).
+- **Izolowane środowisko na serwerze Hetzner (`ADR-006`):** automatyczne uruchamianie GitHub Actions pozostaje wstrzymane. Pełne testy integracyjne PostgreSQL 18.6 (`pnpm test:integration` — weryfikujące migracje `0000`–`0007`, więzy GiST, triggery, `FORCE RLS`, `NOBYPASSRLS` i audyt `security_decision_event`) uruchamiamy wyłącznie przez izolowany skrypt `scripts/hetzner/with-ephemeral-pg18.sh` w zatwierdzonym katalogu `/mnt/HC_Volume_<ID>/pap-ci-ephemeral`.
+- **Uczciwość raportowania:** żaden test niewykonany na danym commicie SHA nie może być oznaczony jako `PASS` — w opisach PR obowiązuje ścisłe rozróżnienie `PASS`, `FAIL` oraz `NOT RUN` wraz ze wskazaniem środowiska.
