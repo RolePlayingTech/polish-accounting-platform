@@ -11,10 +11,15 @@
     "@pap/contracts": "workspace:*",
     "@pap/db": "workspace:*",
     "@pap/domain": "workspace:*",
+    "@pap/mcp": "workspace:*",
     "fastify": "5.12.7",
     "jose": "6.2.13",
     "reflect-metadata": "0.2.2",
-    "rxjs": "7.8.2"
+    "rxjs": "7.8.2",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0"
   },
   "scripts": {
     "dev": "tsx watch src/main.ts",
