@@ -21,6 +21,7 @@ import {
   type GlossaryCategory,
   type QuizOptionIndex,
 } from '../src/academy/index.js';
+import { validatePolishIban, validatePolishNip } from '../src/money.js';
 
 const PLN_AMOUNT_REGEX = /^-?\d{1,3}(?: \d{3})*,\d{2} PLN$/;
 const OFFICIAL_POLISH_AUTHORITY_REGEX =
@@ -90,6 +91,7 @@ describe('Akademia Polskiej Księgowości — kompletność kursu i integralnoś
   });
 
   it('weryfikuje przykłady liczbowe w PLN, oficjalne źródła prawa RP oraz integralność quizów w każdej lekcji', () => {
+    const demoCompanyNameById = new Map<string, string>();
     for (const lesson of ACADEMY_ALL_LESSONS) {
       expect(lesson.intro.length).toBeGreaterThanOrEqual(80);
       expect(lesson.sections.length).toBeGreaterThanOrEqual(2);
@@ -110,6 +112,15 @@ describe('Akademia Polskiej Księgowości — kompletność kursu i integralnoś
 
       expect(lesson.practicalExercise.steps.length).toBeGreaterThanOrEqual(3);
       expect(lesson.practicalExercise.demoCompanyName.toLowerCase()).toContain('syntetyczn');
+      const existingDemoName = demoCompanyNameById.get(lesson.practicalExercise.demoCompanyId);
+      if (existingDemoName !== undefined) {
+        expect(lesson.practicalExercise.demoCompanyName).toBe(existingDemoName);
+      } else {
+        demoCompanyNameById.set(
+          lesson.practicalExercise.demoCompanyId,
+          lesson.practicalExercise.demoCompanyName,
+        );
+      }
       expect(lesson.commonMistakes.length).toBeGreaterThanOrEqual(3);
       expect(lesson.summary.length).toBeGreaterThanOrEqual(3);
 
@@ -162,6 +173,17 @@ describe('Akademia Polskiej Księgowości — kompletność kursu i integralnoś
       expect(resolved?.lessonHref).toBe(`/academy/lekcja/${resolved?.fieldHelp.relatedLessonSlug}`);
       expect(resolved?.fieldHelp.legalBasis.officialUrl).toMatch(OFFICIAL_POLISH_AUTHORITY_REGEX);
     }
+
+    const nipHelp = getFieldHelpById('nip');
+    expect(nipHelp).toBeDefined();
+    expect(validatePolishNip(nipHelp?.exampleValue ?? '').valid).toBe(true);
+
+    const ksefHelp = getFieldHelpById('ksef_reference');
+    const ksefNipPrefix = ksefHelp?.exampleValue.split('-')[0] ?? '';
+    expect(validatePolishNip(ksefNipPrefix).valid).toBe(true);
+
+    const ibanHelp = getFieldHelpById('white_list_iban');
+    expect(validatePolishIban(ibanHelp?.exampleValue ?? '').valid).toBe(true);
 
     expect(getFieldHelpById('unknown_field_id')).toBeUndefined();
     expect(resolveFieldHelpWithLesson('unknown_field_id')).toBeUndefined();

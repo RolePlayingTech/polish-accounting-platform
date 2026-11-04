@@ -538,7 +538,7 @@ export const MODULES_07_TO_09: readonly AcademyModule[] = [
           },
           {
             heading: 'Etap 3: Mały ZUS Plus (do 120 000 zł przychodu) lub Duży ZUS w 2026 r.',
-            body: 'Po wykorzystaniu 24 miesięcy Preferencyjnego ZUS przedsiębiorca wchodzi na **Duży ZUS** (kod `05 10`), gdzie podstawą wymiaru jest 60% prognozowanego przeciętnego wynagrodzenia — w 2026 r. podstawa ta wynosi **5 652,60 PLN**, a pełne składki społeczne z dobrowolnym chorobowym i Funduszem Pracy wynoszą łącznie **1 926,76 PLN/mies.** (emerytalna 1 103,27 zł + rentowa 452,16/452,21 zł + wypadkowa 94,39 zł + chorobowa 138,47 zł + FP 138,47 zł). Jeżeli jednak Twój przychód w poprzednim roku kalendarzowym nie przekroczył **120 000,00 PLN** (i prowadziłeś działalność przez min. 60 dni), możesz zgłosić się (kod `05 90`) do **Małego ZUS Plus** (art. 18c ustawy systemowej): wtedy podstawą składek społecznych jest połowa Twojego średniomiesięcznego dochodu z poprzedniego roku (w widełkach między 30% płacy minimalnej a 60% przeciętnego wynagrodzenia), maksymalnie przez **36 miesięcy w każdym 60-miesięcznym okresie** prowadzenia działalności!',
+            body: 'Po wykorzystaniu 24 miesięcy Preferencyjnego ZUS przedsiębiorca wchodzi na **Duży ZUS** (kod `05 10`), gdzie podstawą wymiaru jest 60% prognozowanego przeciętnego wynagrodzenia — w 2026 r. podstawa ta wynosi **5 652,00 PLN** (60% × 9 420,00 PLN), a pełne składki społeczne z dobrowolnym chorobowym i Funduszem Pracy wynoszą łącznie **1 926,76 PLN/mies.** (emerytalna 1 103,27 zł + rentowa 452,16 zł + wypadkowa 94,39 zł + chorobowa 138,47 zł + FP 138,47 zł). Jeżeli jednak Twój przychód w poprzednim roku kalendarzowym nie przekroczył **120 000,00 PLN** (i prowadziłeś działalność przez min. 60 dni), możesz zgłosić się (kod `05 90`) do **Małego ZUS Plus** (art. 18c ustawy systemowej): wtedy podstawą składek społecznych jest połowa Twojego średniomiesięcznego dochodu z poprzedniego roku (w widełkach między 30% płacy minimalnej a 60% przeciętnego wynagrodzenia), maksymalnie przez **36 miesięcy w każdym 60-miesięcznym okresie** prowadzenia działalności!',
             keyPoints: [
               'Zbieg tytułów do ubezpieczeń: jeśli poza JDG pracujesz jednocześnie na etacie z wynagrodzeniem równym co najmniej płacy minimalnej (od 2026 r. min. **4 806,00 PLN brutto**), z działalności gospodarczej nie płacisz składek społecznych ZUS — opłacasz tylko składkę zdrowotną!',
               'Do Małego ZUS Plus od 1 stycznia należy zgłosić się w nieprzekraczalnym terminie do **31 stycznia** (lub w ciągu 7 dni od zakończenia Preferencyjnego ZUS w trakcie roku).',
@@ -1016,7 +1016,7 @@ export const MODULES_07_TO_09: readonly AcademyModule[] = [
             ],
             correctOptionIndex: 1,
             explanation:
-              'Zgodnie z art. 47 ust. 1 pkt 3 ustawy o systemie ubezpieczeń społecznych płatnicy posiadający osobowość prawną (w tym sp. z o.o.) rozliczają i opłacają składki do 15. dnia następnego miesiąca.',
+              'Zgodnie z art. 47 ust. 1 pkt 2 ustawy o systemie ubezpieczeń społecznych płatnicy posiadający osobowość prawną (w tym sp. z o.o.) rozliczają i opłacają składki do 15. dnia następnego miesiąca.',
           },
           {
             id: 'q-08-03-02',

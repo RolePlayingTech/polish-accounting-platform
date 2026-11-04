@@ -8,7 +8,7 @@ export const ACADEMY_FIELD_HELP_ENTRIES: readonly FieldHelpEntry[] = [
       'Dziesięciocyfrowy Numer Identyfikacji Podatkowej służący do identyfikacji firmy w KSeF, JPK oraz na Białej Liście VAT.',
     detailedExplanation:
       'NIP składa się z 10 cyfr (ostatnia jest cyfrą kontrolną obliczaną z wag 6, 5, 7, 2, 3, 4, 5, 6, 7). W obrocie krajowym B2B wpisuj wyłącznie cyfry bez kresek; dla transakcji wewnątrzwspólnotowych VAT-UE poprzedza się go prefiksem kraju (np. PL).',
-    exampleValue: '5250001009',
+    exampleValue: '5250001003',
     warningNote:
       'Od lutego 2026 r. błędnego NIP na fakturze nie poprawisz już notą korygującą — wymagana jest faktura korygująca od sprzedawcy.',
     audienceScope: {
@@ -42,7 +42,7 @@ export const ACADEMY_FIELD_HELP_ENTRIES: readonly FieldHelpEntry[] = [
       'Unikalny urzędowy identyfikator nadawany e-fakturze ustrukturyzowanej FA(3) w chwili jej przyjęcia przez Krajowy System e-Faktur.',
     detailedExplanation:
       'Numer KSeF potwierdza autentyczność i datę wystawienia faktury ustrukturyzowanej. Jest wymagany na fakturach korygujących odnoszących się do e-faktur, w ewidencji JPK_V7M/V7K oraz w tytułach przelewów za e-faktury między podatnikami VAT.',
-    exampleValue: '5250001009-20260415-A1B2C3-D4E5F6-78',
+    exampleValue: '5250001003-20260415-A1B2C3-D4E5F6-78',
     warningNote:
       'Gdy dokument na dzień wysyłki JPK_V7 nie posiada numeru KSeF, w ewidencji stosuje się właściwy znacznik: OFF, BFK lub DI.',
     audienceScope: {
@@ -159,7 +159,7 @@ export const ACADEMY_FIELD_HELP_ENTRIES: readonly FieldHelpEntry[] = [
       'Jeżeli dla samochodu osobowego w firmie nie prowadzisz szczegółowej kilometrówki dla celów VAT (VAT-26), wydatki eksploatacyjne takie jak paliwo, serwis, opony i myjnia zaliczasz do KUP w wysokości 75%. Podstawą wyliczenia 75% jest kwota netto + nieodliczone 50% podatku VAT.',
     exampleValue: '75% × (netto + 50% VAT)',
     warningNote:
-      'Składki na ubezpieczenie samochodu (OC/AC) podlegają odrębnemu limitowi wartości auta (150 000 PLN), a nie regule 75% eksploatacji.',
+      'Dobrowolne ubezpieczenia liczone od wartości auta (AC, GAP) podlegają odrębnemu limitowi 150 000 PLN (art. 23 ust. 1 pkt 47 PIT), natomiast obowiązkowe OC stanowi KUP w 100% bez limitu wartości pojazdu.',
     audienceScope: {
       type: 'profile_specific',
       applicableProfiles: [

@@ -111,7 +111,7 @@ export const MODULE_11: AcademyModule = {
       practicalExercise: {
         title: 'Weryfikacja i korekta propozycji OCR w widoku dzielonym',
         demoCompanyId: 'demo_jdg_kpir_alfa',
-        demoCompanyName: 'Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)',
+        demoCompanyName: 'Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)',
         steps: [
           'Otwórz kolejkę „Dokumenty do weryfikacji” i wybierz syntetyczny skan faktury kosztowej ze statusem „Propozycja OCR”.',
           'Porównaj podświetlone na bursztynowo pole kwoty netto z podglądem PDF po lewej stronie i skoryguj wartość.',
@@ -279,7 +279,7 @@ export const MODULE_11: AcademyModule = {
       practicalExercise: {
         title: 'Inspekcja uprawnień MCP i przegląd operacji przygotowanej przez agenta',
         demoCompanyId: 'demo_spzoo_gamma',
-        demoCompanyName: 'Syntetyczna Pracownia Projektowa Test Sp. z o.o. (dane syntetyczne)',
+        demoCompanyName: 'Manufaktura Technologiczna Gamma sp. z o.o. (dane syntetyczne)',
         steps: [
           'Przejdź do Ustawienia -> Integracje i MCP i sprawdź aktywne zakresy tokenu OIDC (np. odczyt dokumentów, przygotowywanie szkiców).',
           'Otwórz zakładkę „Oczekujące zatwierdzenia” i przejrzyj szkic przygotowany wywołaniem prepare_* wraz ze skrótem payloadu i czasem wygaśnięcia TTL.',
@@ -449,7 +449,7 @@ export const MODULE_11: AcademyModule = {
       practicalExercise: {
         title: 'Reakcja na ostrzeżenie o niezgodnym rachunku IBAN na fakturze kosztowej',
         demoCompanyId: 'demo_spzoo_gamma',
-        demoCompanyName: 'Syntetyczna Pracownia Projektowa Test Sp. z o.o. (dane syntetyczne)',
+        demoCompanyName: 'Manufaktura Technologiczna Gamma sp. z o.o. (dane syntetyczne)',
         steps: [
           'Otwórz w kolejce weryfikacji syntetyczny dokument testowy zawierający zmieniony rachunek bankowy spoza Białej Listy VAT.',
           'Zwróć uwagę na czerwony baner ostrzegawczy blokujący przekazanie dokumentu do paczki przelewów.',

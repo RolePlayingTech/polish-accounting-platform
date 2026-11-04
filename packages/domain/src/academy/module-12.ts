@@ -103,9 +103,9 @@ export const MODULE_12: AcademyModule = {
       practicalExercise: {
         title: 'Ustawienie profilu podatkowego 2026 i test przycisku „?”',
         demoCompanyId: 'demo_jdg_kpir_alfa',
-        demoCompanyName: 'Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)',
+        demoCompanyName: 'Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)',
         steps: [
-          'Wybierz na górnym pasku firmę demonstracyjną „Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)” i przejdź do Ustawień podatkowych.',
+          'Wybierz na górnym pasku firmę demonstracyjną „Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)” i przejdź do Ustawień podatkowych.',
           'Kliknij ikonę „?” obok pola „Status VAT” oraz „Forma opodatkowania PIT”, aby przeczytać wyjaśnienie kontekstowe.',
           'Zapisz konfigurację na rok 2026: PKPiR, podatek liniowy 19%, czynny podatnik VAT rozliczany miesięcznie (JPK_V7M).',
         ],
@@ -263,7 +263,7 @@ export const MODULE_12: AcademyModule = {
       practicalExercise: {
         title: 'Wystawienie faktury sprzedaży i zatwierdzenie kosztu samochodowego w split-view',
         demoCompanyId: 'demo_jdg_kpir_alfa',
-        demoCompanyName: 'Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)',
+        demoCompanyName: 'Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)',
         steps: [
           'W module Faktury utwórz szkic faktury sprzedaży na 12 000,00 PLN netto (23% VAT) dla syntetycznego kontrahenta i zatwierdź dokument.',
           'Przejdź do Dokumentów kosztowych, otwórz fakturę serwisową auta na 800,00 PLN netto + 184,00 PLN VAT w widoku dzielonym.',
@@ -428,7 +428,7 @@ export const MODULE_12: AcademyModule = {
       practicalExercise: {
         title: 'Uruchomienie walidacji JPK_V7M(3) i inspekcja szuflady „§ Dlaczego?”',
         demoCompanyId: 'demo_jdg_kpir_alfa',
-        demoCompanyName: 'Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)',
+        demoCompanyName: 'Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)',
         steps: [
           'Otwórz widok PKPiR za czerwiec 2026 r. i sprawdź zgodność sumy kolumny 9 — dawnej 7 (12 000,00 PLN) oraz kolumny 15 — dawnej 13 (1 669,00 PLN).',
           'Przejdź do zakładki Podatki i JPK, kliknij „§ Dlaczego?” przy kwocie zaliczki PIT i prześledź kolejne wiersze calculation_trace.',
@@ -489,7 +489,7 @@ export const MODULE_12: AcademyModule = {
             'Na którym etapie stosuje się zaokrąglenie do pełnych złotych na podstawie art. 63 § 1 Ordynacji podatkowej?',
           options: [
             'Przy każdej pojedynczej pozycji towarowej na fakturze sprzedaży',
-            'Przy wpisywaniu pojedynczej faktury kosztowej do kolumny 13 PKPiR',
+            'Przy wpisywaniu pojedynczej faktury kosztowej do kolumny pozostałych wydatków PKPiR (kol. 15 od 2026 r. / dawnej kol. 13)',
             'Przy ustalaniu łącznej podstawy opodatkowania oraz kwoty podatku/zaliczki podlegającej wpłacie do urzędu skarbowego',
             'W polskim prawie podatkowym nigdy nie zaokrągla się podatków do pełnych złotych',
           ],
@@ -599,7 +599,7 @@ export const MODULE_12: AcademyModule = {
       practicalExercise: {
         title: 'Włączenie alertów e-mail i zatwierdzenie szkicu przygotowanego przez MCP',
         demoCompanyId: 'demo_jdg_kpir_alfa',
-        demoCompanyName: 'Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)',
+        demoCompanyName: 'Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)',
         steps: [
           'Otwórz Kalendarz podatkowy na lipiec 2026 r. i sprawdź adnotację o przesunięciu terminu JPK_V7M z soboty 25.07 na poniedziałek 27.07.',
           'Włącz przypomnienia e-mail wysyłane na 3 dni robocze przed terminem ZUS, PIT i VAT.',

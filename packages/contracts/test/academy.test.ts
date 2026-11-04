@@ -61,7 +61,7 @@ describe('Academy contracts (@pap/contracts/academy)', () => {
       shortHint: 'Unikalny identyfikator e-faktury nadawany w Krajowym Systemie e-Faktur.',
       detailedExplanation:
         'Numer KSeF identyfikuje jednoznacznie fakturę ustrukturyzowaną w systemie Ministerstwa Finansów oraz w pliku JPK_V7.',
-      exampleValue: '5250001009-20260415-A1B2C3-D4E5F6-78',
+      exampleValue: '5250001003-20260415-A1B2C3-D4E5F6-78',
       warningNote:
         'W razie braku numeru KSeF w JPK_V7 użyj odpowiedniego znacznika OFF, BFK lub DI.',
       audienceScope: {

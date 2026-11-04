@@ -101,7 +101,7 @@ export const MODULE_10: AcademyModule = {
       practicalExercise: {
         title: 'Przegląd przeterminowanych faktur i przygotowanie przypomnienia',
         demoCompanyId: 'demo_spzoo_gamma',
-        demoCompanyName: 'Syntetyczna Pracownia Projektowa Test Sp. z o.o. (dane syntetyczne)',
+        demoCompanyName: 'Manufaktura Technologiczna Gamma sp. z o.o. (dane syntetyczne)',
         steps: [
           'Otwórz zakładkę Rozrachunki i płatności dla spółki demonstracyjnej i włącz filtr „Przeterminowane należności”.',
           'Sprawdź rozbicie faktury częściowo opłaconej na kwotę pierwotną, kwotę rozliczoną oraz saldo pozostałe do zapłaty.',
@@ -271,7 +271,7 @@ export const MODULE_10: AcademyModule = {
       practicalExercise: {
         title: 'Weryfikacja 90. dnia przeterminowania dla wierzyciela i dłużnika',
         demoCompanyId: 'demo_jdg_kpir_alfa',
-        demoCompanyName: 'Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)',
+        demoCompanyName: 'Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)',
         steps: [
           'Przejdź do widoku Podatki -> Ulga na złe długi (90 dni) dla firmy demonstracyjnej JDG KPiR.',
           'Otwórz ślad obliczeniowy („Dlaczego?”) przy przeterminowanej fakturze sprzedaży i sprawdź dokładną datę upływu 90. dnia od terminu płatności.',
@@ -439,7 +439,7 @@ export const MODULE_10: AcademyModule = {
       practicalExercise: {
         title: 'Import syntetycznego wyciągu CSV i sparowanie przelewu zbiorczego',
         demoCompanyId: 'demo_jdg_kpir_alfa',
-        demoCompanyName: 'Jan Testowy — Projektowanie Syntetyczne (dane syntetyczne)',
+        demoCompanyName: 'Pracownia Projektowa Alfa — Jan Kowalski (dane syntetyczne)',
         steps: [
           'W module Płatności wybierz „Importuj wyciąg bankowy (CSV / MT940)” i wczytaj syntetyczny plik demonstracyjny za maj 2026 r.',
           'Zweryfikuj zgodność salda otwarcia i zamknięcia wyciągu oraz zatwierdź dopasowanie przelewu zbiorczego do dwóch faktur sprzedaży.',
