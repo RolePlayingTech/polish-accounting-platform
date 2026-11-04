@@ -21,7 +21,8 @@ export const ksiegaTokens = {
     canvasDocument: '#efece4',
     surface: '#ffffff',
     borderSubtle: '#e5e2d9',
-    borderStrong: '#d2cec2',
+    /** Kontrast 3.85:1 względem #ffffff i 3.69:1 względem #faf9f5 (WCAG 2.2 AA SC 1.4.11 >= 3:1). */
+    borderStrong: '#858177',
     ink: '#191c1a',
     inkSecondary: '#464c48',
     inkMuted: '#636b66',
@@ -124,7 +125,7 @@ export const ksiegaTokens = {
 } as const;
 
 export interface FormatCurrencyOptions {
-  /** Kod waluty ISO 4217, domyślnie 'PLN'. */
+  /** Kod waluty ISO 4217 (dwudziesiętnej 1/100), domyślnie 'PLN'. */
   currency?: string | undefined;
   /**
    * Gdy `true`, liczba `number` jest interpretowana jako całkowita liczba groszy (minor units).
@@ -146,6 +147,39 @@ export interface SplitMoneyParts {
 }
 
 const ISO_CURRENCY_REGEX = /^[A-Z]{3}$/;
+
+/**
+ * Waluty ISO 4217 o wykładniku innym niż 2 (0 lub 3 miejsca dziesiętne),
+ * odrzucane jawnie w helperze groszowym (1/100), aby wykluczyć ciche przesunięcie rzędu wielkości.
+ */
+const NON_CENTESIMAL_ISO_CURRENCIES = new Set([
+  'BIF',
+  'CLP',
+  'DJF',
+  'GNF',
+  'ISK',
+  'JPY',
+  'KMF',
+  'KRW',
+  'PYG',
+  'RWF',
+  'UGX',
+  'VND',
+  'VUV',
+  'XAF',
+  'XOF',
+  'XPF',
+  'BHD',
+  'IQD',
+  'JOD',
+  'KWD',
+  'LYD',
+  'OMR',
+  'TND',
+]);
+
+const MAX_SAFE_MAJOR_UNITS = Math.floor(Number.MAX_SAFE_INTEGER / 100);
+
 const POLISH_MONTHS_SHORT = [
   'sty',
   'lut',
@@ -195,7 +229,18 @@ function normalizeToGrosze(value: bigint | number, inGrosze?: boolean): bigint {
     }
     return BigInt(value);
   }
-  return BigInt(Math.round(value * 100));
+  if (Math.abs(value) > MAX_SAFE_MAJOR_UNITS) {
+    throw new RangeError(
+      'Przekroczono bezpieczny zakres liczby zmiennoprzecinkowej — przekaż kwotę w groszach jako bigint.',
+    );
+  }
+  const scaled = Math.round(value * 100);
+  if (!Number.isSafeInteger(scaled)) {
+    throw new RangeError(
+      'Przekroczono bezpieczny zakres całkowity po przeliczeniu na grosze — użyj typu bigint.',
+    );
+  }
+  return BigInt(scaled);
 }
 
 /**
@@ -210,6 +255,11 @@ export function splitFormattedMoney(
   if (!ISO_CURRENCY_REGEX.test(currency)) {
     throw new RangeError(
       `Nieprawidłowy kod waluty ISO 4217: "${options?.currency ?? ''}". Oczekiwano np. PLN, EUR, USD.`,
+    );
+  }
+  if (NON_CENTESIMAL_ISO_CURRENCIES.has(currency)) {
+    throw new RangeError(
+      `Waluta ISO 4217 "${currency}" nie stosuje podziału 1/100 (grosze/centy) — wymagany dedykowany kalkulator wykładnika waluty.`,
     );
   }
 
@@ -344,6 +394,12 @@ export function formatAccountingPeriod(
 
 const NIP_WEIGHTS = [6, 5, 7, 2, 3, 4, 5, 6, 7] as const;
 
+/**
+ * Oficjalny wzorzec strukturalny `TNIP` ze schem XSD Ministerstwa Finansów / KSeF:
+ * pierwsza cyfra 1–9, w trzycyfrowym prefiksie Urzędu Skarbowego brak dwóch zer obok siebie.
+ */
+const KSEF_TNIP_REGEX = /^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/;
+
 function stripNipFormatting(rawNip: string): string {
   return rawNip
     .trim()
@@ -352,11 +408,12 @@ function stripNipFormatting(rawNip: string): string {
 }
 
 /**
- * Weryfikuje oficjalną sumę kontrolną polskiego numeru NIP (modulo 11).
+ * Weryfikuje strukturę prefiksu Urzędu Skarbowego wg schemy MF/KSeF (`TNIP`)
+ * oraz oficjalną sumę kontrolną polskiego numeru NIP (wagi `[6,5,7,2,3,4,5,6,7]` modulo 11).
  */
 export function isValidNipChecksum(rawNip: string): boolean {
   const digits = stripNipFormatting(rawNip);
-  if (!/^\d{10}$/.test(digits)) {
+  if (!KSEF_TNIP_REGEX.test(digits)) {
     return false;
   }
   let sum = 0;
@@ -374,7 +431,7 @@ export function isValidNipChecksum(rawNip: string): boolean {
 
 /**
  * Formatuje polski numer NIP do postaci ewidencyjnej `XXX-XXX-XX-XX`.
- * W trybie `strict: true` odrzuca ciąg znaków o niepoprawnej długości lub sumie kontrolnej.
+ * W trybie `strict: true` odrzuca ciąg znaków o niepoprawnej długości, prefiksie US lub sumie kontrolnej.
  */
 export function formatNip(rawNip: string, options?: { strict?: boolean | undefined }): string {
   const digits = stripNipFormatting(rawNip);
@@ -385,7 +442,44 @@ export function formatNip(rawNip: string, options?: { strict?: boolean | undefin
     return rawNip.trim();
   }
   if (options?.strict && !isValidNipChecksum(digits)) {
-    throw new RangeError(`Nieprawidłowa suma kontrolna numeru NIP: "${rawNip}".`);
+    throw new RangeError(
+      `Nieprawidłowy prefiks Urzędu Skarbowego lub suma kontrolna numeru NIP: "${rawNip}".`,
+    );
   }
   return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6, 8)}-${digits.slice(8, 10)}`;
+}
+
+// eslint-disable-next-line no-control-regex
+const UNSAFE_CONTROL_CHARS_REGEX = /[\u0000-\u001F\u007F]/;
+
+/**
+ * Defence-in-depth dla adresów nawigacji, akcji i zasobów obrazów w UI:
+ * akceptuje wyłącznie wewnętrzne ścieżki względne `/...` (bez `//` i `/\`) albo pełne adresy `https://...`.
+ * Blokuje `javascript:`, `data:`, `vbscript:`, `file:`, `http:` oraz znaki sterujące.
+ */
+export function isSafeAppUrl(rawUrl: string): boolean {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || UNSAFE_CONTROL_CHARS_REGEX.test(trimmed)) {
+    return false;
+  }
+  if (trimmed.startsWith('/')) {
+    return !trimmed.startsWith('//') && !trimmed.startsWith('/\\');
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Zwraca oczyszczony bezpieczny adres `/...` lub `https://...`, albo `undefined` w razie naruszenia polityki.
+ */
+export function sanitizeAppUrl(rawUrl: string | undefined): string | undefined {
+  if (rawUrl === undefined) {
+    return undefined;
+  }
+  const trimmed = rawUrl.trim();
+  return isSafeAppUrl(trimmed) ? trimmed : undefined;
 }

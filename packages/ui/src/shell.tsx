@@ -1,18 +1,19 @@
 'use client';
 
 import {
-  useEffect,
   useId,
   useState,
   type AnchorHTMLAttributes,
   type PropsWithChildren,
   type ReactNode,
 } from 'react';
+import { useModalFocusTrap } from './focus-trap.js';
 import { StatusBadge } from './primitives.js';
 import {
   formatAccountingPeriod,
   formatNip,
   ksiegaTokens,
+  sanitizeAppUrl,
   type AppSurface,
   type StatusTone,
 } from './tokens.js';
@@ -102,10 +103,13 @@ export function CompanyPeriodHeader({
   period,
   taxProfileLabel,
 }: CompanyPeriodHeaderProps) {
-  const periodSelectId = useId();
+  const periodControlId = useId();
   const formattedNip = formatNip(nip);
   const normalizedPeriod = formatAccountingPeriod(period);
   const modeSpec = DATA_MODE_BADGE[dataMode];
+  const isPeriodInteractive = Boolean(
+    availablePeriods && availablePeriods.length > 0 && onPeriodChange,
+  );
 
   return (
     <div
@@ -125,7 +129,7 @@ export function CompanyPeriodHeader({
               </strong>
               {onSwitchCompany && (
                 <button
-                  className={`rounded-md border border-[#d2cec2] bg-[#faf9f5] px-2 py-0.5 text-[11px] font-medium text-[#191c1a] hover:bg-[#f4f2ec] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+                  className={`rounded-md border border-[#858177] bg-[#faf9f5] px-2 py-0.5 text-[11px] font-medium text-[#191c1a] hover:bg-[#f4f2ec] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
                   onClick={onSwitchCompany}
                   type="button"
                 >
@@ -135,7 +139,7 @@ export function CompanyPeriodHeader({
             </div>
           </div>
 
-          <span aria-hidden="true" className="hidden text-[#d2cec2] sm:inline">
+          <span aria-hidden="true" className="hidden text-[#858177] sm:inline">
             |
           </span>
 
@@ -148,7 +152,7 @@ export function CompanyPeriodHeader({
                 {formattedNip}
               </span>
             </span>
-            <span aria-hidden="true" className="text-[#d2cec2]">
+            <span aria-hidden="true" className="text-[#858177]">
               ·
             </span>
             <span className="rounded bg-[#f4f2ec] px-2 py-0.5 font-medium text-[#191c1a]">
@@ -158,37 +162,47 @@ export function CompanyPeriodHeader({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center gap-2 rounded-lg border border-[#d2cec2] bg-[#faf9f5] px-2.5 py-1">
-            <label
-              className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#636b66]"
-              htmlFor={periodSelectId}
-            >
-              Okres
-            </label>
-            {availablePeriods && availablePeriods.length > 0 && onPeriodChange ? (
-              <select
-                aria-label="Okres rozliczeniowy (RRRR-MM)"
-                className={`bg-transparent text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums} ${ksiegaTokens.a11y.focusRing}`}
-                id={periodSelectId}
-                onChange={(event) => onPeriodChange(event.target.value)}
-                value={normalizedPeriod}
-              >
-                {availablePeriods.map((optionPeriod) => {
-                  const code = formatAccountingPeriod(optionPeriod);
-                  return (
-                    <option key={code} value={code}>
-                      {code}
-                    </option>
-                  );
-                })}
-              </select>
+          <div className="flex items-center gap-2 rounded-lg border border-[#858177] bg-[#faf9f5] px-2.5 py-1">
+            {isPeriodInteractive ? (
+              <>
+                <label
+                  className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#636b66]"
+                  htmlFor={periodControlId}
+                >
+                  Okres
+                </label>
+                <select
+                  aria-label="Okres rozliczeniowy (RRRR-MM)"
+                  className={`bg-transparent text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums} ${ksiegaTokens.a11y.focusRing}`}
+                  id={periodControlId}
+                  onChange={(event) => onPeriodChange?.(event.target.value)}
+                  value={normalizedPeriod}
+                >
+                  {(availablePeriods ?? []).map((optionPeriod) => {
+                    const code = formatAccountingPeriod(optionPeriod);
+                    return (
+                      <option key={code} value={code}>
+                        {code}
+                      </option>
+                    );
+                  })}
+                </select>
+              </>
             ) : (
-              <span
-                className={`text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums}`}
-                id={periodSelectId}
-              >
-                {normalizedPeriod}
-              </span>
+              <>
+                <span
+                  className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[#636b66]"
+                  id={periodControlId}
+                >
+                  Okres
+                </span>
+                <span
+                  aria-labelledby={periodControlId}
+                  className={`text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums}`}
+                >
+                  {normalizedPeriod}
+                </span>
+              </>
             )}
           </div>
 
@@ -261,7 +275,7 @@ function defaultLinkRenderer({
 
 /**
  * Główny szkielet aplikacji („Księga Współczesna”) z podzieloną na sekcje lewą nawigacją,
- * dostępną klawiaturowo szufladą mobilną oraz rozdziałem powierzchni `/app`, `/settings` i `/platform`.
+ * dostępną klawiaturowo szufladą mobilną (focus trap + Escape) oraz rozdziałem powierzchni `/app`, `/settings` i `/platform`.
  */
 export function AppShell({
   activeHref = '/app',
@@ -280,19 +294,10 @@ export function AppShell({
   const [mobileOpen, setMobileOpen] = useState<boolean>(defaultMobileMenuOpen);
   const mobileDrawerId = useId();
   const surfaceMeta = SURFACE_META[surface];
-
-  useEffect(() => {
-    if (!mobileOpen) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setMobileOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [mobileOpen]);
+  const mobileDrawerRef = useModalFocusTrap<HTMLDivElement>({
+    open: mobileOpen,
+    onClose: () => setMobileOpen(false),
+  });
 
   const renderNavigationList = (onNavigate?: () => void) => (
     <nav
@@ -306,32 +311,41 @@ export function AppShell({
           </p>
           <ul className="mt-2 space-y-0.5" role="list">
             {section.items.map((item) => {
-              const isActive = item.href === activeHref;
+              const safeHref = sanitizeAppUrl(item.href);
+              const isActive = safeHref !== undefined && safeHref === activeHref;
               const baseItemClass = `flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px] font-medium ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`;
-              const stateClass = item.disabled
-                ? 'cursor-not-allowed text-[#636b66] opacity-60'
-                : isActive
-                  ? 'bg-[#e7f1ec] font-semibold text-[#164833] border border-[#b7d4c5]'
-                  : 'border border-transparent text-[#464c48] hover:bg-white/70 hover:text-[#191c1a]';
+              const stateClass =
+                item.disabled || !safeHref
+                  ? 'cursor-not-allowed text-[#636b66] opacity-60'
+                  : isActive
+                    ? 'bg-[#e7f1ec] font-semibold text-[#164833] border border-[#b7d4c5]'
+                    : 'border border-transparent text-[#464c48] hover:bg-white/70 hover:text-[#191c1a]';
 
-              if (item.disabled) {
+              if (item.disabled || !safeHref) {
                 return (
                   <li key={item.id}>
-                    <span aria-disabled="true" className={`${baseItemClass} ${stateClass}`}>
+                    <span
+                      aria-disabled="true"
+                      className={`${baseItemClass} ${stateClass}`}
+                      data-blocked-unsafe-href={!safeHref ? 'true' : undefined}
+                    >
                       <span>{item.label}</span>
                       <span className="text-[10px] uppercase tracking-wider text-[#636b66]">
-                        Wkrótce
+                        {item.disabled ? 'Wkrótce' : 'Zablokowano'}
                       </span>
                     </span>
                   </li>
                 );
               }
 
+              const isExternal = safeHref.startsWith('https://');
+
               return (
                 <li key={item.id}>
                   {renderLink({
-                    href: item.href,
+                    href: safeHref,
                     'aria-current': isActive ? 'page' : undefined,
+                    rel: isExternal ? 'noopener noreferrer' : undefined,
                     className: `${baseItemClass} ${stateClass}`,
                     onClick: onNavigate,
                     children: (
@@ -340,7 +354,7 @@ export function AppShell({
                           <span
                             aria-hidden="true"
                             className={`size-1.5 shrink-0 rounded-full ${
-                              isActive ? 'bg-[#1d5c42]' : 'bg-[#d2cec2]'
+                              isActive ? 'bg-[#1d5c42]' : 'bg-[#858177]'
                             }`}
                           />
                           <span className="truncate">{item.label}</span>
@@ -424,7 +438,7 @@ export function AppShell({
             aria-controls={mobileDrawerId}
             aria-expanded={mobileOpen}
             aria-label={mobileOpen ? 'Zamknij menu nawigacji' : 'Otwórz menu nawigacji'}
-            className={`inline-flex min-h-9 items-center gap-2 rounded-lg border border-[#d2cec2] bg-white px-3 py-1.5 text-xs font-semibold text-[#191c1a] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+            className={`inline-flex min-h-9 items-center gap-2 rounded-lg border border-[#858177] bg-white px-3 py-1.5 text-xs font-semibold text-[#191c1a] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
             onClick={() => setMobileOpen((prev) => !prev)}
             type="button"
           >
@@ -451,22 +465,26 @@ export function AppShell({
           <div
             aria-label="Nawigacja mobilna"
             aria-modal="true"
-            className="fixed inset-0 z-40 flex lg:hidden"
+            className={`fixed inset-0 z-40 flex lg:hidden ${ksiegaTokens.a11y.focusRing}`}
+            data-focus-trap="active"
             id={mobileDrawerId}
+            ref={mobileDrawerRef}
             role="dialog"
+            tabIndex={-1}
           >
             <div
               aria-hidden="true"
               className="fixed inset-0 bg-[#191c1a]/40"
               onClick={() => setMobileOpen(false)}
             />
-            <div className="relative z-10 flex w-72 max-w-[85vw] flex-col border-r border-[#e5e2d9] bg-[#faf9f5] shadow-xl">
+            <div className="relative z-10 flex w-72 max-w-[85vw] flex-col border-r border-[#858177] bg-[#faf9f5] shadow-xl">
               <div className="flex h-14 items-center justify-between border-b border-[#e5e2d9] px-4">
                 <span className="text-xs font-semibold uppercase tracking-[0.14em] text-[#636b66]">
                   {surfaceMeta.brandSubtitle}
                 </span>
                 <button
-                  className={`rounded-lg border border-[#d2cec2] bg-white px-2.5 py-1 text-xs font-semibold text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
+                  className={`rounded-lg border border-[#858177] bg-white px-2.5 py-1 text-xs font-semibold text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
+                  data-autofocus="true"
                   onClick={() => setMobileOpen(false)}
                   type="button"
                 >

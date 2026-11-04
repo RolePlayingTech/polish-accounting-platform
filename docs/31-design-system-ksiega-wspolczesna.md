@@ -42,7 +42,7 @@ Koncepcja oparta na szlachetnej tradycji polskich ksiąg handlowych przetłumacz
 | > Pulpit           | Masz 3 dokumenty do sprawdzenia i 1 termin za 5 dni.         |
 |   Dokumenty (3)    |--------------------------------------------------------------|
 |   KPiR / Ewidencja | DO DECYZJI CZŁOWIEKA                 | TERMINY USTAWOWE      |
-|   VAT i JPK        | [!] FV/10/2026 · Hosting UE · 492,00 | 20.11 · PIT-5 [§]     |
+|   VAT i JPK        | [!] FV/10/2026 · Hosting UE · 492,00 | 20.11 · Zaliczka PIT|
 |   Kalendarz        | [!] Propozycja MCP · Kwalifikacja    | 25.11 · JPK_V7M [§]   |
 | WIEDZA             |--------------------------------------------------------------|
 |   Akademia         | OSTATNIE POZYCJE EWIDENCYJNE                          (PLN)  |
@@ -159,7 +159,7 @@ Zamiast sztucznych ozdobników „Księga Współczesna” wyróżnia się trzem
 | `canvas.document` | `#efece4` | Podłoże podglądu dokumentu oryginalnego w `SplitVerificationView` | Wyraźna granica oryginału |
 | `surface.DEFAULT` | `#ffffff` | Karty zadaniowe, wiersze tabel, pola formularzy, szuflady i dialogi | Tło zawartości |
 | `border.subtle` | `#e5e2d9` | Cienkie linie ewidencyjne wierszy i obramowania paneli (`1px`) | Nienachalny rytm rubryk |
-| `border.strong` | `#d2cec2` | Obramowania pól formularzy, przełączników i aktywnych kontrolek | Czytelne granice wejścia |
+| `border.strong` | `#858177` | Obramowania pól formularzy, przełączników i aktywnych kontrolek | **3.85:1** na `#ffffff` / **3.69:1** na `#faf9f5` (AA 1.4.11) |
 | `ink.DEFAULT` | `#191c1a` | Tekst podstawowy, kwoty główne, nagłówki (głęboki grafit) | **16.8:1** na `#ffffff` (AAA) |
 | `ink.secondary` | `#464c48` | Tekst pomocniczy, opisy wierszy, parametry techniczne | **8.5:1** na `#faf9f5` (AAA) |
 | `ink.muted` | `#636b66` | Nadtytuły (`eyebrow`), jednostki w nagłówkach, wskazówki pól | **5.2:1** na `#faf9f5` (AA) |
@@ -240,7 +240,8 @@ Zgodnie z procesem z `docs/21-kierunek-wizualny.md` (rozdz. „Jak zatwierdzić 
 
 | Moduł | Eksportowane elementy | Przeznaczenie |
 | --- | --- | --- |
-| `tokens.ts` | `ksiegaTokens`, `formatCurrencyPln`, `splitFormattedMoney`, `formatPolishDate`, `formatAccountingPeriod`, `formatNip`, `isValidNipChecksum` | Tokeny kolorów/typografii, bezstratne formatowanie groszy PLN/ISO, polskich dat, okresów i NIP |
+| `tokens.ts` | `ksiegaTokens`, `formatCurrencyPln`, `splitFormattedMoney`, `formatPolishDate`, `formatAccountingPeriod`, `formatNip`, `isValidNipChecksum`, `isSafeAppUrl`, `sanitizeAppUrl` | Tokeny kolorów/typografii, bezstratne formatowanie groszy PLN/ISO, dat, okresów, walidacja KSeF `TNIP` oraz ochrona URL |
+| `focus-trap.ts` | `useModalFocusTrap`, `attachModalFocusTrap`, `cycleFocusTrapIndex`, `cycleRadioGroupIndex` | Zarządzanie fokusem w modalach/szufladach (WCAG 2.4.3) oraz nawigacja strzałkami WAI-ARIA `radiogroup` |
 | `primitives.tsx` | `Card`, `StatusBadge`, `ToneIcon` | Kompatybilne wstecz prymitywy powierzchni i statusów z wbudowanymi ikonami SVG |
 | `money.tsx` | `MoneyAmount` | Tabularna prezentacja kwot finansowych z wyróżnieniem groszy i wariantami semantycznymi |
 | `shell.tsx` | `AppShell`, `CompanyPeriodHeader`, `DEFAULT_APP_NAV_SECTIONS` | Główny układ aplikacji z sekcjami nawigacji, szufladą mobilną, skip-linkiem i paskiem kontekstu firmy/okresu |
@@ -250,7 +251,7 @@ Zgodnie z procesem z `docs/21-kierunek-wizualny.md` (rozdz. „Jak zatwierdzić 
 | `verification.tsx` | `SplitVerificationView`, `AiProposalField` | Dwukolumnowa weryfikacja dokumentu (oryginał + SHA-256 vs decyzja człowieka, `diff` AI, blokada `Enter`) |
 | `forms.tsx` | `FormField`, `FieldHelpButton` | Dostępne pole formularza (`role="alert"`, `aria-invalid`, `aria-describedby`) z pomocą kontekstową `fieldHelpId` |
 | `confirm-dialog.tsx` | `CriticalConfirmDialog` | Modal zatwierdzania operacji krytycznych (księgowanie, zgoda MCP, zamknięcie okresu) z podsumowaniem audytowym |
-| `academy.tsx` | `AcademyLessonView`, `InteractiveQuiz` | Komponenty edukacyjne Akademii Księgowości (przykład liczbowy, przepis, typowe błędy, zrzut ekranu, quiz) |
+| `academy.tsx` | `AcademyLessonView`, `LessonLayout`, `InteractiveQuiz` | Komponenty edukacyjne Akademii Księgowości (przykład liczbowy, przepis, typowe błędy, zrzut ekranu, quiz) |
 
 ### Plan etapowego przejścia w `apps/web` (bez naruszania granic bieżących strumieni)
 

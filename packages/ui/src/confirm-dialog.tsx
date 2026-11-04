@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useId } from 'react';
+import { useId } from 'react';
+import { useModalFocusTrap } from './focus-trap.js';
 import { MoneyAmount } from './money.js';
 import { StatusBadge, ToneIcon } from './primitives.js';
 import { formatAccountingPeriod, formatNip, ksiegaTokens } from './tokens.js';
@@ -43,7 +44,8 @@ const OPERATION_LABELS: Record<CriticalOperationType, string> = {
 
 /**
  * Modal świadomego zatwierdzania operacji krytycznych (zaksięgowanie do KPiR / księgi głównej,
- * akceptacja szkicu MCP, zamknięcie miesiąca) z podsumowaniem firmy, okresu, kwoty i skutków audytowych.
+ * akceptacja szkicu MCP, zamknięcie miesiąca) z podsumowaniem firmy, okresu, kwoty, skutków audytowych
+ * oraz pełnym zarządzaniem fokusem (focus trap, auto-focus i przywrócenie fokusu wg WCAG 2.4.3).
  */
 export function CriticalConfirmDialog({
   amountGrosze,
@@ -66,19 +68,11 @@ export function CriticalConfirmDialog({
 }: CriticalConfirmDialogProps) {
   const titleId = useId();
   const descriptionId = useId();
-
-  useEffect(() => {
-    if (!open || isSubmitting) {
-      return;
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onCancel();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [open, isSubmitting, onCancel]);
+  const dialogRef = useModalFocusTrap<HTMLDivElement>({
+    open,
+    onClose: onCancel,
+    disableEscape: isSubmitting,
+  });
 
   if (!open) {
     return null;
@@ -111,8 +105,11 @@ export function CriticalConfirmDialog({
         aria-describedby={descriptionId}
         aria-labelledby={titleId}
         aria-modal="true"
-        className="relative z-10 w-full max-w-lg rounded-xl border border-[#d2cec2] bg-white p-5 text-[#191c1a] shadow-xl sm:p-6"
+        className={`relative z-10 w-full max-w-lg rounded-xl border border-[#858177] bg-white p-5 text-[#191c1a] shadow-xl sm:p-6 ${ksiegaTokens.a11y.focusRing}`}
+        data-focus-trap="active"
+        ref={dialogRef}
         role="alertdialog"
+        tabIndex={-1}
       >
         <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#e5e2d9] pb-4">
           <div className="space-y-1">
@@ -198,7 +195,8 @@ export function CriticalConfirmDialog({
 
         <div className="mt-6 flex flex-col-reverse justify-end gap-2.5 sm:flex-row">
           <button
-            className={`min-h-9 rounded-lg border border-[#d2cec2] bg-white px-4 py-2 text-xs font-semibold text-[#191c1a] hover:bg-[#faf9f5] disabled:opacity-50 ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+            className={`min-h-9 rounded-lg border border-[#858177] bg-white px-4 py-2 text-xs font-semibold text-[#191c1a] hover:bg-[#faf9f5] disabled:opacity-50 ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+            data-autofocus="true"
             disabled={isSubmitting}
             onClick={onCancel}
             type="button"

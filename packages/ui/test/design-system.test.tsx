@@ -15,16 +15,27 @@ import {
   InteractiveQuiz,
   LedgerTable,
   LegalBasisPanel,
+  LessonLayout,
   MoneyAmount,
   ObligationTimeline,
   SplitVerificationView,
   StatusBadge,
   WhyTrigger,
+  attachModalFocusTrap,
+  cycleFocusTrapIndex,
+  cycleRadioGroupIndex,
   formatAccountingPeriod,
   formatCurrencyPln,
   formatNip,
   formatPolishDate,
+  isSafeAppUrl,
   isValidNipChecksum,
+  ksiegaTokens,
+  sanitizeAppUrl,
+  type FocusTrapContainer,
+  type FocusTrapDocument,
+  type FocusTrapKeyboardEvent,
+  type FocusableNode,
   type LedgerColumn,
   type LegalBasisInfo,
 } from '../src/index.js';
@@ -643,6 +654,345 @@ describe('Design System „Księga Współczesna” (@pap/ui)', () => {
       expect(quizHtml).toContain('Wynik: 0/1 (odpowiedziano: 1)');
       expect(quizHtml).toContain('Sprawdź wyjaśnienie');
       expect(quizHtml).toContain('art. 22 ust. 6b ustawy o PIT');
+    });
+  });
+
+  describe('Domknięcie 6 punktów audytu P2 (WCAG 2.4.3 / 1.4.11, ARIA, KSeF TNIP, zakres groszy, URL defence-in-depth)', () => {
+    it('P2-1: realizuje focus trap (Tab/Shift+Tab, auto-focus, Escape i przywracanie fokusu) w CriticalConfirmDialog i szufladzie AppShell', () => {
+      expect(cycleFocusTrapIndex(0, 0, false)).toBe(-1);
+      expect(cycleFocusTrapIndex(-1, 3, false)).toBe(0);
+      expect(cycleFocusTrapIndex(2, 3, false)).toBe(0);
+      expect(cycleFocusTrapIndex(0, 3, true)).toBe(2);
+      expect(cycleFocusTrapIndex(2, 3, true)).toBe(1);
+
+      // Pełny przebieg cyklu życia focus-trap bez zależności od przeglądarki
+      let currentActive: FocusableNode | null = null;
+      const listeners: Array<(event: FocusTrapKeyboardEvent) => void> = [];
+
+      const createMockNode = (
+        id: string,
+        attrs: Record<string, string> = {},
+      ): FocusableNode & { readonly id: string } => {
+        const node: FocusableNode & { readonly id: string } = {
+          id,
+          isConnected: true,
+          focus: () => {
+            currentActive = node;
+          },
+          hasAttribute: (name: string) => Object.prototype.hasOwnProperty.call(attrs, name),
+          getAttribute: (name: string) => attrs[name] ?? null,
+        };
+        return node;
+      };
+
+      const triggerBtn = createMockNode('open-modal-trigger');
+      const cancelBtn = createMockNode('cancel-btn', { 'data-autofocus': 'true' });
+      const confirmBtn = createMockNode('confirm-btn');
+      triggerBtn.focus();
+
+      const mockContainer: FocusTrapContainer = {
+        ...createMockNode('dialog-container'),
+        querySelector: (selector: string) =>
+          selector.includes('data-autofocus') ? cancelBtn : cancelBtn,
+        querySelectorAll: () => [cancelBtn, confirmBtn],
+      };
+
+      const mockDoc: FocusTrapDocument = {
+        get activeElement() {
+          return currentActive;
+        },
+        addEventListener: (_type, listener) => {
+          listeners.push(listener);
+        },
+        removeEventListener: (_type, listener) => {
+          const idx = listeners.indexOf(listener);
+          if (idx >= 0) {
+            listeners.splice(idx, 1);
+          }
+        },
+      };
+
+      let closeCalls = 0;
+      let escapeBlocked = true;
+
+      const detach = attachModalFocusTrap({
+        doc: mockDoc,
+        getContainer: () => mockContainer,
+        isEscapeDisabled: () => escapeBlocked,
+        onClose: () => {
+          closeCalls += 1;
+        },
+      });
+
+      // Auto-focus na przycisku anulowania z [data-autofocus="true"]
+      expect(currentActive).toBe(cancelBtn);
+
+      const dispatchKey = (key: string, shiftKey = false): boolean => {
+        let prevented = false;
+        for (const listener of [...listeners]) {
+          listener({
+            key,
+            shiftKey,
+            preventDefault: () => {
+              prevented = true;
+            },
+          });
+        }
+        return prevented;
+      };
+
+      // Cykliczne Tab: cancel -> confirm -> cancel
+      expect(dispatchKey('Tab', false)).toBe(true);
+      expect(currentActive).toBe(confirmBtn);
+      expect(dispatchKey('Tab', false)).toBe(true);
+      expect(currentActive).toBe(cancelBtn);
+
+      // Cykliczne Shift+Tab: cancel -> confirm
+      expect(dispatchKey('Tab', true)).toBe(true);
+      expect(currentActive).toBe(confirmBtn);
+
+      // Blokada Escape podczas zapisu, a po odblokowaniu wywołanie onClose
+      expect(dispatchKey('Escape')).toBe(false);
+      expect(closeCalls).toBe(0);
+      escapeBlocked = false;
+      expect(dispatchKey('Escape')).toBe(true);
+      expect(closeCalls).toBe(1);
+
+      // Zamknięcie modalu przywraca fokus na element wyzwalający
+      detach();
+      expect(currentActive).toBe(triggerBtn);
+
+      const dialogHtml = renderHtml(
+        <CriticalConfirmDialog
+          auditConsequences={['Trwały ślad audytowy']}
+          companyName="Syntetyczna Firma Testowa"
+          confirmLabel="Zatwierdź"
+          description="Opis operacji"
+          nip="5261040828"
+          onCancel={() => undefined}
+          onConfirm={() => undefined}
+          open
+          operationType="ledger_post"
+          period="2026-10"
+          title="Potwierdź księgowanie"
+        />,
+      );
+      expect(dialogHtml).toContain('data-focus-trap="active"');
+      expect(dialogHtml).toContain('tabindex="-1"');
+      expect(dialogHtml).toContain('data-autofocus="true"');
+
+      const shellHtml = renderHtml(
+        <AppShell activeHref="/app" defaultMobileMenuOpen>
+          <p>Treść</p>
+        </AppShell>,
+      );
+      expect(shellHtml).toContain('data-focus-trap="active"');
+      expect(shellHtml).toContain('data-autofocus="true"');
+    });
+
+    it('P2-2: egzekwuje kontrast obramowania kontrolek >= 3:1 (WCAG 2.2 AA SC 1.4.11)', () => {
+      const relativeLuminance = (hex: string): number => {
+        const clean = hex.replace('#', '');
+        const channels = [0, 2, 4].map((offset) => {
+          const srgb = Number.parseInt(clean.slice(offset, offset + 2), 16) / 255;
+          return srgb <= 0.04045 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+        });
+        return (
+          0.2126 * (channels[0] ?? 0) + 0.7152 * (channels[1] ?? 0) + 0.0722 * (channels[2] ?? 0)
+        );
+      };
+
+      const contrastRatio = (fg: string, bg: string): number => {
+        const l1 = relativeLuminance(fg);
+        const l2 = relativeLuminance(bg);
+        const lighter = Math.max(l1, l2);
+        const darker = Math.min(l1, l2);
+        return (lighter + 0.05) / (darker + 0.05);
+      };
+
+      expect(ksiegaTokens.colors.borderStrong).toBe('#858177');
+      expect(
+        contrastRatio(ksiegaTokens.colors.borderStrong, ksiegaTokens.colors.surface),
+      ).toBeGreaterThanOrEqual(3.8);
+      expect(
+        contrastRatio(ksiegaTokens.colors.borderStrong, ksiegaTokens.colors.canvas),
+      ).toBeGreaterThanOrEqual(3.68);
+
+      const fieldHtml = renderHtml(
+        <FormField id="f-nip" label="NIP kontrahenta">
+          <input className="border border-[#858177]" id="f-nip" type="text" />
+        </FormField>,
+      );
+      const proposalHtml = renderHtml(
+        <AiProposalField
+          confidence="high"
+          confidencePercent={94}
+          id="f-net"
+          label="Kwota netto"
+          proposedValue="100,00"
+          value="100,00"
+        />,
+      );
+      expect(fieldHtml).toContain('border-[#858177]');
+      expect(proposalHtml).toContain('border-[#858177]');
+    });
+
+    it('P2-3: zachowuje poprawną semantykę HTML5 <label> w CompanyPeriodHeader oraz WAI-ARIA radiogroup w InteractiveQuiz', () => {
+      const readOnlyHeaderHtml = renderHtml(
+        <CompanyPeriodHeader
+          companyName="Firma Syntetyczna"
+          dataFreshnessLabel="Dane aktualne"
+          nip="5261040828"
+          period="2026-10"
+          taxProfileLabel="JDG · KPiR"
+        />,
+      );
+      expect(readOnlyHeaderHtml).not.toContain('<label');
+      expect(readOnlyHeaderHtml).toContain('aria-labelledby=');
+
+      const interactiveHeaderHtml = renderHtml(
+        <CompanyPeriodHeader
+          availablePeriods={['2026-09', '2026-10']}
+          companyName="Firma Syntetyczna"
+          dataFreshnessLabel="Dane aktualne"
+          nip="5261040828"
+          onPeriodChange={() => undefined}
+          period="2026-10"
+          taxProfileLabel="JDG · KPiR"
+        />,
+      );
+      expect(interactiveHeaderHtml).toContain('<label');
+      expect(interactiveHeaderHtml).toContain('<select');
+
+      const quizHtml = renderHtml(
+        <InteractiveQuiz
+          questions={[
+            {
+              id: 'q-aria',
+              question: 'Kiedy powstaje obowiązek podatkowy VAT na zasadach ogólnych?',
+              hint: 'Art. 19a ust. 1 ustawy o VAT.',
+              correctOptionId: 'b',
+              options: [
+                { id: 'a', label: 'Z chwilą wystawienia oferty', explanation: 'Nie.' },
+                {
+                  id: 'b',
+                  label: 'Z chwilą dokonania dostawy towarów lub wykonania usługi',
+                  explanation: 'Tak.',
+                },
+              ],
+            },
+          ]}
+        />,
+      );
+
+      expect(quizHtml).toContain('id="quiz-legend-q-aria"');
+      expect(quizHtml).toContain('aria-labelledby="quiz-legend-q-aria"');
+      expect(quizHtml).toContain('role="radiogroup"');
+      expect(quizHtml).toContain('tabindex="0"');
+      expect(quizHtml).toContain('tabindex="-1"');
+
+      expect(cycleRadioGroupIndex(0, 3, 'ArrowDown')).toBe(1);
+      expect(cycleRadioGroupIndex(2, 3, 'ArrowRight')).toBe(0);
+      expect(cycleRadioGroupIndex(0, 3, 'ArrowUp')).toBe(2);
+      expect(cycleRadioGroupIndex(1, 3, 'ArrowLeft')).toBe(0);
+      expect(cycleRadioGroupIndex(2, 3, 'Home')).toBe(0);
+      expect(cycleRadioGroupIndex(0, 3, 'End')).toBe(2);
+      expect(cycleRadioGroupIndex(0, 3, 'Enter')).toBeNull();
+    });
+
+    it('P2-4: waliduje wzorzec prefiksu Urzędu Skarbowego KSeF TNIP przed sumą kontrolną modulo 11', () => {
+      // Fałszywe prefiksy US, które przechodziłyby samo modulo 11 bez reguły KSeF TNIP:
+      expect(isValidNipChecksum('0000000000')).toBe(false);
+      expect(isValidNipChecksum('0123456789')).toBe(false);
+      expect(isValidNipChecksum('1000000006')).toBe(false);
+      expect(isValidNipChecksum('0010000007')).toBe(false);
+      expect(() => formatNip('000-000-00-00', { strict: true })).toThrow(RangeError);
+      expect(() => formatNip('100-000-00-06', { strict: true })).toThrow(RangeError);
+
+      // Prawidłowe syntetyczne numery NIP z poprawnym prefiksem US (np. 526, 701) i sumą kontrolną:
+      expect(isValidNipChecksum('5261040828')).toBe(true);
+      expect(isValidNipChecksum('7010001453')).toBe(true);
+    });
+
+    it('P2-5: blokuje utratę precyzji IEEE-754 powyżej Number.MAX_SAFE_INTEGER po skalowaniu do groszy oraz waluty inne niż 1/100', () => {
+      expect(() => formatCurrencyPln(100_000_000_000_000.13)).toThrow(RangeError);
+      expect(() => formatCurrencyPln(Number.MAX_SAFE_INTEGER)).toThrow(RangeError);
+      expect(() => formatCurrencyPln(1000n, { currency: 'JPY' })).toThrow(RangeError);
+      expect(() => formatCurrencyPln(1000n, { currency: 'KWD' })).toThrow(RangeError);
+
+      // Wartości bigint powyżej zakresu IEEE-754 są formatowane bezstratnie co do grosza:
+      expect(formatCurrencyPln(10_000_000_000_000_013n)).toBe(
+        '100\u00A0000\u00A0000\u00A0000\u00A0000,13\u00A0PLN',
+      );
+    });
+
+    it('P2-6: blokuje niebezpieczne schematy URL (javascript:, data:, vbscript:, //) w nawigacji AppShell i obrazach LessonLayout', () => {
+      expect(isSafeAppUrl('/app/documents')).toBe(true);
+      expect(isSafeAppUrl('https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp')).toBe(true);
+      expect(isSafeAppUrl('javascript:alert(1)')).toBe(false);
+      expect(isSafeAppUrl('  JavaScript:alert(1)')).toBe(false);
+      expect(isSafeAppUrl('\tjavascript:alert(1)')).toBe(false);
+      expect(isSafeAppUrl('data:text/html,<script>alert(1)</script>')).toBe(false);
+      expect(isSafeAppUrl('vbscript:msgbox(1)')).toBe(false);
+      expect(isSafeAppUrl('http://niezabezpieczony.example.pl')).toBe(false);
+      expect(isSafeAppUrl('//evil.example.com/phish')).toBe(false);
+      expect(isSafeAppUrl('/\\evil.example.com/phish')).toBe(false);
+      expect(sanitizeAppUrl('javascript:void(0)')).toBeUndefined();
+
+      const shellUnsafeHtml = renderHtml(
+        <AppShell
+          sections={[
+            {
+              id: 'sec-test',
+              title: 'Test bezpieczeństwa',
+              items: [
+                { id: 'safe', label: 'Bezpieczny pulpit', href: '/app' },
+                { id: 'xss', label: 'Wstrzyknięty link', href: 'javascript:alert(1)' },
+              ],
+            },
+          ]}
+        >
+          <p>Widok</p>
+        </AppShell>,
+      );
+      expect(shellUnsafeHtml).not.toContain('href="javascript:alert(1)"');
+      expect(shellUnsafeHtml).toContain('data-blocked-unsafe-href="true"');
+
+      const lessonUnsafeHtml = renderHtml(
+        <LessonLayout
+          appScreenshot={{
+            appRoute: '/app/documents/verify',
+            alt: 'Podgląd ekranu',
+            caption: 'Opis zrzutu',
+            imageSrc: 'javascript:alert(1)',
+          }}
+          applicableProfiles={['JDG · KPiR']}
+          lead="Wprowadzenie"
+          lessonTitle="Bezpieczeństwo zasobów"
+          moduleLabel="Moduł 1"
+          readingTimeMinutes={3}
+        />,
+      );
+      expect(lessonUnsafeHtml).not.toContain('<img');
+      expect(lessonUnsafeHtml).toContain('data-blocked-unsafe-image="true"');
+
+      const lessonSafeHtml = renderHtml(
+        <LessonLayout
+          appScreenshot={{
+            appRoute: '/app/documents/verify',
+            alt: 'Prawidłowy zrzut z aplikacji',
+            caption: 'Opis zrzutu',
+            imageSrc: '/screenshots/verify-invoice.png',
+          }}
+          applicableProfiles={['JDG · KPiR']}
+          lead="Wprowadzenie"
+          lessonTitle="Bezpieczeństwo zasobów"
+          moduleLabel="Moduł 1"
+          readingTimeMinutes={3}
+        />,
+      );
+      expect(lessonSafeHtml).toContain('<img');
+      expect(lessonSafeHtml).toContain('src="/screenshots/verify-invoice.png"');
     });
   });
 });

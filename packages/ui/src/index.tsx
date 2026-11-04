@@ -1,4 +1,5 @@
 export * from './tokens.js';
+export * from './focus-trap.js';
 export * from './primitives.js';
 export * from './money.js';
 export * from './shell.js';

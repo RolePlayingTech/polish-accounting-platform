@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from 'react';
 import { ToneIcon } from './primitives.js';
-import { ksiegaTokens, type TableDensity } from './tokens.js';
+import { ksiegaTokens, sanitizeAppUrl, type TableDensity } from './tokens.js';
 
 export type LedgerColumnMobileRole = 'title' | 'status' | 'primaryAmount' | 'meta' | 'hidden';
 
@@ -112,8 +112,8 @@ export function LedgerTable<TRow>({
   };
 
   const hasFooter = columns.some((column) => column.footer !== undefined);
-
   const showHeaderBar = Boolean(title || subtitle || toolbarSlot || !hideDensityToggle);
+  const safeEmptyHref = sanitizeAppUrl(emptyState?.actionHref);
 
   return (
     <section
@@ -135,7 +135,7 @@ export function LedgerTable<TRow>({
             {!hideDensityToggle && (
               <div
                 aria-label="Gęstość wierszy tabeli"
-                className="inline-flex items-center rounded-lg border border-[#d2cec2] bg-white p-0.5"
+                className="inline-flex items-center rounded-lg border border-[#858177] bg-white p-0.5"
                 role="group"
               >
                 {(['comfortable', 'compact'] as const).map((mode) => {
@@ -193,15 +193,16 @@ export function LedgerTable<TRow>({
             {emptyState?.description ??
               'Dodaj dokument źródłowy lub zmień filtry okresu, aby wyświetlić zapisy księgowe.'}
           </p>
-          {emptyState?.actionLabel && emptyState.actionHref && (
+          {emptyState?.actionLabel && safeEmptyHref && (
             <a
               className={`mt-4 inline-flex min-h-9 items-center rounded-lg bg-[#1d5c42] px-4 py-2 text-xs font-semibold text-white hover:bg-[#164833] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
-              href={emptyState.actionHref}
+              href={safeEmptyHref}
+              rel={safeEmptyHref.startsWith('https://') ? 'noopener noreferrer' : undefined}
             >
               {emptyState.actionLabel}
             </a>
           )}
-          {emptyState?.actionLabel && !emptyState.actionHref && emptyState.onAction && (
+          {emptyState?.actionLabel && !safeEmptyHref && emptyState.onAction && (
             <button
               className={`mt-4 inline-flex min-h-9 items-center rounded-lg bg-[#1d5c42] px-4 py-2 text-xs font-semibold text-white hover:bg-[#164833] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
               onClick={emptyState.onAction}
@@ -328,7 +329,7 @@ export function LedgerTable<TRow>({
               </tbody>
               {hasFooter && (
                 <tfoot>
-                  <tr className="border-t-2 border-[#d2cec2] bg-[#f4f2ec] font-semibold">
+                  <tr className="border-t-2 border-[#858177] bg-[#f4f2ec] font-semibold">
                     {columns.map((column, colIndex) => {
                       const alignClass = resolveAlignment(column);
                       const numericClass = column.numeric

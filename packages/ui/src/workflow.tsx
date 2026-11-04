@@ -1,7 +1,7 @@
 import { WhyTrigger, type LegalBasisInfo } from './legal-basis.js';
 import { MoneyAmount } from './money.js';
 import { Card, StatusBadge } from './primitives.js';
-import { formatPolishDate, ksiegaTokens, type StatusTone } from './tokens.js';
+import { formatPolishDate, ksiegaTokens, sanitizeAppUrl, type StatusTone } from './tokens.js';
 
 export type ActionCategory =
   'document_verify' | 'mcp_approval' | 'bank_match' | 'discrepancy' | 'period_close';
@@ -92,6 +92,8 @@ export function ActionQueue({
           {items.map((item) => {
             const urgencySpec = URGENCY_BADGES[item.urgency];
             const categoryLabel = CATEGORY_LABELS[item.category];
+            const safeHref = sanitizeAppUrl(item.href);
+
             return (
               <li
                 className="flex flex-col justify-between gap-3 p-3.5 sm:flex-row sm:items-center sm:gap-4"
@@ -120,10 +122,11 @@ export function ActionQueue({
                       size="sm"
                     />
                   )}
-                  {item.href ? (
+                  {safeHref ? (
                     <a
                       className={`inline-flex min-h-9 items-center justify-center rounded-lg bg-[#1d5c42] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#164833] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
-                      href={item.href}
+                      href={safeHref}
+                      rel={safeHref.startsWith('https://') ? 'noopener noreferrer' : undefined}
                     >
                       {item.ctaLabel}
                     </a>

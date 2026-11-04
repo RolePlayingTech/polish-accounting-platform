@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useState, type ReactNode } from 'react';
 import { ToneIcon } from './primitives.js';
-import { ksiegaTokens } from './tokens.js';
+import { ksiegaTokens, sanitizeAppUrl } from './tokens.js';
 
 export interface FieldHelpInfo {
   readonly fieldHelpId: string;
@@ -25,6 +25,7 @@ export interface FieldHelpButtonProps {
 export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonProps) {
   const [open, setOpen] = useState<boolean>(defaultOpen);
   const panelId = useId();
+  const safeLessonHref = sanitizeAppUrl(help.lessonHref);
 
   useEffect(() => {
     if (!open) {
@@ -45,7 +46,7 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
         aria-controls={panelId}
         aria-expanded={open}
         aria-label={`Pomoc kontekstowa: ${help.title}`}
-        className={`inline-grid size-6 place-items-center rounded-full border border-[#d2cec2] bg-[#faf9f5] text-xs font-bold text-[#464c48] hover:border-[#1d5c42] hover:bg-[#e7f1ec] hover:text-[#164833] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+        className={`inline-grid size-6 place-items-center rounded-full border border-[#858177] bg-[#faf9f5] text-xs font-bold text-[#464c48] hover:border-[#1d5c42] hover:bg-[#e7f1ec] hover:text-[#164833] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
         data-field-help-id={help.fieldHelpId}
         onClick={() => setOpen((prev) => !prev)}
         type="button"
@@ -65,7 +66,7 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
             <p className="font-semibold text-[#164833]">{help.title}</p>
             <button
               aria-label="Zamknij pomoc kontekstową"
-              className={`rounded border border-[#b7d4c5] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#164833] ${ksiegaTokens.a11y.focusRing}`}
+              className={`rounded border border-[#858177] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#164833] ${ksiegaTokens.a11y.focusRing}`}
               onClick={() => setOpen(false)}
               type="button"
             >
@@ -79,12 +80,13 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
               {help.example}
             </p>
           )}
-          {(help.lessonHref || help.onOpenLesson) && (
+          {(safeLessonHref || help.onOpenLesson) && (
             <div className="mt-2.5 border-t border-[#b7d4c5] pt-2">
-              {help.lessonHref ? (
+              {safeLessonHref ? (
                 <a
                   className={`inline-flex items-center gap-1 font-semibold text-[#164833] underline underline-offset-2 ${ksiegaTokens.a11y.focusRing}`}
-                  href={help.lessonHref}
+                  href={safeLessonHref}
+                  rel={safeLessonHref.startsWith('https://') ? 'noopener noreferrer' : undefined}
                 >
                   <span>{help.lessonTitle ?? 'Otwórz lekcję w Akademii Księgowości'}</span>
                   <span aria-hidden="true">→</span>
@@ -129,7 +131,7 @@ export interface FormFieldProps {
 
 /**
  * Dostępne pole formularza zgodne z WCAG 2.2 AA (`label`, `hint`, `error` z `role="alert"`,
- * `aria-invalid`, `aria-describedby` oraz opcjonalny przycisk pomocy kontekstowej `FieldHelpButton`).
+ * `aria-invalid`, `aria-describedby`, obramowanie `#858177` >= 3.8:1 oraz przycisk `FieldHelpButton`).
  */
 export function FormField({
   children,
@@ -148,7 +150,7 @@ export function FormField({
   const hasError = Boolean(error);
 
   const defaultInputClass = `w-full rounded-lg border px-3 py-2 text-sm text-[#191c1a] bg-white ${
-    hasError ? 'border-[#991b1b] bg-[#fff7f7]' : 'border-[#d2cec2]'
+    hasError ? 'border-[#991b1b] bg-[#fff7f7]' : 'border-[#858177]'
   } ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`;
 
   return (

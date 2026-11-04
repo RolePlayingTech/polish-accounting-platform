@@ -48,7 +48,7 @@ const VERIFICATION_STATUS_META: Record<
 
 function isSafeHttpsUrl(rawUrl: string): boolean {
   try {
-    const parsed = new URL(rawUrl);
+    const parsed = new URL(rawUrl.trim());
     return parsed.protocol === 'https:';
   } catch {
     return false;
@@ -80,7 +80,9 @@ export function LegalBasisPanel({ basis, className = '', id, onClose }: LegalBas
   const toFormatted = basis.effectiveTo
     ? safeFormatEffectiveDate(basis.effectiveTo)
     : 'obowiązuje nadal';
-  const safeExternalUrl = isSafeHttpsUrl(basis.officialSourceUrl) ? basis.officialSourceUrl : null;
+  const safeExternalUrl = isSafeHttpsUrl(basis.officialSourceUrl)
+    ? basis.officialSourceUrl.trim()
+    : null;
 
   return (
     <section
@@ -104,7 +106,7 @@ export function LegalBasisPanel({ basis, className = '', id, onClose }: LegalBas
           {onClose && (
             <button
               aria-label="Zamknij panel podstawy prawnej"
-              className={`rounded-md border border-[#d2cec2] bg-white px-2.5 py-1 text-xs font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
+              className={`rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
               onClick={onClose}
               type="button"
             >
@@ -237,7 +239,7 @@ export function WhyTrigger({
       <button
         aria-controls={panelId}
         aria-expanded={isOpen}
-        className={`inline-flex min-h-6 items-center gap-1.5 rounded-md border border-[#dcd3b8] bg-[#f7f4ea] px-2.5 py-1 text-[11px] font-semibold text-[#5b4618] hover:bg-[#efe9d6] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+        className={`inline-flex min-h-6 items-center gap-1.5 rounded-md border border-[#858177] bg-[#f7f4ea] px-2.5 py-1 text-[11px] font-semibold text-[#5b4618] hover:bg-[#efe9d6] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
         onClick={toggle}
         type="button"
       >

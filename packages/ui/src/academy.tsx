@@ -1,10 +1,11 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { cycleRadioGroupIndex } from './focus-trap.js';
 import { LegalBasisPanel, type LegalBasisInfo } from './legal-basis.js';
 import { MoneyAmount } from './money.js';
 import { Card, StatusBadge, ToneIcon } from './primitives.js';
-import { ksiegaTokens } from './tokens.js';
+import { ksiegaTokens, sanitizeAppUrl } from './tokens.js';
 
 export interface NumericExampleRow {
   readonly label: string;
@@ -60,7 +61,8 @@ export interface InteractiveQuizProps {
 }
 
 /**
- * Interaktywny quiz sprawdzający wiedzę księgową ze wskazówkami oraz natychmiastowym wyjaśnieniem odpowiedzi.
+ * Interaktywny quiz sprawdzający wiedzę księgową ze wskazówkami, wzorcem WAI-ARIA Radio Group
+ * (`aria-labelledby`, roving `tabIndex`, klawisze strzałek) oraz natychmiastowym wyjaśnieniem odpowiedzi.
  */
 export function InteractiveQuiz({
   defaultShowHints = false,
@@ -83,6 +85,8 @@ export function InteractiveQuiz({
     return initial;
   });
 
+  const radioButtonRefs = useRef<Record<string, Array<HTMLButtonElement | null>>>({});
+
   const answeredCount = questions.filter((q) => selectedAnswers[q.id] !== undefined).length;
   const correctCount = questions.filter(
     (q) => selectedAnswers[q.id] !== undefined && selectedAnswers[q.id] === q.correctOptionId,
@@ -93,6 +97,25 @@ export function InteractiveQuiz({
     onAnswerSelect?.(question.id, optionId, optionId === question.correctOptionId);
   };
 
+  const handleRadioKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    question: QuizQuestion,
+    currentOptionIndex: number,
+  ) => {
+    const nextIndex = cycleRadioGroupIndex(currentOptionIndex, question.options.length, event.key);
+    if (nextIndex === null) {
+      return;
+    }
+    const nextOption = question.options[nextIndex];
+    if (!nextOption) {
+      return;
+    }
+    event.preventDefault();
+    handleSelect(question, nextOption.id);
+    const questionButtons = radioButtonRefs.current[question.id];
+    questionButtons?.[nextIndex]?.focus();
+  };
+
   const toggleHint = (questionId: string) => {
     setOpenHints((prev) => ({ ...prev, [questionId]: !prev[questionId] }));
   };
@@ -101,7 +124,7 @@ export function InteractiveQuiz({
     <Card
       actions={
         <span
-          className={`rounded-md border border-[#d2cec2] bg-[#faf9f5] px-2.5 py-1 text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums}`}
+          className={`rounded-md border border-[#858177] bg-[#faf9f5] px-2.5 py-1 text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums}`}
         >
           Wynik: {correctCount}/{questions.length} (odpowiedziano: {answeredCount})
         </span>
@@ -113,15 +136,18 @@ export function InteractiveQuiz({
       <div className="space-y-5">
         {questions.map((question, qIndex) => {
           const chosenOptionId = selectedAnswers[question.id];
-          const chosenOption = question.options.find((opt) => opt.id === chosenOptionId);
+          const chosenOptionIndex = question.options.findIndex((opt) => opt.id === chosenOptionId);
+          const chosenOption =
+            chosenOptionIndex >= 0 ? question.options[chosenOptionIndex] : undefined;
           const isCorrect =
             chosenOptionId !== undefined && chosenOptionId === question.correctOptionId;
           const isHintVisible = Boolean(openHints[question.id]);
           const hintPanelId = `quiz-hint-${question.id}`;
+          const legendId = `quiz-legend-${question.id}`;
 
           return (
             <fieldset className="rounded-xl border border-[#e5e2d9] bg-white p-4" key={question.id}>
-              <legend className="px-1 text-sm font-semibold text-[#191c1a]">
+              <legend className="px-1 text-sm font-semibold text-[#191c1a]" id={legendId}>
                 Pytanie {qIndex + 1}. {question.question}
               </legend>
 
@@ -129,7 +155,7 @@ export function InteractiveQuiz({
                 <button
                   aria-controls={hintPanelId}
                   aria-expanded={isHintVisible}
-                  className={`inline-flex min-h-6 items-center gap-1.5 rounded-md border border-[#d2cec2] bg-[#faf9f5] px-2.5 py-1 text-[11px] font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
+                  className={`inline-flex min-h-6 items-center gap-1.5 rounded-md border border-[#858177] bg-[#faf9f5] px-2.5 py-1 text-[11px] font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
                   onClick={() => toggleHint(question.id)}
                   type="button"
                 >
@@ -148,9 +174,17 @@ export function InteractiveQuiz({
                 )}
               </div>
 
-              <div className="mt-3 space-y-2" role="radiogroup">
-                {question.options.map((option) => {
+              <div
+                aria-labelledby={legendId}
+                className="mt-3 space-y-2"
+                data-keyboard-nav="arrow-roving"
+                role="radiogroup"
+              >
+                {question.options.map((option, optionIndex) => {
                   const isSelected = chosenOptionId === option.id;
+                  const isTabStop =
+                    chosenOptionIndex >= 0 ? optionIndex === chosenOptionIndex : optionIndex === 0;
+
                   return (
                     <button
                       aria-checked={isSelected}
@@ -159,17 +193,24 @@ export function InteractiveQuiz({
                           ? isCorrect
                             ? 'border-[#b8dec6] bg-[#eaf5ee] font-semibold text-[#165b33]'
                             : 'border-[#f3d38c] bg-[#fef7e6] font-semibold text-[#854d0e]'
-                          : 'border-[#e5e2d9] bg-[#faf9f5] text-[#191c1a] hover:bg-[#f4f2ec]'
+                          : 'border-[#858177] bg-[#faf9f5] text-[#191c1a] hover:bg-[#f4f2ec]'
                       } ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
                       key={option.id}
                       onClick={() => handleSelect(question, option.id)}
+                      onKeyDown={(event) => handleRadioKeyDown(event, question, optionIndex)}
+                      ref={(node) => {
+                        const list = radioButtonRefs.current[question.id] ?? [];
+                        list[optionIndex] = node;
+                        radioButtonRefs.current[question.id] = list;
+                      }}
                       role="radio"
+                      tabIndex={isTabStop ? 0 : -1}
                       type="button"
                     >
                       <span
                         aria-hidden="true"
                         className={`mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border ${
-                          isSelected ? 'border-current bg-white' : 'border-[#d2cec2] bg-white'
+                          isSelected ? 'border-current bg-white' : 'border-[#858177] bg-white'
                         }`}
                       >
                         {isSelected && <span className="size-2 rounded-full bg-current" />}
@@ -248,6 +289,9 @@ export function AcademyLessonView({
   readingTimeMinutes,
   relatedFieldHelpIds,
 }: AcademyLessonViewProps) {
+  const safeImageSrc = sanitizeAppUrl(appScreenshot?.imageSrc);
+  const hasBlockedImageSrc = appScreenshot?.imageSrc !== undefined && safeImageSrc === undefined;
+
   return (
     <article className="space-y-6 text-[#191c1a]">
       {/* Nagłówek lekcji */}
@@ -351,7 +395,7 @@ export function AcademyLessonView({
 
       {/* Ramka prawdziwego zrzutu ekranu z działającej aplikacji */}
       {appScreenshot && (
-        <figure className="overflow-hidden rounded-xl border border-[#d2cec2] bg-white">
+        <figure className="overflow-hidden rounded-xl border border-[#858177] bg-white">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e5e2d9] bg-[#f4f2ec] px-4 py-2.5 text-xs">
             <span className="font-semibold text-[#191c1a]">
               Widok w aplikacji Polish Accounting Platform
@@ -364,17 +408,26 @@ export function AcademyLessonView({
           </div>
 
           <div className="bg-[#faf9f5] p-4">
-            {appScreenshot.imageSrc ? (
+            {safeImageSrc ? (
               <img
                 alt={appScreenshot.alt}
                 className="w-full rounded-lg border border-[#e5e2d9]"
-                src={appScreenshot.imageSrc}
+                src={safeImageSrc}
               />
+            ) : hasBlockedImageSrc ? (
+              <div
+                className="rounded-lg border border-[#f5bcbc] bg-[#fff7f7] p-4 text-xs font-medium text-[#991b1b]"
+                data-blocked-unsafe-image="true"
+                role="alert"
+              >
+                Zablokowano niebezpieczny adres obrazu — dozwolone są wyłącznie ścieżki względne
+                `/...` oraz adresy `https://...`.
+              </div>
             ) : (
               (appScreenshot.fallbackPreview ?? (
                 <div
                   aria-label={appScreenshot.alt}
-                  className="rounded-lg border border-dashed border-[#d2cec2] bg-white p-6 text-center text-xs text-[#636b66]"
+                  className="rounded-lg border border-dashed border-[#858177] bg-white p-6 text-center text-xs text-[#636b66]"
                   role="img"
                 >
                   Miejsce na automatyczny zrzut ekranu Playwright dla ścieżki{' '}
@@ -410,7 +463,7 @@ export function AcademyLessonView({
           </span>
           {relatedFieldHelpIds.map((helpId) => (
             <code
-              className={`rounded border border-[#d2cec2] bg-white px-2 py-0.5 text-[#191c1a] ${ksiegaTokens.typography.ledgerCode}`}
+              className={`rounded border border-[#858177] bg-white px-2 py-0.5 text-[#191c1a] ${ksiegaTokens.typography.ledgerCode}`}
               key={helpId}
             >
               {helpId}
@@ -423,3 +476,6 @@ export function AcademyLessonView({
     </article>
   );
 }
+
+export const LessonLayout = AcademyLessonView;
+export type LessonLayoutProps = AcademyLessonViewProps;

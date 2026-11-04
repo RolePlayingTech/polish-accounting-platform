@@ -116,7 +116,7 @@ export function AiProposalField({
           aria-describedby={ariaDescribedBy}
           aria-invalid={Boolean(error)}
           className={`w-full rounded-lg border px-3 py-2 text-sm font-medium text-[#191c1a] bg-white ${
-            error ? 'border-[#991b1b]' : 'border-[#d2cec2]'
+            error ? 'border-[#991b1b]' : 'border-[#858177]'
           } ${numeric ? ksiegaTokens.typography.tabularNums : ''} ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
           data-prevent-enter-submit="true"
           id={id}
@@ -147,7 +147,7 @@ export function AiProposalField({
             </div>
             {!readOnly && onChange && (
               <button
-                className={`rounded border border-[#d2cec2] bg-[#faf9f5] px-2 py-0.5 text-[11px] font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
+                className={`rounded border border-[#858177] bg-[#faf9f5] px-2 py-0.5 text-[11px] font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
                 onClick={() => onChange(proposedValue)}
                 type="button"
               >
@@ -246,7 +246,7 @@ export function SplitVerificationView({
       {/* Przełącznik widoku na ekranach mobilnych (< 1024px) */}
       <div
         aria-label="Przełączanie między oryginałem dokumentu a formularzem weryfikacji"
-        className="grid grid-cols-2 gap-1 rounded-xl border border-[#d2cec2] bg-[#f4f2ec] p-1 lg:hidden"
+        className="grid grid-cols-2 gap-1 rounded-xl border border-[#858177] bg-[#f4f2ec] p-1 lg:hidden"
         role="group"
       >
         <button
@@ -279,11 +279,11 @@ export function SplitVerificationView({
         {/* Lewa kolumna: Oryginał write-once i metadane integralności */}
         <aside
           aria-label="Podgląd oryginału dokumentu i integralność kryptograficzna"
-          className={`flex flex-col rounded-xl border border-[#d2cec2] bg-[#efece4] p-4 sm:p-5 ${
+          className={`flex flex-col rounded-xl border border-[#e5e2d9] bg-[#efece4] p-4 sm:p-5 ${
             mobilePane === 'document' ? 'block' : 'hidden lg:flex'
           }`}
         >
-          <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#d2cec2] pb-3.5">
+          <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[#e5e2d9] pb-3.5">
             <div className="min-w-0">
               <p className={ksiegaTokens.typography.eyebrow}>Oryginał dokumentu (write-once)</p>
               <h2 className="mt-1 truncate text-sm font-semibold text-[#191c1a]">{fileName}</h2>
@@ -293,7 +293,7 @@ export function SplitVerificationView({
             </span>
           </div>
 
-          <dl className="mt-3.5 grid gap-2 rounded-lg border border-[#d2cec2] bg-[#faf9f5] p-3 text-xs">
+          <dl className="mt-3.5 grid gap-2 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3 text-xs">
             <div className="flex flex-wrap justify-between gap-2">
               <dt className="text-[#636b66]">Źródło wpływu:</dt>
               <dd className="font-semibold text-[#191c1a]">{sourceChannel}</dd>
@@ -318,7 +318,7 @@ export function SplitVerificationView({
             </div>
           </dl>
 
-          <div className="mt-4 flex-1 rounded-lg border border-[#d2cec2] bg-white p-4">
+          <div className="mt-4 flex-1 rounded-lg border border-[#e5e2d9] bg-white p-4">
             {previewContent ?? (
               <div className="flex min-h-[240px] flex-col justify-between text-xs text-[#464c48]">
                 <div>
@@ -359,7 +359,7 @@ export function SplitVerificationView({
             <p className="rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2 text-xs text-[#464c48]">
               AI i OCR wyłącznie proponują wartości pól. Sprawdź kwoty, daty i NIP kontrahenta.
               Klawisz{' '}
-              <kbd className="rounded border border-[#d2cec2] bg-white px-1 font-mono">Enter</kbd> w
+              <kbd className="rounded border border-[#858177] bg-white px-1 font-mono">Enter</kbd> w
               polach tekstowych jest zablokowany przed przypadkowym zatwierdzeniem.
             </p>
 
@@ -385,7 +385,7 @@ export function SplitVerificationView({
               )}
               {onSaveDraft && (
                 <button
-                  className={`min-h-9 rounded-lg border border-[#d2cec2] bg-[#faf9f5] px-3.5 py-2 text-xs font-semibold text-[#191c1a] hover:bg-[#f4f2ec] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+                  className={`min-h-9 rounded-lg border border-[#858177] bg-[#faf9f5] px-3.5 py-2 text-xs font-semibold text-[#191c1a] hover:bg-[#f4f2ec] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
                   onClick={onSaveDraft}
                   type="button"
                 >
