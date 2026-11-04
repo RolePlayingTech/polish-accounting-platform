@@ -158,6 +158,18 @@ describe('@pap/contracts/api schemas', () => {
         autoPostWithoutHuman: true,
       }),
     ).toThrow();
+
+    expect(() =>
+      ApproveAndPostDocumentRequestSchema.parse({
+        netPln: '9'.repeat(24),
+      }),
+    ).toThrow();
+
+    expect(() =>
+      ApproveAndPostDocumentRequestSchema.parse({
+        vatPln: `${'9'.repeat(21)}.00`,
+      }),
+    ).toThrow();
   });
 
   it('rejects invalid journal account codes, bad confirmation codes, and authority-spoofing notification emails', () => {

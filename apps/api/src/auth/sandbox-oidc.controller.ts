@@ -9,9 +9,11 @@ import {
   Post,
   Req,
 } from '@nestjs/common';
-import type { AccountingWorkspaceService } from '@pap/application';
 import type { FastifyRequest } from 'fastify';
-import { ACCOUNTING_WORKSPACE_SERVICE } from '../runtime/workspace-runtime.js';
+import {
+  ACCOUNTING_WORKSPACE_SERVICE,
+  type WorkspaceRuntimePort,
+} from '../runtime/workspace-runtime.js';
 import { SandboxOidcService } from './sandbox-oidc.service.js';
 
 @Controller()
@@ -20,7 +22,7 @@ export class SandboxOidcController {
     @Inject(SandboxOidcService)
     private readonly sandboxOidc: SandboxOidcService,
     @Inject(ACCOUNTING_WORKSPACE_SERVICE)
-    private readonly workspace: AccountingWorkspaceService,
+    private readonly workspace: WorkspaceRuntimePort,
   ) {}
 
   private assertSandboxEnabled(): void {

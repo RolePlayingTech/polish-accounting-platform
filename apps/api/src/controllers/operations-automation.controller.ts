@@ -19,7 +19,6 @@ import {
   AccountingWorkspaceConflictError,
   AccountingWorkspaceValidationError,
   DEMO_DEFAULT_PERIOD,
-  type AccountingWorkspaceService,
 } from '@pap/application';
 import type { PapMcpGateway } from '@pap/application/mcp-gateway';
 import {
@@ -40,7 +39,11 @@ import {
   requireRequestActor,
   type JwtAuthenticatedRequest,
 } from '../auth/jwt-bearer.guard.js';
-import { ACCOUNTING_WORKSPACE_SERVICE, PAP_MCP_GATEWAY } from '../runtime/workspace-runtime.js';
+import {
+  ACCOUNTING_WORKSPACE_SERVICE,
+  PAP_MCP_GATEWAY,
+  type WorkspaceRuntimePort,
+} from '../runtime/workspace-runtime.js';
 import { parseOptionalPeriodParam } from './query-helpers.js';
 
 const SendTestNotificationBodySchema = z
@@ -92,7 +95,7 @@ function parseCalendarQuery(
 export class OperationsAutomationController {
   constructor(
     @Inject(ACCOUNTING_WORKSPACE_SERVICE)
-    private readonly workspace: AccountingWorkspaceService,
+    private readonly workspace: WorkspaceRuntimePort,
     @Inject(PAP_MCP_GATEWAY)
     private readonly mcpGateway: PapMcpGateway,
   ) {}
@@ -129,7 +132,7 @@ export class OperationsAutomationController {
   @Post('/finance/reconcile')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
-  reconcileBank(
+  async reconcileBank(
     @Req() request: JwtAuthenticatedRequest,
     @Param('tenantId') tenantId: string,
     @Param('legalEntityId') legalEntityId: string,
@@ -148,7 +151,7 @@ export class OperationsAutomationController {
           typeof m === 'object' && m !== null && !('settlementId' in m) && 'matchedDocumentId' in m,
       );
       if (needsDocMapping) {
-        const finance = this.workspace.getFinanceView(actor, tenantId, legalEntityId);
+        const finance = await this.workspace.getFinanceView(actor, tenantId, legalEntityId);
         const mapped = rawMatches
           .filter(
             (m): m is Record<string, unknown> =>
@@ -209,7 +212,7 @@ export class OperationsAutomationController {
   @Post('/calendar/obligations/:obligationId/toggle-paid')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
-  toggleObligationPaid(
+  async toggleObligationPaid(
     @Req() request: JwtAuthenticatedRequest,
     @Param('tenantId') tenantId: string,
     @Param('legalEntityId') legalEntityId: string,
@@ -234,7 +237,7 @@ export class OperationsAutomationController {
       );
     }
     const [y, m] = period.split('-');
-    const calendar = this.workspace.getCalendarView(
+    const calendar = await this.workspace.getCalendarView(
       actor,
       tenantId,
       legalEntityId,
@@ -289,13 +292,13 @@ export class OperationsAutomationController {
 
   @Get('/notifications/preferences')
   @Header('Cache-Control', 'no-store')
-  getNotificationPreferences(
+  async getNotificationPreferences(
     @Req() request: JwtAuthenticatedRequest,
     @Param('tenantId') tenantId: string,
     @Param('legalEntityId') legalEntityId: string,
   ) {
     const actor = requireRequestActor(request);
-    return this.workspace.getNotificationsView(actor, tenantId, legalEntityId).preferences;
+    return (await this.workspace.getNotificationsView(actor, tenantId, legalEntityId)).preferences;
   }
 
   @Put('/notifications/preferences')
@@ -332,13 +335,13 @@ export class OperationsAutomationController {
 
   @Get('/notifications/sandbox-mailbox')
   @Header('Cache-Control', 'no-store')
-  getSandboxMailbox(
+  async getSandboxMailbox(
     @Req() request: JwtAuthenticatedRequest,
     @Param('tenantId') tenantId: string,
     @Param('legalEntityId') legalEntityId: string,
   ) {
     const actor = requireRequestActor(request);
-    const view = this.workspace.getNotificationsView(actor, tenantId, legalEntityId);
+    const view = await this.workspace.getNotificationsView(actor, tenantId, legalEntityId);
     return {
       deliveredMailbox: view.deliveredMailbox,
       messages: view.deliveredMailbox,

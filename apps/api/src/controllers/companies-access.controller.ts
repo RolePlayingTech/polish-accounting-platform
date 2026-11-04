@@ -13,7 +13,6 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import type { AccountingWorkspaceService } from '@pap/application';
 import type {
   CreateCompanyRequest,
   GrantCompanyAccessRequest,
@@ -26,7 +25,10 @@ import {
   requireRequestActor,
   type JwtAuthenticatedRequest,
 } from '../auth/jwt-bearer.guard.js';
-import { ACCOUNTING_WORKSPACE_SERVICE } from '../runtime/workspace-runtime.js';
+import {
+  ACCOUNTING_WORKSPACE_SERVICE,
+  type WorkspaceRuntimePort,
+} from '../runtime/workspace-runtime.js';
 import { parseOptionalPeriodParam } from './query-helpers.js';
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -38,7 +40,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 export class CompaniesAccessController {
   constructor(
     @Inject(ACCOUNTING_WORKSPACE_SERVICE)
-    private readonly workspace: AccountingWorkspaceService,
+    private readonly workspace: WorkspaceRuntimePort,
   ) {}
 
   @Get('/me/companies')
