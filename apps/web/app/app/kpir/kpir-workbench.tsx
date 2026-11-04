@@ -2,7 +2,12 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import type { KpirColumnLayout, KpirEntry, KpirPeriodSummary } from '@pap/domain';
+import {
+  sumGrosze,
+  type KpirColumnLayout,
+  type KpirEntry,
+  type KpirPeriodSummary,
+} from '@pap/domain';
 import {
   Card,
   FieldHelpButton,
@@ -137,7 +142,7 @@ export function KpirWorkbench({
   const columns: readonly LedgerColumn<KpirEntryRowView>[] = [
     {
       id: 'lp',
-      header: 'Kol. 1 · Lp.',
+      header: `Kol. ${String(activeLayout.ordinalCol)} · Lp.`,
       numeric: true,
       mobileRole: 'meta',
       render: ({ entry }) => (
@@ -146,9 +151,29 @@ export function KpirWorkbench({
         </span>
       ),
     },
+    ...(layoutMode === '2026'
+      ? ([
+          {
+            id: 'ksef_col',
+            header: `Kol. ${String(activeLayout.ksefReferenceCol ?? 3)} · Nr KSeF`,
+            mobileRole: 'meta',
+            render: ({ entry }: KpirEntryRowView) =>
+              entry.ksefReferenceNumber ? (
+                <span className="font-mono text-[11px] tabular-nums text-[#1d5c42]">
+                  {entry.ksefReferenceNumber}
+                </span>
+              ) : (
+                <span className="text-xs text-[#636b66]">— (poza KSeF)</span>
+              ),
+          },
+        ] satisfies LedgerColumn<KpirEntryRowView>[])
+      : []),
     {
       id: 'date_doc',
-      header: layoutMode === '2026' ? 'Kol. 2–3 · Data i dowód' : 'Kol. 2–3 · Data i nr dowodu',
+      header:
+        layoutMode === '2026'
+          ? `Kol. ${String(activeLayout.eventDateCol)} i ${String(activeLayout.documentNumberCol)} · Data i nr dowodu`
+          : `Kol. ${String(activeLayout.eventDateCol)}–${String(activeLayout.documentNumberCol)} · Data i nr dowodu`,
       mobileRole: 'title',
       render: ({ entry }) => (
         <div className="space-y-0.5">
@@ -167,21 +192,8 @@ export function KpirWorkbench({
     ...(layoutMode === '2026'
       ? ([
           {
-            id: 'ksef_col',
-            header: 'Kol. 4 · Nr KSeF (2026)',
-            mobileRole: 'meta',
-            render: ({ entry }: KpirEntryRowView) =>
-              entry.ksefReferenceNumber ? (
-                <span className="font-mono text-[11px] tabular-nums text-[#1d5c42]">
-                  {entry.ksefReferenceNumber}
-                </span>
-              ) : (
-                <span className="text-xs text-[#636b66]">— (poza KSeF)</span>
-              ),
-          },
-          {
             id: 'nip_col',
-            header: 'Kol. 5 · NIP',
+            header: `Kol. ${String(activeLayout.counterpartyNipCol ?? 5)} · NIP`,
             mobileRole: 'meta',
             render: ({ entry }: KpirEntryRowView) => (
               <span className="font-mono text-xs tabular-nums text-[#464c48]">
@@ -207,7 +219,7 @@ export function KpirWorkbench({
     },
     {
       id: 'rev_total',
-      header: layoutMode === '2026' ? 'Kol. 11 · Razem przychód' : 'Kol. 9 · Razem przychód',
+      header: `Kol. ${String(activeLayout.totalRevenueCol)} · Razem przychód`,
       unit: 'PLN',
       align: 'right',
       numeric: true,
@@ -230,19 +242,46 @@ export function KpirWorkbench({
       ),
     },
     {
-      id: 'cost_total',
-      header: layoutMode === '2026' ? 'Kol. 16 · Razem wydatki KUP' : 'Kol. 14 · Razem wydatki KUP',
+      id: 'other_expenses_col',
+      header: `Kol. ${String(activeLayout.otherExpensesCol)} · Pozostałe wydatki`,
       unit: 'PLN',
       align: 'right',
       numeric: true,
       mobileRole: 'meta',
       render: ({ entry }) => (
         <MoneyAmount
-          amount={
-            entry.col14TotalExpensesGrosze +
-            entry.col10GoodsAndMaterialsGrosze +
-            entry.col11IncidentalCostsGrosze
-          }
+          amount={entry.col13OtherExpensesGrosze}
+          inGrosze
+          size="sm"
+          variant={entry.isCorrection ? 'overdue' : 'expense'}
+        />
+      ),
+      footer: (
+        <MoneyAmount
+          amount={summary.monthTotals.col13OtherExpensesGrosze}
+          inGrosze
+          size="sm"
+          variant="expense"
+        />
+      ),
+    },
+    {
+      id: 'cost_total',
+      header:
+        layoutMode === '2026'
+          ? 'Łącznie koszty KUP (Kol. 12+13+16)'
+          : 'Łącznie koszty KUP (Kol. 10+11+14)',
+      unit: 'PLN',
+      align: 'right',
+      numeric: true,
+      mobileRole: 'meta',
+      render: ({ entry }) => (
+        <MoneyAmount
+          amount={sumGrosze([
+            entry.col10GoodsAndMaterialsGrosze,
+            entry.col11IncidentalCostsGrosze,
+            entry.col14TotalExpensesGrosze,
+          ])}
           inGrosze
           size="sm"
           variant={entry.isCorrection ? 'overdue' : 'expense'}
@@ -331,8 +370,8 @@ export function KpirWorkbench({
           Aktywny wzór:{' '}
           <strong className="text-[#191c1a]">
             {layoutMode === '2026'
-              ? 'Rozporządzenie MF (Dz.U. 2025 poz. 1299 — wzór 19 kolumn z nr KSeF od 2026 r.)'
-              : 'Rozporządzenie MF (Dz.U. 2019 poz. 2544 — historyczny wzór 17 kolumn)'}
+              ? 'Rozporządzenie MF (Dz.U. 2025 poz. 1299 — wzór 19 kolumn z nr KSeF w Kol. 3 i pozostałymi wydatkami w Kol. 15)'
+              : 'Rozporządzenie MF (Dz.U. 2019 poz. 2544 — historyczny wzór 17 kolumn z pozostałymi wydatkami w Kol. 13)'}
           </strong>{' '}
           · łączna liczba kolumn urzędowych:{' '}
           <span className="font-mono font-semibold tabular-nums">
@@ -439,7 +478,10 @@ export function KpirWorkbench({
                   />
                 )}
               </FormField>
-              <FormField id="kpir-doc-num" label="Nr dowodu księgowego (Kol. 3)">
+              <FormField
+                id="kpir-doc-num"
+                label={`Nr dowodu księgowego (Kol. ${String(activeLayout.documentNumberCol)})`}
+              >
                 {(ctrl) => (
                   <input
                     {...ctrl}
@@ -453,7 +495,7 @@ export function KpirWorkbench({
 
             <FormField
               id="kpir-ksef-ref"
-              label="Numer KSeF (Kol. 4 we wzorze 2026)"
+              label="Numer KSeF (Kol. 3 we wzorze 2026)"
               fieldHelp={helpMap.ksefReference}
             >
               {(ctrl) => (
@@ -478,7 +520,7 @@ export function KpirWorkbench({
                   />
                 )}
               </FormField>
-              <FormField id="kpir-cp-nip" label="NIP kontrahenta (Kol. 5)">
+              <FormField id="kpir-cp-nip" label="NIP kontrahenta (Kol. 5 we wzorze 2026)">
                 {(ctrl) => (
                   <input
                     {...ctrl}
@@ -505,14 +547,14 @@ export function KpirWorkbench({
             <div className="grid gap-3 sm:grid-cols-2">
               <MoneyInput
                 id="kpir-sales-pln"
-                label="Przychód ze sprzedaży"
+                label={`Przychód ze sprzedaży (Kol. ${String(activeLayout.salesRevenueCol)})`}
                 value={salesPln}
                 onChange={setSalesPln}
                 fieldHelp={helpMap.col7}
               />
               <MoneyInput
                 id="kpir-exp-pln"
-                label="Pozostałe wydatki KUP"
+                label={`Pozostałe wydatki (Kol. ${String(activeLayout.otherExpensesCol)})`}
                 value={expensesPln}
                 onChange={setExpensesPln}
                 fieldHelp={helpMap.col13}

@@ -12,8 +12,7 @@ import {
   type ShellLinkRenderer,
 } from '@pap/ui';
 import type { SessionContext } from '../lib/session';
-import { AVAILABLE_PERIODS } from '../lib/synthetic-workspace';
-import type { CompanyProfileRecord } from '../lib/workspace-types';
+import { AVAILABLE_PERIODS, type CompanyProfileRecord } from '../lib/workspace-types';
 
 export const WORKSPACE_NAV_SECTIONS: readonly NavSection[] = [
   {

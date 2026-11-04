@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -29,9 +33,23 @@ export default async function KpirPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const kpir = getKpirSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => ({
+    dash: getDashboardSnapshot(session),
+    kpir: getKpirSnapshot(session),
+  }));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/kpir"
+        pageEyebrow="Księgowość JDG · PKPiR 2026 / 2019"
+        pageTitle="Podatkowa Księga Przychodów i Rozchodów (KPiR)"
+      />
+    );
+  }
 
+  const { dash, kpir } = loaded.data;
   const rows = kpir.entries.map((entry) => ({
     entry,
     basis: mapDomainExplanationToBasisInfo(

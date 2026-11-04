@@ -154,8 +154,12 @@ export function NotificationsWorkbench({
                 )}
               </FormField>
 
-              <label className="flex items-start gap-2.5 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3 text-xs text-[#191c1a]">
+              <label
+                htmlFor="notif-opt-out-all"
+                className="flex items-start gap-2.5 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3 text-xs text-[#191c1a]"
+              >
                 <input
+                  id="notif-opt-out-all"
                   type="checkbox"
                   checked={optedOut}
                   onChange={(e) => setOptedOut(e.target.checked)}
@@ -179,8 +183,13 @@ export function NotificationsWorkbench({
                 {(Object.keys(STAGE_LABELS) as ReminderStage[]).map((stage) => {
                   const enabled = !disabledStages.includes(stage);
                   return (
-                    <label key={stage} className="flex items-center gap-2 text-xs text-[#464c48]">
+                    <label
+                      key={stage}
+                      htmlFor={`notif-stage-${stage}`}
+                      className="flex items-center gap-2 text-xs text-[#464c48]"
+                    >
                       <input
+                        id={`notif-stage-${stage}`}
                         type="checkbox"
                         checked={enabled}
                         onChange={() => toggleStage(stage)}

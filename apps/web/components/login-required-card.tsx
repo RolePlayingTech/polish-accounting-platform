@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Card, StatusBadge } from '@pap/ui';
-import { SYNTHETIC_PERSONAS } from '../lib/synthetic-workspace';
+import { sanitizeInternalRedirect } from '../lib/request-security';
+import { PUBLIC_SYNTHETIC_PERSONAS } from '../lib/workspace-types';
 
 export interface LoginRequiredCardProps {
   returnTo: string;
@@ -8,6 +9,8 @@ export interface LoginRequiredCardProps {
 }
 
 export function LoginRequiredCard({ returnTo, screenTitle }: LoginRequiredCardProps) {
+  const safeReturnTo = sanitizeInternalRedirect(returnTo, '/app');
+
   return (
     <Card
       as="div"
@@ -24,7 +27,7 @@ export function LoginRequiredCard({ returnTo, screenTitle }: LoginRequiredCardPr
       </p>
 
       <div className="mt-4 grid gap-3 md:grid-cols-3">
-        {SYNTHETIC_PERSONAS.map((persona) => (
+        {PUBLIC_SYNTHETIC_PERSONAS.map((persona) => (
           <form
             key={persona.personaId}
             method="post"
@@ -32,7 +35,7 @@ export function LoginRequiredCard({ returnTo, screenTitle }: LoginRequiredCardPr
             className="flex flex-col justify-between rounded-xl border border-[#e5e2d9] bg-white p-4"
           >
             <input type="hidden" name="personaId" value={persona.personaId} />
-            <input type="hidden" name="redirectTo" value={returnTo} />
+            <input type="hidden" name="redirectTo" value={safeReturnTo} />
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-[#191c1a]">{persona.displayName}</p>

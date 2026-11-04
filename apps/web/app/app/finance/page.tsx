@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -29,8 +33,23 @@ export default async function FinancePage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const fin = getFinanceSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => ({
+    dash: getDashboardSnapshot(session),
+    fin: getFinanceSnapshot(session),
+  }));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/finance"
+        pageEyebrow="Rozrachunki, Biała Lista KAS i bankowość"
+        pageTitle="Należności, zobowiązania i uzgadnianie wyciągów CSV / MT940"
+      />
+    );
+  }
+
+  const { dash, fin } = loaded.data;
 
   return (
     <WorkspaceShell

@@ -1,5 +1,6 @@
 import {
   ACADEMY_DISCLAIMER,
+  ACADEMY_FIELD_HELP_ENTRIES,
   ACADEMY_MODULES,
   resolveFieldHelpWithLesson,
   type LegalBasisCitation,
@@ -20,6 +21,7 @@ const FIELD_HELP_ALIASES: Readonly<Record<string, string>> = {
   mpp_split_payment: 'split_payment_mpp',
   whitelist_iban: 'white_list_iban',
   double_entry_wn_ma: 'wn_ma_balance',
+  mcp_human_approval: 'mcp_human_confirmation',
 };
 
 const SUPPLEMENTARY_UI_FIELD_HELP: Readonly<
@@ -129,6 +131,21 @@ export function resolveUiFieldHelp(fieldHelpId: string): FieldHelpInfo | undefin
 
   return undefined;
 }
+
+export const FIELD_HELP_REGISTRY: Readonly<Record<string, FieldHelpInfo>> = Object.freeze(
+  Object.fromEntries(
+    [
+      ...ACADEMY_FIELD_HELP_ENTRIES.map((entry) => entry.fieldHelpId),
+      ...Object.keys(SUPPLEMENTARY_UI_FIELD_HELP),
+      ...Object.keys(FIELD_HELP_ALIASES),
+    ]
+      .map((id) => {
+        const resolved = resolveUiFieldHelp(id);
+        return resolved ? ([id, resolved] as const) : undefined;
+      })
+      .filter((pair): pair is readonly [string, FieldHelpInfo] => pair !== undefined),
+  ),
+);
 
 export function mustResolveUiFieldHelp(fieldHelpId: string): FieldHelpInfo {
   const found = resolveUiFieldHelp(fieldHelpId);

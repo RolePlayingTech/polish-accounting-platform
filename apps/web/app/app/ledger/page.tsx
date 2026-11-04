@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -29,8 +33,23 @@ export default async function FullLedgerPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const ledger = getFullLedgerSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => ({
+    dash: getDashboardSnapshot(session),
+    ledger: getFullLedgerSnapshot(session),
+  }));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/ledger"
+        pageEyebrow="Pełne księgi rachunkowe · Ustawa o rachunkowości"
+        pageTitle="Księga główna Sp. z o.o., Dziennik, Bilans, RZiS i CIT"
+      />
+    );
+  }
+
+  const { dash, ledger } = loaded.data;
 
   return (
     <WorkspaceShell

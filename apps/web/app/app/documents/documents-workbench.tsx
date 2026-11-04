@@ -552,8 +552,12 @@ export function DocumentsWorkbench({
               </div>
 
               <div className="flex items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-xs text-[#191c1a]">
+                <label
+                  htmlFor="manual-doc-annex15"
+                  className="flex items-center gap-2 text-xs text-[#191c1a]"
+                >
                   <input
+                    id="manual-doc-annex15"
                     type="checkbox"
                     checked={annex15}
                     onChange={(e) => setAnnex15(e.target.checked)}

@@ -6,8 +6,10 @@ import type {
   VatDeductionMode,
   VatRateCode,
 } from '@pap/domain';
+import { assertSameOriginMutation } from '../../../../lib/request-security';
 import { readServerSession, writeSessionToResponse } from '../../../../lib/session';
 import {
+  MAX_WORKSPACE_IMPORT_BYTES,
   WorkspaceAccessError,
   addJournalEntryMutation,
   addManualKpirEntryMutation,
@@ -33,6 +35,11 @@ function str(val: unknown, fallback = ''): string {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const csrfError = assertSameOriginMutation(request);
+  if (csrfError) {
+    return csrfError;
+  }
+
   const session = await readServerSession();
   if (!session) {
     return NextResponse.json(
@@ -45,9 +52,49 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  const contentLengthHeader = request.headers.get('content-length');
+  if (contentLengthHeader) {
+    const contentLength = Number(contentLengthHeader);
+    if (Number.isFinite(contentLength) && contentLength > MAX_WORKSPACE_IMPORT_BYTES) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reasonCode: 'payload_too_large',
+          error: 'Ładunek żądania przekracza dopuszczalny limit 256 KB.',
+        },
+        { status: 413 },
+      );
+    }
+  }
+
+  let rawBodyText: string;
+  try {
+    rawBodyText = await request.text();
+  } catch {
+    return NextResponse.json(
+      { ok: false, reasonCode: 'invalid_body', error: 'Nie udało się odczytać treści żądania.' },
+      { status: 400 },
+    );
+  }
+
+  if (Buffer.byteLength(rawBodyText, 'utf8') > MAX_WORKSPACE_IMPORT_BYTES) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reasonCode: 'payload_too_large',
+        error: 'Ładunek żądania przekracza dopuszczalny limit 256 KB.',
+      },
+      { status: 413 },
+    );
+  }
+
   let payload: Record<string, unknown>;
   try {
-    payload = (await request.json()) as Record<string, unknown>;
+    const parsed: unknown = JSON.parse(rawBodyText);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Wymagany obiekt JSON.');
+    }
+    payload = parsed as Record<string, unknown>;
   } catch {
     return NextResponse.json(
       { ok: false, reasonCode: 'invalid_json', error: 'Nieprawidłowy ładunek JSON.' },
@@ -125,7 +172,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           direction: payload['direction'] === 'sales' ? 'sales' : 'purchase',
           documentNumber: str(payload['documentNumber']),
           issueDate: str(payload['issueDate'], `${session.context.period}-16`),
-          dueDate: str(payload['dueDate'], `${session.context.period}-30`),
+          dueDate: str(payload['dueDate'], `${session.context.period}-28`),
           counterpartyName: str(payload['counterpartyName']),
           counterpartyNip: str(payload['counterpartyNip']),
           description: str(payload['description']),

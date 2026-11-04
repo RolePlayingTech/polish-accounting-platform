@@ -9,6 +9,10 @@ import {
   type LedgerColumn,
 } from '@pap/ui';
 import type { VatRegisterEntry } from '@pap/domain';
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner, AlertBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -42,11 +46,27 @@ export default async function VatAndJpkPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const vat = buildVatRegistersForCompany(dash.activeCompany, session.context.period);
-  const docs = getDocumentsForActiveCompany(session);
-  const compSnap = getCompaniesManagementSnapshot(session);
-  const ledgerSnap = getFullLedgerSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => {
+    const dash = getDashboardSnapshot(session);
+    const vat = buildVatRegistersForCompany(dash.activeCompany, session.context.period);
+    const docs = getDocumentsForActiveCompany(session);
+    const compSnap = getCompaniesManagementSnapshot(session);
+    const ledgerSnap = getFullLedgerSnapshot(session);
+    return { dash, vat, docs, compSnap, ledgerSnap };
+  });
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/vat"
+        pageEyebrow="Podatek od towarów i usług · JPK_V7M(3)"
+        pageTitle="Rejestry VAT sprzedaży i zakupów oraz deklaracja JPK_V7M(3)"
+      />
+    );
+  }
+
+  const { dash, vat, docs, compSnap, ledgerSnap } = loaded.data;
 
   const gtuByDocNum = new Map(docs.map((d) => [d.documentNumber, d.gtuCodes]));
   const procByDocNum = new Map(docs.map((d) => [d.documentNumber, d.procedureCodes]));

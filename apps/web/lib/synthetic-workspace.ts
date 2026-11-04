@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   POLISH_LEGAL_RULES_REGISTRY,
   STANDARD_SPZOO_CHART_OF_ACCOUNTS,
@@ -58,11 +58,20 @@ import {
   type VatRateCode,
   type VatRegisterEntry,
 } from '@pap/domain';
-import { papBffFetch } from './api-url';
+import { type BffFetchResult, papBffFetch } from './api-url';
 import type { ActiveWebSession, PersonaId, SessionContext } from './session';
 import {
+  AVAILABLE_PERIODS,
+  COMPANY_JDG_KPIR_ID,
+  COMPANY_JDG_RYCZALT_ID,
+  COMPANY_SPZOO_ID,
+  COMPANY_TENANT_2_ID,
+  DEFAULT_ACCOUNTING_PERIOD,
   MANDATORY_AUXILIARY_EMAIL_FOOTER_PL,
+  PUBLIC_SYNTHETIC_PERSONAS,
   SAMPLE_BANK_CSV,
+  TENANT_1_ID,
+  TENANT_2_ID,
   type AuditLogEntryRecord,
   type CompanyProfileRecord,
   type CompanyUserGrantRecord,
@@ -71,21 +80,29 @@ import {
   type NotificationFrequency,
   type NotificationOutboxEntry,
   type NotificationPrefsState,
+  type PublicPersonaSummary,
   type ReminderStage,
   type SyntheticPersonaDefinition,
   type WorkspaceDocumentRecord,
 } from './workspace-types';
 
-export const TENANT_1_ID = '11111111-1111-4111-8111-111111111100';
-export const TENANT_2_ID = '22222222-2222-4222-8222-222222222200';
+export {
+  AVAILABLE_PERIODS,
+  COMPANY_JDG_KPIR_ID,
+  COMPANY_JDG_RYCZALT_ID,
+  COMPANY_SPZOO_ID,
+  COMPANY_TENANT_2_ID,
+  DEFAULT_ACCOUNTING_PERIOD,
+  PUBLIC_SYNTHETIC_PERSONAS,
+  TENANT_1_ID,
+  TENANT_2_ID,
+  type PublicPersonaSummary,
+};
 
-export const COMPANY_JDG_KPIR_ID = '11111111-1111-4111-8111-111111111101';
-export const COMPANY_JDG_RYCZALT_ID = '11111111-1111-4111-8111-111111111102';
-export const COMPANY_SPZOO_ID = '11111111-1111-4111-8111-111111111103';
-export const COMPANY_TENANT_2_ID = '22222222-2222-4222-8222-222222222201';
-
-export const AVAILABLE_PERIODS = ['2026-10', '2026-06', '2026-11', '2026-12'] as const;
-export const DEFAULT_ACCOUNTING_PERIOD = '2026-10' as const;
+const STRICT_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const SAFE_RESOURCE_ID_REGEX = /^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$/;
+export const MAX_WORKSPACE_IMPORT_BYTES = 262_144;
 
 export const SYNTHETIC_PERSONAS: readonly SyntheticPersonaDefinition[] = [
   {
@@ -147,13 +164,13 @@ export function getPersonaById(personaId: PersonaId): SyntheticPersonaDefinition
   return found;
 }
 
-export async function listAvailablePersonas(): Promise<readonly SyntheticPersonaDefinition[]> {
+export async function listAvailablePersonas(): Promise<readonly PublicPersonaSummary[]> {
   const remote = await papBffFetch<{ personas?: unknown }>('/api/v1/oidc/personas');
+  assertApiResponsePermitsFallback(remote);
   if (remote.kind === 'ok' && Array.isArray(remote.data?.personas)) {
-    // Zachowujemy kanoniczne definicje syntetyczne wzbogacone o odpowiedź API, jeśli dostępna.
-    return SYNTHETIC_PERSONAS;
+    return PUBLIC_SYNTHETIC_PERSONAS;
   }
-  return SYNTHETIC_PERSONAS;
+  return PUBLIC_SYNTHETIC_PERSONAS;
 }
 
 export async function issuePersonaSession(
@@ -173,9 +190,10 @@ export async function issuePersonaSession(
       body: { personaId: persona.personaId, sub: persona.userId },
     },
   );
+  assertApiResponsePermitsFallback(tokenResp);
   if (tokenResp.kind === 'ok') {
     const issued = tokenResp.data.accessToken ?? tokenResp.data.token;
-    if (typeof issued === 'string' && issued.trim().length >= 8) {
+    if (typeof issued === 'string' && issued.trim().length >= 16) {
       oidcToken = issued.trim();
     }
   }
@@ -977,7 +995,7 @@ function createInitialStore(): WorkspaceStateStore {
       scope: 'pap:mcp:prepare',
       status: 'pending_human_approval',
       createdAt: '2026-11-04T09:10:00Z',
-      expiresAt: '2026-11-05T09:10:00Z',
+      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
       payloadHash: sha256Hex(mcpProposalPayload),
       direction: 'purchase',
       invoiceNumber: 'FZ/MCP/2026/10/099',
@@ -1089,10 +1107,10 @@ function toDomainGrants(records: readonly CompanyUserGrantRecord[]): CompanyAcce
 }
 
 export class WorkspaceAccessError extends Error {
-  public readonly statusCode: 401 | 403 | 404 | 400;
+  public readonly statusCode: number;
   public readonly reasonCode: string;
 
-  public constructor(statusCode: 401 | 403 | 404 | 400, reasonCode: string, messagePl: string) {
+  public constructor(statusCode: number, reasonCode: string, messagePl: string) {
     super(messagePl);
     this.name = 'WorkspaceAccessError';
     this.statusCode = statusCode;
@@ -1100,12 +1118,107 @@ export class WorkspaceAccessError extends Error {
   }
 }
 
-export function verifySessionAccess(
-  session: ActiveWebSession | null,
-  targetTenantId: string,
-  targetLegalEntityId: string,
-  action: 'read' | 'write',
-): CompanyProfileRecord {
+function assertUuidPathParam(value: string, label: string): string {
+  if (!STRICT_UUID_REGEX.test(value)) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_selector',
+      `Nieprawidłowy format UUID parametru ${label}.`,
+    );
+  }
+  return encodeURIComponent(value);
+}
+
+function assertSafeResourceIdPathParam(value: string, label: string): string {
+  if (!SAFE_RESOURCE_ID_REGEX.test(value)) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_selector',
+      `Nieprawidłowy identyfikator zasobu (${label}).`,
+    );
+  }
+  return encodeURIComponent(value);
+}
+
+function assertIsoCalendarDateOrThrow(value: string, labelPl: string): string {
+  const trimmed = value.trim();
+  const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(trimmed);
+  if (!match) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_date',
+      `Nieprawidłowy format daty ${labelPl} (${trimmed || 'pusta'}) — wymagany format RRRR-MM-DD.`,
+    );
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(utc.getTime()) ||
+    utc.getUTCFullYear() !== year ||
+    utc.getUTCMonth() !== month - 1 ||
+    utc.getUTCDate() !== day
+  ) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_date',
+      `Nieistniejąca data kalendarzowa ${labelPl} (${trimmed}).`,
+    );
+  }
+  return trimmed;
+}
+
+function assertPayloadSizeWithinLimit(raw: string, labelPl: string): void {
+  if (Buffer.byteLength(raw, 'utf8') > MAX_WORKSPACE_IMPORT_BYTES) {
+    throw new WorkspaceAccessError(
+      413,
+      'payload_too_large',
+      `Rozmiar danych wejściowych (${labelPl}) przekracza maksymalny limit 256 KB.`,
+    );
+  }
+}
+
+function parsePlnToGroszeOrThrow(rawPln: string, labelPl: string): number {
+  try {
+    return parsePlnToGrosze(rawPln);
+  } catch (err) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_amount',
+      err instanceof Error ? err.message : `Nieprawidłowa kwota PLN w polu ${labelPl}.`,
+    );
+  }
+}
+
+function assertApiResponsePermitsFallback(remote: BffFetchResult<unknown>): void {
+  if (remote.kind === 'unauthorized') {
+    throw new WorkspaceAccessError(
+      401,
+      'api_unauthorized',
+      'Brak autoryzacji w API (401) — zaloguj się ponownie.',
+    );
+  }
+  if (remote.kind === 'forbidden') {
+    throw new WorkspaceAccessError(403, remote.reasonCode ?? 'api_forbidden', remote.message);
+  }
+  if (remote.kind === 'validation_error') {
+    throw new WorkspaceAccessError(
+      remote.status,
+      remote.reasonCode ?? 'api_validation_error',
+      remote.message,
+    );
+  }
+  if (remote.kind === 'not_found' && !remote.routeUnmounted) {
+    throw new WorkspaceAccessError(
+      404,
+      'api_not_found',
+      'Wskazany zasób nie został znaleziony w usłudze API (404).',
+    );
+  }
+}
+
+function assertValidSessionIdentity(session: ActiveWebSession | null): ActiveWebSession {
   if (!session) {
     throw new WorkspaceAccessError(
       401,
@@ -1114,7 +1227,60 @@ export function verifySessionAccess(
     );
   }
 
+  if (
+    !STRICT_UUID_REGEX.test(session.context.userId) ||
+    !STRICT_UUID_REGEX.test(session.context.tenantId) ||
+    !STRICT_UUID_REGEX.test(session.context.legalEntityId)
+  ) {
+    throw new WorkspaceAccessError(
+      401,
+      'invalid_session_context',
+      'Kontekst sesji BFF zawiera nieprawidłowy identyfikator UUID — zaloguj się ponownie.',
+    );
+  }
+
+  const persona = SYNTHETIC_PERSONAS.find((p) => p.personaId === session.context.personaId);
+  if (
+    !persona ||
+    persona.userId !== session.context.userId ||
+    persona.email !== session.context.email
+  ) {
+    throw new WorkspaceAccessError(
+      401,
+      'session_identity_mismatch',
+      'Tożsamość sesji BFF jest niespójna z kanoniczną personą — zaloguj się ponownie.',
+    );
+  }
+
+  const token = session.oidcToken.trim();
+  if (
+    token.length < 16 ||
+    SYNTHETIC_PERSONAS.some(
+      (other) => other.personaId !== persona.personaId && other.syntheticOidcToken === token,
+    )
+  ) {
+    throw new WorkspaceAccessError(
+      401,
+      'session_token_mismatch',
+      'Token uwierzytelniania nie odpowiada aktywnej personie sesji — zaloguj się ponownie.',
+    );
+  }
+
+  return session;
+}
+
+export function verifySessionAccess(
+  session: ActiveWebSession | null,
+  targetTenantId: string,
+  targetLegalEntityId: string,
+  action: 'read' | 'write',
+): CompanyProfileRecord {
+  const verifiedSession = assertValidSessionIdentity(session);
+  assertUuidPathParam(targetTenantId, 'tenantId');
+  assertUuidPathParam(targetLegalEntityId, 'legalEntityId');
+
   const store = getStore();
+  session = verifiedSession;
 
   let decision;
   try {
@@ -1192,6 +1358,7 @@ export function verifySessionAccess(
 export function listAccessibleCompaniesForSession(
   session: ActiveWebSession,
 ): readonly CompanyProfileRecord[] {
+  assertValidSessionIdentity(session);
   const store = getStore();
   const domainGrants = toDomainGrants(store.grants);
   const actorId = toDomainUserId(session.context.userId);
@@ -1844,7 +2011,22 @@ export async function createCompanyMutation(
     readonly vatStatus: 'czynny' | 'zwolniony_art_113';
   },
 ): Promise<CompanyProfileRecord> {
-  if (session.context.personaId === 'marta-ksiegowa') {
+  assertValidSessionIdentity(session);
+  const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
+  const store = getStore();
+  const actorId = toDomainUserId(session.context.userId);
+  const domainTenant = toDomainTenantId(session.context.tenantId);
+  const membership = store.memberships.find(
+    (m) => m.userId === actorId && m.tenantId === domainTenant && m.status === 'active',
+  );
+  if (!membership) {
+    throw new WorkspaceAccessError(
+      403,
+      'active_membership_required',
+      'Odmowa dostępu (403): Twoje konto nie należy do wskazanej organizacji (tenanta).',
+    );
+  }
+  if (membership.role !== 'tenant_owner' || session.context.personaId === 'marta-ksiegowa') {
     throw new WorkspaceAccessError(
       403,
       'owner_required',
@@ -1870,19 +2052,12 @@ export async function createCompanyMutation(
     );
   }
 
-  const remote = await papBffFetch(`/api/v1/tenants/${session.context.tenantId}/companies`, {
+  const remote = await papBffFetch(`/api/v1/tenants/${safeTenantId}/companies`, {
     method: 'POST',
     bearerToken: session.oidcToken,
     body: { ...input, nip: nipCheck.normalizedNip },
   });
-  if (remote.kind === 'forbidden') {
-    throw new WorkspaceAccessError(403, 'api_forbidden', remote.message);
-  }
-  if (remote.kind === 'unauthorized') {
-    throw new WorkspaceAccessError(401, 'api_unauthorized', 'Brak autoryzacji w API.');
-  }
-
-  const store = getStore();
+  assertApiResponsePermitsFallback(remote);
   const newEntityId = randomUUID();
   const profileLabelMap: Record<TaxProfileCode, string> = {
     jdg_kpir_skala: 'JDG · KPiR (skala 12%/32%)',
@@ -1955,14 +2130,17 @@ export async function updateCompanyTaxSettingsMutation(
     'write',
   );
 
-  await papBffFetch(
-    `/api/v1/tenants/${company.tenantId}/companies/${company.legalEntityId}/settings`,
+  const safeTenantId = assertUuidPathParam(company.tenantId, 'tenantId');
+  const safeEntityId = assertUuidPathParam(company.legalEntityId, 'legalEntityId');
+  const remote = await papBffFetch(
+    `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/settings`,
     {
       method: 'PUT',
       bearerToken: session.oidcToken,
       body: input,
     },
   );
+  assertApiResponsePermitsFallback(remote);
 
   const store = getStore();
   const idx = store.companies.findIndex((c) => c.legalEntityId === company.legalEntityId);
@@ -2137,12 +2315,12 @@ export async function createOrImportDocumentMutation(
     }
     direction = input.direction;
     docKind = input.documentKind;
-    issueDate = input.issueDate;
-    dueDate = input.dueDate;
+    issueDate = assertIsoCalendarDateOrThrow(input.issueDate, 'wystawienia');
+    dueDate = assertIsoCalendarDateOrThrow(input.dueDate, 'płatności');
     counterpartyName = input.counterpartyName.trim() || 'Kontrahent syntetyczny';
     counterpartyNip = nipValidation.normalizedNip;
     description = input.description.trim() || 'Operacja gospodarcza';
-    netGrosze = parsePlnToGrosze(input.netPln);
+    netGrosze = parsePlnToGroszeOrThrow(input.netPln, 'kwota netto');
     if (docKind === 'correction' && netGrosze > 0) {
       netGrosze = -netGrosze;
     }
@@ -2158,6 +2336,7 @@ export async function createOrImportDocumentMutation(
     mimeLabel = 'application/json · Formularz';
     sourceChannel = 'Formularz ręczny';
   } else {
+    assertPayloadSizeWithinLimit(input.rawPayload, 'import dokumentu');
     rawText = input.rawPayload.trim();
     if (!rawText) {
       throw new WorkspaceAccessError(
@@ -2168,10 +2347,25 @@ export async function createOrImportDocumentMutation(
     }
 
     if (input.format === 'fa3_xml') {
-      docNum = extractXmlTag(rawText, 'P_2') ?? `FA3/${session.context.period}/IMP`;
-      issueDate = extractXmlTag(rawText, 'P_1') ?? `${session.context.period}-16`;
-      dueDate = extractXmlTag(rawText, 'Termin') ?? `${session.context.period}-30`;
-      const sellerNip = extractXmlTag(rawText, 'NIP') ?? '5213004125';
+      docNum = (extractXmlTag(rawText, 'P_2') ?? `FA3/${session.context.period}/IMP`).trim();
+      issueDate = assertIsoCalendarDateOrThrow(
+        extractXmlTag(rawText, 'P_1') ?? `${session.context.period}-16`,
+        'wystawienia (P_1)',
+      );
+      dueDate = assertIsoCalendarDateOrThrow(
+        extractXmlTag(rawText, 'Termin') ?? `${session.context.period}-28`,
+        'płatności (Termin)',
+      );
+      const sellerNipRaw = extractXmlTag(rawText, 'NIP') ?? '5213004125';
+      const sellerNipCheck = validatePolishNip(sellerNipRaw);
+      if (!sellerNipCheck.valid || !sellerNipCheck.normalizedNip) {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_nip',
+          sellerNipCheck.reason ?? 'Nieprawidłowy NIP sprzedawcy w pliku FA(3) XML.',
+        );
+      }
+      const sellerNip = sellerNipCheck.normalizedNip;
       const sellerName = extractXmlTag(rawText, 'Nazwa') ?? 'Dostawca KSeF FA(3) Sp. z o.o.';
       direction = sellerNip === company.nip ? 'sales' : 'purchase';
       docKind = direction;
@@ -2180,9 +2374,18 @@ export async function createOrImportDocumentMutation(
       description =
         extractXmlTag(rawText, 'P_7') ??
         'Pozycja zaimportowana z e-faktury ustrukturyzowanej FA(3)';
-      netGrosze = parsePlnToGrosze(extractXmlTag(rawText, 'P_13_1') ?? '1000.00');
-      vatGrosze = parsePlnToGrosze(extractXmlTag(rawText, 'P_14_1') ?? '230.00');
-      grossGrosze = parsePlnToGrosze(extractXmlTag(rawText, 'P_15') ?? '1230.00');
+      netGrosze = parsePlnToGroszeOrThrow(
+        extractXmlTag(rawText, 'P_13_1') ?? '1000.00',
+        'P_13_1 (netto)',
+      );
+      vatGrosze = parsePlnToGroszeOrThrow(
+        extractXmlTag(rawText, 'P_14_1') ?? '230.00',
+        'P_14_1 (VAT)',
+      );
+      grossGrosze = parsePlnToGroszeOrThrow(
+        extractXmlTag(rawText, 'P_15') ?? '1230.00',
+        'P_15 (brutto)',
+      );
       vatRate = '23';
       ksefRef = extractXmlTag(rawText, 'NrKSeF');
       ksefMarker = ksefRef ? 'NrKSeF' : 'OFF';
@@ -2197,13 +2400,27 @@ export async function createOrImportDocumentMutation(
       docNum = cols[0] || `CSV/${session.context.period}/01`;
       direction = cols[1] === 'sales' ? 'sales' : 'purchase';
       docKind = direction;
-      issueDate = cols[2] || `${session.context.period}-18`;
-      dueDate = cols[3] || `${session.context.period}-28`;
+      issueDate = assertIsoCalendarDateOrThrow(
+        cols[2] || `${session.context.period}-18`,
+        'wystawienia (CSV)',
+      );
+      dueDate = assertIsoCalendarDateOrThrow(
+        cols[3] || `${session.context.period}-28`,
+        'płatności (CSV)',
+      );
       counterpartyName = cols[4] || 'Kontrahent CSV Sp. z o.o.';
-      counterpartyNip = cols[5] || '7792301205';
+      const csvNipCheck = validatePolishNip(cols[5] || '7792301205');
+      if (!csvNipCheck.valid || !csvNipCheck.normalizedNip) {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_nip',
+          csvNipCheck.reason ?? 'Nieprawidłowy NIP kontrahenta w pliku CSV.',
+        );
+      }
+      counterpartyNip = csvNipCheck.normalizedNip;
       description = cols[6] || 'Pozycja z pliku CSV';
-      netGrosze = parsePlnToGrosze(cols[7] || '1000.00');
-      vatGrosze = parsePlnToGrosze(cols[8] || '230.00');
+      netGrosze = parsePlnToGroszeOrThrow(cols[7] || '1000.00', 'NettoPLN (CSV)');
+      vatGrosze = parsePlnToGroszeOrThrow(cols[8] || '230.00', 'VatPLN (CSV)');
       grossGrosze = netGrosze + vatGrosze;
       vatRate = '23';
       ksefRef = cols[10] || undefined;
@@ -2212,16 +2429,43 @@ export async function createOrImportDocumentMutation(
       mimeLabel = 'text/csv · średnik';
       sourceChannel = 'Import CSV';
     } else {
-      const parsed = JSON.parse(rawText) as Record<string, unknown>;
-      docNum = String(parsed['documentNumber'] ?? `JSON/${session.context.period}/01`);
+      let parsed: Record<string, unknown>;
+      try {
+        const candidate: unknown = JSON.parse(rawText);
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+          throw new Error('Wymagany obiekt JSON.');
+        }
+        parsed = candidate as Record<string, unknown>;
+      } catch {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_json',
+          'Nieprawidłowy format JSON dokumentu do importu.',
+        );
+      }
+      docNum = String(parsed['documentNumber'] ?? `JSON/${session.context.period}/01`).trim();
       direction = parsed['direction'] === 'sales' ? 'sales' : 'purchase';
       docKind = direction;
-      issueDate = String(parsed['issueDate'] ?? `${session.context.period}-15`);
-      dueDate = String(parsed['dueDate'] ?? `${session.context.period}-29`);
-      counterpartyName = String(parsed['counterpartyName'] ?? 'Kontrahent JSON');
-      counterpartyNip = String(parsed['counterpartyNip'] ?? '5213004125');
-      description = String(parsed['description'] ?? 'Dokument JSON');
-      netGrosze = parsePlnToGrosze(String(parsed['netPln'] ?? '1000.00'));
+      issueDate = assertIsoCalendarDateOrThrow(
+        String(parsed['issueDate'] ?? `${session.context.period}-15`),
+        'wystawienia (JSON)',
+      );
+      dueDate = assertIsoCalendarDateOrThrow(
+        String(parsed['dueDate'] ?? `${session.context.period}-28`),
+        'płatności (JSON)',
+      );
+      counterpartyName = String(parsed['counterpartyName'] ?? 'Kontrahent JSON').trim();
+      const jsonNipCheck = validatePolishNip(String(parsed['counterpartyNip'] ?? '5213004125'));
+      if (!jsonNipCheck.valid || !jsonNipCheck.normalizedNip) {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_nip',
+          jsonNipCheck.reason ?? 'Nieprawidłowy NIP kontrahenta w pliku JSON.',
+        );
+      }
+      counterpartyNip = jsonNipCheck.normalizedNip;
+      description = String(parsed['description'] ?? 'Dokument JSON').trim();
+      netGrosze = parsePlnToGroszeOrThrow(String(parsed['netPln'] ?? '1000.00'), 'netPln (JSON)');
       const calc = calculateInvoiceLineFromNet(netGrosze, '23');
       vatGrosze = calc.vatGrosze;
       grossGrosze = calc.grossGrosze;
@@ -2237,14 +2481,17 @@ export async function createOrImportDocumentMutation(
     (existing) => existing.legalEntityId === company.legalEntityId && existing.sha256 === digest,
   );
 
-  await papBffFetch(
-    `/api/v1/tenants/${company.tenantId}/companies/${company.legalEntityId}/documents`,
+  const safeTenantId = assertUuidPathParam(company.tenantId, 'tenantId');
+  const safeEntityId = assertUuidPathParam(company.legalEntityId, 'legalEntityId');
+  const remote = await papBffFetch(
+    `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents`,
     {
       method: 'POST',
       bearerToken: session.oidcToken,
       body: { documentNumber: docNum, sha256: digest },
     },
   );
+  assertApiResponsePermitsFallback(remote);
 
   const newDoc: WorkspaceDocumentRecord = {
     documentId: `doc-${randomUUID().slice(0, 8)}`,
@@ -2330,6 +2577,11 @@ export async function approveAndPostDocumentMutation(
     session.context.legalEntityId,
     'write',
   );
+  const safeTenantId = assertUuidPathParam(company.tenantId, 'tenantId');
+  const safeEntityId = assertUuidPathParam(company.legalEntityId, 'legalEntityId');
+  const safeDocId = assertSafeResourceIdPathParam(input.documentId, 'documentId');
+  const validatedIssueDate = assertIsoCalendarDateOrThrow(input.issueDate, 'wystawienia');
+
   const store = getStore();
   const docIndex = store.documents.findIndex(
     (d) =>
@@ -2350,103 +2602,228 @@ export async function approveAndPostDocumentMutation(
     );
   }
 
-  const netGrosze = parsePlnToGrosze(input.netPln);
-  const vatGrosze = parsePlnToGrosze(input.vatPln);
+  const netGrosze = parsePlnToGroszeOrThrow(input.netPln, 'kwota netto');
+  const vatGrosze = parsePlnToGroszeOrThrow(input.vatPln, 'kwota VAT');
   const grossGrosze = netGrosze + vatGrosze;
 
-  await papBffFetch(
-    `/api/v1/tenants/${company.tenantId}/companies/${company.legalEntityId}/documents/${input.documentId}/approve-and-post`,
+  const remote = await papBffFetch(
+    `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents/${safeDocId}/approve-and-post`,
     {
       method: 'POST',
       bearerToken: session.oidcToken,
-      body: input,
+      body: { ...input, issueDate: validatedIssueDate, counterpartyNip: nipCheck.normalizedNip },
     },
   );
+  assertApiResponsePermitsFallback(remote);
 
   const current = store.documents[docIndex]!;
+  const postedPeriod = validatedIssueDate.slice(0, 7);
   let postedEntryId = current.postedEntryId ?? `post-${randomUUID().slice(0, 8)}`;
 
-  if (
-    current.status !== 'approved_posted' &&
-    (company.profileCode === 'jdg_kpir_skala' || company.profileCode === 'jdg_kpir_liniowy')
-  ) {
-    const existingKpir = store.kpirEntriesByCompany.get(company.legalEntityId) ?? [];
-    const nextOrdinal = existingKpir.length + 1;
-    postedEntryId = `kpir-${current.period}-${String(nextOrdinal)}`;
+  if (current.status !== 'approved_posted') {
+    if (company.profileCode === 'jdg_kpir_skala' || company.profileCode === 'jdg_kpir_liniowy') {
+      const existingKpir = store.kpirEntriesByCompany.get(company.legalEntityId) ?? [];
+      const nextOrdinal = existingKpir.length + 1;
+      postedEntryId = `kpir-${postedPeriod}-${String(nextOrdinal)}`;
 
-    if (current.direction === 'sales') {
-      const entry = createKpirEntry({
+      if (current.direction === 'sales') {
+        const entry = createKpirEntry({
+          id: postedEntryId,
+          ordinalNumber: nextOrdinal,
+          eventDate: validatedIssueDate,
+          documentNumber: input.documentNumber.trim(),
+          ...(current.ksefReferenceNumber !== undefined
+            ? { ksefReferenceNumber: current.ksefReferenceNumber }
+            : {}),
+          counterpartyName: input.counterpartyName.trim(),
+          counterpartyNip: nipCheck.normalizedNip,
+          counterpartyAddress: current.counterpartyAddress,
+          eventDescription: current.description,
+          col7SalesRevenueGrosze: netGrosze,
+          qualificationKind: 'none',
+        });
+        store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
+      } else if (input.expenseQualification !== 'none') {
+        const vatEntry = createVatRegisterEntry({
+          id: `vat-post-${current.documentId}`,
+          registerType: 'purchase',
+          period: postedPeriod,
+          taxPointDate: validatedIssueDate,
+          issueDate: validatedIssueDate,
+          documentNumber: input.documentNumber.trim(),
+          counterpartyName: input.counterpartyName.trim(),
+          counterpartyNip: nipCheck.normalizedNip,
+          vatRate: current.vatRate,
+          netGrosze,
+          vatTotalGrosze: vatGrosze,
+          deductionMode: input.vatDeductionMode,
+        });
+
+        const qualified = qualifyKpirExpense({
+          eventDate: validatedIssueDate,
+          qualificationKind: input.expenseQualification,
+          netGrosze,
+          vatGrosze,
+          taxpayerVatActive: company.vatStatus === 'czynny',
+          deductibleVatGrosze: vatEntry.deductibleVatGrosze,
+        });
+
+        const entry = createKpirEntry({
+          id: postedEntryId,
+          ordinalNumber: nextOrdinal,
+          eventDate: validatedIssueDate,
+          documentNumber: input.documentNumber.trim(),
+          ...(current.ksefReferenceNumber !== undefined
+            ? { ksefReferenceNumber: current.ksefReferenceNumber }
+            : {}),
+          counterpartyName: input.counterpartyName.trim(),
+          counterpartyNip: nipCheck.normalizedNip,
+          counterpartyAddress: current.counterpartyAddress,
+          eventDescription: current.description,
+          col10GoodsAndMaterialsGrosze: qualified.col10GoodsAndMaterialsGrosze,
+          col11IncidentalCostsGrosze: qualified.col11IncidentalCostsGrosze,
+          col12RemunerationGrosze: qualified.col12RemunerationGrosze,
+          col13OtherExpensesGrosze: qualified.col13OtherExpensesGrosze,
+          col16ResearchDevelopmentCostGrosze: qualified.col16ResearchDevelopmentCostGrosze,
+          qualificationKind: input.expenseQualification,
+        });
+        store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
+      }
+    } else if (company.profileCode === 'jdg_ryczalt') {
+      if (current.direction === 'sales' && netGrosze > 0) {
+        const existingRyczalt = store.ryczaltEntriesByCompany.get(company.legalEntityId) ?? [];
+        const nextOrd = existingRyczalt.length + 1;
+        postedEntryId = `ryczalt-${postedPeriod}-${String(nextOrd)}`;
+        const rycEntry = createRyczaltEntry({
+          id: postedEntryId,
+          ordinalNumber: nextOrd,
+          entryDate: validatedIssueDate,
+          revenueDate: validatedIssueDate,
+          documentNumber: input.documentNumber.trim(),
+          counterpartyName: input.counterpartyName.trim(),
+          counterpartyNip: nipCheck.normalizedNip,
+          rate: '12',
+          revenueGrosze: netGrosze,
+          remarks: current.description,
+        });
+        store.ryczaltEntriesByCompany.set(company.legalEntityId, [...existingRyczalt, rycEntry]);
+      } else {
+        postedEntryId = `ryczalt-ewidencja-zakupu-${current.documentId}`;
+      }
+    } else if (company.profileCode === 'spzoo_pelne_ksiegi' && grossGrosze !== 0) {
+      const existingJournal = store.journalEntriesByCompany.get(company.legalEntityId) ?? [];
+      const nextNo = existingJournal.length + 1;
+      const entryNumber = `DK/${postedPeriod}/${String(nextNo).padStart(3, '0')}`;
+      postedEntryId = `jrn-${postedPeriod}-${String(nextNo)}`;
+      const isCorrection = grossGrosze < 0;
+      const stornoMeta = isCorrection
+        ? { isRedStorno: true, stornoReason: 'Faktura korygująca' }
+        : {};
+
+      const journalLines: {
+        accountCode: string;
+        side: 'Wn' | 'Ma';
+        amountGrosze: number;
+        description: string;
+        isRedStorno?: boolean;
+        stornoReason?: string;
+      }[] = [];
+
+      if (current.direction === 'sales') {
+        journalLines.push({
+          accountCode: '201',
+          side: 'Wn',
+          amountGrosze: grossGrosze,
+          description: `Należność brutto — ${input.counterpartyName.trim()}`,
+          ...stornoMeta,
+        });
+        if (netGrosze !== 0) {
+          journalLines.push({
+            accountCode: '700',
+            side: 'Ma',
+            amountGrosze: netGrosze,
+            description: `Przychód netto ze sprzedaży — ${input.documentNumber.trim()}`,
+            ...stornoMeta,
+          });
+        }
+        if (vatGrosze !== 0) {
+          journalLines.push({
+            accountCode: '221-1',
+            side: 'Ma',
+            amountGrosze: vatGrosze,
+            description: `VAT należny — ${input.documentNumber.trim()}`,
+            ...stornoMeta,
+          });
+        }
+      } else {
+        const vatEntry = createVatRegisterEntry({
+          id: `vat-jrn-${current.documentId}`,
+          registerType: 'purchase',
+          period: postedPeriod,
+          taxPointDate: validatedIssueDate,
+          issueDate: validatedIssueDate,
+          documentNumber: input.documentNumber.trim(),
+          counterpartyName: input.counterpartyName.trim(),
+          counterpartyNip: nipCheck.normalizedNip,
+          vatRate: current.vatRate,
+          netGrosze,
+          vatTotalGrosze: vatGrosze,
+          deductionMode: company.vatStatus === 'czynny' ? input.vatDeductionMode : 'none_0',
+        });
+        const deductibleVat = company.vatStatus === 'czynny' ? vatEntry.deductibleVatGrosze : 0;
+        const costAmount = grossGrosze - deductibleVat;
+        const expenseAccount =
+          input.expenseQualification === 'goods_and_materials_col10' ? '330' : '402';
+
+        if (costAmount !== 0) {
+          journalLines.push({
+            accountCode: expenseAccount,
+            side: 'Wn',
+            amountGrosze: costAmount,
+            description: `Koszt rodzajowy — ${current.description}`,
+            ...stornoMeta,
+          });
+        }
+        if (deductibleVat !== 0) {
+          journalLines.push({
+            accountCode: '221-2',
+            side: 'Wn',
+            amountGrosze: deductibleVat,
+            description: `VAT naliczony podlegający odliczeniu — ${input.documentNumber.trim()}`,
+            ...stornoMeta,
+          });
+        }
+        journalLines.push({
+          accountCode: '202',
+          side: 'Ma',
+          amountGrosze: grossGrosze,
+          description: `Zobowiązanie wobec dostawcy — ${input.counterpartyName.trim()}`,
+          ...stornoMeta,
+        });
+      }
+
+      const journalEntry = createValidatedJournalEntry({
         id: postedEntryId,
-        ordinalNumber: nextOrdinal,
-        eventDate: input.issueDate,
+        entryNumber,
+        bookingDate: validatedIssueDate,
+        documentDate: validatedIssueDate,
         documentNumber: input.documentNumber.trim(),
-        ...(current.ksefReferenceNumber !== undefined
-          ? { ksefReferenceNumber: current.ksefReferenceNumber }
-          : {}),
-        counterpartyName: input.counterpartyName.trim(),
-        counterpartyNip: nipCheck.normalizedNip,
-        counterpartyAddress: current.counterpartyAddress,
-        eventDescription: current.description,
-        col7SalesRevenueGrosze: netGrosze,
-        qualificationKind: 'none',
+        description: `${current.description} (${input.counterpartyName.trim()})`,
+        lines: journalLines,
       });
-      store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
-    } else if (input.expenseQualification !== 'none') {
-      const vatEntry = createVatRegisterEntry({
-        id: `vat-post-${current.documentId}`,
-        registerType: 'purchase',
-        period: input.issueDate.slice(0, 7),
-        taxPointDate: input.issueDate,
-        issueDate: input.issueDate,
-        documentNumber: input.documentNumber.trim(),
-        counterpartyName: input.counterpartyName.trim(),
-        counterpartyNip: nipCheck.normalizedNip,
-        vatRate: current.vatRate,
-        netGrosze,
-        vatTotalGrosze: vatGrosze,
-        deductionMode: input.vatDeductionMode,
-      });
-
-      const qualified = qualifyKpirExpense({
-        eventDate: input.issueDate,
-        qualificationKind: input.expenseQualification,
-        netGrosze,
-        vatGrosze,
-        taxpayerVatActive: company.vatStatus === 'czynny',
-        deductibleVatGrosze: vatEntry.deductibleVatGrosze,
-      });
-
-      const entry = createKpirEntry({
-        id: postedEntryId,
-        ordinalNumber: nextOrdinal,
-        eventDate: input.issueDate,
-        documentNumber: input.documentNumber.trim(),
-        ...(current.ksefReferenceNumber !== undefined
-          ? { ksefReferenceNumber: current.ksefReferenceNumber }
-          : {}),
-        counterpartyName: input.counterpartyName.trim(),
-        counterpartyNip: nipCheck.normalizedNip,
-        counterpartyAddress: current.counterpartyAddress,
-        eventDescription: current.description,
-        col10GoodsAndMaterialsGrosze: qualified.col10GoodsAndMaterialsGrosze,
-        col11IncidentalCostsGrosze: qualified.col11IncidentalCostsGrosze,
-        col12RemunerationGrosze: qualified.col12RemunerationGrosze,
-        col13OtherExpensesGrosze: qualified.col13OtherExpensesGrosze,
-        col16ResearchDevelopmentCostGrosze: qualified.col16ResearchDevelopmentCostGrosze,
-        qualificationKind: input.expenseQualification,
-      });
-      store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
+      store.journalEntriesByCompany.set(company.legalEntityId, [...existingJournal, journalEntry]);
     }
   }
 
   const updated: WorkspaceDocumentRecord = {
     ...current,
+    period: postedPeriod,
     status: 'approved_posted',
     documentNumber: input.documentNumber.trim(),
     counterpartyName: input.counterpartyName.trim(),
     counterpartyNip: nipCheck.normalizedNip,
-    issueDate: input.issueDate,
-    eventDate: input.issueDate,
+    issueDate: validatedIssueDate,
+    eventDate: validatedIssueDate,
     netGrosze,
     vatGrosze,
     grossGrosze,
@@ -2510,15 +2887,27 @@ export function addManualKpirEntryMutation(
         'Nie znaleziono korygowanego wpisu KPiR.',
       );
     }
-    const storno = createKpirStornoEntry({
-      id: `kpir-storno-${String(nextOrdinal)}`,
-      ordinalNumber: nextOrdinal,
-      correctionDate: input.correctionDate,
-      originalEntry: original,
-      correctionDocumentNumber:
-        input.correctionDocumentNumber.trim() || `KOR/${original.documentNumber}`,
-      correctionReason: input.correctionReason.trim(),
-    });
+    let storno: KpirEntry;
+    try {
+      storno = createKpirStornoEntry({
+        id: `kpir-storno-${String(nextOrdinal)}`,
+        ordinalNumber: nextOrdinal,
+        correctionDate: assertIsoCalendarDateOrThrow(input.correctionDate, 'korekty (storno)'),
+        originalEntry: original,
+        correctionDocumentNumber:
+          input.correctionDocumentNumber.trim() || `KOR/${original.documentNumber}`,
+        correctionReason: input.correctionReason.trim(),
+      });
+    } catch (err) {
+      if (err instanceof WorkspaceAccessError) {
+        throw err;
+      }
+      throw new WorkspaceAccessError(
+        400,
+        'kpir_storno_validation_error',
+        err instanceof Error ? err.message : 'Błąd walidacji storna KPiR.',
+      );
+    }
     store.kpirEntriesByCompany.set(company.legalEntityId, [...currentList, storno]);
     appendAudit(
       session,
@@ -2529,23 +2918,53 @@ export function addManualKpirEntryMutation(
     return storno;
   }
 
-  const created = createKpirEntry({
-    id: `kpir-manual-${String(nextOrdinal)}`,
-    ordinalNumber: nextOrdinal,
-    eventDate: input.eventDate,
-    documentNumber: input.documentNumber.trim(),
-    ...(input.ksefReferenceNumber?.trim()
-      ? { ksefReferenceNumber: input.ksefReferenceNumber.trim() }
-      : {}),
-    counterpartyName: input.counterpartyName.trim(),
-    ...(input.counterpartyNip.trim() ? { counterpartyNip: input.counterpartyNip.trim() } : {}),
-    counterpartyAddress: input.counterpartyAddress.trim() || 'Polska',
-    eventDescription: input.eventDescription.trim(),
-    col7SalesRevenueGrosze: parsePlnToGrosze(input.salesPln || '0.00'),
-    col13OtherExpensesGrosze: parsePlnToGrosze(input.otherExpensesPln || '0.00'),
-    qualificationKind:
-      parsePlnToGrosze(input.otherExpensesPln || '0.00') > 0 ? 'other_expenses_100_col13' : 'none',
-  });
+  let created: KpirEntry;
+  try {
+    const validatedDate = assertIsoCalendarDateOrThrow(input.eventDate, 'zdarzenia gospodarczego');
+    const salesGrosze = parsePlnToGroszeOrThrow(input.salesPln || '0.00', 'przychód KPiR');
+    const expensesGrosze = parsePlnToGroszeOrThrow(
+      input.otherExpensesPln || '0.00',
+      'pozostałe wydatki KPiR',
+    );
+    let normalizedNip: string | undefined;
+    if (input.counterpartyNip.trim()) {
+      const nipCheck = validatePolishNip(input.counterpartyNip.trim());
+      if (!nipCheck.valid || !nipCheck.normalizedNip) {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_nip',
+          nipCheck.reason ?? 'Nieprawidłowy NIP kontrahenta we wpisie KPiR.',
+        );
+      }
+      normalizedNip = nipCheck.normalizedNip;
+    }
+
+    created = createKpirEntry({
+      id: `kpir-manual-${String(nextOrdinal)}`,
+      ordinalNumber: nextOrdinal,
+      eventDate: validatedDate,
+      documentNumber: input.documentNumber.trim(),
+      ...(input.ksefReferenceNumber?.trim()
+        ? { ksefReferenceNumber: input.ksefReferenceNumber.trim() }
+        : {}),
+      counterpartyName: input.counterpartyName.trim(),
+      ...(normalizedNip !== undefined ? { counterpartyNip: normalizedNip } : {}),
+      counterpartyAddress: input.counterpartyAddress.trim() || 'Polska',
+      eventDescription: input.eventDescription.trim(),
+      col7SalesRevenueGrosze: salesGrosze,
+      col13OtherExpensesGrosze: expensesGrosze,
+      qualificationKind: expensesGrosze > 0 ? 'other_expenses_100_col13' : 'none',
+    });
+  } catch (err) {
+    if (err instanceof WorkspaceAccessError) {
+      throw err;
+    }
+    throw new WorkspaceAccessError(
+      400,
+      'kpir_entry_validation_error',
+      err instanceof Error ? err.message : 'Błąd walidacji wpisu KPiR.',
+    );
+  }
 
   store.kpirEntriesByCompany.set(company.legalEntityId, [...currentList, created]);
   appendAudit(
@@ -2579,18 +2998,44 @@ export function addRyczaltEntryMutation(
   const list = store.ryczaltEntriesByCompany.get(company.legalEntityId) ?? [];
   const nextOrd = list.length + 1;
 
-  const entry = createRyczaltEntry({
-    id: `ryczalt-${String(nextOrd)}`,
-    ordinalNumber: nextOrd,
-    entryDate: input.revenueDate,
-    revenueDate: input.revenueDate,
-    documentNumber: input.documentNumber.trim(),
-    counterpartyName: input.counterpartyName.trim(),
-    ...(input.counterpartyNip?.trim() ? { counterpartyNip: input.counterpartyNip.trim() } : {}),
-    rate: input.rate,
-    revenueGrosze: parsePlnToGrosze(input.revenuePln),
-    ...(input.remarks?.trim() ? { remarks: input.remarks.trim() } : {}),
-  });
+  let entry: RyczaltEntry;
+  try {
+    const validatedDate = assertIsoCalendarDateOrThrow(input.revenueDate, 'przychodu (ryczałt)');
+    let normalizedNip: string | undefined;
+    if (input.counterpartyNip?.trim()) {
+      const nipCheck = validatePolishNip(input.counterpartyNip.trim());
+      if (!nipCheck.valid || !nipCheck.normalizedNip) {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_nip',
+          nipCheck.reason ?? 'Nieprawidłowy NIP kontrahenta we wpisie ryczałtu.',
+        );
+      }
+      normalizedNip = nipCheck.normalizedNip;
+    }
+
+    entry = createRyczaltEntry({
+      id: `ryczalt-${String(nextOrd)}`,
+      ordinalNumber: nextOrd,
+      entryDate: validatedDate,
+      revenueDate: validatedDate,
+      documentNumber: input.documentNumber.trim(),
+      counterpartyName: input.counterpartyName.trim(),
+      ...(normalizedNip !== undefined ? { counterpartyNip: normalizedNip } : {}),
+      rate: input.rate,
+      revenueGrosze: parsePlnToGroszeOrThrow(input.revenuePln, 'przychód ryczałtowy'),
+      ...(input.remarks?.trim() ? { remarks: input.remarks.trim() } : {}),
+    });
+  } catch (err) {
+    if (err instanceof WorkspaceAccessError) {
+      throw err;
+    }
+    throw new WorkspaceAccessError(
+      400,
+      'ryczalt_entry_validation_error',
+      err instanceof Error ? err.message : 'Błąd walidacji wpisu ewidencji ryczałtu.',
+    );
+  }
 
   store.ryczaltEntriesByCompany.set(company.legalEntityId, [...list, entry]);
   appendAudit(
@@ -2678,14 +3123,9 @@ export async function importAndReconcileBankStatementMutation(
     'write',
   );
 
-  await papBffFetch(
-    `/api/v1/tenants/${company.tenantId}/companies/${company.legalEntityId}/finance/bank-import`,
-    {
-      method: 'POST',
-      bearerToken: session.oidcToken,
-      body: input,
-    },
-  );
+  assertPayloadSizeWithinLimit(input.content, 'wyciąg bankowy');
+  const safeTenantId = assertUuidPathParam(company.tenantId, 'tenantId');
+  const safeEntityId = assertUuidPathParam(company.legalEntityId, 'legalEntityId');
 
   let parsedTx: readonly BankStatementTransaction[];
   try {
@@ -2701,9 +3141,17 @@ export async function importAndReconcileBankStatementMutation(
     );
   }
 
-  const store = getStore();
-  store.bankTransactionsByCompany.set(company.legalEntityId, [...parsedTx]);
+  const importRemote = await papBffFetch(
+    `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/finance/bank-import`,
+    {
+      method: 'POST',
+      bearerToken: session.oidcToken,
+      body: input,
+    },
+  );
+  assertApiResponsePermitsFallback(importRemote);
 
+  const store = getStore();
   const companyDocs = store.documents.filter(
     (d) => d.tenantId === company.tenantId && d.legalEntityId === company.legalEntityId,
   );
@@ -2722,15 +3170,20 @@ export async function importAndReconcileBankStatementMutation(
   let matchedCount = 0;
 
   if (input.applySettlements) {
-    await papBffFetch(
-      `/api/v1/tenants/${company.tenantId}/companies/${company.legalEntityId}/finance/reconcile`,
+    const reconcileRemote = await papBffFetch(
+      `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/finance/reconcile`,
       {
         method: 'POST',
         bearerToken: session.oidcToken,
         body: { matches },
       },
     );
+    assertApiResponsePermitsFallback(reconcileRemote);
+  }
 
+  store.bankTransactionsByCompany.set(company.legalEntityId, [...parsedTx]);
+
+  if (input.applySettlements) {
     for (const match of matches) {
       if (match.matchedDocumentId && match.settledAmountGrosze > 0) {
         matchedCount += 1;
@@ -2827,14 +3280,17 @@ export async function updateNotificationPrefsAndDispatchMutation(
     return;
   }
 
-  await papBffFetch(
-    `/api/v1/tenants/${company.tenantId}/companies/${company.legalEntityId}/notifications/dispatch-due`,
+  const safeTenantId = assertUuidPathParam(company.tenantId, 'tenantId');
+  const safeEntityId = assertUuidPathParam(company.legalEntityId, 'legalEntityId');
+  const dispatchRemote = await papBffFetch(
+    `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/notifications/dispatch-due`,
     {
       method: 'POST',
       bearerToken: session.oidcToken,
       body: { period: session.context.period },
     },
   );
+  assertApiResponsePermitsFallback(dispatchRemote);
 
   const prefs = store.notificationPrefsByCompany.get(company.legalEntityId);
   const existingOutbox = store.outboxByCompany.get(company.legalEntityId) ?? [];
@@ -2966,6 +3422,27 @@ export function manageMcpProposalMutation(
   }
 
   const current = store.mcpProposals[idx]!;
+  if (current.status !== 'pending_human_approval') {
+    throw new WorkspaceAccessError(
+      400,
+      'proposal_not_pending',
+      `Propozycja MCP ${current.invoiceNumber} nie oczekuje już na zatwierdzenie (aktualny status: ${current.status}).`,
+    );
+  }
+
+  const expiresAtMs = Date.parse(current.expiresAt);
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    store.mcpProposals[idx] = {
+      ...current,
+      status: 'expired',
+    };
+    throw new WorkspaceAccessError(
+      400,
+      'proposal_expired',
+      `Propozycja MCP ${current.invoiceNumber} wygasła (${current.expiresAt}) i wymaga ponownego przygotowania.`,
+    );
+  }
+
   if (input.op === 'issue_code') {
     const code = `PAP-HUMAN-${randomUUID().replace(/-/g, '').slice(0, 12).toUpperCase()}`;
     store.mcpProposals[idx] = {
@@ -2981,8 +3458,38 @@ export function manageMcpProposalMutation(
     return { confirmationCode: code };
   }
 
+  const expectedCode = current.issuedConfirmationCode;
+  const providedCode =
+    typeof input.confirmationCode === 'string' ? input.confirmationCode.trim() : '';
+  if (!expectedCode || providedCode.length === 0) {
+    throw new WorkspaceAccessError(
+      400,
+      'missing_confirmation_code',
+      'Zatwierdzenie propozycji MCP wymaga najpierw wygenerowania wyzwania i podania jednorazowego kodu potwierdzenia człowieka.',
+    );
+  }
+
+  const expectedBuf = Buffer.from(expectedCode, 'utf8');
+  const providedBuf = Buffer.from(providedCode, 'utf8');
+  if (expectedBuf.length !== providedBuf.length || !timingSafeEqual(expectedBuf, providedBuf)) {
+    appendAudit(
+      session,
+      company,
+      'MCP_CONFIRMATION_CODE_MISMATCH',
+      `Odrzucono zatwierdzenie propozycji MCP ${current.invoiceNumber} — nieprawidłowy kod potwierdzenia człowieka.`,
+      'UI',
+    );
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_confirmation_code',
+      'Nieprawidłowy jednorazowy kod potwierdzenia człowieka — sprawdź przepisany kod wyzwania.',
+    );
+  }
+
+  const { issuedConfirmationCode: _consumedCode, ...restProposal } = current;
+  void _consumedCode;
   store.mcpProposals[idx] = {
-    ...current,
+    ...restProposal,
     status: 'confirmed',
     confirmedAt: new Date().toISOString(),
     confirmedBy: session.context.displayName,
@@ -2991,7 +3498,7 @@ export function manageMcpProposalMutation(
     session,
     company,
     'MCP_PROPOSAL_CONFIRMED_BY_HUMAN',
-    `Człowiek (${session.context.displayName}) zatwierdził propozycję MCP ${current.invoiceNumber} (hash ${current.payloadHash.slice(0, 12)}…).`,
+    `Człowiek (${session.context.displayName}) zweryfikował kod wyzwania i zatwierdził propozycję MCP ${current.invoiceNumber} (hash ${current.payloadHash.slice(0, 12)}…).`,
   );
   return {};
 }

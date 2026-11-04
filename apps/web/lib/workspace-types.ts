@@ -15,6 +15,17 @@ export type ReminderStage = 'upcoming_7d' | 'urgent_2d' | 'due_today' | 'overdue
 export const MANDATORY_AUXILIARY_EMAIL_FOOTER_PL =
   'Powiadomienie ma charakter wyłącznie pomocniczy i informacyjny — nie stanowi doradztwa podatkowego ani urzędowego potwierdzenia złożenia deklaracji (UPO). Dane syntetyczne środowiska testowego Polish Accounting Platform.';
 
+export const TENANT_1_ID = '11111111-1111-4111-8111-111111111100';
+export const TENANT_2_ID = '22222222-2222-4222-8222-222222222200';
+
+export const COMPANY_JDG_KPIR_ID = '11111111-1111-4111-8111-111111111101';
+export const COMPANY_JDG_RYCZALT_ID = '11111111-1111-4111-8111-111111111102';
+export const COMPANY_SPZOO_ID = '11111111-1111-4111-8111-111111111103';
+export const COMPANY_TENANT_2_ID = '22222222-2222-4222-8222-222222222201';
+
+export const AVAILABLE_PERIODS = ['2026-10', '2026-06', '2026-11', '2026-12'] as const;
+export const DEFAULT_ACCOUNTING_PERIOD = '2026-10' as const;
+
 export interface NotificationOutboxAttempt {
   readonly attemptNumber: number;
   readonly attemptedAt: string;
@@ -53,7 +64,7 @@ export interface NotificationOutboxEntry {
   readonly attempts: readonly NotificationOutboxAttempt[];
 }
 
-export interface SyntheticPersonaDefinition {
+export interface PublicPersonaSummary {
   readonly personaId: PersonaId;
   readonly userId: string;
   readonly displayName: string;
@@ -65,8 +76,56 @@ export interface SyntheticPersonaDefinition {
   readonly defaultLegalEntityId: string;
   readonly scopes: readonly string[];
   readonly descriptionPl: string;
+}
+
+export interface SyntheticPersonaDefinition extends PublicPersonaSummary {
   readonly syntheticOidcToken: string;
 }
+
+export const PUBLIC_SYNTHETIC_PERSONAS: readonly PublicPersonaSummary[] = [
+  {
+    personaId: 'jan-testowy',
+    userId: '00000000-0000-4000-8000-000000000101',
+    displayName: 'Jan Testowy',
+    email: 'jan.testowy@syntetyczny.example',
+    roleSummaryPl: 'Właściciel organizacji (Tenant 1) — pełne uprawnienia do 3 firm',
+    tenantId: TENANT_1_ID,
+    tenantName: 'Grupa Projektowa Jan Testowy (Tenant 1)',
+    tenantRole: 'owner',
+    defaultLegalEntityId: COMPANY_JDG_KPIR_ID,
+    scopes: ['pap:ui:full', 'pap:mcp:read', 'pap:mcp:prepare'],
+    descriptionPl:
+      'Właściciel 3 syntetycznych podmiotów w Tenant 1: JDG na KPiR + VAT, JDG na ryczałcie (zwolnienie VAT do 240 000 PLN) oraz Sp. z o.o. na pełnych księgach UoR i CIT 9%.',
+  },
+  {
+    personaId: 'marta-ksiegowa',
+    userId: '00000000-0000-4000-8000-000000000102',
+    displayName: 'Marta Księgowa',
+    email: 'marta.ksiegowa@biuro-syntetyczne.example',
+    roleSummaryPl: 'Księgowa z delegowanym grantem (zapis: KPiR i Sp. z o.o., odczyt: Ryczałt)',
+    tenantId: TENANT_1_ID,
+    tenantName: 'Grupa Projektowa Jan Testowy (Tenant 1)',
+    tenantRole: 'accountant',
+    defaultLegalEntityId: COMPANY_JDG_KPIR_ID,
+    scopes: ['pap:ui:accounting', 'pap:mcp:read', 'pap:mcp:prepare'],
+    descriptionPl:
+      'Zewnętrzna księgowa z jawnymi grantami podmiotowymi w Tenant 1. Może weryfikować i księgować dokumenty dla firm z grantem write, lecz nie zarządza właścicielskimi grantami organizacji.',
+  },
+  {
+    personaId: 'piotr-izolacyjny',
+    userId: '00000000-0000-4000-8000-000000000201',
+    displayName: 'Piotr Izolacyjny',
+    email: 'piotr.izolacyjny@tenant2-syntetyczny.example',
+    roleSummaryPl: 'Właściciel odrębnego Tenant 2 — izolacja danych między organizacjami',
+    tenantId: TENANT_2_ID,
+    tenantName: 'Przedsiębiorstwo Piotr Izolacyjny (Tenant 2)',
+    tenantRole: 'owner',
+    defaultLegalEntityId: COMPANY_TENANT_2_ID,
+    scopes: ['pap:ui:full', 'pap:mcp:read', 'pap:mcp:prepare'],
+    descriptionPl:
+      'Odrębny tenant do weryfikacji twardej izolacji firm. Każda próba odczytu lub zapisu danych podmiotów z Tenant 1 zwraca odmowę dostępu 403 (missing_tenant_membership).',
+  },
+];
 
 export type CompanyLegalForm = 'jdg' | 'sp_z_o_o' | 'spolka_cywilna';
 
@@ -197,7 +256,7 @@ export interface McpPendingProposalRecord {
   readonly clientName: string;
   readonly toolName: 'prepare_invoice_and_posting_proposal';
   readonly scope: 'pap:mcp:prepare';
-  readonly status: 'pending_human_approval' | 'confirmed' | 'expired';
+  readonly status: 'pending_human_approval' | 'confirmed' | 'rejected' | 'expired';
   readonly createdAt: string;
   readonly expiresAt: string;
   readonly payloadHash: string;

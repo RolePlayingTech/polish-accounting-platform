@@ -1,4 +1,8 @@
 import { getPolishStatutoryHolidaysForYear } from '@pap/domain';
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -30,7 +34,20 @@ export default async function TaxCalendarPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => getDashboardSnapshot(session));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/calendar"
+        pageEyebrow="Terminarz US / ZUS / KSeF"
+        pageTitle="Kalendarz obowiązków podatkowych i składkowych"
+      />
+    );
+  }
+
+  const dash = loaded.data;
   const yearNum = Number(session.context.period.slice(0, 4)) || 2026;
   const holidaysMap = getPolishStatutoryHolidaysForYear(yearNum);
   const holidaysInYear = [...holidaysMap.entries()]

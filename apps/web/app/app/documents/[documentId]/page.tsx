@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { WorkspaceAccessErrorShell } from '../../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../../components/login-required-card';
 import { AcademyDisclaimerBanner, AlertBanner } from '../../../../components/ui-controls';
 import { WorkspaceShell } from '../../../../components/workspace-shell';
@@ -39,7 +40,20 @@ export default async function DocumentDetailPage({
     );
   }
 
-  const dash = getDashboardSnapshot(session);
+  let dash: ReturnType<typeof getDashboardSnapshot>;
+  try {
+    dash = getDashboardSnapshot(session);
+  } catch (err) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={err}
+        activeHref="/app/documents"
+        pageEyebrow="Warsztat weryfikacji Split-View"
+        pageTitle="Weryfikacja propozycji AI obok oryginału dokumentu"
+      />
+    );
+  }
 
   let detail: ReturnType<typeof getDocumentDetailSnapshot> | null = null;
   let errorMessage = 'Nie znaleziono dokumentu w aktywnej firmie.';

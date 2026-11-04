@@ -7,6 +7,7 @@ import {
   createVatRegisterEntry,
   parsePlnToGrosze,
   qualifyKpirExpense,
+  validatePolishNip,
   type KpirExpenseQualificationKind,
   type VatDeductionMode,
 } from '@pap/domain';
@@ -28,6 +29,24 @@ import type {
   CompanyProfileRecord,
   WorkspaceDocumentRecord,
 } from '../../../../lib/workspace-types';
+
+function isValidIsoCalendarDate(candidate: string): boolean {
+  const trimmed = candidate.trim();
+  const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  return (
+    !Number.isNaN(utc.getTime()) &&
+    utc.getUTCFullYear() === year &&
+    utc.getUTCMonth() === month - 1 &&
+    utc.getUTCDate() === day
+  );
+}
 
 export interface DocumentVerificationClientProps {
   company: CompanyProfileRecord;
@@ -82,27 +101,39 @@ export function DocumentVerificationClient({
       // Pozostaw poprzednią kwotę przy niepełnym wpisywaniu
     }
 
+    const safeIssueDate = isValidIsoCalendarDate(issueDate) ? issueDate.trim() : document.issueDate;
+    const nipValidation = validatePolishNip(counterpartyNip);
+    const safeNip =
+      nipValidation.valid && nipValidation.normalizedNip
+        ? nipValidation.normalizedNip
+        : document.counterpartyNip;
+    const safeDocNum = docNumber.trim() || document.documentNumber;
+    const safeCounterpartyName = counterpartyName.trim() || document.counterpartyName;
+
     const vatEntry = createVatRegisterEntry({
       id: `live-vat-${document.documentId}`,
       registerType: document.direction,
-      period: document.period,
-      taxPointDate: issueDate || document.eventDate,
-      issueDate: issueDate || document.issueDate,
-      documentNumber: docNumber || document.documentNumber,
-      counterpartyName: counterpartyName || document.counterpartyName,
-      counterpartyNip: counterpartyNip || document.counterpartyNip,
+      period: safeIssueDate.slice(0, 7),
+      taxPointDate: safeIssueDate,
+      issueDate: safeIssueDate,
+      documentNumber: safeDocNum,
+      counterpartyName: safeCounterpartyName,
+      counterpartyNip: safeNip,
       vatRate: document.vatRate,
       netGrosze,
       vatTotalGrosze: vatGrosze,
       deductionMode: vatDeductionMode,
       annex15Item: document.annex15Item,
       ksefMarker: document.ksefMarker,
+      ...(document.ksefReferenceNumber !== undefined
+        ? { ksefReferenceNumber: document.ksefReferenceNumber }
+        : {}),
     });
 
     const kup =
       document.direction === 'purchase' && expenseQualification !== 'none'
         ? qualifyKpirExpense({
-            eventDate: issueDate || document.eventDate,
+            eventDate: safeIssueDate,
             qualificationKind: expenseQualification,
             netGrosze,
             vatGrosze,
@@ -114,11 +145,11 @@ export function DocumentVerificationClient({
     const basis = kup
       ? mapDomainExplanationToBasisInfo(
           kup.explanation,
-          `Kwalifikacja podatkowa kosztu i VAT (${docNumber})`,
+          `Kwalifikacja podatkowa kosztu i VAT (${safeDocNum})`,
         )
       : mapDomainExplanationToBasisInfo(
           vatEntry.explanation,
-          `Ujęcie w rejestrze VAT (${docNumber})`,
+          `Ujęcie w rejestrze VAT (${safeDocNum})`,
         );
 
     return {
@@ -362,17 +393,19 @@ export function DocumentVerificationClient({
                     }}
                   >
                     <option value="other_expenses_100_col13">
-                      100% KUP — Pozostałe wydatki (kolumna 13 KPiR)
+                      100% KUP — Pozostałe wydatki (Kol. 15 KPiR 2026 / Kol. 13 KPiR 2019)
                     </option>
                     <option value="goods_and_materials_col10">
-                      100% KUP — Zakup towarów handlowych i materiałów (kolumna 10 KPiR)
+                      100% KUP — Zakup towarów handlowych i materiałów (Kol. 12 KPiR 2026 / Kol. 10
+                      KPiR 2019)
                     </option>
                     <option value="vehicle_mixed_75_col13">
                       75% KUP / 50% VAT — Eksploatacja samochodu osobowego mieszanego (art. 23 ust.
                       1 pkt 46a PIT)
                     </option>
                     <option value="research_development_col16">
-                      100% KUP — Koszty działalności badawczo-rozwojowej B+R (kolumna 16 KPiR)
+                      100% KUP — Koszty działalności badawczo-rozwojowej B+R (Kol. 18 KPiR 2026 /
+                      Kol. 16 KPiR 2019)
                     </option>
                     <option value="nkup_excluded">
                       0% NKUP — Koszty reprezentacji / wyłączone z KUP (art. 23 ust. 1 pkt 23 PIT)

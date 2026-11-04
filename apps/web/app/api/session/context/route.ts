@@ -1,17 +1,17 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { assertSameOriginMutation } from '../../../../lib/request-security';
 import {
   readServerSession,
   writeSessionToResponse,
   type SessionContext,
 } from '../../../../lib/session';
+import { WorkspaceAccessError, verifySessionAccess } from '../../../../lib/synthetic-workspace';
 import {
   COMPANY_JDG_KPIR_ID,
   COMPANY_JDG_RYCZALT_ID,
   COMPANY_SPZOO_ID,
   TENANT_1_ID,
-  WorkspaceAccessError,
-  verifySessionAccess,
-} from '../../../../lib/synthetic-workspace';
+} from '../../../../lib/workspace-types';
 
 const DEMO_CODE_TO_ENTITY: Readonly<
   Record<string, { readonly tenantId: string; readonly legalEntityId: string }>
@@ -22,6 +22,11 @@ const DEMO_CODE_TO_ENTITY: Readonly<
 };
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const csrfError = assertSameOriginMutation(request);
+  if (csrfError) {
+    return csrfError;
+  }
+
   const session = await readServerSession();
   if (!session) {
     return NextResponse.json(

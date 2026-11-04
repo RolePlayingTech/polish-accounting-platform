@@ -14,6 +14,7 @@ import {
   type LedgerColumn,
 } from '@pap/ui';
 import { AlertBanner, Button } from '../../../components/ui-controls';
+import type { PersonaId } from '../../../lib/session';
 import {
   MCP_TOOLS_CATALOG,
   type CompanyProfileRecord,
@@ -23,11 +24,13 @@ import {
 
 type McpClientTab = 'claude' | 'cursor' | 'chatgpt' | 'gemini' | 'http';
 
+const REDACTED_OIDC_PLACEHOLDER = '<POBIERZ_TOKEN_Z_ENDPOINTU_OIDC>';
+
 export interface McpWorkbenchProps {
   activeCompany: CompanyProfileRecord;
   period: string;
   canWrite: boolean;
-  syntheticOidcToken: string;
+  personaId: PersonaId;
   personaDisplayName: string;
   proposals: readonly McpPendingProposalRecord[];
   mcpHelp: FieldHelpInfo;
@@ -39,13 +42,17 @@ export function McpWorkbench({
   mcpHelp,
   period,
   personaDisplayName,
+  personaId,
   proposals,
-  syntheticOidcToken,
 }: McpWorkbenchProps) {
   const router = useRouter();
   const [clientTab, setClientTab] = useState<McpClientTab>('claude');
-  const [tokenVisible, setTokenVisible] = useState(false);
-  const [proposalToConfirm, setProposalToConfirm] = useState<McpPendingProposalRecord | null>(null);
+  const [issuedCodesByProposal, setIssuedCodesByProposal] = useState<Record<string, string>>({});
+  const [typedCodesByProposal, setTypedCodesByProposal] = useState<Record<string, string>>({});
+  const [proposalToConfirm, setProposalToConfirm] = useState<{
+    proposal: McpPendingProposalRecord;
+    confirmationCode: string;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{
     tone: 'success' | 'danger' | 'info';
@@ -54,9 +61,6 @@ export function McpWorkbench({
   } | null>(null);
 
   const endpointUrl = 'http://127.0.0.1:4000/api/v1/mcp';
-  const displayedToken = tokenVisible
-    ? syntheticOidcToken
-    : `${syntheticOidcToken.slice(0, 14)}••••••••••••••••`;
 
   const configSnippets: Record<McpClientTab, { title: string; code: string }> = {
     claude: {
@@ -68,7 +72,7 @@ export function McpWorkbench({
               type: 'streamable-http',
               url: endpointUrl,
               headers: {
-                Authorization: `Bearer ${displayedToken}`,
+                Authorization: `Bearer ${REDACTED_OIDC_PLACEHOLDER}`,
                 'X-PAP-Tenant-Id': activeCompany.tenantId,
                 'X-PAP-Legal-Entity-Id': activeCompany.legalEntityId,
               },
@@ -88,7 +92,7 @@ export function McpWorkbench({
               url: endpointUrl,
               transport: 'streamable-http',
               headers: {
-                Authorization: `Bearer ${displayedToken}`,
+                Authorization: `Bearer ${REDACTED_OIDC_PLACEHOLDER}`,
               },
             },
           },
@@ -104,7 +108,7 @@ export function McpWorkbench({
         `Transport: MCP Streamable HTTP (JSON-RPC 2.0 POST)`,
         `Authentication: OAuth 2.0 / Bearer Token`,
         `Scopes: pap:mcp:read, pap:mcp:prepare`,
-        `Bearer (syntetyczny): ${displayedToken}`,
+        `Bearer: ${REDACTED_OIDC_PLACEHOLDER}`,
       ].join('\n'),
     },
     gemini: {
@@ -115,7 +119,7 @@ export function McpWorkbench({
             'pap-ksiegowosc': {
               httpUrl: endpointUrl,
               headers: {
-                Authorization: `Bearer ${displayedToken}`,
+                Authorization: `Bearer ${REDACTED_OIDC_PLACEHOLDER}`,
               },
             },
           },
@@ -127,16 +131,23 @@ export function McpWorkbench({
     http: {
       title: 'Własny klient Streamable HTTP (curl / SDK)',
       code: [
+        `# 1. Pobierz osobny token delegowany dla klienta MCP z lokalnego dostawcy OIDC:`,
+        `#    POST http://127.0.0.1:4000/api/v1/oidc/token {"personaId":"${personaId}"}`,
         `curl -X POST ${endpointUrl} \\`,
         `  -H "Content-Type: application/json" \\`,
         `  -H "Accept: application/json, text/event-stream" \\`,
-        `  -H "Authorization: Bearer ${displayedToken}" \\`,
+        `  -H "Authorization: Bearer ${REDACTED_OIDC_PLACEHOLDER}" \\`,
         `  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'`,
       ].join('\n'),
     },
   };
 
-  async function runMcpAction(body: Record<string, unknown>, okTitle: string, okDetail: string) {
+  async function runMcpAction(
+    body: Record<string, unknown>,
+    okTitle: string,
+    okDetail: string,
+    onSuccessData?: (data: { confirmationCode?: string }) => void,
+  ) {
     setBusy(true);
     setFeedback(null);
     try {
@@ -157,11 +168,12 @@ export function McpWorkbench({
           detail: data.error ?? 'Operacja nie powiodła się.',
         });
       } else {
+        onSuccessData?.(data);
         setFeedback({
           tone: 'success',
           title: okTitle,
           detail: data.confirmationCode
-            ? `${okDetail} Jednorazowy kod dla klienta MCP: ${data.confirmationCode}`
+            ? `${okDetail} Jednorazowy kod wyzwania człowieka: ${data.confirmationCode}`
             : okDetail,
         });
         router.refresh();
@@ -246,92 +258,164 @@ export function McpWorkbench({
         }
       >
         <div className="space-y-4">
-          {proposals.map((prop) => (
-            <div
-              key={prop.proposalId}
-              className={`rounded-xl border p-4 ${
-                prop.promptInjectionSuspected
-                  ? 'border-[#e6b3b0] bg-[#fceeed]/60'
-                  : 'border-[#e5e2d9] bg-[#faf9f5]'
-              }`}
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-sm font-semibold text-[#191c1a]">
-                      {prop.invoiceNumber}
-                    </span>
-                    <StatusBadge
-                      size="sm"
-                      tone={prop.status === 'confirmed' ? 'success' : 'warning'}
-                      label={
-                        prop.status === 'confirmed'
-                          ? `Zatwierdzono (${prop.confirmedBy ?? ''})`
-                          : 'Oczekuje na zatwierdzenie człowieka'
-                      }
-                    />
-                    {prop.promptInjectionSuspected ? (
+          {proposals.map((prop) => {
+            const challengeCode =
+              issuedCodesByProposal[prop.proposalId] ?? prop.issuedConfirmationCode;
+            const typedCode = typedCodesByProposal[prop.proposalId] ?? '';
+            const codeMatches = Boolean(challengeCode) && typedCode.trim() === challengeCode;
+            const codeInputId = `mcp-confirm-code-${prop.proposalId}`;
+
+            return (
+              <div
+                key={prop.proposalId}
+                className={`rounded-xl border p-4 ${
+                  prop.promptInjectionSuspected
+                    ? 'border-[#e6b3b0] bg-[#fceeed]/60'
+                    : 'border-[#e5e2d9] bg-[#faf9f5]'
+                }`}
+              >
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-mono text-sm font-semibold text-[#191c1a]">
+                        {prop.invoiceNumber}
+                      </span>
                       <StatusBadge
                         size="sm"
-                        tone="danger"
-                        label="Ostrzeżenie: podejrzenie prompt injection w opisie!"
+                        tone={
+                          prop.status === 'confirmed'
+                            ? 'success'
+                            : prop.status === 'expired' || prop.status === 'rejected'
+                              ? 'danger'
+                              : 'warning'
+                        }
+                        label={
+                          prop.status === 'confirmed'
+                            ? `Zatwierdzono (${prop.confirmedBy ?? ''})`
+                            : prop.status === 'expired'
+                              ? 'Propozycja wygasła'
+                              : prop.status === 'rejected'
+                                ? 'Odrzucono propozycję'
+                                : 'Oczekuje na zatwierdzenie człowieka'
+                        }
                       />
-                    ) : null}
+                      {prop.promptInjectionSuspected ? (
+                        <StatusBadge
+                          size="sm"
+                          tone="danger"
+                          label="Ostrzeżenie: podejrzenie prompt injection w opisie!"
+                        />
+                      ) : null}
+                    </div>
+                    <p className="text-xs font-medium text-[#191c1a]">
+                      Kontrahent: {prop.counterpartyName} (NIP {formatNip(prop.counterpartyNip)})
+                    </p>
+                    <p className="text-xs text-[#464c48]">{prop.description}</p>
+                    <p className="font-mono text-[11px] text-[#636b66]">
+                      Klient: {prop.clientName} · Narzędzie: {prop.toolName} · Hash SHA-256:{' '}
+                      {prop.payloadHash.slice(0, 16)}… · Ważność do:{' '}
+                      {prop.expiresAt.slice(0, 16).replace('T', ' ')}
+                    </p>
                   </div>
-                  <p className="text-xs font-medium text-[#191c1a]">
-                    Kontrahent: {prop.counterpartyName} (NIP {formatNip(prop.counterpartyNip)})
-                  </p>
-                  <p className="text-xs text-[#464c48]">{prop.description}</p>
-                  <p className="font-mono text-[11px] text-[#636b66]">
-                    Klient: {prop.clientName} · Narzędzie: {prop.toolName} · Hash SHA-256:{' '}
-                    {prop.payloadHash.slice(0, 16)}…
-                  </p>
+
+                  <div className="text-right">
+                    <MoneyAmount amount={prop.grossGrosze} inGrosze size="md" variant="expense" />
+                    <p className="mt-1 font-mono text-[11px] tabular-nums text-[#636b66]">
+                      Podgląd KUP: {(prop.kupPreviewGrosze / 100).toFixed(2)} · VAT:{' '}
+                      {(prop.deductibleVatPreviewGrosze / 100).toFixed(2)} PLN
+                    </p>
+                  </div>
                 </div>
 
-                <div className="text-right">
-                  <MoneyAmount amount={prop.grossGrosze} inGrosze size="md" variant="expense" />
-                  <p className="mt-1 font-mono text-[11px] tabular-nums text-[#636b66]">
-                    Podgląd KUP: {(prop.kupPreviewGrosze / 100).toFixed(2)} · VAT:{' '}
-                    {(prop.deductibleVatPreviewGrosze / 100).toFixed(2)} PLN
-                  </p>
-                </div>
+                {challengeCode && prop.status === 'pending_human_approval' ? (
+                  <div className="mt-3 space-y-2 rounded-lg border border-[#1d5c42] bg-[#e7f1ec] p-3 text-xs text-[#191c1a]">
+                    <p className="text-[#1d5c42]">
+                      Wyzwanie zatwierdzenia człowieka (
+                      <code className="font-mono">humanConfirmationCode</code>):{' '}
+                      <strong className="font-mono">{challengeCode}</strong>
+                    </p>
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="min-w-[240px] flex-1">
+                        <label
+                          htmlFor={codeInputId}
+                          className="block text-[11px] font-semibold text-[#191c1a]"
+                        >
+                          Przepisz lub wklej kod wyzwania, aby odblokować zatwierdzenie:
+                        </label>
+                        <input
+                          id={codeInputId}
+                          type="text"
+                          value={typedCode}
+                          onChange={(e) =>
+                            setTypedCodesByProposal((prev) => ({
+                              ...prev,
+                              [prop.proposalId]: e.target.value,
+                            }))
+                          }
+                          placeholder={challengeCode}
+                          autoComplete="off"
+                          className="mt-1 min-h-9 w-full rounded-md border border-[#858177] bg-white px-2.5 py-1.5 font-mono text-xs text-[#191c1a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+                        />
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        disabled={busy}
+                        onClick={() =>
+                          setTypedCodesByProposal((prev) => ({
+                            ...prev,
+                            [prop.proposalId]: challengeCode,
+                          }))
+                        }
+                      >
+                        Użyj wyświetlonego kodu wyzwania
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                {prop.status === 'pending_human_approval' ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#e5e2d9] pt-3">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy || !canWrite}
+                      onClick={() =>
+                        void runMcpAction(
+                          { action: 'mcp_issue_code', proposalId: prop.proposalId },
+                          'Wygenerowano jednorazowy kod autoryzacji człowieka',
+                          'Potwierdź wygenerowany kod wyzwania powyżej lub przekaż go do narzędzia confirm_prepared_proposal.',
+                          (data) => {
+                            if (data.confirmationCode) {
+                              setIssuedCodesByProposal((prev) => ({
+                                ...prev,
+                                [prop.proposalId]: data.confirmationCode!,
+                              }));
+                            }
+                          },
+                        )
+                      }
+                    >
+                      1. Wygeneruj kod potwierdzenia człowieka
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={busy || !canWrite || !codeMatches}
+                      onClick={() => {
+                        if (!challengeCode || !codeMatches) return;
+                        setProposalToConfirm({
+                          proposal: prop,
+                          confirmationCode: typedCode.trim(),
+                        });
+                      }}
+                    >
+                      2. Zatwierdź propozycję z kodem człowieka
+                    </Button>
+                  </div>
+                ) : null}
               </div>
-
-              {prop.issuedConfirmationCode ? (
-                <div className="mt-3 rounded-lg border border-[#1d5c42] bg-[#e7f1ec] px-3 py-2 text-xs text-[#1d5c42]">
-                  Jednorazowy kod potwierdzenia człowieka (
-                  <code className="font-mono">humanConfirmationCode</code>):{' '}
-                  <strong className="font-mono">{prop.issuedConfirmationCode}</strong>
-                </div>
-              ) : null}
-
-              {prop.status === 'pending_human_approval' ? (
-                <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-[#e5e2d9] pt-3">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    disabled={busy || !canWrite}
-                    onClick={() =>
-                      void runMcpAction(
-                        { action: 'mcp_issue_code', proposalId: prop.proposalId },
-                        'Wygenerowano jednorazowy kod autoryzacji człowieka',
-                        'Możesz przekazać ten kod do narzędzia confirm_prepared_proposal lub zatwierdzić bezpośrednio poniżej.',
-                      )
-                    }
-                  >
-                    Wygeneruj kod potwierdzenia dla klienta MCP
-                  </Button>
-                  <Button
-                    size="sm"
-                    disabled={busy || !canWrite}
-                    onClick={() => setProposalToConfirm(prop)}
-                  >
-                    Zatwierdź propozycję bezpośrednio w UI
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
 
@@ -341,16 +425,17 @@ export function McpWorkbench({
         title="Instrukcja podłączenia zewnętrznych klientów AI do /api/v1/mcp"
       >
         <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3 text-xs">
-            <div>
-              <p className="font-semibold text-[#191c1a]">
-                Syntetyczny token OIDC aktywnej persony ({personaDisplayName}):
-              </p>
-              <code className="mt-0.5 block font-mono text-[#1d5c42]">{displayedToken}</code>
-            </div>
-            <Button size="sm" variant="secondary" onClick={() => setTokenVisible((v) => !v)}>
-              {tokenVisible ? 'Ukryj token syntetyczny' : 'Pokaż pełny token syntetyczny'}
-            </Button>
+          <div className="rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3 text-xs text-[#464c48]">
+            <p className="font-semibold text-[#191c1a]">
+              Ochrona sesji przeglądarkowej ({personaDisplayName}):
+            </p>
+            <p className="mt-1 leading-relaxed">
+              Token Twojej sesji webowej pozostaje wyłącznie w ciasteczku serwerowym{' '}
+              <code className="font-mono">HttpOnly</code> i nie jest renderowany w HTML ani w
+              payloadach RSC. Zewnętrzny klient MCP pobiera własny delegowany token z{' '}
+              <code className="font-mono">POST /api/v1/oidc/token</code> i podstawia go w miejsce{' '}
+              <code className="font-mono text-[#1d5c42]">{REDACTED_OIDC_PLACEHOLDER}</code>.
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -398,40 +483,40 @@ export function McpWorkbench({
         open={proposalToConfirm !== null}
         operationType="mcp_approval"
         title="Świadome zatwierdzenie propozycji przygotowanej przez klienta MCP"
-        description={`Zatwierdzasz jako człowiek szkic ${proposalToConfirm?.invoiceNumber ?? ''} od ${proposalToConfirm?.counterpartyName ?? ''}.`}
+        description={`Zatwierdzasz jako człowiek szkic ${proposalToConfirm?.proposal.invoiceNumber ?? ''} od ${proposalToConfirm?.proposal.counterpartyName ?? ''} za pomocą zweryfikowanego kodu wyzwania ${proposalToConfirm?.confirmationCode ?? ''}.`}
         companyName={activeCompany.companyName}
         nip={activeCompany.nip}
         period={period}
-        amountGrosze={proposalToConfirm?.grossGrosze}
+        amountGrosze={proposalToConfirm?.proposal.grossGrosze}
         {...(proposalToConfirm
           ? {
               mcpMetadata: {
-                clientName: proposalToConfirm.clientName,
-                scope: proposalToConfirm.scope,
-                expiresAtLabel: proposalToConfirm.expiresAt.slice(0, 16).replace('T', ' '),
+                clientName: proposalToConfirm.proposal.clientName,
+                scope: proposalToConfirm.proposal.scope,
+                expiresAtLabel: proposalToConfirm.proposal.expiresAt.slice(0, 16).replace('T', ' '),
               },
             }
           : {})}
         auditConsequences={[
-          'Szkic MCP zostanie trwale oznaczony jako zatwierdzony przez człowieka (MCP_PROPOSAL_CONFIRMED_BY_HUMAN).',
-          `Zgodność skrótu ładunku SHA-256 (${proposalToConfirm?.payloadHash.slice(0, 12) ?? ''}…) zostanie zapisana w dzienniku audytu.`,
+          'Szkic MCP zostanie trwale oznaczony jako zatwierdzony przez człowieka (MCP_PROPOSAL_CONFIRMED_BY_HUMAN) po weryfikacji jednorazowego kodu wyzwania.',
+          `Zgodność skrótu ładunku SHA-256 (${proposalToConfirm?.proposal.payloadHash.slice(0, 12) ?? ''}…) zostanie zapisana w dzienniku audytu.`,
         ]}
-        confirmLabel="Potwierdzam i zatwierdzam propozycję MCP"
+        confirmLabel="Potwierdzam kod i zatwierdzam propozycję MCP"
         isSubmitting={busy}
         onCancel={() => setProposalToConfirm(null)}
         onConfirm={() => {
           if (!proposalToConfirm) return;
-          const id = proposalToConfirm.proposalId;
-          const code = proposalToConfirm.issuedConfirmationCode;
+          const id = proposalToConfirm.proposal.proposalId;
+          const code = proposalToConfirm.confirmationCode;
           setProposalToConfirm(null);
           void runMcpAction(
             {
               action: 'mcp_confirm_proposal',
               proposalId: id,
-              ...(code ? { confirmationCode: code } : {}),
+              confirmationCode: code,
             },
             'Propozycja MCP została zatwierdzona przez człowieka',
-            'Zdarzenie zapisano w niezmiennym dzienniku audytu organizacji.',
+            'Jednorazowy kod wyzwania został zużyty, a zdarzenie zapisano w niezmiennym dzienniku audytu organizacji.',
           );
         }}
       />

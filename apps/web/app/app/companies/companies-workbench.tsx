@@ -18,11 +18,12 @@ import {
   type LegalBasisInfo,
 } from '@pap/ui';
 import { AlertBanner, Button, NipInput, TaxRegimeSelector } from '../../../components/ui-controls';
-import { COMPANY_JDG_KPIR_ID, TENANT_1_ID } from '../../../lib/synthetic-workspace';
-import type {
-  AuditLogEntryRecord,
-  CompanyProfileRecord,
-  CompanyUserGrantRecord,
+import {
+  COMPANY_JDG_KPIR_ID,
+  TENANT_1_ID,
+  type AuditLogEntryRecord,
+  type CompanyProfileRecord,
+  type CompanyUserGrantRecord,
 } from '../../../lib/workspace-types';
 
 export interface CompaniesWorkbenchProps {
@@ -355,8 +356,12 @@ export function CompaniesWorkbench({
                 )}
               </FormField>
 
-              <label className="flex items-center gap-2.5 text-sm text-[#191c1a]">
+              <label
+                htmlFor="edit-company-small-taxpayer"
+                className="flex items-center gap-2.5 text-sm text-[#191c1a]"
+              >
                 <input
+                  id="edit-company-small-taxpayer"
                   type="checkbox"
                   checked={editSmallTaxpayer}
                   onChange={(e) => setEditSmallTaxpayer(e.target.checked)}
@@ -459,8 +464,12 @@ export function CompaniesWorkbench({
               />
 
               <div className="flex items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-xs font-medium text-[#191c1a]">
+                <label
+                  htmlFor="new-company-vat-active"
+                  className="flex items-center gap-2 text-xs font-medium text-[#191c1a]"
+                >
                   <input
+                    id="new-company-vat-active"
                     type="checkbox"
                     checked={newVatStatus === 'czynny'}
                     onChange={(e) =>
@@ -562,8 +571,12 @@ export function CompaniesWorkbench({
                   />
                 )}
               </FormField>
-              <label className="flex items-center gap-2 text-xs text-[#191c1a]">
+              <label
+                htmlFor="grant-access-allow-write"
+                className="flex items-center gap-2 text-xs text-[#191c1a]"
+              >
                 <input
+                  id="grant-access-allow-write"
                   type="checkbox"
                   checked={grantWrite}
                   onChange={(e) => setGrantWrite(e.target.checked)}

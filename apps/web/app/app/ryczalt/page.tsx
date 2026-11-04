@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -26,8 +30,23 @@ export default async function RyczaltPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const ryc = getRyczaltSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => ({
+    dash: getDashboardSnapshot(session),
+    ryc: getRyczaltSnapshot(session),
+  }));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/ryczalt"
+        pageEyebrow="Ewidencja przychodów · Ryczałt PPE"
+        pageTitle="Ryczałt od przychodów ewidencjonowanych i limit VAT 240 000 PLN"
+      />
+    );
+  }
+
+  const { dash, ryc } = loaded.data;
 
   return (
     <WorkspaceShell

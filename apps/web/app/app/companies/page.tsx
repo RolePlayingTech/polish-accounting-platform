@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -29,7 +33,20 @@ export default async function CompaniesPage() {
     );
   }
 
-  const snapshot = getCompaniesManagementSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => getCompaniesManagementSnapshot(session));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/companies"
+        pageEyebrow="Organizacja i uprawnienia (ADR-003)"
+        pageTitle="Podmioty, profile podatkowe i dziennik audytu"
+      />
+    );
+  }
+
+  const snapshot = loaded.data;
   const zusBasis = snapshot.zusPreview
     ? mapDomainExplanationToBasisInfo(
         snapshot.zusPreview.explanation,

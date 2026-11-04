@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -6,7 +10,6 @@ import { readServerSession } from '../../../lib/session';
 import {
   getDashboardSnapshot,
   getNotificationsAndMcpSnapshot,
-  getPersonaById,
 } from '../../../lib/synthetic-workspace';
 import { McpWorkbench } from './mcp-workbench';
 
@@ -33,9 +36,23 @@ export default async function McpIntegrationPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const snap = getNotificationsAndMcpSnapshot(session);
-  const persona = getPersonaById(session.context.personaId);
+  const loaded = tryLoadWorkspaceData(() => ({
+    dash: getDashboardSnapshot(session),
+    snap: getNotificationsAndMcpSnapshot(session),
+  }));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/mcp"
+        pageEyebrow="Model Context Protocol (ADR-001)"
+        pageTitle="Klienci AI i kolejka propozycji MCP"
+      />
+    );
+  }
+
+  const { dash, snap } = loaded.data;
 
   return (
     <WorkspaceShell
@@ -52,8 +69,8 @@ export default async function McpIntegrationPage() {
           activeCompany={dash.activeCompany}
           period={session.context.period}
           canWrite={dash.activeCompany.grantedActions.includes('write')}
-          syntheticOidcToken={persona.syntheticOidcToken}
-          personaDisplayName={persona.displayName}
+          personaId={session.context.personaId}
+          personaDisplayName={session.context.displayName}
           proposals={snap.mcpProposals}
           mcpHelp={mustResolveUiFieldHelp('mcp_human_confirmation')}
         />

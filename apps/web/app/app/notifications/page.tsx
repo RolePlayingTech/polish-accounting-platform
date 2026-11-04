@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -31,8 +35,23 @@ export default async function NotificationsPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const snap = getNotificationsAndMcpSnapshot(session);
+  const loaded = tryLoadWorkspaceData(() => ({
+    dash: getDashboardSnapshot(session),
+    snap: getNotificationsAndMcpSnapshot(session),
+  }));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/notifications"
+        pageEyebrow="Powiadomienia e-mail i Skrzynka Sandbox RFC 5322"
+        pageTitle="Przypomnienia o terminach podatkowych i podgląd wiadomości"
+      />
+    );
+  }
+
+  const { dash, snap } = loaded.data;
 
   return (
     <WorkspaceShell

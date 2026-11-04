@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useId, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { ACADEMY_DISCLAIMER } from '@pap/domain/academy';
 import type { TaxProfileCode } from '@pap/domain';
 import {
@@ -215,6 +215,7 @@ export interface TaxRegimeSelectorProps {
 }
 
 export function TaxRegimeSelector({ fieldHelp, onChange, value }: TaxRegimeSelectorProps) {
+  const groupId = useId();
   return (
     <fieldset className="space-y-2.5">
       <div className="flex items-center justify-between gap-2">
@@ -226,9 +227,11 @@ export function TaxRegimeSelector({ fieldHelp, onChange, value }: TaxRegimeSelec
       <div className="grid gap-2.5 sm:grid-cols-2">
         {TAX_REGIME_OPTIONS.map((opt) => {
           const selected = opt.code === value;
+          const radioId = `${groupId}-${opt.code}`;
           return (
             <label
               key={opt.code}
+              htmlFor={radioId}
               className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors motion-reduce:transition-none ${
                 selected
                   ? 'border-[#1d5c42] bg-[#e7f1ec]/70'
@@ -236,8 +239,9 @@ export function TaxRegimeSelector({ fieldHelp, onChange, value }: TaxRegimeSelec
               }`}
             >
               <input
+                id={radioId}
                 type="radio"
-                name="taxRegimeProfile"
+                name={`taxRegimeProfile-${groupId}`}
                 value={opt.code}
                 checked={selected}
                 onChange={() => onChange(opt.code, opt.legalForm)}

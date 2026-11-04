@@ -1,22 +1,21 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import {
+  assertSameOriginMutation,
+  sanitizeInternalRedirect,
+} from '../../../../lib/request-security';
 import { PersonaIdSchema, writeSessionToResponse } from '../../../../lib/session';
 import {
   DEFAULT_ACCOUNTING_PERIOD,
+  WorkspaceAccessError,
   issuePersonaSession,
 } from '../../../../lib/synthetic-workspace';
 
-function sanitizeInternalRedirect(candidate: string | null | undefined, fallback: string): string {
-  if (!candidate) {
-    return fallback;
-  }
-  const trimmed = candidate.trim();
-  if (!trimmed.startsWith('/') || trimmed.startsWith('//') || trimmed.includes('\\')) {
-    return fallback;
-  }
-  return trimmed;
-}
-
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const csrfError = assertSameOriginMutation(request);
+  if (csrfError) {
+    return csrfError;
+  }
+
   const contentType = request.headers.get('content-type') ?? '';
   const prefersJson =
     contentType.includes('application/json') ||
@@ -59,11 +58,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const session = await issuePersonaSession(
-    parsedPersona.data,
-    rawPeriod ?? DEFAULT_ACCOUNTING_PERIOD,
-  );
-  const redirectPath = sanitizeInternalRedirect(rawRedirectTo, '/app');
+  let session;
+  try {
+    session = await issuePersonaSession(parsedPersona.data, rawPeriod ?? DEFAULT_ACCOUNTING_PERIOD);
+  } catch (err) {
+    if (err instanceof WorkspaceAccessError) {
+      return NextResponse.json(
+        { ok: false, reasonCode: err.reasonCode, error: err.message },
+        { status: err.statusCode },
+      );
+    }
+    return NextResponse.json(
+      { ok: false, error: 'Nie udało się utworzyć sesji testowej BFF.' },
+      { status: 500 },
+    );
+  }
+
+  const requestOrigin = new URL(request.url).origin;
+  const redirectPath = sanitizeInternalRedirect(rawRedirectTo, '/app', requestOrigin);
 
   if (prefersJson) {
     const response = NextResponse.json({
@@ -75,7 +87,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return response;
   }
 
-  const response = NextResponse.redirect(new URL(redirectPath, request.url), { status: 303 });
+  const redirectTarget = new URL(redirectPath, requestOrigin);
+  const safeTarget =
+    redirectTarget.origin === requestOrigin ? redirectTarget : new URL('/app', requestOrigin);
+  const response = NextResponse.redirect(safeTarget, { status: 303 });
   writeSessionToResponse(response, session);
   return response;
 }

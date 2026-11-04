@@ -392,8 +392,12 @@ export function FinanceWorkbench({
               </FormField>
 
               <div className="flex items-end pb-2">
-                <label className="flex items-center gap-2 text-xs font-medium text-[#191c1a]">
+                <label
+                  htmlFor="bank-import-apply-settlements"
+                  className="flex items-center gap-2 text-xs font-medium text-[#191c1a]"
+                >
                   <input
+                    id="bank-import-apply-settlements"
                     type="checkbox"
                     checked={applySettlements}
                     onChange={(e) => setApplySettlements(e.target.checked)}

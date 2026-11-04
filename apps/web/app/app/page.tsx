@@ -8,13 +8,18 @@ import {
   type ActionQueueItem,
   type TaxObligationItem,
 } from '@pap/ui';
+import { WorkspaceAccessDeniedCard } from '../../components/access-denied-card';
 import { SystemStatusDiagnosticSection } from '../../components/system-status-section';
 import { AcademyDisclaimerBanner } from '../../components/ui-controls';
 import { WorkspaceShell } from '../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo } from '../../lib/field-help';
 import { readPublicSystemStatus } from '../../lib/read-system-status';
 import { readServerSession } from '../../lib/session';
-import { WorkspaceAccessError, getDashboardSnapshot } from '../../lib/synthetic-workspace';
+import {
+  WorkspaceAccessError,
+  getDashboardSnapshot,
+  listAccessibleCompaniesForSession,
+} from '../../lib/synthetic-workspace';
 
 export default async function AppDashboardPage() {
   const [systemStatus, session] = await Promise.all([
@@ -47,13 +52,19 @@ export default async function AppDashboardPage() {
         activeCompany={null}
       >
         <div className="space-y-6">
-          {sessionError ? (
-            <div
-              role="alert"
-              className="rounded-xl border border-[#e6b3b0] bg-[#fceeed] p-4 text-sm text-[#9e2a25]"
-            >
-              {sessionError}
-            </div>
+          {session && sessionError ? (
+            <WorkspaceAccessDeniedCard
+              statusCode={403}
+              reasonCode="access_denied"
+              messagePl={sessionError}
+              accessibleCompanies={(() => {
+                try {
+                  return listAccessibleCompaniesForSession(session);
+                } catch {
+                  return [];
+                }
+              })()}
+            />
           ) : null}
 
           <Card

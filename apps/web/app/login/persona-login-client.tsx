@@ -5,11 +5,10 @@ import { useState } from 'react';
 import { Card, StatusBadge } from '@pap/ui';
 import { AlertBanner, Button } from '../../components/ui-controls';
 import type { PersonaId } from '../../lib/session';
-import { AVAILABLE_PERIODS } from '../../lib/synthetic-workspace';
-import type { SyntheticPersonaDefinition } from '../../lib/workspace-types';
+import { AVAILABLE_PERIODS, type PublicPersonaSummary } from '../../lib/workspace-types';
 
 export interface PersonaLoginClientProps {
-  personas: readonly SyntheticPersonaDefinition[];
+  personas: readonly PublicPersonaSummary[];
   redirectTo: string;
 }
 

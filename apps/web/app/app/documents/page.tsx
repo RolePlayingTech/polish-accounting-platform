@@ -1,3 +1,7 @@
+import {
+  WorkspaceAccessErrorShell,
+  tryLoadWorkspaceData,
+} from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -32,8 +36,23 @@ export default async function DocumentsPage() {
     );
   }
 
-  const dash = getDashboardSnapshot(session);
-  const documents = getDocumentsForActiveCompany(session);
+  const loaded = tryLoadWorkspaceData(() => ({
+    dash: getDashboardSnapshot(session),
+    documents: getDocumentsForActiveCompany(session),
+  }));
+  if (!loaded.ok) {
+    return (
+      <WorkspaceAccessErrorShell
+        session={session}
+        error={loaded.error}
+        activeHref="/app/documents"
+        pageEyebrow="Obieg dokumentów i KSeF FA(3)"
+        pageTitle="Dokumenty źródłowe, import FA(3) i weryfikacja AI"
+      />
+    );
+  }
+
+  const { dash, documents } = loaded.data;
 
   return (
     <WorkspaceShell

@@ -1,8 +1,18 @@
 import Link from 'next/link';
 import { StatusBadge } from '@pap/ui';
 import { AcademyDisclaimerBanner, AlertBanner } from '../../components/ui-controls';
+import { sanitizeInternalRedirect } from '../../lib/request-security';
 import { listAvailablePersonas } from '../../lib/synthetic-workspace';
+import { PUBLIC_SYNTHETIC_PERSONAS, type PublicPersonaSummary } from '../../lib/workspace-types';
 import { PersonaLoginClient } from './persona-login-client';
+
+async function loadPersonasSafe(): Promise<readonly PublicPersonaSummary[]> {
+  try {
+    return await listAvailablePersonas();
+  } catch {
+    return PUBLIC_SYNTHETIC_PERSONAS;
+  }
+}
 
 export default async function LoginPage({
   searchParams,
@@ -10,13 +20,8 @@ export default async function LoginPage({
   searchParams: Promise<{ redirectTo?: string }>;
 }) {
   const resolvedParams = await searchParams;
-  const personas = await listAvailablePersonas();
-  const redirectTo =
-    typeof resolvedParams.redirectTo === 'string' &&
-    resolvedParams.redirectTo.startsWith('/') &&
-    !resolvedParams.redirectTo.startsWith('//')
-      ? resolvedParams.redirectTo
-      : '/app';
+  const personas = await loadPersonasSafe();
+  const redirectTo = sanitizeInternalRedirect(resolvedParams.redirectTo, '/app');
 
   return (
     <div className="min-h-screen bg-[#faf9f5] text-[#191c1a]">
@@ -43,7 +48,7 @@ export default async function LoginPage({
       <main className="mx-auto max-w-5xl space-y-6 px-4 py-8 sm:px-6">
         <div className="space-y-2">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[#636b66]">
-            Uwierzytelnianie OIDC · Sesja BFF HttpOnly
+            Uwierzytelnianie OIDC · Sesja BFF HttpOnly + HMAC-SHA256
           </p>
           <h1 className="text-2xl font-semibold tracking-[-0.025em] text-[#191c1a] sm:text-3xl">
             Wybierz syntetyczną personę testową
@@ -53,8 +58,9 @@ export default async function LoginPage({
             <code className="font-mono text-xs">GET /api/v1/oidc/personas</code> →{' '}
             <code className="font-mono text-xs">POST /api/v1/oidc/token</code>) i zapisuje go
             wyłącznie w bezpiecznym ciasteczku serwerowym{' '}
-            <code className="font-mono text-xs">HttpOnly; SameSite=Lax; Path=/</code>. Tokeny nigdy
-            nie trafiają do <code className="font-mono text-xs">localStorage</code>.
+            <code className="font-mono text-xs">HttpOnly; SameSite=Lax; Path=/</code> z podpisem
+            kryptograficznym HMAC-SHA256. Tokeny nigdy nie trafiają do przeglądarkowego JS ani{' '}
+            <code className="font-mono text-xs">localStorage</code>.
           </p>
         </div>
 
