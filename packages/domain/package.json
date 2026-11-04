@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./academy": {
+      "types": "./dist/academy/index.d.ts",
+      "import": "./dist/academy/index.js"
     }
   },
   "scripts": {
