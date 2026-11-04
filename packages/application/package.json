@@ -15,6 +15,14 @@
     "./notifications-engine": {
       "types": "./dist/notifications-engine.d.ts",
       "import": "./dist/notifications-engine.js"
+    },
+    "./accounting-workspace": {
+      "types": "./dist/accounting-workspace.d.ts",
+      "import": "./dist/accounting-workspace.js"
+    },
+    "./demo-seed": {
+      "types": "./dist/demo-seed.d.ts",
+      "import": "./dist/demo-seed.js"
     }
   },
   "dependencies": {
@@ -25,6 +33,7 @@
     "build": "tsc -b",
     "lint": "eslint src test",
     "typecheck": "tsc -b --pretty false",
+    "pretest": "tsc -b ../contracts/tsconfig.json ../domain/tsconfig.json",
     "test": "vitest run --config ../../vitest.config.ts",
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\""
   }

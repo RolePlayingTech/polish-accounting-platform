@@ -273,6 +273,9 @@ importers:
       '@pap/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@pap/mcp':
+        specifier: workspace:*
+        version: link:../mcp
       fastify:
         specifier: 5.12.7
         version: 5.12.7
@@ -285,6 +288,13 @@ importers:
       rxjs:
         specifier: 7.8.2
         version: 7.8.2
+      zod:
+        specifier: 4.6.7
+        version: 4.6.7
+    devDependencies:
+      '@modelcontextprotocol/client':
+        specifier: 2.4.0
+        version: 2.4.0
 
   apps/mcp:
     dependencies:
