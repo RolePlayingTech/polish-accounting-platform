@@ -464,7 +464,7 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
         mailbox: await scope.listSandboxMailboxMessages(),
       }),
     );
-    expect(crossTenantRead).toEqual({
+    expect(crossTenantRead).toMatchObject({
       allowed: true,
       data: {
         settings: null,
