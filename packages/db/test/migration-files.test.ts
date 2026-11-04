@@ -3,8 +3,49 @@ import { fileURLToPath } from 'node:url';
 import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { describe, expect, it } from 'vitest';
 
+const accountingCoreTables = [
+  'company_tax_settings',
+  'accounting_document',
+  'kpir_entry',
+  'ryczalt_entry',
+  'vat_register_entry',
+  'ledger_account',
+  'journal_entry',
+  'journal_line',
+  'settlement_item',
+  'bank_statement_import',
+  'bank_transaction',
+  'tax_obligation_item',
+  'mcp_prepared_proposal',
+  'notification_preference',
+  'notification_outbox',
+  'sandbox_mailbox_message',
+] as const;
+
+const mutableAccountingTables = [
+  'company_tax_settings',
+  'accounting_document',
+  'ledger_account',
+  'settlement_item',
+  'bank_transaction',
+  'tax_obligation_item',
+  'mcp_prepared_proposal',
+  'notification_preference',
+  'notification_outbox',
+] as const;
+
+const appendOnlyAccountingTables = [
+  'kpir_entry',
+  'ryczalt_entry',
+  'vat_register_entry',
+  'journal_entry',
+  'journal_line',
+  'bank_statement_import',
+  'sandbox_mailbox_message',
+] as const;
+
 describe('Kontrakt plików migracji', () => {
-  it('zachowuje znacznik 6A i łańcuch snapshotów oraz journal 6A → 6B → 6D-R → 6D-2 → 6D-3', () => {
+  it('zachowuje znacznik 6A i łańcuch snapshotów oraz journal 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', () => {
     const folder = fileURLToPath(new URL('../drizzle', import.meta.url));
     const migrations = readMigrationFiles({ migrationsFolder: folder });
     const readJson = (name: string) => JSON.parse(readFileSync(`${folder}/meta/${name}`, 'utf8'));
@@ -15,8 +56,9 @@ describe('Kontrakt plików migracji', () => {
     const runtime = readJson('0004_snapshot.json');
     const audit = readJson('0005_snapshot.json');
     const foundation = readJson('0006_snapshot.json');
+    const accounting = readJson('0007_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(7);
+    expect(migrations).toHaveLength(8);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
@@ -25,14 +67,22 @@ describe('Kontrakt plików migracji', () => {
     expect(runtime.prevId).toBe(identity.id);
     expect(audit.prevId).toBe(runtime.id);
     expect(foundation.prevId).toBe(audit.id);
+    expect(accounting.prevId).toBe(foundation.id);
     expect(
       foundation.tables['public.access_management_event'].columns.transaction_id,
     ).toBeDefined();
     expect(audit.tables['public.access_management_event'].columns.transaction_id).toBeUndefined();
     expect(Object.keys(audit.tables)).toHaveLength(11);
     expect(Object.values(runtime.tables)).toHaveLength(10);
+    expect(Object.keys(accounting.tables)).toHaveLength(27);
     for (const table of Object.values(runtime.tables) as { isRLSEnabled: boolean }[]) {
       expect(table.isRLSEnabled).toBe(true);
+    }
+    for (const table of Object.values(accounting.tables) as { isRLSEnabled: boolean }[]) {
+      expect(table.isRLSEnabled).toBe(true);
+    }
+    for (const tableName of accountingCoreTables) {
+      expect(accounting.tables[`public.${tableName}`]).toBeDefined();
     }
     expect(journal.entries.map((entry: { tag: string }) => entry.tag)).toEqual([
       '0000_technical-baseline',
@@ -42,6 +92,7 @@ describe('Kontrakt plików migracji', () => {
       '0004_runtime-security',
       '0005_security-audit',
       '0006_security-foundation',
+      '0007_accounting-core',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -63,6 +114,7 @@ describe('Kontrakt plików migracji', () => {
       '0004_runtime-security.sql',
       '0005_security-audit.sql',
       '0006_security-foundation.sql',
+      '0007_accounting-core.sql',
     ]) {
       const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
       expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
@@ -189,5 +241,69 @@ describe('Kontrakt plików migracji', () => {
     expect(bootstrapRole).toContain('pap_lockdown_pgcrypto_on_extension');
     expect(bootstrapRole).not.toContain('public.pap_apply_pgcrypto_lockdown');
     expect(bootstrapRole).not.toContain('public.pap_on_create_extension_lockdown');
+  });
+
+  it('0007 wymusza FORCE RLS, polityki migratora i pap_company_allowed, audyt TX oraz białą listę ACL bez DELETE', () => {
+    const migration = readFileSync(
+      new URL('../drizzle/0007_accounting-core.sql', import.meta.url),
+      'utf8',
+    );
+
+    const statements = migration.split('--> statement-breakpoint');
+    for (const stmt of statements) {
+      expect(stmt.trim().length).toBeGreaterThan(0);
+    }
+
+    for (const fragment of [
+      "SET LOCAL lock_timeout = '5s';",
+      "SET LOCAL statement_timeout = '30s';",
+      'ALTER TABLE %I ENABLE ROW LEVEL SECURITY',
+      'ALTER TABLE %I FORCE ROW LEVEL SECURITY',
+      'CREATE POLICY pap_migrator ON %I FOR ALL TO PUBLIC USING (current_user = %L) WITH CHECK (current_user = %L)',
+      'pap_require_accounting_write_audit()',
+      'pap_protect_append_only_accounting()',
+      'pap_forbid_accounting_delete()',
+      'pap_guard_posted_document()',
+      'SET search_path = pg_catalog, %I, pg_temp',
+      'RESET lock_timeout;',
+      'RESET statement_timeout;',
+    ]) {
+      expect(migration).toContain(fragment);
+    }
+
+    expect(migration).not.toMatch(/\b(?:double\s+precision|real|float4|float8)\b/i);
+    expect(migration).not.toMatch(/FOR\s+DELETE/i);
+
+    for (const tableName of accountingCoreTables) {
+      expect(migration).toContain(`REFERENCES "legal_entity"("tenant_id","id")`);
+      expect(migration).toContain(
+        `CREATE POLICY pap_${tableName}_read ON "${tableName}" FOR SELECT`,
+      );
+      expect(migration).toContain(
+        `CREATE POLICY pap_${tableName}_insert ON "${tableName}" FOR INSERT`,
+      );
+      expect(migration).toContain("pap_company_allowed(tenant_id, legal_entity_id, 'read')");
+      expect(migration).toContain("pap_company_allowed(tenant_id, legal_entity_id, 'write')");
+    }
+
+    for (const tableName of mutableAccountingTables) {
+      expect(migration).toContain(
+        `CREATE POLICY pap_${tableName}_update ON "${tableName}" FOR UPDATE`,
+      );
+    }
+
+    for (const tableName of appendOnlyAccountingTables) {
+      expect(migration).not.toContain(`ON "${tableName}" FOR UPDATE`);
+    }
+
+    const runtimePrivileges = readFileSync(
+      new URL('../sql/runtime-privileges.sql', import.meta.url),
+      'utf8',
+    );
+    expect(runtimePrivileges).not.toMatch(/GRANT\s+[^;]*\b(?:DELETE|TRUNCATE)\b/i);
+    expect(runtimePrivileges).toContain('GRANT SELECT, INSERT ON %I.%I TO %I');
+    for (const tableName of accountingCoreTables) {
+      expect(runtimePrivileges).toContain(`'${tableName}'`);
+    }
   });
 });

@@ -5,7 +5,7 @@
 Dokument opisuje:
 
 1. architekturę wersjonowanego rejestru reguł prawnych obowiązujących w latach **2025–2026** oraz mechanizm wyjaśnienia **„Dlaczego? / Podstawa prawna”** (`LegalExplanation`),
-2. kompletny katalog **32 wersji reguł prawnych** (25 unikalnych kodów reguł) zweryfikowanych w oficjalnych źródłach urzędowych (ISAP / Dz.U., Monitor Polski, MF / `podatki.gov.pl`, `ksef.podatki.gov.pl`, `zus.pl`, `gov.pl`),
+2. kompletny katalog **42 wersji temporalnych / 32 kodów reguł** zweryfikowanych w oficjalnych źródłach urzędowych (ISAP / Dz.U., Monitor Polski, MF / `podatki.gov.pl`, `ksef.podatki.gov.pl`, `zus.pl`, `gov.pl`),
 3. cykl życia aktualizacji reguł podatkowych i zasady ekspozycji read-only dla adapterów MCP / AI (**Issue #4**),
 4. kanoniczną matrycę profilu pilota **JDG KPiR** (`supported` / `reviewed` / `experimental` / `excluded`) wraz z syntetycznymi przypadkami referencyjnymi (**Issue #1**).
 
@@ -90,7 +90,7 @@ Każdy kalkulator domenowy (`VAT`, `KPiR`, `PIT`, `Ryczałt`, `ZUS`, `UoR / CIT`
 | 38  | `uor-double-entry-and-balance-2025`       | `UOR_DOUBLE_ENTRY_AND_BALANCE`         | `2025-01-01` → otwarty                              | Ustawa o rachunkowości (`t.j. Dz.U. 2023 poz. 120 ze zm., w tym Dz.U. 2024 poz. 1863`), `art. 5, 15, 18, 25` | `verified`               | Podwójny zapis `SUM(Wn) === SUM(Ma)`, blokada zamkniętych okresów, `Aktywa === Pasywa`                                                                                  |
 | 39  | `cit-rates-art-19-2025-2026`              | `CIT_RATES_ART_19`                     | `2025-01-01` → otwarty                              | Ustawa o CIT (`Dz.U. 2025 poz. 278`), `art. 19 ust. 1`, `art. 25 ust. 1a`                                    | `verified`               | CIT `9%` (mały podatnik do 2 mln EUR) vs `19%`, zaliczki do 20. dnia miesiąca                                                                                           |
 
-_(W rejestrze w `registry.ts` znajduje się łącznie 32 niezależne rekordy wersjonowanych reguł `LegalRule` obejmujące powyższe warianty roczne 2025 i 2026)._
+_(W rejestrze w `registry.ts` znajdują się łącznie **42 wersje temporalne / 32 kody reguł** `LegalRule` obejmujące powyższe warianty roczne 2025 i 2026)._
 
 ---
 

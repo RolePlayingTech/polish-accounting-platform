@@ -213,6 +213,9 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
       'configureRuntimePrivileges',
       'PostgresAccessManagementStore',
       'PostgresSecurityAudit',
+      'PostgresCompanyActionScopeDriver',
+      'createPostgresCompanyActionScope',
+      'createPostgresAccountingScope',
     ])(
       'blocks direct value and type imports of %s from @pap/db in controllers and guards',
       async (restrictedSymbol) => {
@@ -272,7 +275,7 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     ])('allows composition root wiring in %s', async (compositionRootFile) => {
       const result = await lintCode(
         compositionRootFile,
-        `import { PostgresTransactionalUnitOfWork, loadDatabaseContextSigner } from '@pap/db';\nexport const wiring = [PostgresTransactionalUnitOfWork, loadDatabaseContextSigner];\n`,
+        `import { PostgresTransactionalUnitOfWork, loadDatabaseContextSigner, createPostgresAccountingScope } from '@pap/db';\nexport const wiring = [PostgresTransactionalUnitOfWork, loadDatabaseContextSigner, createPostgresAccountingScope];\n`,
       );
       expect(result.errorCount).toBe(0);
       expect(result.warningCount).toBe(0);

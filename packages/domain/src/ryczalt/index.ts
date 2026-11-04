@@ -165,7 +165,7 @@ export interface RyczaltRateBreakdown {
   readonly rawNetRevenueGrosze: number;
   /** Dodatni przychód w okresie wchodzący do proporcji odliczeń z art. 11 (`= revenueGrosze`). */
   readonly taxableRevenueInPeriodGrosze: number;
-  /** Nierozliczona nadwyżka korekty `in minus` w tej stawce do przeniesienia na kolejne okresy / PIT-28 (art. 6 ust. 1c). */
+  /** Nierozliczona nadwyżka korekty `in minus` w tej stawce do przeniesienia na kolejne okresy / PIT-28 (art. 6 ust. 1e u.z.p.d., w odróżnieniu od art. 14 ust. 1m u.p.d.o.f. dla KPiR). */
   readonly carryForwardNegativeRevenueGrosze: number;
   readonly shareRatioDescription: string;
   readonly allocatedSocialDeductionGrosze: number;
@@ -191,7 +191,7 @@ export interface MonthlyRyczaltCalculationResult {
   readonly totalPositiveBucketRevenueGrosze: number;
   /** Algebraiczna suma wszystkich wpisów w okresie (uwzględniająca ujemne salda stawek po korektach `in minus`). */
   readonly totalNetRevenueGrosze: number;
-  /** Łączna kwota nierozliczonych korekt zmniejszających przychód (`in minus`) do przeniesienia wg art. 6 ust. 1c u.z.p.d. */
+  /** Łączna kwota nierozliczonych korekt zmniejszających przychód (`in minus`) do przeniesienia wg art. 6 ust. 1e u.z.p.d. (w odróżnieniu od art. 14 ust. 1m u.p.d.o.f. dla KPiR). */
   readonly unappliedNegativeCorrectionGrosze: number;
   readonly deductibleSocialZusGrosze: number;
   readonly deductibleHealth50PctGrosze: number;
@@ -311,7 +311,7 @@ export function allocateDeductionProportionally(
 
 /**
  * Oblicza miesięczny ryczałt od przychodów ewidencjonowanych:
- * - grupuje przychody wg stawek ryczałtu (art. 12 ust. 1) z zachowaniem ujemnych korekt `in minus` wg art. 6 ust. 1c
+ * - grupuje przychody wg stawek ryczałtu (art. 12 ust. 1) z rozliczeniem korekt przychodu w bieżącym okresie i zachowaniem ujemnych nadwyżek `in minus` wg art. 6 ust. 1e u.z.p.d. (w odróżnieniu od art. 14 ust. 1m u.p.d.o.f. dla KPiR)
  * - rozlicza zapłacone składki społeczne ZUS oraz 50% zapłaconej składki zdrowotnej proporcjonalnie
  *   do udziału poszczególnych dodatnich stawek w ogólnej kwocie dodatnich przychodów (art. 11 ust. 1, ust. 1a i ust. 2)
  * - zaokrągla podstawy opodatkowania każdej stawki oraz należny ryczałt do pełnych złotych (art. 63 § 1 OP).
@@ -387,7 +387,7 @@ export function calculateMonthlyRyczalt(
     warnings.push({
       code: 'RYCZALT_NEGATIVE_CORRECTION_CARRY_FORWARD_ART_6_1C',
       severity: 'requires_expert_review',
-      message: `W okresie wystąpiła nierozliczona nadwyżka korekty zmniejszającej przychód (in minus) ponad przychody danej stawki (${negDescriptions}; łącznie ${formatPlnFromGrosze(unappliedNegativeCorrectionGrosze)}). Zgodnie z art. 6 ust. 1c ustawy o zryczałtowanym podatku dochodowym nadwyżka podlega przeniesieniu do rozliczenia w kolejnych okresach lub w zeznaniu rocznym PIT-28 — wymagana weryfikacja księgowa.`,
+      message: `W okresie wystąpiła nierozliczona nadwyżka korekty zmniejszającej przychód (in minus) ponad przychody danej stawki (${negDescriptions}; łącznie ${formatPlnFromGrosze(unappliedNegativeCorrectionGrosze)}). Zgodnie z art. 6 ust. 1e ustawy o zryczałtowanym podatku dochodowym (rozliczenie korekty przychodu w bieżącym okresie, w odróżnieniu od art. 14 ust. 1m u.p.d.o.f. dla KPiR) nadwyżka podlega przeniesieniu do rozliczenia w kolejnych okresach lub w zeznaniu rocznym PIT-28 — wymagana weryfikacja księgowa.`,
     });
   }
 
@@ -452,7 +452,7 @@ export function calculateMonthlyRyczalt(
     {
       stepNumber: 1,
       label:
-        'Zsumowanie przychodów wg stawek (z kontrolą korekt in minus wg art. 6 ust. 1c) i wyliczenie 50% zapłaconej zdrowotnej',
+        'Zsumowanie przychodów wg stawek (z kontrolą korekt in minus wg art. 6 ust. 1e u.z.p.d.) i wyliczenie 50% zapłaconej zdrowotnej',
       formula: 'health50Pct = round_half_up(paidHealth * 50%)',
       inputs: {
         totalNetRevenueGrosze,
