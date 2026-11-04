@@ -36,6 +36,7 @@ import {
   getNotificationsAndMcpSnapshot,
   getPersonaById,
   getRyczaltSnapshot,
+  importAndReconcileBankStatementMutation,
   listAccessibleCompaniesForSession,
   listAvailablePersonas,
   manageCompanyGrantMutation,
@@ -43,7 +44,11 @@ import {
   resetSyntheticWorkspaceForTests,
   verifySessionAccess,
 } from '../lib/synthetic-workspace.js';
-import { PUBLIC_SYNTHETIC_PERSONAS, SAMPLE_KSEF_FA3_XML } from '../lib/workspace-types.js';
+import {
+  PUBLIC_SYNTHETIC_PERSONAS,
+  SAMPLE_BANK_CSV,
+  SAMPLE_KSEF_FA3_XML,
+} from '../lib/workspace-types.js';
 import type { ActiveWebSession, SessionContext } from '../lib/session.js';
 
 function makeSessionForPersona(
@@ -793,5 +798,77 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
     const ledgerSnap = getFullLedgerSnapshot(janSpzooSession);
     expect(ledgerSnap.trialBalance.isBalanced).toBe(true);
     expect(ledgerSnap.balanceSheet.isBalanced).toBe(true);
+  });
+
+  it('preserves live API documentId UUID across import -> approve-and-post and sends only matched bank settlements', async () => {
+    const janSession = makeSessionForPersona('jan-testowy', {
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+    });
+    const remoteUuid = '77777777-7777-4777-8777-777777777777';
+    const capturedCalls: Array<{ url: string; body: unknown }> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = input instanceof URL ? input.toString() : String(input);
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+        capturedCalls.push({ url, body });
+
+        if (url.endsWith('/documents')) {
+          return new Response(JSON.stringify({ documentId: remoteUuid, status: 'ai_proposed' }), {
+            status: 201,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    const imported = await createOrImportDocumentMutation(janSession, {
+      mode: 'import_xml_or_csv',
+      format: 'fa3_xml',
+      rawPayload: SAMPLE_KSEF_FA3_XML,
+    });
+    expect(imported.documentId).toBe(remoteUuid);
+
+    await approveAndPostDocumentMutation(janSession, {
+      documentId: imported.documentId,
+      documentNumber: imported.documentNumber,
+      counterpartyName: imported.counterpartyName,
+      counterpartyNip: imported.counterpartyNip,
+      issueDate: imported.issueDate,
+      netPln: '2400,00',
+      vatPln: '552,00',
+      expenseQualification: 'vehicle_mixed_75_col13',
+      vatDeductionMode: 'vehicle_mixed_50',
+    });
+
+    const approveCall = capturedCalls.find((c) =>
+      c.url.endsWith(`/documents/${remoteUuid}/approve-and-post`),
+    );
+    expect(approveCall).toBeDefined();
+    expect(approveCall?.body).toMatchObject({
+      netPln: '2400.00',
+      vatPln: '552.00',
+    });
+    expect(approveCall?.body).not.toHaveProperty('documentId');
+
+    const bankRes = await importAndReconcileBankStatementMutation(janSession, {
+      format: 'csv',
+      content: SAMPLE_BANK_CSV,
+      applySettlements: true,
+    });
+    expect(bankRes.importedCount).toBeGreaterThanOrEqual(2);
+    expect(bankRes.matchedCount).toBeGreaterThanOrEqual(1);
+
+    const reconcileCall = capturedCalls.find((c) => c.url.endsWith('/finance/reconcile'));
+    expect(reconcileCall).toBeDefined();
+    const sentMatches = (reconcileCall?.body as { matches?: Array<{ matchedDocumentId?: string }> })
+      ?.matches;
+    expect(Array.isArray(sentMatches)).toBe(true);
+    expect(sentMatches?.every((m) => typeof m.matchedDocumentId === 'string')).toBe(true);
   });
 });

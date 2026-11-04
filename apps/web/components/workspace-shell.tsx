@@ -135,11 +135,14 @@ export function WorkspaceShell({
           dataFreshnessLabel={`Aktor: ${sessionContext.displayName}`}
           dataMode="synthetic"
           actions={
-            <div className="flex flex-wrap items-center gap-2">
-              <div data-testid="company-profile-switcher" className="flex items-center gap-1.5">
+            <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+              <div
+                data-testid="company-profile-switcher"
+                className="flex min-w-0 max-w-full items-center gap-1.5"
+              >
                 <label
                   htmlFor="pap-active-company-select"
-                  className="text-xs font-medium text-[#464c48]"
+                  className="shrink-0 text-xs font-medium text-[#464c48]"
                 >
                   Firma:
                 </label>
@@ -158,7 +161,7 @@ export function WorkspaceShell({
                       });
                     }
                   }}
-                  className="min-h-8 rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs font-medium text-[#191c1a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+                  className="min-h-8 min-w-0 max-w-[calc(100vw-6.5rem)] truncate rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs font-medium text-[#191c1a] sm:max-w-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
                 >
                   {accessibleCompanies.map((comp) => (
                     <option key={comp.legalEntityId} value={comp.legalEntityId}>

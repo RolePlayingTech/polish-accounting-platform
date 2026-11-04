@@ -59,6 +59,21 @@ a {
   font-variant-numeric: tabular-nums lining-nums;
 }
 
+select,
+input,
+textarea {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.grid > * {
+  min-width: 0;
+}
+
+[data-rule-version] p {
+  overflow-wrap: anywhere;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

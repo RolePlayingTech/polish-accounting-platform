@@ -310,7 +310,7 @@ export function FinanceWorkbench({
           >
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="flex items-start gap-2">
-                <ToneIcon tone="warning" className="mt-0.5 shrink-0" />
+                <ToneIcon tone="warning" className="mt-0.5 size-4 shrink-0" />
                 <div>
                   <p className="text-sm font-semibold">
                     Kontrola bezpieczeństwa płatności (Biała Lista VAT i obowiązkowy Split Payment)

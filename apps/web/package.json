@@ -24,6 +24,7 @@
     "lint": "eslint app components lib test e2e",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run --config ../../vitest.config.ts",
+    "capture:academy-screenshots": "node scripts/capture-academy-screenshots.mjs",
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('.next', { recursive: true, force: true }))\""
   }
 }

@@ -33,7 +33,7 @@ export default async function LoginPage({
           >
             ← Polish Accounting Platform („Księga Współczesna”)
           </Link>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <StatusBadge size="sm" tone="warning" label="Dane syntetyczne (OIDC Sandbox)" />
             <Link
               href="/academy"

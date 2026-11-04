@@ -2483,18 +2483,42 @@ export async function createOrImportDocumentMutation(
 
   const safeTenantId = assertUuidPathParam(company.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(company.legalEntityId, 'legalEntityId');
-  const remote = await papBffFetch(
+  const remote = await papBffFetch<{ documentId?: string }>(
     `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents`,
     {
       method: 'POST',
       bearerToken: session.oidcToken,
-      body: { documentNumber: docNum, sha256: digest },
+      body: {
+        documentNumber: docNum,
+        sha256: digest,
+        direction,
+        issueDate,
+        dueDate,
+        counterpartyName,
+        counterpartyNip,
+        netGrosze: Math.abs(netGrosze),
+        vatRate,
+        description,
+      },
     },
   );
-  assertApiResponsePermitsFallback(remote);
+  if (!(
+    remote.kind === 'validation_error' &&
+    remote.status === 409 &&
+    remote.reasonCode === 'duplicate_document_sha256'
+  )) {
+    assertApiResponsePermitsFallback(remote);
+  }
+
+  const remoteDocumentId =
+    remote.kind === 'ok' &&
+    typeof remote.data?.documentId === 'string' &&
+    SAFE_RESOURCE_ID_REGEX.test(remote.data.documentId)
+      ? remote.data.documentId
+      : undefined;
 
   const newDoc: WorkspaceDocumentRecord = {
-    documentId: `doc-${randomUUID().slice(0, 8)}`,
+    documentId: remoteDocumentId ?? `doc-${randomUUID().slice(0, 8)}`,
     tenantId: company.tenantId,
     legalEntityId: company.legalEntityId,
     period: issueDate.slice(0, 7),
@@ -2606,17 +2630,63 @@ export async function approveAndPostDocumentMutation(
   const vatGrosze = parsePlnToGroszeOrThrow(input.vatPln, 'kwota VAT');
   const grossGrosze = netGrosze + vatGrosze;
 
+  const current = store.documents[docIndex]!;
+  let remoteDocId = safeDocId;
+  if (!STRICT_UUID_REGEX.test(safeDocId)) {
+    const seedRemote = await papBffFetch<{ documentId?: string }>(
+      `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents`,
+      {
+        method: 'POST',
+        bearerToken: session.oidcToken,
+        body: {
+          documentNumber: input.documentNumber.trim(),
+          sha256: current.sha256,
+          direction: current.direction,
+          issueDate: validatedIssueDate,
+          dueDate: current.dueDate,
+          counterpartyName: input.counterpartyName.trim(),
+          counterpartyNip: nipCheck.normalizedNip,
+          netGrosze: Math.abs(netGrosze),
+          vatRate: current.vatRate,
+          description: current.description,
+        },
+      },
+    );
+    if (!(
+      seedRemote.kind === 'validation_error' &&
+      seedRemote.status === 409 &&
+      seedRemote.reasonCode === 'duplicate_document_sha256'
+    )) {
+      assertApiResponsePermitsFallback(seedRemote);
+    }
+    if (
+      seedRemote.kind === 'ok' &&
+      typeof seedRemote.data?.documentId === 'string' &&
+      STRICT_UUID_REGEX.test(seedRemote.data.documentId)
+    ) {
+      remoteDocId = seedRemote.data.documentId;
+    }
+  }
+
   const remote = await papBffFetch(
-    `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents/${safeDocId}/approve-and-post`,
+    `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents/${remoteDocId}/approve-and-post`,
     {
       method: 'POST',
       bearerToken: session.oidcToken,
-      body: { ...input, issueDate: validatedIssueDate, counterpartyNip: nipCheck.normalizedNip },
+      body: {
+        documentNumber: input.documentNumber.trim(),
+        counterpartyName: input.counterpartyName.trim(),
+        counterpartyNip: nipCheck.normalizedNip,
+        issueDate: validatedIssueDate,
+        netPln: (Math.abs(netGrosze) / 100).toFixed(2),
+        vatPln: (Math.abs(vatGrosze) / 100).toFixed(2),
+        expenseQualification: input.expenseQualification,
+        vatDeductionMode: input.vatDeductionMode,
+      },
     },
   );
   assertApiResponsePermitsFallback(remote);
 
-  const current = store.documents[docIndex]!;
   const postedPeriod = validatedIssueDate.slice(0, 7);
   let postedEntryId = current.postedEntryId ?? `post-${randomUUID().slice(0, 8)}`;
 
@@ -3146,7 +3216,7 @@ export async function importAndReconcileBankStatementMutation(
     {
       method: 'POST',
       bearerToken: session.oidcToken,
-      body: input,
+      body: { ...input, applySettlements: false },
     },
   );
   assertApiResponsePermitsFallback(importRemote);
@@ -3167,15 +3237,18 @@ export async function importAndReconcileBankStatementMutation(
     }));
 
   const matches = reconcileBankTransactions(parsedTx, openItems);
+  const settledMatches = matches.filter(
+    (m) => typeof m.matchedDocumentId === 'string' && m.settledAmountGrosze > 0,
+  );
   let matchedCount = 0;
 
-  if (input.applySettlements) {
+  if (input.applySettlements && settledMatches.length > 0) {
     const reconcileRemote = await papBffFetch(
       `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/finance/reconcile`,
       {
         method: 'POST',
         bearerToken: session.oidcToken,
-        body: { matches },
+        body: { matches: settledMatches },
       },
     );
     assertApiResponsePermitsFallback(reconcileRemote);
@@ -3287,7 +3360,7 @@ export async function updateNotificationPrefsAndDispatchMutation(
     {
       method: 'POST',
       bearerToken: session.oidcToken,
-      body: { period: session.context.period },
+      body: {},
     },
   );
   assertApiResponsePermitsFallback(dispatchRemote);

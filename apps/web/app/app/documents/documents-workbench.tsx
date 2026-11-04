@@ -269,7 +269,7 @@ export function DocumentsWorkbench({
           rows={filteredDocs}
           getRowKey={(row) => row.documentId}
           toolbarSlot={
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
               <label htmlFor="doc-search" className="sr-only">
                 Szukaj po numerze, NIP, nazwie lub NrKSeF
               </label>
@@ -279,7 +279,7 @@ export function DocumentsWorkbench({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Szukaj nr, NIP, kontrahenta, NrKSeF…"
-                className="min-h-8 rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs text-[#191c1a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+                className="min-h-8 w-full rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs text-[#191c1a] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42] sm:w-56"
               />
               <label htmlFor="doc-status-filter" className="sr-only">
                 Filtruj po statusie dokumentu
@@ -288,7 +288,7 @@ export function DocumentsWorkbench({
                 id="doc-status-filter"
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value as 'all' | DocumentWorkflowStatus)}
-                className="min-h-8 rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs text-[#191c1a]"
+                className="min-h-8 w-full rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs text-[#191c1a] sm:w-auto"
               >
                 <option value="all">Wszystkie statusy ({String(documents.length)})</option>
                 <option value="ai_proposal">Propozycja AI — wymaga zatwierdzenia</option>
