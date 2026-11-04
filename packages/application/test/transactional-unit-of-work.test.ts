@@ -5,7 +5,7 @@ import {
   executeAuthorizedCompanyAction,
   freezeTransactionActor,
   TransactionOutcomeUnknownError,
-  type CompanyActionTransactionContext,
+  type CompanyActionAuthorizationSession,
   type CompanyActionUnitOfWork,
 } from '../src/transactional-unit-of-work.js';
 import { SecurityAuditUnavailableError, type SecurityAuditEvent } from '../src/security-audit.js';
@@ -145,8 +145,11 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
   it('wykonuje rewalidację konta, blokadę faktów, kontekst sesji i operację w jednej transakcji i commituje tylko przy allow', async () => {
     const events: string[] = [];
     let committed: boolean | undefined;
+    const isolatedScope = Object.freeze({
+      kind: 'isolated-company-scope' as const,
+    });
 
-    const tx: CompanyActionTransactionContext = {
+    const session: CompanyActionAuthorizationSession<typeof isolatedScope> = {
       recordAuthorizationDecision: async () => {
         events.push('audit:allow');
       },
@@ -181,16 +184,22 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
           now: DB_NOW,
         };
       }),
-      applySessionContext: vi.fn(async (sessionCtx) => {
-        events.push(`applySessionContext:${sessionCtx.tenantId}:${sessionCtx.legalEntityId}`);
+      enterAuthorizedCompanyScope: vi.fn(async (sessionCtx) => {
+        events.push(
+          `enterAuthorizedCompanyScope:${sessionCtx.tenantId}:${sessionCtx.legalEntityId}`,
+        );
+        return isolatedScope;
+      }),
+      closeScope: vi.fn(() => {
+        events.push('closeScope');
       }),
     };
 
-    const unitOfWork: CompanyActionUnitOfWork = {
+    const unitOfWork: CompanyActionUnitOfWork<typeof isolatedScope> = {
       recordDeniedDecision: async () => {},
       async runCompanyActionInTransaction(work, shouldCommit) {
         events.push('tx:begin');
-        const result = await work(tx);
+        const result = await work(session);
         committed = shouldCommit(result);
         events.push(committed ? 'tx:commit' : 'tx:rollback');
         return result;
@@ -232,8 +241,9 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         },
         unitOfWork,
       },
-      async (context, activeTx) => {
-        expect(activeTx).toBe(tx);
+      async (context, activeScope) => {
+        expect(activeScope).toBe(isolatedScope);
+        expect(activeScope).not.toBe(session);
         expect(Object.isFrozen(context)).toBe(true);
         events.push(`operation:${context.action}`);
         return { invoiceCount: 3 };
@@ -260,12 +270,13 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       },
       data: { invoiceCount: 3 },
     });
-    expect(tx.applySessionContext).toHaveBeenCalledWith({
+    expect(session.enterAuthorizedCompanyScope).toHaveBeenCalledWith({
       operationId: id(99),
       decisionAt: DB_NOW.toISOString(),
       actorUserId: USER_A,
       tenantId: TENANT_A,
       legalEntityId: ENTITY_A1,
+      action: 'write',
     });
     expect(events).toEqual([
       'verifyAccessToken',
@@ -273,8 +284,9 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       'tx:begin',
       `verifyActorAccount:${USER_A}:Sub-User-A`,
       'getLockedFacts',
-      `applySessionContext:${TENANT_A}:${ENTITY_A1}`,
+      `enterAuthorizedCompanyScope:${TENANT_A}:${ENTITY_A1}`,
       'operation:write',
+      'closeScope',
       'audit:allow',
       'tx:commit',
     ]);
@@ -284,10 +296,12 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     const operation = vi.fn();
     const decisionsCommitted: boolean[] = [];
 
-    const makeUnitOfWork = (tx: CompanyActionTransactionContext): CompanyActionUnitOfWork => ({
+    const makeUnitOfWork = (
+      session: CompanyActionAuthorizationSession<unknown>,
+    ): CompanyActionUnitOfWork => ({
       recordDeniedDecision: async () => {},
       async runCompanyActionInTransaction(work, shouldCommit) {
-        const result = await work(tx);
+        const result = await work(session);
         decisionsCommitted.push(shouldCommit(result));
         return result;
       },
@@ -305,12 +319,12 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       },
     };
 
-    // 1) Konto wyłączone między resolveVerifiedIdentity a tx.verifyActorAccount
-    const disabledTx: CompanyActionTransactionContext = {
+    // 1) Konto wyłączone między resolveVerifiedIdentity a session.verifyActorAccount
+    const disabledSession: CompanyActionAuthorizationSession<unknown> = {
       recordAuthorizationDecision: async () => {},
       verifyActorAccount: vi.fn().mockResolvedValue(false),
       getLockedFacts: vi.fn(),
-      applySessionContext: vi.fn(),
+      enterAuthorizedCompanyScope: vi.fn(),
     };
 
     await expect(
@@ -321,7 +335,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
           legalEntityId: ENTITY_A1,
           action: 'read',
         },
-        { ...baseDeps, unitOfWork: makeUnitOfWork(disabledTx) },
+        { ...baseDeps, unitOfWork: makeUnitOfWork(disabledSession) },
         operation,
       ),
     ).resolves.toEqual({
@@ -329,11 +343,12 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       status: 'forbidden',
       reason: 'identity_not_provisioned_or_disabled',
     });
-    expect(disabledTx.getLockedFacts).not.toHaveBeenCalled();
+    expect(disabledSession.getLockedFacts).not.toHaveBeenCalled();
+    expect(disabledSession.enterAuthorizedCompanyScope).not.toHaveBeenCalled();
     expect(operation).not.toHaveBeenCalled();
 
     // 2) Grant cofnięty tuż przed pobraniem zablokowanych faktów w transakcji
-    const revokedGrantTx: CompanyActionTransactionContext = {
+    const revokedGrantSession: CompanyActionAuthorizationSession<unknown> = {
       recordAuthorizationDecision: async () => {},
       verifyActorAccount: vi.fn().mockResolvedValue(true),
       getLockedFacts: vi.fn().mockResolvedValue({
@@ -360,7 +375,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         platformRoleAssignments: [],
         now: DB_NOW,
       }),
-      applySessionContext: vi.fn(),
+      enterAuthorizedCompanyScope: vi.fn(),
     };
 
     await expect(
@@ -371,7 +386,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
           legalEntityId: ENTITY_A1,
           action: 'read',
         },
-        { ...baseDeps, unitOfWork: makeUnitOfWork(revokedGrantTx) },
+        { ...baseDeps, unitOfWork: makeUnitOfWork(revokedGrantSession) },
         operation,
       ),
     ).resolves.toEqual({
@@ -379,7 +394,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       status: 'forbidden',
       reason: 'explicit_company_grant_required',
     });
-    expect(revokedGrantTx.applySessionContext).not.toHaveBeenCalled();
+    expect(revokedGrantSession.enterAuthorizedCompanyScope).not.toHaveBeenCalled();
     expect(operation).not.toHaveBeenCalled();
     expect(decisionsCommitted).toEqual([false, false]);
   });
@@ -418,6 +433,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       reason: 'authorization_data_unavailable',
     });
   });
+
   it('zapisuje odmowę dopiero po rollbacku i blokuje odpowiedź przy awarii trwałego audytu', async () => {
     const order: string[] = [];
     const recordDeniedDecision = vi.fn(async (event) => {
@@ -426,15 +442,16 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       expect(JSON.stringify(event)).not.toContain('synthetic-secret-token');
       order.push('durable-audit');
     });
-    const tx: CompanyActionTransactionContext = {
+    const session: CompanyActionAuthorizationSession<unknown> = {
       verifyActorAccount: async () => false,
       getLockedFacts: vi.fn(),
+      enterAuthorizedCompanyScope: vi.fn(),
       recordAuthorizationDecision: vi.fn(),
     };
     const unitOfWork: CompanyActionUnitOfWork = {
       recordDeniedDecision,
       async runCompanyActionInTransaction(work, commit) {
-        const result = await work(tx);
+        const result = await work(session);
         expect(commit(result)).toBe(false);
         order.push('rollback');
         return result;
@@ -509,18 +526,23 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     };
 
     // 1) Błąd biznesowy przed COMMIT + potwierdzony ROLLBACK -> allow/rolled_back (operation_failed)
+    let preCommitScopeClosed = false;
     const preCommitRollbackUoW: CompanyActionUnitOfWork = {
       recordDeniedDecision: async (ev) => {
         durableEvents.push(ev);
       },
       async runCompanyActionInTransaction(work) {
-        const tx: CompanyActionTransactionContext = {
+        const session: CompanyActionAuthorizationSession<unknown> = {
           verifyActorAccount: async () => true,
           getLockedFacts: async () => baseFacts,
+          enterAuthorizedCompanyScope: async () => Object.freeze({}),
+          closeScope: () => {
+            preCommitScopeClosed = true;
+          },
           recordAuthorizationDecision: vi.fn(),
         };
         try {
-          return await work(tx);
+          return await work(session);
         } catch (err) {
           throw new ConfirmedTransactionRollbackError(err);
         }
@@ -541,6 +563,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         throw new Error('Błąd walidacji w callbacku przed COMMIT');
       },
     );
+    expect(preCommitScopeClosed).toBe(true);
     expect(preCommitRes).toEqual({
       allowed: false,
       status: 'forbidden',
@@ -553,15 +576,16 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         durableEvents.push(ev);
       },
       async runCompanyActionInTransaction(work) {
-        const tx: CompanyActionTransactionContext = {
+        const session: CompanyActionAuthorizationSession<unknown> = {
           verifyActorAccount: async () => true,
           getLockedFacts: async () => baseFacts,
+          enterAuthorizedCompanyScope: async () => Object.freeze({}),
           recordAuthorizationDecision: async () => {
             throw new SecurityAuditUnavailableError();
           },
         };
         try {
-          return await work(tx);
+          return await work(session);
         } catch (err) {
           throw new ConfirmedTransactionRollbackError(err);
         }
@@ -593,14 +617,15 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       },
       async runCompanyActionInTransaction(work, shouldCommit) {
         const stagedEvents: SecurityAuditEvent[] = [];
-        const tx: CompanyActionTransactionContext = {
+        const session: CompanyActionAuthorizationSession<unknown> = {
           verifyActorAccount: async () => true,
           getLockedFacts: async () => baseFacts,
+          enterAuthorizedCompanyScope: async () => Object.freeze({}),
           recordAuthorizationDecision: async (ev) => {
             stagedEvents.push(ev);
           },
         };
-        const result = await work(tx);
+        const result = await work(session);
         expect(shouldCommit(result)).toBe(true);
         expect(stagedEvents).toHaveLength(1);
         // Serwer odrzucił COMMIT przed WAL -> stagedEvents wycofane, potwierdzony rollback
@@ -659,7 +684,14 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
     let simulateLostCommitAck = true;
     let failDiagnosticAuditOnce = false;
 
-    const unitOfWork: CompanyActionUnitOfWork = {
+    interface IdempotentProbeScope {
+      upsertIdempotentProbe(
+        opId: string,
+        payload: { readonly probe: string },
+      ): { created: boolean; record: { readonly probe: string } };
+    }
+
+    const unitOfWork: CompanyActionUnitOfWork<IdempotentProbeScope> = {
       async recordDeniedDecision(event) {
         if (failDiagnosticAuditOnce) {
           failDiagnosticAuditOnce = false;
@@ -670,7 +702,23 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
       async runCompanyActionInTransaction(work, shouldCommit) {
         const stagedOps = new Map<string, { readonly probe: string }>();
         const stagedAudit: SecurityAuditEvent[] = [];
-        const tx: CompanyActionTransactionContext = {
+        let scopeActive = false;
+
+        const scope: IdempotentProbeScope = Object.freeze({
+          upsertIdempotentProbe(opId: string, payload: { readonly probe: string }) {
+            if (!scopeActive) {
+              throw new Error('Zakres został zamknięty.');
+            }
+            const existing = persistedOperations.get(opId) ?? stagedOps.get(opId);
+            if (existing) {
+              return { created: false, record: existing };
+            }
+            stagedOps.set(opId, payload);
+            return { created: true, record: payload };
+          },
+        });
+
+        const session: CompanyActionAuthorizationSession<IdempotentProbeScope> = {
           verifyActorAccount: async () => true,
           getLockedFacts: async () => ({
             membership: {
@@ -696,23 +744,19 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
             platformRoleAssignments: [],
             now: DB_NOW,
           }),
+          enterAuthorizedCompanyScope: async () => {
+            scopeActive = true;
+            return scope;
+          },
+          closeScope: () => {
+            scopeActive = false;
+          },
           recordAuthorizationDecision: async (event) => {
             stagedAudit.push(event);
           },
         };
 
-        const txWithStore = Object.assign(tx, {
-          upsertIdempotentProbe(opId: string, payload: { readonly probe: string }) {
-            const existing = persistedOperations.get(opId) ?? stagedOps.get(opId);
-            if (existing) {
-              return { created: false, record: existing };
-            }
-            stagedOps.set(opId, payload);
-            return { created: true, record: payload };
-          },
-        });
-
-        const result = await work(txWithStore);
+        const result = await work(session);
         if (!shouldCommit(result)) {
           return result;
         }
@@ -757,16 +801,10 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         legalEntityId: ENTITY_A1,
         action: 'write',
       },
-      deps as Parameters<typeof executeAuthorizedCompanyAction>[1],
-      async (_ctx, rawTx) => {
+      deps,
+      async (_ctx, scope) => {
         callbackInvocations += 1;
-        const txStore = rawTx as CompanyActionTransactionContext & {
-          upsertIdempotentProbe(
-            key: string,
-            payload: { readonly probe: string },
-          ): { created: boolean; record: { readonly probe: string } };
-        };
-        return txStore.upsertIdempotentProbe(opId, { probe: 'syntetyczny-zapis' });
+        return scope.upsertIdempotentProbe(opId, { probe: 'syntetyczny-zapis' });
       },
     );
 
@@ -806,16 +844,10 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         legalEntityId: ENTITY_A1,
         action: 'write',
       },
-      deps as Parameters<typeof executeAuthorizedCompanyAction>[1],
-      async (_ctx, rawTx) => {
+      deps,
+      async (_ctx, scope) => {
         callbackInvocations += 1;
-        const txStore = rawTx as CompanyActionTransactionContext & {
-          upsertIdempotentProbe(
-            key: string,
-            payload: { readonly probe: string },
-          ): { created: boolean; record: { readonly probe: string } };
-        };
-        return txStore.upsertIdempotentProbe(opId, { probe: 'syntetyczny-zapis' });
+        return scope.upsertIdempotentProbe(opId, { probe: 'syntetyczny-zapis' });
       },
     );
 
@@ -907,6 +939,7 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
                 platformRoleAssignments: [],
                 now: DB_NOW,
               }),
+              enterAuthorizedCompanyScope: async () => Object.freeze({}),
               recordAuthorizationDecision: async () => {},
             });
             // Surowy wyjątek bez dowodu potwierdzonego ROLLBACKu
@@ -929,5 +962,153 @@ describe('Transakcyjny UnitOfWork (6D-3A) — freezeTransactionActor i executeAu
         reason: 'transaction_outcome_unknown',
       }),
     ]);
+  });
+
+  it('NEG-SEC04-01/02: callback operacji otrzymuje wyłącznie izolowany uchwyt TScope (bez metod sesji autoryzacyjnej), a awaria enterAuthorizedCompanyScope przerywa wykonanie fail-closed', async () => {
+    let capturedScope: Record<string, unknown> | undefined;
+    const scopeHandle = Object.freeze({
+      recordProbe: async () => ({ inserted: true }),
+    });
+
+    const okResult = await executeAuthorizedCompanyAction(
+      {
+        operationId: id(710),
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      {
+        verifier: {
+          verifyAccessToken: async () => ({
+            ok: true as const,
+            identity: { issuer: 'https://idp.example.test', subject: 'Sub-User-A' },
+          }),
+        },
+        identityResolver: { resolveVerifiedIdentity: async () => ({ userId: USER_A }) },
+        unitOfWork: {
+          recordDeniedDecision: async () => {},
+          async runCompanyActionInTransaction(work) {
+            return work({
+              verifyActorAccount: async () => true,
+              getLockedFacts: async () => ({
+                membership: {
+                  tenantId: TENANT_A,
+                  userId: USER_A,
+                  role: 'tenant_member',
+                  status: 'active',
+                  validFrom: VALID_FROM,
+                  validUntil: null,
+                },
+                grants: [
+                  {
+                    grantId: id(711),
+                    tenantId: TENANT_A,
+                    userId: USER_A,
+                    legalEntityId: ENTITY_A1,
+                    action: 'write',
+                    validFrom: VALID_FROM,
+                    validUntil: null,
+                    revokedAt: null,
+                  },
+                ],
+                platformRoleAssignments: [],
+                now: DB_NOW,
+              }),
+              enterAuthorizedCompanyScope: async () => scopeHandle,
+              recordAuthorizationDecision: async () => {},
+            });
+          },
+        },
+      },
+      async (_ctx, scope) => {
+        capturedScope = scope as unknown as Record<string, unknown>;
+        return scope.recordProbe();
+      },
+    );
+
+    expect(okResult).toMatchObject({ allowed: true, data: { inserted: true } });
+    expect(capturedScope).toBe(scopeHandle);
+    for (const forbiddenProp of [
+      'tx',
+      'signer',
+      'verifyActorAccount',
+      'getLockedFacts',
+      'enterAuthorizedCompanyScope',
+      'applySessionContext',
+      'closeScope',
+      'recordAuthorizationDecision',
+    ]) {
+      expect(capturedScope).not.toHaveProperty(forbiddenProp);
+    }
+
+    // Awaria obowiązkowego enterAuthorizedCompanyScope nie może uruchomić callbacku biznesowego
+    const operationOnScopeError = vi.fn();
+    const failedScopeRes = await executeAuthorizedCompanyAction(
+      {
+        operationId: id(712),
+        rawBearerToken: 'valid-jwt',
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        action: 'write',
+      },
+      {
+        verifier: {
+          verifyAccessToken: async () => ({
+            ok: true as const,
+            identity: { issuer: 'https://idp.example.test', subject: 'Sub-User-A' },
+          }),
+        },
+        identityResolver: { resolveVerifiedIdentity: async () => ({ userId: USER_A }) },
+        unitOfWork: {
+          recordDeniedDecision: async () => {},
+          async runCompanyActionInTransaction(work) {
+            try {
+              return await work({
+                verifyActorAccount: async () => true,
+                getLockedFacts: async () => ({
+                  membership: {
+                    tenantId: TENANT_A,
+                    userId: USER_A,
+                    role: 'tenant_member',
+                    status: 'active',
+                    validFrom: VALID_FROM,
+                    validUntil: null,
+                  },
+                  grants: [
+                    {
+                      grantId: id(713),
+                      tenantId: TENANT_A,
+                      userId: USER_A,
+                      legalEntityId: ENTITY_A1,
+                      action: 'write',
+                      validFrom: VALID_FROM,
+                      validUntil: null,
+                      revokedAt: null,
+                    },
+                  ],
+                  platformRoleAssignments: [],
+                  now: DB_NOW,
+                }),
+                enterAuthorizedCompanyScope: async () => {
+                  throw new Error('Brak aktywnego klucza podpisu pap.context');
+                },
+                recordAuthorizationDecision: vi.fn(),
+              });
+            } catch (err) {
+              throw new ConfirmedTransactionRollbackError(err);
+            }
+          },
+        },
+      },
+      operationOnScopeError,
+    );
+
+    expect(operationOnScopeError).not.toHaveBeenCalled();
+    expect(failedScopeRes).toEqual({
+      allowed: false,
+      status: 'forbidden',
+      reason: 'authorization_data_unavailable',
+    });
   });
 });

@@ -4,7 +4,7 @@ import { readMigrationFiles } from 'drizzle-orm/migrator';
 import { describe, expect, it } from 'vitest';
 
 describe('Kontrakt plików migracji', () => {
-  it('zachowuje znacznik 6A i łańcuch snapshotów oraz journal 6A → 6B → 6D-R → 6D-2', () => {
+  it('zachowuje znacznik 6A i łańcuch snapshotów oraz journal 6A → 6B → 6D-R → 6D-2 → 6D-3', () => {
     const folder = fileURLToPath(new URL('../drizzle', import.meta.url));
     const migrations = readMigrationFiles({ migrationsFolder: folder });
     const readJson = (name: string) => JSON.parse(readFileSync(`${folder}/meta/${name}`, 'utf8'));
@@ -25,7 +25,9 @@ describe('Kontrakt plików migracji', () => {
     expect(runtime.prevId).toBe(identity.id);
     expect(audit.prevId).toBe(runtime.id);
     expect(foundation.prevId).toBe(audit.id);
-    expect(foundation.tables['public.access_management_event'].columns.transaction_id).toBeDefined();
+    expect(
+      foundation.tables['public.access_management_event'].columns.transaction_id,
+    ).toBeDefined();
     expect(audit.tables['public.access_management_event'].columns.transaction_id).toBeUndefined();
     expect(Object.keys(audit.tables)).toHaveLength(11);
     expect(Object.values(runtime.tables)).toHaveLength(10);
@@ -123,14 +125,65 @@ describe('Kontrakt plików migracji', () => {
     }
   });
 
-  it('0006 łączy dokładne efekty i trzy wyniki TX bez przepisywania historycznego audytu', () => {
-    const migration = readFileSync(new URL('../drizzle/0006_security-foundation.sql', import.meta.url), 'utf8');
+  it('0006 łączy dokładne efekty, trzy wyniki TX i poprawki P1/P2 bez pustych statement-breakpointów', () => {
+    const migration = readFileSync(
+      new URL('../drizzle/0006_security-foundation.sql', import.meta.url),
+      'utf8',
+    );
     for (const fragment of [
-      'pap_execute_access()', 'pap_security_protocol_version()',
-      'e.operation_id = NEW.operation_id', "a.state_change->'effects'->effect_key = expected_effect",
-      'a.transaction_id = pg_current_xact_id()::text', 'WITH CHECK (false)',
-      "'outcome_unknown'", "'transaction_outcome_unknown'", 'access_management_operation_id IS NULL',
-      ') NOT VALID;', "SET LOCAL lock_timeout = '5s'",
-    ]) expect(migration).toContain(fragment);
+      'pap_execute_access()',
+      'pap_security_protocol_version()',
+      'e.operation_id = NEW.operation_id',
+      "a.state_change->'effects'->effect_key = expected_effect",
+      'a.transaction_id = pg_current_xact_id()::text',
+      'WITH CHECK (false)',
+      "'outcome_unknown'",
+      "'transaction_outcome_unknown'",
+      'access_management_operation_id IS NULL',
+      ') NOT VALID;',
+      "SET LOCAL lock_timeout = '5s'",
+      // P1-2: rzutowania UUID ::text przed operatorem || (ochrona przed shadowingiem pg_temp)
+      "'company_access_grant:' || g.grant_id::text",
+      "'company_access_grant:' || g_after.grant_id::text",
+      "'tenant_membership:' || scope_tenant::text || ':' || target_user::text",
+      "'tenant_membership:' || NEW.tenant_id::text || ':' || NEW.user_id::text",
+      "'company_access_grant:' || (to_jsonb(NEW)->>'grant_id')::text",
+      // P2-1: walidacja jsonb_typeof(c->'command') oraz NULL dla identyfikatorów przed deduplikacją
+      "jsonb_typeof(c->'command') IS DISTINCT FROM 'object'",
+      "c->>'tenant_id' IS NULL OR c->>'target_user_id' IS NULL",
+      'IF target_entity IS NULL OR requested_grant IS NULL THEN',
+      'IF requested_grant IS NULL THEN',
+      // P2-2: precyzja timestamptz(3) zgodna z zegarem JS Date
+      'timestamptz(3)',
+      "decision_time := (c->>'decision_at')::timestamptz(3)",
+      // P2-3: reset lokalnych timeoutów po migracji
+      'RESET lock_timeout;',
+      'RESET statement_timeout;',
+    ]) {
+      expect(migration).toContain(fragment);
+    }
+
+    // P2-3: brak pustych chunków między --> statement-breakpoint i brak duplikatu ALTER FUNCTION pap_check_committed_decision()
+    const statements = migration.split('--> statement-breakpoint');
+    for (const stmt of statements) {
+      expect(stmt.trim().length).toBeGreaterThan(0);
+    }
+    const alterCommittedDecisionMatches = migration.match(/'pap_check_committed_decision\(\)'/g);
+    expect(alterCommittedDecisionMatches).toHaveLength(1);
+
+    // P1-1: runtime-privileges.sql filtruje funkcje po pg_has_role(current_user, p.proowner, 'USAGE') bez globalnego REVOKE ALL ON ALL FUNCTIONS
+    const runtimePrivileges = readFileSync(
+      new URL('../sql/runtime-privileges.sql', import.meta.url),
+      'utf8',
+    );
+    expect(runtimePrivileges).not.toMatch(/REVOKE\s+ALL\s+ON\s+ALL\s+FUNCTIONS\s+IN\s+SCHEMA/i);
+    expect(runtimePrivileges).toContain("pg_has_role(current_user, p.proowner, 'USAGE')");
+
+    const bootstrapRole = readFileSync(
+      new URL('../sql/bootstrap-runtime-role.sql', import.meta.url),
+      'utf8',
+    );
+    expect(bootstrapRole).toContain('pap_apply_pgcrypto_lockdown');
+    expect(bootstrapRole).toContain('pap_lockdown_pgcrypto_on_extension');
   });
 });

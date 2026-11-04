@@ -20,7 +20,6 @@ import {
   type SecurityAuditRecorder,
   type AuthenticatedCompanyActionContext,
   type Clock,
-  type CompanyActionTransactionContext,
   type ExecuteAuthorizedCompanyActionDependencies,
   type OidcAccessTokenVerifier,
   type TenantAuthorizationDataSource,
@@ -130,7 +129,7 @@ export function extractBearerTokenFromHeaders(headers: FastifyRequest['headers']
 
 /**
  * Serwerowy guard NestJS/Fastify pełniący funkcję wczesnej bramki transportowej HTTP (400/401/403).
- * UWAGA (6D-3A): Krytyczne operacje odczytu i zapisu danych firmowych oraz administracji dostępem
+ * UWAGA (6D-3): Krytyczne operacje odczytu i zapisu danych firmowych oraz administracji dostępem
  * nie mogą opierać bezpieczeństwa wyłącznie na wcześniejszym wyniku guarda w pamięci żądania —
  * muszą wykonywać autoryzację i operację DB w jednej transakcji przez `executeHttpAuthorizedCompanyAction`
  * (`executeAuthorizedCompanyAction`) lub `manageAccess`.
@@ -249,18 +248,15 @@ export class CompanyActionAuthorizationGuard implements CanActivate {
 }
 
 /**
- * Transakcyjny helper HTTP (6D-3A) łączący ekstrakcję Bearer JWT i ochronę przed spoofingiem nagłówków
- * z `executeAuthorizedCompanyAction` (jedna transakcja UnitOfWork dla autoryzacji, kontekstu sesji i operacji DB).
+ * Transakcyjny helper HTTP (6D-3 / SEC-04) łączący ekstrakcję Bearer JWT i ochronę przed spoofingiem nagłówków
+ * z `executeAuthorizedCompanyAction` (jedna transakcja UnitOfWork dla autoryzacji, zakresu RLS `TScope` i audytu).
  */
-export async function executeHttpAuthorizedCompanyAction<
-  TOutput,
-  TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
->(
+export async function executeHttpAuthorizedCompanyAction<TOutput, TScope = unknown>(
   request: AuthenticatedFastifyRequest,
   reply: FastifyReply,
   metadata: RequireCompanyActionMetadata,
-  dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
-  operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+  dependencies: ExecuteAuthorizedCompanyActionDependencies<TScope>,
+  operation: (context: AuthenticatedCompanyActionContext, scope: TScope) => Promise<TOutput>,
   options?: { readonly operationId?: string },
 ): Promise<TOutput> {
   if (hasUntrustedIdentitySignal(request)) {

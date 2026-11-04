@@ -100,6 +100,49 @@ export default defineConfig([
     },
   },
   {
+    files: ['apps/api/src/**/*.{js,jsx,ts,tsx}'],
+    ignores: [
+      'apps/api/src/app.module.ts',
+      'apps/api/src/main.ts',
+      'apps/api/src/runtime/**/*.{js,jsx,ts,tsx}',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@pap/db',
+              importNames: [
+                'PostgresContextSigner',
+                'loadDatabaseContextSigner',
+                'PostgresTransactionalUnitOfWork',
+                'runManagedTransaction',
+              ],
+              message:
+                'Kontrolery, guardy i serwisy HTTP nie mogą bezpośrednio importować signera kontekstu ani adaptera UnitOfWork/transakcji; wstrzykuj porty przez composition root.',
+            },
+          ],
+          patterns: [
+            {
+              group: [
+                '@pap/db/*',
+                '**/packages/db',
+                '**/packages/db/**',
+                'drizzle-orm',
+                'drizzle-orm/*',
+                'postgres',
+                'postgres/*',
+              ],
+              message:
+                'Warstwa HTTP API poza composition root nie może importować wewnętrznych modułów @pap/db, ORM ani sterownika SQL.',
+            },
+          ],
+        },
+      ],
+    },
+  },
+  {
     files: ['apps/web/**/*.{js,jsx,ts,tsx}'],
     rules: {
       'no-restricted-imports': [

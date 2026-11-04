@@ -14,14 +14,14 @@ import {
   type AccessManagementResult,
   type AccessManagementStore,
   type AccessManagementTransaction,
-  type CompanyActionTransactionContext,
+  type CompanyActionAuthorizationSession,
   type CompanyActionUnitOfWork,
+  type CompanyRlsSessionContext,
   type LockedTenantAuthorizationFacts,
   type TenantAuthorizationDataSource,
   type TenantAuthorizationFacts,
   type TenantAuthorizationQuery,
   type TransactionActor,
-  type TransactionSessionContext,
   type UserIdentityResolver,
   type VerifiedOidcIdentity,
 } from '@pap/application';
@@ -77,9 +77,9 @@ const TEST_WRITE_OPERATION_ID = id(701);
 
 const TEST_COMPANY_UNIT_OF_WORK = Symbol('TEST_COMPANY_UNIT_OF_WORK');
 
-interface TestCompanyTransactionContext extends CompanyActionTransactionContext {
+interface TestCompanyActionScope {
   readonly txNumber: number;
-  appliedSessionContext: TransactionSessionContext | null;
+  readonly sessionContext: CompanyRlsSessionContext;
 }
 
 /**
@@ -131,7 +131,7 @@ class TestTransactionalCompanyController {
     @Inject(USER_IDENTITY_RESOLVER)
     private readonly identityResolver: UserIdentityResolver,
     @Inject(TEST_COMPANY_UNIT_OF_WORK)
-    private readonly unitOfWork: CompanyActionUnitOfWork<TestCompanyTransactionContext>,
+    private readonly unitOfWork: CompanyActionUnitOfWork<TestCompanyActionScope>,
   ) {}
 
   @Post('probe-transactional-write')
@@ -153,17 +153,22 @@ class TestTransactionalCompanyController {
         identityResolver: this.identityResolver,
         unitOfWork: this.unitOfWork,
       },
-      async (ctx, tx) => ({
-        ok: true,
-        txNumber: tx.txNumber,
-        operationId: ctx.operationId,
-        decisionAt: ctx.decisionAt,
-        resolvedActorUserId: ctx.userId,
-        tenantId: ctx.tenantId,
-        legalEntityId: ctx.legalEntityId,
-        action: ctx.action,
-        sessionContext: tx.appliedSessionContext,
-      }),
+      async (ctx, scope) => {
+        if ('verifyActorAccount' in (scope as unknown as Record<string, unknown>)) {
+          throw new Error('Wyciek sesji autoryzacyjnej do uchwytu TScope.');
+        }
+        return {
+          ok: true,
+          txNumber: scope.txNumber,
+          operationId: ctx.operationId,
+          decisionAt: ctx.decisionAt,
+          resolvedActorUserId: ctx.userId,
+          tenantId: ctx.tenantId,
+          legalEntityId: ctx.legalEntityId,
+          action: ctx.action,
+          sessionContext: scope.sessionContext,
+        };
+      },
       { operationId },
     );
   }
@@ -175,7 +180,7 @@ class ControlledAuthState
     TenantAuthorizationDataSource,
     AccessManagementAuthorizationDataSource,
     AccessManagementStore,
-    CompanyActionUnitOfWork<TestCompanyTransactionContext>
+    CompanyActionUnitOfWork<TestCompanyActionScope>
 {
   readonly auditEvents: unknown[] = [];
   async recordDeniedDecision(event: unknown) {
@@ -318,44 +323,52 @@ class ControlledAuthState
   }
 
   private isActorCurrentlyActive(actor: TransactionActor): boolean {
-    if (actor.identity) {
-      const entry = this.identities.get(`${actor.identity.issuer}\u0000${actor.identity.subject}`);
-      return Boolean(
-        entry && entry.userId === actor.userId && entry.userActive && entry.linkActive,
-      );
+    if (!actor.identity) {
+      return false;
     }
-    for (const entry of this.identities.values()) {
-      if (entry.userId === actor.userId && entry.userActive) {
-        return true;
-      }
-    }
-    return false;
+    const entry = this.identities.get(`${actor.identity.issuer}\u0000${actor.identity.subject}`);
+    return Boolean(
+      entry && entry.userId === actor.userId && entry.userActive && entry.linkActive,
+    );
   }
 
   async runCompanyActionInTransaction<TResult>(
-    work: (tx: TestCompanyTransactionContext) => Promise<TResult>,
+    work: (session: CompanyActionAuthorizationSession<TestCompanyActionScope>) => Promise<TResult>,
     shouldCommit: (result: TResult) => boolean,
   ): Promise<TResult> {
     const txNumber = ++this.txCounter;
-    const tx: TestCompanyTransactionContext = {
-      txNumber,
-      appliedSessionContext: null,
+    let sessionApplied = false;
+    let decisionRecorded = false;
+    let scopeClosed = false;
+
+    const session: CompanyActionAuthorizationSession<TestCompanyActionScope> = {
       verifyActorAccount: async (actor) => this.isActorCurrentlyActive(actor),
       recordAuthorizationDecision: async (event) => {
+        if (decisionRecorded) {
+          throw new Error('Decyzja autoryzacyjna została już zapisana.');
+        }
+        decisionRecorded = true;
         this.auditEvents.push(event);
       },
       getLockedFacts: async (query): Promise<LockedTenantAuthorizationFacts> => {
         const facts = await this.getFacts(query);
         return { ...facts, now: NOW };
       },
-      applySessionContext: async (context) => {
-        tx.appliedSessionContext = context;
+      enterAuthorizedCompanyScope: async (context) => {
+        sessionApplied = true;
+        return Object.freeze({
+          txNumber,
+          sessionContext: context,
+        });
+      },
+      closeScope: () => {
+        scopeClosed = true;
       },
     };
 
     try {
-      const result = await work(tx);
-      if (shouldCommit(result)) {
+      const result = await work(session);
+      if (shouldCommit(result) && sessionApplied && decisionRecorded && scopeClosed) {
         this.committedTransactions += 1;
         this.executedOperations += 1;
         if (this.simulateLostCommitConfirmation) {
@@ -1081,6 +1094,7 @@ describe('Serwerowy pipeline OIDC -> UserIdentityResolver -> authorizeCompanyAct
         actorUserId: USER_A,
         tenantId: TENANT_A,
         legalEntityId: ENTITY_A1,
+        action: 'write',
       },
     });
     expect(state.committedTransactions).toBe(1);

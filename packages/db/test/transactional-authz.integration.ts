@@ -1429,7 +1429,34 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
 
     try {
       const store = new PostgresAccessManagementStore(singlePool.db);
-      const uow = new PostgresTransactionalUnitOfWork(singlePool.db);
+      const uow = new PostgresTransactionalUnitOfWork(
+        singlePool.db,
+        undefined,
+        ({ tx, assertActive }) =>
+          Object.freeze({
+            async failWithDivisionByZero() {
+              assertActive();
+              await tx.execute(statement`SELECT 1 / 0`);
+            },
+            async inspectSessionGucs() {
+              assertActive();
+              const rows = await tx.execute<{
+                pid: number;
+                tenant_ctx: string;
+                actor_ctx: string;
+                entity_ctx: string;
+              }>(statement`SELECT
+                pg_backend_pid() AS pid,
+                current_setting('pap.current_tenant_id', true) AS tenant_ctx,
+                current_setting('pap.current_actor_user_id', true) AS actor_ctx,
+                current_setting('pap.current_legal_entity_id', true) AS entity_ctx`);
+              return {
+                ...rows[0]!,
+                pid: Number(rows[0]!.pid),
+              };
+            },
+          }),
+      );
       const identityResolver = new PostgresUserIdentityResolver(singlePool.db);
 
       const initialPidRows = await singlePool.client<
@@ -1491,9 +1518,9 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
           action: 'read',
         },
         { verifier, identityResolver, unitOfWork: uow },
-        async (_ctx, txCtx) => {
+        async (_ctx, scope) => {
           // Wymuszamy rzeczywisty błąd SQL PostgreSQL (dzielenie przez zero 22012), który przerywa transakcję na serwerze
-          await txCtx.tx.execute(statement`SELECT 1 / 0`);
+          await scope.failWithDivisionByZero();
           return 'unreachable';
         },
       );
@@ -1524,22 +1551,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
           action: 'read',
         },
         { verifier, identityResolver, unitOfWork: uow },
-        async (_ctx, txCtx) => {
-          const rows = await txCtx.tx.execute<{
-            pid: number;
-            tenant_ctx: string;
-            actor_ctx: string;
-            entity_ctx: string;
-          }>(statement`SELECT
-            pg_backend_pid() AS pid,
-            current_setting('pap.current_tenant_id', true) AS tenant_ctx,
-            current_setting('pap.current_actor_user_id', true) AS actor_ctx,
-            current_setting('pap.current_legal_entity_id', true) AS entity_ctx`);
-          return {
-            ...rows[0]!,
-            pid: Number(rows[0]!.pid),
-          };
-        },
+        async (_ctx, scope) => scope.inspectSessionGucs(),
       );
 
       expect(validAction).toMatchObject({
@@ -1624,6 +1636,7 @@ describe('6D-3A — transakcyjna autoryzacja, UnitOfWork i eliminacja TOCTOU na 
     let writeOperationExecuted = false;
     const writeAttemptPromise = executeAuthorizedCompanyAction(
       {
+        operationId: nextId(),
         rawBearerToken: 'token:sub-member-1',
         tenantId: TENANT_A,
         legalEntityId: ENTITY_A1,

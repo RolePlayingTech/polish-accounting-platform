@@ -2,8 +2,9 @@ import {
   auditIdentifier,
   freezeTransactionActor,
   type AccessManagementStore,
-  type CompanyActionTransactionContext,
+  type CompanyActionAuthorizationSession,
   type CompanyActionUnitOfWork,
+  type CompanyRlsSessionContext,
   type SecurityAuditEvent,
   type TenantAuthorizationQuery,
   type TransactionActor,
@@ -11,95 +12,123 @@ import {
 import { decideAccountingAccess, legalEntityId, tenantId, userId } from '@pap/domain';
 import { PostgresAccessManagementStore } from './access-management.js';
 import type { connectDatabase } from './client.js';
-import type { PostgresContextSigner } from './signed-context.js';
+import {
+  createPostgresCompanyActionScope,
+  ScopeClosedError,
+  type PostgresCompanyActionScope,
+  type PostgresCompanyActionScopeDriver,
+  type PostgresCompanyActionScopeFactory,
+} from './company-operation-probe.js';
 import { appendSecurityDecision, PostgresSecurityAudit } from './security-audit.js';
+import type { PostgresContextSigner } from './signed-context.js';
 import {
   applyLocalRlsSessionContext,
   lockCompanyActionFactsInTx,
-  readTransactionClockNow,
   runManagedTransaction,
   verifyAndLockActorInTx,
-  type PostgresTransaction,
 } from './transaction-primitives.js';
 
 export {
-  applyLocalRlsSessionContext,
-  lockCompanyActionFactsInTx,
-  readTransactionClockNow,
-  runManagedTransaction,
-  verifyAndLockActorInTx,
-  type PostgresTransaction,
+  ScopeClosedError,
+  type PostgresCompanyActionScope,
+  type PostgresCompanyActionScopeDriver,
+  type PostgresCompanyActionScopeFactory,
 };
 
 type Database = ReturnType<typeof connectDatabase>['db'];
 
-export interface PostgresCompanyActionTransactionContext extends CompanyActionTransactionContext {
-  readonly tx: PostgresTransaction;
-}
-
 /**
- * Reużywalny transakcyjny UnitOfWork PostgreSQL (6D-3A) przeznaczony dla:
+ * Reużywalny transakcyjny UnitOfWork PostgreSQL (6D-3 / SEC-04) przeznaczony dla:
  * - operacji odczytu i zapisu dokumentów firmowych (`executeAuthorizedCompanyAction`),
  * - operacji administracji dostępem (`createAccessManagementStore` -> `manageAccess`),
- * - późniejszej integracji z PostgreSQL RLS i ograniczoną rolą runtime w 6D-3B.
+ * - przyszłych repozytoriów Fazy 2 (KPiR, VAT, dokumenty, księgi) przez rozszerzalne `scopeFactory`
+ *   bez jakiejkolwiek ekspozycji surowego `PostgresTransaction`, signera ani sesji autoryzacyjnej.
  */
-export class PostgresTransactionalUnitOfWork implements CompanyActionUnitOfWork<PostgresCompanyActionTransactionContext> {
+export class PostgresTransactionalUnitOfWork<TScope = PostgresCompanyActionScope>
+  implements CompanyActionUnitOfWork<TScope>
+{
+  readonly #db: Pick<Database, 'transaction'>;
+  readonly #signer: PostgresContextSigner | undefined;
+  readonly #scopeFactory: PostgresCompanyActionScopeFactory<TScope>;
+
   constructor(
-    private readonly db: Pick<Database, 'transaction'>,
-    private readonly signer?: PostgresContextSigner,
-  ) {}
+    db: Pick<Database, 'transaction'>,
+    signer?: PostgresContextSigner,
+    scopeFactory?: PostgresCompanyActionScopeFactory<TScope>,
+  ) {
+    this.#db = db;
+    this.#signer = signer;
+    this.#scopeFactory =
+      scopeFactory ??
+      (createPostgresCompanyActionScope as unknown as PostgresCompanyActionScopeFactory<TScope>);
+    Object.freeze(this);
+  }
 
   recordDeniedDecision(event: SecurityAuditEvent): Promise<void> {
-    return new PostgresSecurityAudit(this.db, this.signer).recordDecision(event);
+    return new PostgresSecurityAudit(this.#db, this.#signer).recordDecision(event);
   }
 
   async runCompanyActionInTransaction<TResult>(
-    work: (tx: PostgresCompanyActionTransactionContext) => Promise<TResult>,
+    work: (session: CompanyActionAuthorizationSession<TScope>) => Promise<TResult>,
     shouldCommit: (result: TResult) => boolean,
   ): Promise<TResult> {
+    let sessionApplied = false;
+    let decisionRecorded = false;
+
     return runManagedTransaction(
-      this.db,
+      this.#db,
       async (tx) => {
+        sessionApplied = false;
+        decisionRecorded = false;
         let verificationAttempted = false;
         let verifiedActor: TransactionActor | undefined;
         let factsRequested = false;
         let authorizedQuery: TenantAuthorizationQuery | undefined;
         let decisionAt: string | undefined;
         let operationId: string | null = null;
-        let sessionApplied = false;
-        const context: PostgresCompanyActionTransactionContext = {
-          tx,
-          recordAuthorizationDecision: async (event) => {
-            if (
-              !sessionApplied || !authorizedQuery || event.kind !== 'company' ||
-              event.decision !== 'allow' || event.outcome !== 'committed' ||
-              event.actorId !== authorizedQuery.userId || event.tenantId !== authorizedQuery.tenantId ||
-              event.legalEntityId !== authorizedQuery.legalEntityId || event.action !== authorizedQuery.action ||
-              auditIdentifier(event.operationId) !== operationId || event.decidedAt !== decisionAt
-            ) throw new Error('Audyt nie odpowiada zablokowanej decyzji.');
-            await appendSecurityDecision(tx, event, this.signer);
-          },
-          verifyActorAccount: async (rawActor) => {
-            // Jedna tożsamość w TX. Wynik false nie zostawia aktora uprawnionego do podpisu.
-            if (verificationAttempted) throw new Error('Aktor transakcji został już wybrany.');
+        let scopeActive = false;
+        let decisionAttempted = false;
+
+        const assertActive = (): void => {
+          if (!scopeActive) {
+            throw new ScopeClosedError();
+          }
+        };
+
+        const session: CompanyActionAuthorizationSession<TScope> = Object.freeze({
+          verifyActorAccount: async (rawActor: TransactionActor) => {
+            // Jedna tożsamość w TX. Wymagana zweryfikowana tożsamość OIDC eliminuje pominięcie blokady user_oidc_identity.
+            if (verificationAttempted) {
+              throw new Error('Aktor transakcji został już wybrany.');
+            }
             verificationAttempted = true;
             const actor = freezeTransactionActor(rawActor);
-            await this.signer?.apply(tx, { purpose: 'actor', actorUserId: actor.userId });
-            if (!(await verifyAndLockActorInTx(tx, actor))) return false;
+            if (actor.identity === undefined) {
+              throw new Error('Wymagana zweryfikowana tożsamość OIDC aktora.');
+            }
+            await this.#signer?.apply(tx, { purpose: 'actor', actorUserId: actor.userId });
+            if (!(await verifyAndLockActorInTx(tx, actor))) {
+              return false;
+            }
             verifiedActor = actor;
             return true;
           },
-          getLockedFacts: async (rawQuery) => {
+
+          getLockedFacts: async (rawQuery: TenantAuthorizationQuery) => {
             if (!verifiedActor || factsRequested || rawQuery.userId !== verifiedActor.userId) {
               throw new Error('Brak zweryfikowanego aktora lub zakres został już wybrany.');
             }
             factsRequested = true;
-            if (rawQuery.action !== 'read' && rawQuery.action !== 'write') throw new Error('Niepoprawna akcja.');
-            const query = Object.freeze({
-              userId: userId(rawQuery.userId), tenantId: tenantId(rawQuery.tenantId),
-              legalEntityId: legalEntityId(rawQuery.legalEntityId), action: rawQuery.action,
+            if (rawQuery.action !== 'read' && rawQuery.action !== 'write') {
+              throw new Error('Niepoprawna akcja.');
+            }
+            const query: TenantAuthorizationQuery = Object.freeze({
+              userId: userId(rawQuery.userId),
+              tenantId: tenantId(rawQuery.tenantId),
+              legalEntityId: legalEntityId(rawQuery.legalEntityId),
+              action: rawQuery.action,
             });
-            await this.signer?.apply(tx, {
+            await this.#signer?.apply(tx, {
               purpose: 'facts',
               actorUserId: verifiedActor.userId,
               tenantId: query.tenantId,
@@ -114,40 +143,104 @@ export class PostgresTransactionalUnitOfWork implements CompanyActionUnitOfWork<
             }
             return structuredClone(facts);
           },
-          applySessionContext: async (sessionContext) => {
+
+          enterAuthorizedCompanyScope: async (rawSessionContext: CompanyRlsSessionContext) => {
             if (
-              sessionApplied || !authorizedQuery || !decisionAt ||
-              sessionContext.actorUserId !== authorizedQuery.userId ||
-              sessionContext.tenantId !== authorizedQuery.tenantId ||
-              sessionContext.legalEntityId !== authorizedQuery.legalEntityId ||
-              sessionContext.decisionAt !== decisionAt
+              sessionApplied ||
+              decisionAttempted ||
+              !authorizedQuery ||
+              !decisionAt ||
+              rawSessionContext.actorUserId !== authorizedQuery.userId ||
+              rawSessionContext.tenantId !== authorizedQuery.tenantId ||
+              rawSessionContext.legalEntityId !== authorizedQuery.legalEntityId ||
+              rawSessionContext.action !== authorizedQuery.action ||
+              rawSessionContext.decisionAt !== decisionAt
             ) {
               throw new Error('Brak zablokowanej decyzji autoryzacyjnej.');
             }
-            operationId = auditIdentifier(sessionContext.operationId);
+            if (rawSessionContext.operationId !== undefined) {
+              const parsedOperationId = auditIdentifier(rawSessionContext.operationId);
+              if (parsedOperationId === null) {
+                throw new Error('Niepoprawny identyfikator operacji.');
+              }
+              operationId = parsedOperationId;
+            } else {
+              operationId = null;
+            }
             if (authorizedQuery.action === 'write' && operationId === null) {
               throw new Error('Zapis wymaga identyfikatora operacji.');
             }
+            const frozenSessionContext: CompanyRlsSessionContext = Object.freeze({
+              ...(operationId ? { operationId } : {}),
+              decisionAt,
+              actorUserId: authorizedQuery.userId,
+              tenantId: authorizedQuery.tenantId,
+              legalEntityId: authorizedQuery.legalEntityId,
+              action: authorizedQuery.action,
+            });
             sessionApplied = true;
-            await this.signer?.apply(tx, {
+            await this.#signer?.apply(tx, {
               purpose: 'company',
               actorUserId: authorizedQuery.userId,
-              tenantId: sessionContext.tenantId,
+              tenantId: authorizedQuery.tenantId,
               legalEntityId: authorizedQuery.legalEntityId,
               action: authorizedQuery.action,
               ...(operationId ? { operationId } : {}),
               decisionAt,
             });
-            await applyLocalRlsSessionContext(tx, sessionContext);
+            await applyLocalRlsSessionContext(tx, frozenSessionContext);
+            scopeActive = true;
+            return this.#scopeFactory(
+              Object.freeze({
+                tx,
+                context: frozenSessionContext,
+                assertActive,
+              }),
+            );
           },
-        };
-        return work(Object.freeze(context));
+
+          closeScope: () => {
+            scopeActive = false;
+          },
+
+          recordAuthorizationDecision: async (event: SecurityAuditEvent) => {
+            scopeActive = false;
+            if (decisionAttempted || decisionRecorded) {
+              throw new Error('Decyzja autoryzacyjna została już zapisana w tej transakcji.');
+            }
+            decisionAttempted = true;
+            if (
+              !sessionApplied ||
+              !authorizedQuery ||
+              !decisionAt ||
+              event.kind !== 'company' ||
+              event.decision !== 'allow' ||
+              event.outcome !== 'committed' ||
+              event.actorId !== authorizedQuery.userId ||
+              event.tenantId !== authorizedQuery.tenantId ||
+              event.legalEntityId !== authorizedQuery.legalEntityId ||
+              event.action !== authorizedQuery.action ||
+              auditIdentifier(event.operationId) !== operationId ||
+              event.decidedAt !== decisionAt
+            ) {
+              throw new Error('Audyt nie odpowiada zablokowanej decyzji.');
+            }
+            await appendSecurityDecision(tx, event, this.#signer);
+            decisionRecorded = true;
+          },
+        });
+
+        try {
+          return await work(session);
+        } finally {
+          scopeActive = false;
+        }
       },
-      shouldCommit,
+      (result) => shouldCommit(result) && sessionApplied && decisionRecorded,
     );
   }
 
   createAccessManagementStore(): AccessManagementStore {
-    return new PostgresAccessManagementStore(this.db, this.signer);
+    return new PostgresAccessManagementStore(this.#db, this.#signer);
   }
 }

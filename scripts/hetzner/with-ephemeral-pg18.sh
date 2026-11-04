@@ -781,7 +781,9 @@ main() {
   fi
   RUN_DIR="${candidate_run_dir}"
   mkdir -m 0700 "${RUN_DIR}"
-  mkdir -m 0700 "${RUN_DIR}/pgdata"
+  # Kontener postgres:18.6-alpine tworzy /var/lib/postgresql/18/docker jako uid 70 (postgres);
+  # katalog nadrzędny RUN_DIR ma 0700, więc żaden inny użytkownik na hoście nie ma do niego wejścia.
+  mkdir -m 0777 "${RUN_DIR}/pgdata"
 
   local boot_password
   boot_password="$(openssl rand -hex 24)"
@@ -904,6 +906,74 @@ SQL
         exit 4
       fi
       runtime_db_url="postgres://pap_test_app:${runtime_password}@127.0.0.1:${PORT}/pap_test"
+    fi
+
+    # P1-1 (H1): blokada domyślnego PUBLIC EXECUTE na funkcjach pgcrypto (instalowanego w 0004 przez pap_test NOSUPERUSER)
+    # z zachowaniem EXECUTE wyłącznie na hmac(bytea, bytea, text) dla migratora pap_test.
+    if ! exec_container_super_psql pap_test <<'SQL'
+CREATE OR REPLACE FUNCTION public.pap_apply_pgcrypto_lockdown()
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $fn$
+DECLARE
+  migrator_name text;
+  fn_rec record;
+BEGIN
+  SELECT r.rolname INTO migrator_name
+    FROM pg_catalog.pg_database d
+    JOIN pg_catalog.pg_roles r ON r.oid = d.datdba
+   WHERE d.datname = pg_catalog.current_database();
+
+  FOR fn_rec IN
+    SELECT p.oid::pg_catalog.regprocedure AS regproc,
+           p.proname,
+           pg_catalog.pg_get_function_identity_arguments(p.oid) AS args
+      FROM pg_catalog.pg_depend dep
+      JOIN pg_catalog.pg_extension ext ON ext.oid = dep.refobjid
+      JOIN pg_catalog.pg_proc p ON p.oid = dep.objid
+     WHERE dep.classid = 'pg_catalog.pg_proc'::pg_catalog.regclass
+       AND dep.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass
+       AND dep.deptype = 'e'
+       AND ext.extname = 'pgcrypto'
+       AND pg_catalog.pg_has_role(current_user, p.proowner, 'USAGE')
+  LOOP
+    EXECUTE pg_catalog.format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', fn_rec.regproc);
+    IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'pap_test_app') THEN
+      EXECUTE pg_catalog.format('REVOKE ALL ON FUNCTION %s FROM pap_test_app', fn_rec.regproc);
+    END IF;
+    IF migrator_name IS NOT NULL AND fn_rec.proname = 'hmac' AND fn_rec.args = 'bytea, bytea, text' THEN
+      EXECUTE pg_catalog.format('GRANT EXECUTE ON FUNCTION %s TO %I', fn_rec.regproc, migrator_name);
+    END IF;
+  END LOOP;
+END;
+$fn$;
+REVOKE ALL ON FUNCTION public.pap_apply_pgcrypto_lockdown() FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION public.pap_on_create_extension_lockdown()
+RETURNS event_trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog
+AS $et$
+BEGIN
+  PERFORM public.pap_apply_pgcrypto_lockdown();
+END;
+$et$;
+REVOKE ALL ON FUNCTION public.pap_on_create_extension_lockdown() FROM PUBLIC;
+
+DROP EVENT TRIGGER IF EXISTS pap_lockdown_pgcrypto_on_extension;
+CREATE EVENT TRIGGER pap_lockdown_pgcrypto_on_extension
+  ON ddl_command_end
+  WHEN TAG IN ('CREATE EXTENSION')
+  EXECUTE FUNCTION public.pap_on_create_extension_lockdown();
+
+DO $$ BEGIN PERFORM public.pap_apply_pgcrypto_lockdown(); END; $$;
+SQL
+    then
+      log_error "Instalacja blokady pgcrypto (P1-1/H1) w bazie pap_test nie powiodła się."
+      exit 4
     fi
 
     # Blokada logowania superusera postgres po TCP (127.0.0.1:${PORT}) w trybie strict-migrator

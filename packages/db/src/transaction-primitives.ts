@@ -169,8 +169,8 @@ export async function readTransactionClockNow(tx: PostgresTransaction): Promise<
  * Poziomy 1–2 kanonicznego porządku blokad (DAG):
  * 1) `app_user` (FOR SHARE) — blokuje konkurencyjne wyłączenie konta (`disableUserAccount` FOR UPDATE)
  *    i wymusza odczyt aktualnego statusu po zwolnieniu ewentualnej blokady.
- * 2) `user_oidc_identity` (FOR SHARE, gdy aktor przyszedł ze ścieżki OIDC) — potwierdza aktywność
- *    konkretnej pary `(issuer, subject)` w tym samym porządku tabel co `revokeOidcIdentity`.
+ * 2) `user_oidc_identity` (FOR SHARE, obowiązkowo) — wymaga zweryfikowanej pary `(issuer, subject)`
+ *    i potwierdza jej aktywność w tym samym porządku tabel co `revokeOidcIdentity`.
  */
 export async function verifyAndLockActorInTx(
   tx: PostgresTransaction,
@@ -180,6 +180,10 @@ export async function verifyAndLockActorInTx(
   try {
     actor = freezeTransactionActor(rawActor);
   } catch {
+    return false;
+  }
+
+  if (actor.identity === undefined) {
     return false;
   }
 
@@ -202,35 +206,33 @@ export async function verifyAndLockActorInTx(
     return false;
   }
 
-  if (actor.identity !== undefined) {
-    const [identityRow] = await tx
-      .select({
-        id: userOidcIdentity.id,
-        userId: userOidcIdentity.userId,
-        issuer: userOidcIdentity.issuer,
-        subject: userOidcIdentity.subject,
-        status: userOidcIdentity.status,
-        revokedAt: userOidcIdentity.revokedAt,
-      })
-      .from(userOidcIdentity)
-      .where(
-        and(
-          eq(userOidcIdentity.issuer, actor.identity.issuer),
-          eq(userOidcIdentity.subject, actor.identity.subject),
-        ),
-      )
-      .for('share');
+  const [identityRow] = await tx
+    .select({
+      id: userOidcIdentity.id,
+      userId: userOidcIdentity.userId,
+      issuer: userOidcIdentity.issuer,
+      subject: userOidcIdentity.subject,
+      status: userOidcIdentity.status,
+      revokedAt: userOidcIdentity.revokedAt,
+    })
+    .from(userOidcIdentity)
+    .where(
+      and(
+        eq(userOidcIdentity.issuer, actor.identity.issuer),
+        eq(userOidcIdentity.subject, actor.identity.subject),
+      ),
+    )
+    .for('share');
 
-    if (
-      !identityRow ||
-      identityRow.userId !== actor.userId ||
-      identityRow.issuer !== actor.identity.issuer ||
-      identityRow.subject !== actor.identity.subject ||
-      identityRow.status !== 'active' ||
-      identityRow.revokedAt !== null
-    ) {
-      return false;
-    }
+  if (
+    !identityRow ||
+    identityRow.userId !== actor.userId ||
+    identityRow.issuer !== actor.identity.issuer ||
+    identityRow.subject !== actor.identity.subject ||
+    identityRow.status !== 'active' ||
+    identityRow.revokedAt !== null
+  ) {
+    return false;
   }
 
   return true;
@@ -238,8 +240,6 @@ export async function verifyAndLockActorInTx(
 
 /**
  * Ustawia parametry sesyjne PostgreSQL ograniczone wyłącznie do bieżącej transakcji (`is_local = true`).
- * Przygotowuje UnitOfWork pod przyszłe polityki PostgreSQL RLS i ograniczoną rolę runtime w etapie 6D-3B.
- * UWAGA: W etapie 6D-3A samo ustawienie zmiennych GUC nie włącza jeszcze polityk RLS na tabelach.
  */
 export async function applyLocalRlsSessionContext(
   tx: PostgresTransaction,
@@ -340,7 +340,7 @@ export async function lockCompanyActionFactsInTx(
       userId: userId(grantRow.userId),
       legalEntityId: legalEntityId(grantRow.legalEntityId),
     })),
-    // Schemat 6B/6D-3A nie przechowuje ról platformowych dających dostęp księgowy.
+    // Schemat 6B/6D-3 nie przechowuje ról platformowych dających dostęp księgowy.
     platformRoleAssignments: [],
     now,
   };

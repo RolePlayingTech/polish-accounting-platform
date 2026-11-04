@@ -1,4 +1,4 @@
--- Security Foundation 6D-3: addytywna integracja SEC-01/02/03.
+-- Security Foundation 6D-3: addytywna integracja SEC-01/02/03/04/05.
 -- Wymaga oryginalnych 0000-0005 z #31; nie stosować do zmienionych fixture #35/#36/#37.
 -- Migrator/właściciel i ręczny provisioning ACL; brak deployu i danych rzeczywistych.
 SET LOCAL lock_timeout = '5s';
@@ -24,7 +24,7 @@ DECLARE c jsonb := pap_context();
 BEGIN
   IF c->>'purpose' IS NULL OR c->>'purpose' NOT IN ('facts','access')
     OR c->>'tenant_id' IS DISTINCT FROM scope_tenant::text
-    OR c->'command' IS NULL THEN RETURN false; END IF;
+    OR jsonb_typeof(c->'command') IS DISTINCT FROM 'object' THEN RETURN false; END IF;
   RETURN EXISTS (SELECT 1 FROM tenant_membership m JOIN app_user u ON u.id = m.user_id
     WHERE m.tenant_id = scope_tenant AND m.user_id::text = c->>'actor_user_id'
       AND u.status = 'active' AND u.disabled_at IS NULL
@@ -58,7 +58,7 @@ END;
 $$;
 --> statement-breakpoint
 CREATE OR REPLACE FUNCTION pap_guard_access_write() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE c jsonb := pap_context(); command jsonb; decision_time timestamptz;
+DECLARE c jsonb := pap_context(); command jsonb; decision_time timestamptz(3);
 BEGIN
   -- INVOKER: SELECT FOR UPDATE nadal działa, ale runtime nigdy nie wykonuje DML.
   -- Kontrolowana funkcja SECURITY DEFINER wykonuje DML jako właściciel tabeli.
@@ -66,11 +66,13 @@ BEGIN
     RAISE EXCEPTION 'Zmiana dostępu wymaga kontrolowanej funkcji' USING ERRCODE = '42501';
   END IF;
   IF session_user = current_user THEN RETURN NEW; END IF;
-  IF c->>'purpose' IS DISTINCT FROM 'access' THEN
+  IF c->>'purpose' IS DISTINCT FROM 'access'
+    OR jsonb_typeof(c->'command') IS DISTINCT FROM 'object'
+    OR c->>'decision_at' IS NULL THEN
     RAISE EXCEPTION 'Brak autoryzowanej komendy dostępu' USING ERRCODE = '42501';
   END IF;
   command := c->'command';
-  decision_time := (c->>'decision_at')::timestamptz;
+  decision_time := (c->>'decision_at')::timestamptz(3);
   IF NEW.tenant_id::text IS DISTINCT FROM c->>'tenant_id'
     OR NEW.user_id::text IS DISTINCT FROM c->>'target_user_id'
     OR NOT pap_admin_allowed(NEW.tenant_id) THEN
@@ -83,15 +85,15 @@ BEGIN
           AND NEW.valid_from = OLD.valid_from AND NEW.valid_until IS NOT DISTINCT FROM OLD.valid_until)
         OR (command->>'kind' = 'reactivate_membership' AND OLD.status = 'revoked'
           AND NEW.status = 'active' AND NEW.valid_from = decision_time
-          AND NEW.valid_until IS NOT DISTINCT FROM (command->>'validUntil')::timestamptz)
+          AND NEW.valid_until IS NOT DISTINCT FROM (command->>'validUntil')::timestamptz(3))
       ) THEN RAISE EXCEPTION 'Zmiana niezgodna z komendą' USING ERRCODE = '42501'; END IF;
   ELSIF TG_OP = 'INSERT' THEN
     IF command->>'kind' IS DISTINCT FROM 'grant'
       OR NEW.grant_id::text IS DISTINCT FROM command->>'grantId'
       OR NEW.legal_entity_id::text IS DISTINCT FROM command->>'legalEntityId'
       OR NEW.action IS DISTINCT FROM command->>'action'
-      OR NEW.valid_from IS DISTINCT FROM COALESCE((command->>'validFrom')::timestamptz, decision_time)
-      OR NEW.valid_until IS DISTINCT FROM (command->>'validUntil')::timestamptz
+      OR NEW.valid_from IS DISTINCT FROM COALESCE((command->>'validFrom')::timestamptz(3), decision_time)
+      OR NEW.valid_until IS DISTINCT FROM (command->>'validUntil')::timestamptz(3)
       OR NEW.revoked_at IS NOT NULL
     THEN RAISE EXCEPTION 'Grant niezgodny z komendą' USING ERRCODE = '42501'; END IF;
   ELSE
@@ -109,13 +111,13 @@ CREATE OR REPLACE FUNCTION revoke_grants_on_membership_transition() RETURNS trig
 LANGUAGE plpgsql AS $$
 DECLARE
   c jsonb := pap_context();
-  revoked_time timestamptz := date_trunc('milliseconds', clock_timestamp());
+  revoked_time timestamptz(3) := date_trunc('milliseconds', clock_timestamp())::timestamptz(3);
 BEGIN
   IF session_user <> current_user THEN
     IF c->>'purpose' IS DISTINCT FROM 'access' OR c->>'decision_at' IS NULL THEN
       RAISE EXCEPTION 'Brak decyzji kaskady' USING ERRCODE = '42501';
     END IF;
-    revoked_time := (c->>'decision_at')::timestamptz;
+    revoked_time := (c->>'decision_at')::timestamptz(3);
   ELSIF NEW.status = 'active' THEN
     revoked_time := LEAST(revoked_time, NEW.valid_from);
   END IF;
@@ -134,7 +136,7 @@ ALTER POLICY pap_probe_insert ON company_operation_probe WITH CHECK (
   AND legal_entity_id::text = pap_context()->>'legal_entity_id'
   AND actor_id::text = pap_context()->>'actor_user_id'
   AND operation_id::text = pap_context()->>'operation_id'
-  AND created_at = (pap_context()->>'decision_at')::timestamptz
+  AND created_at = (pap_context()->>'decision_at')::timestamptz(3)
   AND pap_company_allowed(tenant_id, legal_entity_id, 'write'));
 --> statement-breakpoint
 -- NULL oznacza historyczny receipt sprzed tego protokołu. Nie przypisujemy mu TX migracji.
@@ -151,16 +153,19 @@ CREATE FUNCTION pap_execute_access() RETURNS jsonb LANGUAGE plpgsql SECURITY DEF
 SET timezone = 'UTC' SET datestyle = 'ISO, YMD' AS $$
 DECLARE
   c jsonb := pap_context(); cmd jsonb := c->'command';
-  op uuid; scope_tenant uuid; target_user uuid; actor uuid; decision_time timestamptz;
+  op uuid; scope_tenant uuid; target_user uuid; actor uuid; requested_grant uuid; target_entity uuid;
+  decision_time timestamptz(3);
   member tenant_membership%ROWTYPE; member_after tenant_membership%ROWTYPE;
   g company_access_grant%ROWTYPE; g_after company_access_grant%ROWTYPE;
   previous access_management_event%ROWTYPE;
-  result_grant uuid; from_time timestamptz; until_time timestamptz;
+  result_grant uuid; from_time timestamptz(3); until_time timestamptz(3);
   before_state text; after_state text; changed boolean := false; revoked_count integer := 0;
   effects jsonb := '{}'::jsonb; receipt jsonb; request_key text;
 BEGIN
-  IF c->>'purpose' IS DISTINCT FROM 'access' OR cmd IS NULL
+  IF c->>'purpose' IS DISTINCT FROM 'access'
+    OR jsonb_typeof(c->'command') IS DISTINCT FROM 'object'
     OR c->>'decision_at' IS NULL OR c->>'actor_user_id' IS NULL
+    OR c->>'tenant_id' IS NULL OR c->>'target_user_id' IS NULL
     OR cmd->>'tenantId' IS DISTINCT FROM c->>'tenant_id'
     OR cmd->>'userId' IS DISTINCT FROM c->>'target_user_id'
     OR cmd->>'kind' IS NULL
@@ -170,7 +175,7 @@ BEGIN
   END IF;
   op := (cmd->>'operationId')::uuid; scope_tenant := (cmd->>'tenantId')::uuid;
   target_user := (cmd->>'userId')::uuid; actor := (c->>'actor_user_id')::uuid;
-  decision_time := (c->>'decision_at')::timestamptz;
+  decision_time := (c->>'decision_at')::timestamptz(3);
   IF NOT isfinite(decision_time) OR decision_time > clock_timestamp()
     OR actor = target_user OR NOT pap_admin_allowed(scope_tenant) THEN
     RAISE EXCEPTION 'Niepoprawna decyzja dostępu' USING ERRCODE = '42501';
@@ -195,7 +200,7 @@ BEGIN
       IF member.status <> 'revoked' THEN
         RETURN jsonb_build_object('ok',false,'reason','membership_not_revoked');
       END IF;
-      until_time := (cmd->>'validUntil')::timestamptz;
+      until_time := (cmd->>'validUntil')::timestamptz(3);
       IF until_time IS NOT NULL AND (NOT isfinite(until_time) OR until_time <= decision_time) THEN
         RETURN jsonb_build_object('ok',false,'reason','invalid_command');
       END IF;
@@ -208,7 +213,7 @@ BEGIN
     LOOP
       UPDATE company_access_grant SET revoked_at = decision_time WHERE grant_id = g.grant_id
         RETURNING * INTO g_after;
-      effects := effects || jsonb_build_object('company_access_grant:' || g.grant_id,
+      effects := effects || jsonb_build_object('company_access_grant:' || g.grant_id::text,
         jsonb_build_object('table','company_access_grant',
           'operation','UPDATE','old',to_jsonb(g),'new',to_jsonb(g_after)));
       revoked_count := revoked_count + 1;
@@ -225,7 +230,7 @@ BEGIN
         WHERE tenant_id = scope_tenant AND user_id = target_user RETURNING * INTO member_after;
     END IF;
     IF member_after.user_id IS NOT NULL THEN
-      effects := effects || jsonb_build_object('tenant_membership:' || scope_tenant || ':' || target_user,
+      effects := effects || jsonb_build_object('tenant_membership:' || scope_tenant::text || ':' || target_user::text,
         jsonb_build_object('table','tenant_membership',
           'operation','UPDATE','old',to_jsonb(member),'new',to_jsonb(member_after)));
     END IF;
@@ -235,22 +240,28 @@ BEGIN
       OR (member.valid_until IS NOT NULL AND member.valid_until <= decision_time) THEN
       RETURN jsonb_build_object('ok',false,'reason','membership_inactive');
     END IF;
-    from_time := COALESCE((cmd->>'validFrom')::timestamptz, decision_time);
-    until_time := (cmd->>'validUntil')::timestamptz;
+    from_time := COALESCE((cmd->>'validFrom')::timestamptz(3), decision_time);
+    until_time := (cmd->>'validUntil')::timestamptz(3);
     IF NOT isfinite(from_time) OR from_time < decision_time
       OR (until_time IS NOT NULL AND (NOT isfinite(until_time) OR until_time <= from_time)) THEN
       RETURN jsonb_build_object('ok',false,'reason','invalid_command');
     END IF;
-    IF cmd->>'legalEntityId' IS DISTINCT FROM c->>'legal_entity_id'
+    IF c->>'legal_entity_id' IS NULL
+      OR cmd->>'legalEntityId' IS DISTINCT FROM c->>'legal_entity_id'
       OR cmd->>'action' IS NULL OR cmd->>'action' NOT IN ('read','write') THEN
       RAISE EXCEPTION 'Niepoprawny zakres grantu' USING ERRCODE = '42501';
     END IF;
+    target_entity := (cmd->>'legalEntityId')::uuid;
+    requested_grant := (cmd->>'grantId')::uuid;
+    IF target_entity IS NULL OR requested_grant IS NULL THEN
+      RAISE EXCEPTION 'Niepoprawny identyfikator grantu' USING ERRCODE = '42501';
+    END IF;
     PERFORM 1 FROM legal_entity WHERE tenant_id = scope_tenant
-      AND id = (cmd->>'legalEntityId')::uuid FOR SHARE;
+      AND id = target_entity FOR SHARE;
     IF NOT FOUND THEN RETURN jsonb_build_object('ok',false,'reason','grant_unavailable'); END IF;
     SELECT * INTO g FROM company_access_grant
       WHERE tenant_id = scope_tenant AND user_id = target_user
-        AND legal_entity_id = (cmd->>'legalEntityId')::uuid AND action = cmd->>'action'
+        AND legal_entity_id = target_entity AND action = cmd->>'action'
         AND revoked_at IS NULL AND valid_until IS NOT DISTINCT FROM until_time
         AND ((cmd->>'validFrom' IS NULL AND valid_from <= decision_time)
           OR (cmd->>'validFrom' IS NOT NULL AND valid_from = from_time))
@@ -258,20 +269,24 @@ BEGIN
     IF FOUND THEN
       result_grant := g.grant_id; before_state := 'granted'; after_state := 'granted';
     ELSE
-      IF EXISTS (SELECT 1 FROM company_access_grant WHERE grant_id = (cmd->>'grantId')::uuid) THEN
+      IF EXISTS (SELECT 1 FROM company_access_grant WHERE grant_id = requested_grant) THEN
         RETURN jsonb_build_object('ok',false,'reason','operation_conflict');
       END IF;
       INSERT INTO company_access_grant (grant_id,tenant_id,user_id,legal_entity_id,action,valid_from,valid_until)
-        VALUES ((cmd->>'grantId')::uuid,scope_tenant,target_user,(cmd->>'legalEntityId')::uuid,
+        VALUES (requested_grant,scope_tenant,target_user,target_entity,
           cmd->>'action',from_time,until_time) RETURNING * INTO g_after;
       result_grant := g_after.grant_id; before_state := 'absent'; after_state := 'granted'; changed := true;
-      effects := jsonb_build_object('company_access_grant:' || g_after.grant_id,
+      effects := jsonb_build_object('company_access_grant:' || g_after.grant_id::text,
         jsonb_build_object('table','company_access_grant',
           'operation','INSERT','old',NULL,'new',to_jsonb(g_after)));
     END IF;
   ELSE
+    requested_grant := (cmd->>'grantId')::uuid;
+    IF requested_grant IS NULL THEN
+      RAISE EXCEPTION 'Niepoprawny identyfikator grantu' USING ERRCODE = '42501';
+    END IF;
     SELECT * INTO g FROM company_access_grant WHERE tenant_id = scope_tenant
-      AND user_id = target_user AND grant_id = (cmd->>'grantId')::uuid FOR UPDATE;
+      AND user_id = target_user AND grant_id = requested_grant FOR UPDATE;
     IF NOT FOUND THEN RETURN jsonb_build_object('ok',false,'reason','grant_unavailable'); END IF;
     result_grant := g.grant_id;
     before_state := COALESCE(to_char(g.revoked_at,'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),'not_revoked');
@@ -280,7 +295,7 @@ BEGIN
       UPDATE company_access_grant SET revoked_at = decision_time WHERE grant_id = g.grant_id
         RETURNING * INTO g_after;
       changed := true; revoked_count := 1;
-      effects := jsonb_build_object('company_access_grant:' || g.grant_id,
+      effects := jsonb_build_object('company_access_grant:' || g.grant_id::text,
         jsonb_build_object('table','company_access_grant',
           'operation','UPDATE','old',to_jsonb(g),'new',to_jsonb(g_after)));
     END IF;
@@ -295,7 +310,6 @@ BEGIN
   RETURN jsonb_build_object('ok',true,'receipt',receipt);
 END;
 $$;
---> statement-breakpoint
 --> statement-breakpoint
 ALTER TABLE security_decision_event DROP CONSTRAINT security_decision_codes_check;
 --> statement-breakpoint
@@ -344,7 +358,7 @@ BEGIN
       OR (NEW.receipt->>'changed')::boolean IS DISTINCT FROM (NEW.state_change->'effects' <> '{}'::jsonb)
       OR NEW.receipt->>'operationId' IS DISTINCT FROM NEW.operation_id::text
       OR NEW.receipt->>'grantId' IS DISTINCT FROM NEW.grant_id::text
-      OR (NEW.receipt->>'occurredAt')::timestamptz IS DISTINCT FROM NEW.occurred_at
+      OR (NEW.receipt->>'occurredAt')::timestamptz(3) IS DISTINCT FROM NEW.occurred_at
       OR NEW.request_key::jsonb->>'kind' IS DISTINCT FROM NEW.kind
       OR NEW.request_key::jsonb->>'operationId' IS DISTINCT FROM NEW.operation_id::text
       OR NEW.request_key::jsonb->>'tenantId' IS DISTINCT FROM NEW.tenant_id::text
@@ -360,8 +374,8 @@ BEGIN
     expected_effect := jsonb_build_object('table',TG_TABLE_NAME,'operation',TG_OP,
       'old',CASE WHEN TG_OP = 'INSERT' THEN NULL ELSE to_jsonb(OLD) END,'new',to_jsonb(NEW));
     effect_key := CASE TG_TABLE_NAME
-      WHEN 'tenant_membership' THEN 'tenant_membership:' || NEW.tenant_id || ':' || NEW.user_id
-      ELSE 'company_access_grant:' || (to_jsonb(NEW)->>'grant_id') END;
+      WHEN 'tenant_membership' THEN 'tenant_membership:' || NEW.tenant_id::text || ':' || NEW.user_id::text
+      ELSE 'company_access_grant:' || (to_jsonb(NEW)->>'grant_id')::text END;
     SELECT count(*) INTO matched FROM access_management_event a
       WHERE a.transaction_id = pg_current_xact_id()::text
         AND a.tenant_id = NEW.tenant_id AND a.user_id = NEW.user_id
@@ -429,13 +443,6 @@ BEGIN
 END;
 $$;
 --> statement-breakpoint
-DO $$
-BEGIN
-  EXECUTE format('ALTER FUNCTION pap_check_committed_decision() SET search_path = pg_catalog, %I, pg_temp', current_schema());
-  REVOKE ALL ON FUNCTION pap_check_committed_decision() FROM PUBLIC;
-END;
-$$;
---> statement-breakpoint
 CREATE CONSTRAINT TRIGGER pap_committed_decision_consistent
 AFTER INSERT ON security_decision_event DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW EXECUTE FUNCTION pap_check_committed_decision();
@@ -447,7 +454,7 @@ DROP POLICY pap_grant_read ON company_access_grant;
 CREATE POLICY pap_grant_read ON company_access_grant FOR SELECT USING (
   tenant_id::text = pap_context()->>'tenant_id' AND (
     (user_id::text = pap_context()->>'actor_user_id' AND (
-      (pap_context()->'command' IS NOT NULL AND pap_admin_allowed(tenant_id))
+      (jsonb_typeof(pap_context()->'command') = 'object' AND pap_admin_allowed(tenant_id))
       OR (pap_context()->>'purpose' IN ('facts','company')
         AND legal_entity_id::text = pap_context()->>'legal_entity_id'
         AND action = pap_context()->>'action')))
@@ -471,3 +478,7 @@ BEGIN
   END LOOP;
 END;
 $$;
+--> statement-breakpoint
+RESET lock_timeout;
+--> statement-breakpoint
+RESET statement_timeout;

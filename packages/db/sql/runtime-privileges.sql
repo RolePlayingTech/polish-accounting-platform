@@ -6,9 +6,11 @@ DECLARE
   runtime_name text := current_setting('pap.provision_runtime_role');
   db_name text := current_database();
   data_schema text := current_schema();
+  migrator_name text;
   role_record record;
   table_name text;
   column_record record;
+  function_record record;
 BEGIN
   IF (db_name, runtime_name) NOT IN (
       ('pap_local','pap_local_app'), ('pap_test','pap_test_app'),
@@ -18,6 +20,10 @@ BEGIN
   IF data_schema <> 'public' AND data_schema !~ '^pap_test_[a-f0-9]{32}$' THEN
     RAISE EXCEPTION 'Niedozwolony schemat danych';
   END IF;
+  SELECT r.rolname INTO migrator_name
+    FROM pg_database d
+    JOIN pg_roles r ON r.oid = d.datdba
+   WHERE d.datname = db_name;
   SELECT * INTO role_record FROM pg_roles WHERE rolname = runtime_name;
   IF NOT FOUND OR role_record.rolsuper OR role_record.rolbypassrls
     OR role_record.rolcreatedb OR role_record.rolcreaterole OR role_record.rolreplication
@@ -48,7 +54,34 @@ BEGIN
       column_record.attname, data_schema, column_record.relname, runtime_name);
   END LOOP;
   EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM PUBLIC, %I', data_schema, runtime_name);
-  EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM PUBLIC, %I', data_schema, runtime_name);
+  -- P1-1 (H1): iteracja wyłącznie po funkcjach należących do ról zarządzalnych przez current_user
+  -- (bez WARNING 01007 / ERROR 42501 na funkcjach rozszerzeń C należących do superusera postgres
+  -- przy migratorze NOSUPERUSER).
+  FOR function_record IN
+    SELECT p.oid::regprocedure AS regproc
+    FROM pg_proc p
+    WHERE p.pronamespace = to_regnamespace(data_schema)
+      AND pg_has_role(current_user, p.proowner, 'USAGE')
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, %I', function_record.regproc, runtime_name);
+  END LOOP;
+  -- Gdy skrypt wykonuje superuser (właściciel funkcji pgcrypto), zachowujemy EXECUTE na hmac dla migratora (pap_context).
+  IF migrator_name IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM pg_proc p
+    JOIN pg_depend dep ON dep.objid = p.oid
+      AND dep.classid = 'pg_proc'::regclass
+      AND dep.refclassid = 'pg_extension'::regclass
+      AND dep.deptype = 'e'
+    JOIN pg_extension ext ON ext.oid = dep.refobjid
+    WHERE p.pronamespace = to_regnamespace(data_schema)
+      AND ext.extname = 'pgcrypto'
+      AND p.proname = 'hmac'
+      AND pg_get_function_identity_arguments(p.oid) = 'bytea, bytea, text'
+      AND pg_has_role(current_user, p.proowner, 'USAGE')
+  ) THEN
+    EXECUTE format('GRANT EXECUTE ON FUNCTION %I.hmac(bytea, bytea, text) TO %I', data_schema, migrator_name);
+  END IF;
   FOREACH table_name IN ARRAY ARRAY['tenant','legal_entity','entity_profile_version','tenant_membership',
     'company_access_grant','access_management_event','app_user','user_oidc_identity','company_operation_probe']
   LOOP

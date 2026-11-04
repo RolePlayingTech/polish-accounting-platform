@@ -113,6 +113,8 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           rows = [{ result }];
         } else if (query.includes('from "app_user"')) {
           rows = [[id(6), 'active', null]];
+        } else if (query.includes('from "user_oidc_identity"')) {
+          rows = [[id(77), id(6), 'https://idp.example.test', 'owner-sub', 'active', null]];
         } else if (query.includes('from "legal_entity"')) {
           rows = [[id(5)]];
         } else if (query.includes('from "tenant_membership"')) {
@@ -150,6 +152,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
         expect(
           await new PostgresAccessManagementStore(db, createTestSigner()).execute(command, {
             userId: userId(id(6)),
+            identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' },
           }),
         ).toEqual({
           ok: true,
@@ -506,6 +509,9 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           requestedActor === disabledActorUuid
             ? [[disabledActorUuid, 'disabled', '2026-10-28T11:00:00.000Z']]
             : [[memberActorUuid, 'active', null]];
+      } else if (query.includes('from "user_oidc_identity"')) {
+        const requestedSubject = parameters[1];
+        rows = [[id(77), requestedSubject, 'https://idp.example.test', requestedSubject, 'active', null]];
       } else if (query.includes('from "tenant_membership"')) {
         rows = [
           [
@@ -546,7 +552,10 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           validFrom: null,
           validUntil: null,
         },
-        { userId: memberActorUuid },
+        {
+          userId: memberActorUuid,
+          identity: { issuer: 'https://idp.example.test', subject: memberActorUuid },
+        },
       );
 
       const deniedDisabledResult = await store.execute(
@@ -556,7 +565,10 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           tenantId: tenantUuid,
           userId: targetUuid,
         },
-        { userId: disabledActorUuid },
+        {
+          userId: disabledActorUuid,
+          identity: { issuer: 'https://idp.example.test', subject: disabledActorUuid },
+        },
       );
 
       expect(deniedRoleResult).toEqual({ ok: false, reason: 'access_management_denied' });
@@ -630,8 +642,11 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
             constraint_name: 'company_access_grant_pkey',
           });
         }
-        const cmd = lastSignedContext?.command!;
-        const actor = lastSignedContext?.actor_user_id!;
+        const ctx = lastSignedContext as SignedContextPayload | null;
+        if (!ctx?.command) throw new Error("Brak podpisanej komendy");
+        const cmd = ctx.command;
+        if (!ctx.actor_user_id) throw new Error("Brak aktora w kontekście");
+        const actor = ctx.actor_user_id;
         const decisionAt = lastSignedContext?.decision_at ?? now;
         const serializedCommand = JSON.stringify(cmd);
         const existing = persistedEvents.get(cmd.operationId);
@@ -667,6 +682,8 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
         }
       } else if (query.includes('from "app_user"')) {
         rows = [[actorUuid, 'active', null]];
+      } else if (query.includes('from "user_oidc_identity"')) {
+        rows = [[id(77), actorUuid, 'https://idp.example.test', 'owner-sub', 'active', null]];
       } else if (query.includes('from "tenant_membership"')) {
         rows = [
           [
@@ -715,7 +732,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           validFrom: null,
           validUntil: null,
         },
-        { userId: actorUuid },
+        { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } },
       );
       expect(initialGrant).toMatchObject({ ok: true, receipt: { operationId: opId, grantId: id(721) } });
       expect(executorMutationCount).toBe(1);
@@ -733,7 +750,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           validFrom: null,
           validUntil: null,
         },
-        { userId: actorUuid },
+        { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } },
       );
       expect(conflictingOperation).toEqual({ ok: false, reason: 'operation_conflict' });
       expect(executorMutationCount).toBe(1);
@@ -752,7 +769,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           validFrom: null,
           validUntil: null,
         },
-        { userId: actorUuid },
+        { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } },
       );
       expect(duplicateGrantKey).toEqual({ ok: false, reason: 'operation_conflict' });
       expect(hasForbiddenDirectAccessDml(executedQueries)).toBe(false);
@@ -811,8 +828,9 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
       stagedEvent = null;
       stagedAuditRows = [];
       const res = await callback(client);
-      if (stagedEvent) {
-        committedEvents.set(stagedEvent.operationId, stagedEvent);
+      const pendingEvent = stagedEvent as PersistedAccessEventRecord | null;
+      if (pendingEvent) {
+        committedEvents.set(pendingEvent.operationId, pendingEvent);
       }
       committedAuditRows.push(...stagedAuditRows);
       return res;
@@ -828,7 +846,9 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           lastSignedContext = JSON.parse(rawPayload) as SignedContextPayload;
         }
       } else if (query.includes('pap_execute_access()')) {
-        const cmd = lastSignedContext?.command!;
+        const ctx = lastSignedContext as SignedContextPayload | null;
+        if (!ctx?.command) throw new Error("Brak podpisanej komendy");
+        const cmd = ctx.command;
         const decisionAt = lastSignedContext?.decision_at ?? now;
         const receipt: AccessManagementReceipt = {
           operationId: cmd.operationId,
@@ -848,6 +868,8 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
         rows = [{ result: { ok: true, receipt } satisfies AccessManagementResult }];
       } else if (query.includes('from "app_user"')) {
         rows = [[actorUuid, 'active', null]];
+      } else if (query.includes('from "user_oidc_identity"')) {
+        rows = [[id(77), actorUuid, 'https://idp.example.test', 'owner-sub', 'active', null]];
       } else if (query.includes('from "tenant_membership"')) {
         rows = [
           [
@@ -901,7 +923,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           validFrom: null,
           validUntil: null,
         },
-        { userId: actorUuid },
+        { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } },
       );
 
       expect(firstResult).toEqual({ ok: false, reason: 'authorization_audit_unavailable' });
@@ -928,7 +950,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           validFrom: null,
           validUntil: null,
         },
-        { userId: actorUuid },
+        { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } },
       );
 
       expect(secondResult).toEqual({ ok: false, reason: 'authorization_audit_unavailable' });
@@ -1119,8 +1141,9 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           message: 'Brak atomowego audytu operacji',
         } as never);
       }
-      if (stagedEvent) {
-        committedEvents.set(stagedEvent.operationId, stagedEvent);
+      const pendingEvent = stagedEvent as PersistedAccessEventRecord | null;
+      if (pendingEvent) {
+        committedEvents.set(pendingEvent.operationId, pendingEvent);
       }
       committedAuditRows.push(...stagedAuditRows);
       return res;
@@ -1136,7 +1159,9 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           lastSignedContext = JSON.parse(rawPayload) as SignedContextPayload;
         }
       } else if (query.includes('pap_execute_access()')) {
-        const cmd = lastSignedContext?.command!;
+        const ctx = lastSignedContext as SignedContextPayload | null;
+        if (!ctx?.command) throw new Error("Brak podpisanej komendy");
+        const cmd = ctx.command;
         const decisionAt = lastSignedContext?.decision_at ?? now;
         const receipt: AccessManagementReceipt = {
           operationId: cmd.operationId,
@@ -1156,6 +1181,8 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
         rows = [{ result: { ok: true, receipt } satisfies AccessManagementResult }];
       } else if (query.includes('from "app_user"')) {
         rows = [[actorUuid, 'active', null]];
+      } else if (query.includes('from "user_oidc_identity"')) {
+        rows = [[id(77), actorUuid, 'https://idp.example.test', 'owner-sub', 'active', null]];
       } else if (query.includes('from "tenant_membership"')) {
         rows = [
           [
@@ -1199,7 +1226,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
           validFrom: null,
           validUntil: null,
         },
-        { userId: actorUuid },
+        { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } },
       );
 
       expect(res).toEqual({
@@ -1274,8 +1301,11 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
         }
       } else if (query.includes('pap_execute_access()')) {
         expect(lastSignedContext?.purpose).toBe('access');
-        const cmd = lastSignedContext?.command!;
-        const actor = lastSignedContext?.actor_user_id!;
+        const ctx = lastSignedContext as SignedContextPayload | null;
+        if (!ctx?.command) throw new Error("Brak podpisanej komendy");
+        const cmd = ctx.command;
+        if (!ctx.actor_user_id) throw new Error("Brak aktora w kontekście");
+        const actor = ctx.actor_user_id;
         const decisionAt = lastSignedContext?.decision_at ?? currentDbNow;
         const serializedCommand = JSON.stringify(cmd);
         if (persistedAccessEvent && persistedAccessEvent.operationId === cmd.operationId) {
@@ -1318,6 +1348,8 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
         }
       } else if (query.includes('from "app_user"')) {
         rows = [[actorUuid, 'active', null]];
+      } else if (query.includes('from "user_oidc_identity"')) {
+        rows = [[id(77), actorUuid, 'https://idp.example.test', 'owner-sub', 'active', null]];
       } else if (query.includes('from "tenant_membership"')) {
         rows = [
           [
@@ -1374,7 +1406,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
       };
 
       // Pierwsza próba: serwer wykonał COMMIT z pap_execute_access(), klient stracił potwierdzenie
-      const first = await store.execute(command, { userId: actorUuid });
+      const first = await store.execute(command, { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } });
       expect(first).toEqual({
         ok: false,
         reason: 'transaction_outcome_unknown',
@@ -1399,7 +1431,7 @@ describe('Lifecycle i transakcyjna autoryzacja 6D-3A/SEC-01/02/03 — kontrolowa
       // Jawne ponowienie 5 minut później z tym samym operationId i jawnym validFrom z czasu pierwszej próby:
       // rozpoznaje własny receipt (committedOperationAt), nie wykonuje drugiego DML i zwraca pierwotny receipt
       currentDbNow = retryNow;
-      const second = await store.execute(command, { userId: actorUuid });
+      const second = await store.execute(command, { userId: actorUuid, identity: { issuer: 'https://idp.example.test', subject: 'owner-sub' } });
       expect(second).toEqual({
         ok: true,
         receipt: {

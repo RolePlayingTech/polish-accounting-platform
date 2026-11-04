@@ -16,6 +16,7 @@ import {
   legalEntity,
   tenant,
   tenantMembership,
+  userOidcIdentity,
 } from '../src/schema.js';
 import { PostgresTenantAuthorizationDataSource } from '../src/tenant-authorization.js';
 import {
@@ -29,6 +30,14 @@ const A = tenantId(id(1)),
   B = tenantId(id(2));
 const USER = userId(id(31)),
   ACTOR = userId(id(32));
+const ACTOR_VERIFIED = {
+  userId: ACTOR,
+  identity: { issuer: 'https://idp.example.test', subject: 'actor-sub' },
+} as const;
+const USER_VERIFIED = {
+  userId: USER,
+  identity: { issuer: 'https://idp.example.test', subject: 'user-sub' },
+} as const;
 const A1 = legalEntityId(id(11)),
   A2 = legalEntityId(id(12)),
   B1 = legalEntityId(id(21));
@@ -66,7 +75,7 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
   ) =>
     manageAccess(command, {
       store,
-      actors: { getVerifiedActor: async () => ({ userId: ACTOR }) },
+      actors: { getVerifiedActor: async () => ACTOR_VERIFIED },
       authorizer: { authorize: async (_actor, scoped) => scoped.tenantId === A },
     });
   const authorize = (entity = A1, action: 'read' | 'write' = 'read') =>
@@ -101,6 +110,24 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
     await database.db.insert(appUser).values([
       { id: USER, status: 'active', createdAt: from },
       { id: ACTOR, status: 'active', createdAt: from },
+    ]);
+    await database.db.insert(userOidcIdentity).values([
+      {
+        id: id(901),
+        userId: USER,
+        issuer: 'https://idp.example.test',
+        subject: 'user-sub',
+        status: 'active',
+        linkedAt: from,
+      },
+      {
+        id: id(902),
+        userId: ACTOR,
+        issuer: 'https://idp.example.test',
+        subject: 'actor-sub',
+        status: 'active',
+        linkedAt: from,
+      },
     ]);
     await database.db.insert(tenant).values([
       { id: A, name: 'Syntetyczny A' },
@@ -330,8 +357,13 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
       },
       {
         store,
-        actors: { getVerifiedActor: async () => ({ userId: USER }) },
+        actors: { getVerifiedActor: async () => USER_VERIFIED },
         authorizer: { authorize: async () => false },
+      },
+      {
+        store,
+        actors: { getVerifiedActor: async () => ({ userId: ACTOR }) },
+        authorizer: { authorize: async () => true },
       },
     ]) {
       expect(await manageAccess(revoke(), deps)).toEqual({
@@ -396,7 +428,7 @@ describe('6D-R — transakcje cyklu dostępu na PostgreSQL', () => {
       const result = await Promise.race([
         manageAccess(grant({ tenantId: B, legalEntityId: B1 }), {
           store: new PostgresAccessManagementStore(db),
-          actors: { getVerifiedActor: async () => ({ userId: ACTOR }) },
+          actors: { getVerifiedActor: async () => ACTOR_VERIFIED },
           authorizer: { authorize: async (_actor, command) => command.tenantId === B },
         }),
         new Promise<never>((_resolve, reject) => {

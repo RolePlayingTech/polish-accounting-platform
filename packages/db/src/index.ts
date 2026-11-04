@@ -4,14 +4,11 @@ export {
   PostgresAccessManagementStore,
 } from './access-management.js';
 export {
-  applyLocalRlsSessionContext,
-  lockCompanyActionFactsInTx,
   PostgresTransactionalUnitOfWork,
-  readTransactionClockNow,
-  runManagedTransaction,
-  verifyAndLockActorInTx,
-  type PostgresCompanyActionTransactionContext,
-  type PostgresTransaction,
+  ScopeClosedError,
+  type PostgresCompanyActionScope,
+  type PostgresCompanyActionScopeDriver,
+  type PostgresCompanyActionScopeFactory,
 } from './transactional-unit-of-work.js';
 export {
   PostgresUserIdentityResolver,
@@ -40,9 +37,13 @@ export * from './signed-context.js';
 export { securityDecisionEvent } from './schema.js';
 export { PostgresSecurityAudit } from './security-audit.js';
 export { companyOperationProbe } from './schema.js';
-export { recordCompanyOperationProbe } from './company-operation-probe.js';
+export {
+  createPostgresCompanyActionScope,
+  recordCompanyOperationProbe,
+} from './company-operation-probe.js';
 export { configureRuntimePrivileges, provisionDatabaseContextKey } from './runtime-provisioning.js';
 export {
   assertRuntimeDatabaseSecurity,
   createPostgresSecurityServices,
+  type PostgresSecurityServices,
 } from './runtime-security.js';

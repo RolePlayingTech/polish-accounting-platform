@@ -3,6 +3,7 @@ import {
   legalEntityId,
   tenantId,
   userId,
+  type AccountingAction,
   type LegalEntityId,
   type TenantId,
   type UserId,
@@ -97,8 +98,8 @@ function isNonBlankExactString(value: unknown): value is string {
 export interface TransactionActor {
   readonly userId: UserId;
   /**
-   * Opcjonalna zweryfikowana tożsamość OIDC. Gdy jest obecna, transakcja DB blokuje i potwierdza
-   * także aktywność konkretnego powiązania (issuer, subject) w user_oidc_identity.
+   * Opcjonalna zweryfikowana tożsamość OIDC w czystym modelu aplikacyjnym.
+   * Adapter bazodanowy PostgreSQL wymaga jej obecności i blokuje powiązanie (issuer, subject) FOR SHARE.
    */
   readonly identity?: VerifiedOidcIdentity | undefined;
 }
@@ -132,9 +133,7 @@ export function freezeTransactionActor(input: TransactionActor): TransactionActo
 }
 
 /**
- * Kontekst sesji autoryzacyjnej wiązany z bieżącą transakcją bazodanową.
- * Punkt rozszerzenia pod transakcyjne SET LOCAL / set_config(..., true) dla PostgreSQL RLS w 6D-3B.
- * W 6D-3A przekazanie tego kontekstu nie oznacza jeszcze włączonych polityk RLS ani roli runtime DB.
+ * Kontekst sesji autoryzacyjnej wiązany z bieżącą transakcją bazodanową (m.in. operacje administracyjne 6D-R).
  */
 export interface TransactionSessionContext {
   readonly operationId?: string | undefined;
@@ -144,45 +143,63 @@ export interface TransactionSessionContext {
   readonly legalEntityId?: LegalEntityId | undefined;
 }
 
+/**
+ * Pełny, zatwierdzony kontekst sesji PostgreSQL RLS dla operacji na danych konkretnej firmy.
+ */
+export interface CompanyRlsSessionContext {
+  readonly operationId?: string | undefined;
+  readonly decisionAt: string;
+  readonly actorUserId: UserId;
+  readonly tenantId: TenantId;
+  readonly legalEntityId: LegalEntityId;
+  readonly action: AccountingAction;
+}
+
 export interface LockedTenantAuthorizationFacts extends TenantAuthorizationFacts {
   /** Autorytatywny czas z zegara transakcyjnego DB pobrany PO uzyskaniu blokad wierszowych. */
   readonly now: Date;
 }
 
 /**
- * Kontekst pojedynczej otwartej transakcji dla operacji na danych firmy (odczyt/zapis dokumentów).
+ * Wewnętrzny port sterowania autoryzacją i audytem pojedynczej transakcji firmowej (SEC-04).
+ * Nie jest przekazywany do callbacku biznesowego `operation` — callback otrzymuje wyłącznie
+ * odseparowany uchwyt repozytoriów `TScope` zwrócony przez `enterAuthorizedCompanyScope`.
  */
-export interface CompanyActionTransactionContext {
-  /** Wymagany atomowy INSERT; błąd musi przerwać chronioną transakcję. */
-  recordAuthorizationDecision(event: SecurityAuditEvent): Promise<void>;
-  /** Sprawdza i blokuje aktualny stan konta app_user (oraz powiązania OIDC, gdy obecne). */
+export interface CompanyActionAuthorizationSession<TScope = unknown> {
+  /** Sprawdza i blokuje aktualny stan konta app_user oraz wymaganego powiązania OIDC. */
   verifyActorAccount(actor: TransactionActor): Promise<boolean>;
 
   /** Pobiera i blokuje w kanonicznym porządku członkostwo, firmę i granty oraz zegar DB po blokadach. */
   getLockedFacts(query: TenantAuthorizationQuery): Promise<LockedTenantAuthorizationFacts>;
 
-  /** Opcjonalny hook wiążący kontekst tenanta/aktora ze zmiennymi lokalnymi transakcji (pod 6D-3B RLS). */
-  applySessionContext?(context: TransactionSessionContext): Promise<void>;
+  /**
+   * Obowiązkowe wejście w autoryzowany zakres firmy (podpisany kontekst `pap.context` + zmienne lokalne RLS).
+   * Zwraca odseparowany uchwyt repozytoriów `TScope`, który nie udostępnia surowej transakcji ani sesji.
+   */
+  enterAuthorizedCompanyScope(context: CompanyRlsSessionContext): Promise<TScope>;
+
+  /** Dezaktywuje uchwyt `TScope` natychmiast po wyjściu z `operation` (przed zapisem audytu i COMMIT). */
+  closeScope?(): void;
+
+  /** Wymagany jednorazowy, atomowy INSERT decyzji allow/committed; błąd musi przerwać chronioną transakcję. */
+  recordAuthorizationDecision(event: SecurityAuditEvent): Promise<void>;
 }
 
 /**
  * Port transakcyjnego UnitOfWork dla autoryzowanych operacji firmowych.
  */
-export interface CompanyActionUnitOfWork<
-  TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
-> {
+export interface CompanyActionUnitOfWork<TScope = unknown> {
   /** Wykonywany dopiero PO rollbacku chronionej transakcji. */
   recordDeniedDecision(event: SecurityAuditEvent): Promise<void>;
   runCompanyActionInTransaction<TResult>(
-    work: (tx: TTx) => Promise<TResult>,
+    work: (session: CompanyActionAuthorizationSession<TScope>) => Promise<TResult>,
     shouldCommit: (result: TResult) => boolean,
   ): Promise<TResult>;
 }
 
-export interface ExecuteAuthorizedCompanyActionDependencies<
-  TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
-> extends AuthenticateOidcActorDependencies {
-  readonly unitOfWork: CompanyActionUnitOfWork<TTx>;
+export interface ExecuteAuthorizedCompanyActionDependencies<TScope = unknown>
+  extends AuthenticateOidcActorDependencies {
+  readonly unitOfWork: CompanyActionUnitOfWork<TScope>;
 }
 
 export type ExecuteAuthorizedCompanyActionResult<TOutput> =
@@ -204,19 +221,17 @@ export type ExecuteAuthorizedCompanyActionResult<TOutput> =
     };
 
 /**
- * Transakcyjny przepływ 6D-3A eliminujący okno TOCTOU dla odczytu i zapisu danych firmowych:
+ * Transakcyjny przepływ 6D-3 eliminujący okno TOCTOU i ekspozycję prymitywów TX (SEC-04):
  * 1) Weryfikacja kryptograficzna OIDC i rozwiązanie userId poza transakcją (bez blokad na sieci JWKS).
- * 2) Jedna transakcja DB: blokada i rewalidacja app_user (+ user_oidc_identity), blokada członkostwa,
- *    firmy i grantów, zegar DB po blokadach, decyzja decideAccountingAccess, opcjonalny kontekst sesji
- *    pod przyszłe RLS oraz wykonanie operacji biznesowej przed COMMIT.
+ * 2) Jedna transakcja DB: blokada i rewalidacja app_user + user_oidc_identity, blokada członkostwa,
+ *    firmy i grantów, zegar DB po blokadach, decyzja decideAccountingAccess, obowiązkowe wejście
+ *    w podpisany zakres RLS (`enterAuthorizedCompanyScope`), wykonanie `operation(context, scope)`,
+ *    natychmiastowe zamknięcie `scope` oraz atomowy zapis audytu przed COMMIT.
  */
-async function executeAuthorizedCompanyActionCore<
-  TOutput,
-  TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
->(
+async function executeAuthorizedCompanyActionCore<TOutput, TScope = unknown>(
   input: AuthenticatedCompanyActionInput,
-  dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
-  operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+  dependencies: ExecuteAuthorizedCompanyActionDependencies<TScope>,
+  operation: (context: AuthenticatedCompanyActionContext, scope: TScope) => Promise<TOutput>,
   audit: {
     actorId: string | null;
     authorized: boolean;
@@ -281,8 +296,8 @@ async function executeAuthorizedCompanyActionCore<
     });
 
     const txResult = await dependencies.unitOfWork.runCompanyActionInTransaction(
-      async (tx): Promise<ExecuteAuthorizedCompanyActionResult<TOutput>> => {
-        if ((await tx.verifyActorAccount(txActor)) !== true) {
+      async (session): Promise<ExecuteAuthorizedCompanyActionResult<TOutput>> => {
+        if ((await session.verifyActorAccount(txActor)) !== true) {
           return {
             allowed: false,
             status: 'forbidden',
@@ -297,8 +312,9 @@ async function executeAuthorizedCompanyActionCore<
           action,
         });
 
-        const facts = await tx.getLockedFacts(query);
-        audit.decidedAt = facts.now.toISOString();
+        const facts = await session.getLockedFacts(query);
+        const decisionIso = facts.now.toISOString();
+        audit.decidedAt = decisionIso;
         const decision = decideAccountingAccess({
           ...query,
           membership: facts.membership,
@@ -314,19 +330,20 @@ async function executeAuthorizedCompanyActionCore<
           };
         }
 
-        if (tx.applySessionContext) {
-          await tx.applySessionContext({
+        const scope = await session.enterAuthorizedCompanyScope(
+          Object.freeze({
             operationId: operationId ?? undefined,
-            decisionAt: facts.now.toISOString(),
+            decisionAt: decisionIso,
             actorUserId: txActor.userId,
             tenantId: parsedTenantId,
             legalEntityId: parsedLegalEntityId,
-          });
-        }
+            action,
+          }),
+        );
 
         const context: AuthenticatedCompanyActionContext = Object.freeze({
           operationId: operationId ?? undefined,
-          decisionAt: facts.now.toISOString(),
+          decisionAt: decisionIso,
           userId: txActor.userId,
           tenantId: parsedTenantId,
           legalEntityId: parsedLegalEntityId,
@@ -335,8 +352,15 @@ async function executeAuthorizedCompanyActionCore<
         });
 
         audit.authorized = true;
-        const data = await operation(context, tx);
-        await tx.recordAuthorizationDecision(audit.event('allow', 'committed', decision.reason));
+        let data: TOutput;
+        try {
+          data = await operation(context, scope);
+        } finally {
+          session.closeScope?.();
+        }
+        await session.recordAuthorizationDecision(
+          audit.event('allow', 'committed', decision.reason),
+        );
         audit.commitPhaseEntered = true;
         return Object.freeze({
           allowed: true,
@@ -404,13 +428,10 @@ async function executeAuthorizedCompanyActionCore<
 }
 
 /** Pełna granica bezpieczeństwa: sukces z audytem w TX, odmowa po jej rollbacku. */
-export async function executeAuthorizedCompanyAction<
-  TOutput,
-  TTx extends CompanyActionTransactionContext = CompanyActionTransactionContext,
->(
+export async function executeAuthorizedCompanyAction<TOutput, TScope = unknown>(
   input: AuthenticatedCompanyActionInput,
-  dependencies: ExecuteAuthorizedCompanyActionDependencies<TTx>,
-  operation: (context: AuthenticatedCompanyActionContext, tx: TTx) => Promise<TOutput>,
+  dependencies: ExecuteAuthorizedCompanyActionDependencies<TScope>,
+  operation: (context: AuthenticatedCompanyActionContext, scope: TScope) => Promise<TOutput>,
 ): Promise<ExecuteAuthorizedCompanyActionResult<TOutput>> {
   const snapshot = {
     ...input,

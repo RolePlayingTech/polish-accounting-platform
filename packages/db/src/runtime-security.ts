@@ -1,10 +1,14 @@
 import { sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
+import type {
+  PostgresCompanyActionScope,
+  PostgresCompanyActionScopeFactory,
+} from './company-operation-probe.js';
+import { PostgresSecurityAudit } from './security-audit.js';
 import { PostgresContextSigner } from './signed-context.js';
+import { PostgresTenantAuthorizationDataSource } from './tenant-authorization.js';
 import { PostgresTransactionalUnitOfWork } from './transactional-unit-of-work.js';
 import { PostgresUserIdentityResolver } from './user-identity.js';
-import { PostgresTenantAuthorizationDataSource } from './tenant-authorization.js';
-import { PostgresSecurityAudit } from './security-audit.js';
 
 type Database = ReturnType<typeof connectDatabase>['db'];
 
@@ -48,8 +52,22 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     throw new Error('Niespełniony kontrakt bezpieczeństwa roli runtime DB.');
 }
 
+export interface PostgresSecurityServices<TScope = PostgresCompanyActionScope> {
+  readonly unitOfWork: PostgresTransactionalUnitOfWork<TScope>;
+  readonly identityResolver: PostgresUserIdentityResolver;
+  readonly authorizationDataSource: PostgresTenantAuthorizationDataSource;
+  readonly accessManagementStore: ReturnType<
+    PostgresTransactionalUnitOfWork<TScope>['createAccessManagementStore']
+  >;
+  readonly securityAudit: PostgresSecurityAudit;
+}
+
 /** Jedno miejsce kompozycji dla przyszłego API i adaptera MCP. Bez otwierania endpointów. */
-export async function createPostgresSecurityServices(db: Database, signer: PostgresContextSigner) {
+export async function createPostgresSecurityServices<TScope = PostgresCompanyActionScope>(
+  db: Database,
+  signer: PostgresContextSigner,
+  scopeFactory?: PostgresCompanyActionScopeFactory<TScope>,
+): Promise<PostgresSecurityServices<TScope>> {
   await assertRuntimeDatabaseSecurity(db);
   await db.transaction(async (tx) => {
     await signer.apply(tx, { purpose: 'actor' });
@@ -58,7 +76,7 @@ export async function createPostgresSecurityServices(db: Database, signer: Postg
     );
     if (row?.valid !== true) throw new Error('Nieaktywny klucz kontekstu runtime DB.');
   });
-  const unitOfWork = new PostgresTransactionalUnitOfWork(db, signer);
+  const unitOfWork = new PostgresTransactionalUnitOfWork<TScope>(db, signer, scopeFactory);
   return Object.freeze({
     unitOfWork,
     identityResolver: new PostgresUserIdentityResolver(db, signer),
