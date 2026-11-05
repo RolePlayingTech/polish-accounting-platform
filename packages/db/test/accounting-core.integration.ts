@@ -958,18 +958,28 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
     if (!created.allowed) throw new Error('Nie utworzono dokumentu ai_proposed');
 
     // Próba zatwierdzenia z niespójnymi kwotami (net + vat !== gross) kończy się błędem walidacji i rollbackiem
-    await expect(
-      runAsActor(
-        { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
-        async (scope) =>
-          scope.verifyAndPostAccountingDocument({
+    let caughtMismatchError: unknown = null;
+    const mismatched = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+      async (scope) => {
+        try {
+          return await scope.verifyAndPostAccountingDocument({
             documentId: created.data.document.id,
             netGrosze: 280_000,
             vatGrosze: 64_400,
             grossGrosze: 999_999,
-          }),
-      ),
-    ).rejects.toThrow('netGrosze + vatGrosze musi równać się grossGrosze');
+          });
+        } catch (err) {
+          caughtMismatchError = err;
+          throw err;
+        }
+      },
+    );
+    expect(mismatched.allowed).toBe(false);
+    expect(caughtMismatchError).toBeInstanceOf(Error);
+    expect((caughtMismatchError as Error).message).toContain(
+      'netGrosze + vatGrosze musi równać się grossGrosze',
+    );
 
     // Zatwierdzenie z ludzką korektą kwot, numeru, dat oraz kontrahenta zapisuje nowe kolumny relacyjne SQL
     const verified = await runAsActor(
