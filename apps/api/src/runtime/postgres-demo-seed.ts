@@ -22,6 +22,7 @@ import {
 import {
   DatabaseConfigError,
   connectDatabase,
+  createPostgresAccountingScope,
   type DatabaseEnvironment,
   type PostgresAccountingScope,
 } from '@pap/db';
@@ -29,6 +30,7 @@ import {
   STANDARD_SPZOO_CHART_OF_ACCOUNTS,
   legalEntityId as parseLegalEntityId,
   tenantId as parseTenantId,
+  userId as parseUserId,
   type JournalEntry,
   type KpirEntry,
   type RyczaltEntry,
@@ -653,26 +655,31 @@ export async function seedSyntheticDemoToPostgres(
     const tId = parseTenantId(seedDef.tenantId);
     const leId = parseLegalEntityId(seedDef.legalEntityId);
 
-    const existingCheck = await executeAuthorizedCompanyAction(
-      {
-        requestId: randomUUID(),
-        rawBearerToken: `seed-token:${ownerUserId}`,
+    const existingSettings = await runtime.connection.db.transaction(async (tx) => {
+      const operationId = randomUUID();
+      await runtime.signer.apply(tx, {
+        purpose: 'company',
+        actorUserId: ownerUserId,
         tenantId: tId,
         legalEntityId: leId,
         action: 'read',
-      },
-      {
-        ...runtime.securityServices,
-        verifier: seedVerifier,
-      },
-      (_ctx, scope) => scope.getCompanyTaxSettings(),
-    );
-    if (!existingCheck.allowed) {
-      throw new DatabaseConfigError(
-        `Nie udało się zweryfikować stanu firmy demo ${seedDef.displayName}: ${existingCheck.reason}.`,
-      );
-    }
-    if (existingCheck.data !== null) {
+        operationId,
+      });
+      const scope = createPostgresAccountingScope({
+        tx,
+        context: {
+          actorUserId: parseUserId(ownerUserId),
+          tenantId: tId,
+          legalEntityId: leId,
+          action: 'read',
+          operationId,
+          decisionAt: new Date().toISOString(),
+        },
+        assertActive: () => {},
+      });
+      return scope.getCompanyTaxSettings();
+    });
+    if (existingSettings !== null) {
       skippedExistingCompanies += 1;
       continue;
     }
