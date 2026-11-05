@@ -142,7 +142,7 @@ export function KpirWorkbench({
   const columns: readonly LedgerColumn<KpirEntryRowView>[] = [
     {
       id: 'lp',
-      header: `Kol. ${String(activeLayout.ordinalCol)} · Lp.`,
+      header: 'Lp.',
       numeric: true,
       mobileRole: 'meta',
       render: ({ entry }) => (
@@ -159,7 +159,7 @@ export function KpirWorkbench({
             mobileRole: 'meta',
             render: ({ entry }: KpirEntryRowView) =>
               entry.ksefReferenceNumber ? (
-                <span className="font-mono text-[11px] tabular-nums text-[#1d5c42]">
+                <span className="block max-w-[7rem] break-all font-mono text-[10px] leading-tight tabular-nums text-[#1d5c42]">
                   {entry.ksefReferenceNumber}
                 </span>
               ) : (
@@ -172,8 +172,8 @@ export function KpirWorkbench({
       id: 'date_doc',
       header:
         layoutMode === '2026'
-          ? `Kol. ${String(activeLayout.eventDateCol)} i ${String(activeLayout.documentNumberCol)} · Data i nr dowodu`
-          : `Kol. ${String(activeLayout.eventDateCol)}–${String(activeLayout.documentNumberCol)} · Data i nr dowodu`,
+          ? `Kol. ${String(activeLayout.eventDateCol)}, ${String(activeLayout.documentNumberCol)} · Dowód`
+          : `Kol. ${String(activeLayout.eventDateCol)}–${String(activeLayout.documentNumberCol)} · Dowód`,
       mobileRole: 'title',
       render: ({ entry }) => (
         <div className="space-y-0.5">
@@ -196,7 +196,7 @@ export function KpirWorkbench({
             header: `Kol. ${String(activeLayout.counterpartyNipCol ?? 5)} · NIP`,
             mobileRole: 'meta',
             render: ({ entry }: KpirEntryRowView) => (
-              <span className="font-mono text-xs tabular-nums text-[#464c48]">
+              <span className="whitespace-nowrap font-mono text-[11px] tabular-nums text-[#464c48]">
                 {entry.counterpartyNip ? formatNip(entry.counterpartyNip) : '—'}
               </span>
             ),
@@ -205,10 +205,7 @@ export function KpirWorkbench({
       : []),
     {
       id: 'counterparty_desc',
-      header:
-        layoutMode === '2026'
-          ? 'Kol. 6–8 · Kontrahent i zdarzenie'
-          : 'Kol. 4–6 · Kontrahent i opis',
+      header: layoutMode === '2026' ? 'Kol. 6–8 · Zdarzenie' : 'Kol. 4–6 · Opis',
       mobileRole: 'meta',
       render: ({ entry }) => (
         <div className="space-y-0.5">
@@ -219,7 +216,7 @@ export function KpirWorkbench({
     },
     {
       id: 'rev_total',
-      header: `Kol. ${String(activeLayout.totalRevenueCol)} · Razem przychód`,
+      header: `Kol. ${String(activeLayout.totalRevenueCol)} · Przychód`,
       unit: 'PLN',
       align: 'right',
       numeric: true,
@@ -243,7 +240,7 @@ export function KpirWorkbench({
     },
     {
       id: 'other_expenses_col',
-      header: `Kol. ${String(activeLayout.otherExpensesCol)} · Pozostałe wydatki`,
+      header: `Kol. ${String(activeLayout.otherExpensesCol)} · Wydatki`,
       unit: 'PLN',
       align: 'right',
       numeric: true,
@@ -267,10 +264,7 @@ export function KpirWorkbench({
     },
     {
       id: 'cost_total',
-      header:
-        layoutMode === '2026'
-          ? 'Łącznie koszty KUP (Kol. 12+13+16)'
-          : 'Łącznie koszty KUP (Kol. 10+11+14)',
+      header: 'Koszty KUP',
       unit: 'PLN',
       align: 'right',
       numeric: true,
@@ -298,7 +292,7 @@ export function KpirWorkbench({
     },
     {
       id: 'why_col',
-      header: 'Wyjaśnienie „Dlaczego?”',
+      header: 'Dlaczego?',
       mobileRole: 'status',
       render: ({ entry }) => {
         const isSelected = selectedRow?.entry.id === entry.id;
@@ -306,6 +300,7 @@ export function KpirWorkbench({
           <Button
             size="sm"
             variant={isSelected ? 'primary' : 'secondary'}
+            className="whitespace-nowrap px-2.5 text-[11px]"
             onClick={() => setSelectedRowId(entry.id)}
           >
             § Dlaczego?
@@ -347,25 +342,23 @@ export function KpirWorkbench({
         as="div"
         eyebrow="Rozporządzenie Ministra Finansów · PKPiR"
         title="Przełącznik struktury kolumn KPiR (2026 vs 2019)"
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              variant={layoutMode === '2026' ? 'primary' : 'secondary'}
-              onClick={() => setLayoutMode('2026')}
-            >
-              2026 — 19 kolumn z nr KSeF (Dz.U. 2025 poz. 1299)
-            </Button>
-            <Button
-              size="sm"
-              variant={layoutMode === '2019' ? 'primary' : 'secondary'}
-              onClick={() => setLayoutMode('2019')}
-            >
-              2019 — 17 kolumn (układ historyczny)
-            </Button>
-          </div>
-        }
       >
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant={layoutMode === '2026' ? 'primary' : 'secondary'}
+            onClick={() => setLayoutMode('2026')}
+          >
+            2026 — 19 kolumn z nr KSeF (Dz.U. 2025 poz. 1299)
+          </Button>
+          <Button
+            size="sm"
+            variant={layoutMode === '2019' ? 'primary' : 'secondary'}
+            onClick={() => setLayoutMode('2019')}
+          >
+            2019 — 17 kolumn (układ historyczny)
+          </Button>
+        </div>
         <p className="text-xs text-[#464c48]">
           Aktywny wzór:{' '}
           <strong className="text-[#191c1a]">
@@ -399,6 +392,7 @@ export function KpirWorkbench({
           columns={columns}
           rows={rows}
           getRowKey={(r) => r.entry.id}
+          defaultDensity="compact"
         />
       </div>
 

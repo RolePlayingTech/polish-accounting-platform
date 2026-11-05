@@ -45,7 +45,7 @@ export function Button({
   return (
     <button
       type={type}
-      className={`inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42] ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`.trim()}
+      className={`inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42] ${BUTTON_VARIANTS[variant]} ${BUTTON_SIZES[size]} ${className}`.trim()}
       {...props}
     >
       {children}
@@ -288,7 +288,7 @@ export function AlertBanner({ actions, children, className = '', title, tone }: 
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-2.5">
-          <ToneIcon tone={tone} className="mt-0.5 shrink-0" />
+          <ToneIcon tone={tone} className="mt-0.5 size-4 shrink-0" />
           <div className="space-y-1">
             <p className="text-sm font-semibold">{title}</p>
             {children ? <div className="text-xs leading-relaxed opacity-95">{children}</div> : null}
@@ -347,7 +347,7 @@ export function AcademyDisclaimerBanner({ className = '' }: { className?: string
       className={`rounded-xl border border-[#b8c4de] bg-[#eff2f8] px-4 py-3 text-xs leading-relaxed text-[#28385e] ${className}`.trim()}
     >
       <div className="flex items-start gap-2.5">
-        <ToneIcon tone="legal" className="mt-0.5 shrink-0" />
+        <ToneIcon tone="legal" className="mt-0.5 size-4 shrink-0" />
         <p>
           <strong className="font-semibold">Klauzula informacyjna Akademii: </strong>
           {ACADEMY_DISCLAIMER}
