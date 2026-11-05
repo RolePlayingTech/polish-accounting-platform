@@ -10,16 +10,24 @@ import {
 import { Reflector } from '@nestjs/core';
 import { randomUUID } from 'node:crypto';
 import {
+  InMemoryAccountingWorkspaceStore,
   auditIdentifier,
-  type AccountingWorkspaceService,
   type OidcAccessTokenVerifier,
   type SecurityAuditRecorder,
+  type UserIdentityResolver,
   type WorkspaceActorContext,
 } from '@pap/application';
 import { userId as parseUserId } from '@pap/domain';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import { ACCOUNTING_WORKSPACE_SERVICE } from '../runtime/workspace-runtime.js';
-import { OIDC_ACCESS_TOKEN_VERIFIER, SECURITY_AUDIT_RECORDER } from './company-access.guard.js';
+import {
+  ACCOUNTING_WORKSPACE_SERVICE,
+  type WorkspaceRuntimePort,
+} from '../runtime/workspace-runtime.js';
+import {
+  OIDC_ACCESS_TOKEN_VERIFIER,
+  SECURITY_AUDIT_RECORDER,
+  USER_IDENTITY_RESOLVER,
+} from './company-access.guard.js';
 
 export const OPTIONAL_JWT_AUTH_KEY = 'pap:optional_jwt_auth';
 export const OptionalJwtAuth = () => SetMetadata(OPTIONAL_JWT_AUTH_KEY, true);
@@ -128,7 +136,9 @@ export class JwtBearerAuthGuard implements CanActivate {
     @Inject(OIDC_ACCESS_TOKEN_VERIFIER)
     private readonly verifier: OidcAccessTokenVerifier,
     @Inject(ACCOUNTING_WORKSPACE_SERVICE)
-    private readonly workspace: AccountingWorkspaceService,
+    private readonly workspace: WorkspaceRuntimePort,
+    @Inject(USER_IDENTITY_RESOLVER)
+    private readonly identityResolver: UserIdentityResolver,
     @Inject(SECURITY_AUDIT_RECORDER)
     private readonly securityAudit: SecurityAuditRecorder,
   ) {}
@@ -204,6 +214,21 @@ export class JwtBearerAuthGuard implements CanActivate {
         resolvedUser = this.workspace.store.getUserById(parseUserId(identity.subject));
       } catch {
         resolvedUser = null;
+      }
+    }
+    if (!resolvedUser) {
+      const dbResolved = await this.identityResolver.resolveVerifiedIdentity(identity);
+      if (dbResolved) {
+        resolvedUser = {
+          userId: dbResolved.userId,
+          subject: identity.subject,
+          displayName: identity.subject,
+          email: 'uzytkownik@pap.example',
+          active: true,
+        };
+        if (this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {
+          this.workspace.store.upsertUser(resolvedUser);
+        }
       }
     }
 

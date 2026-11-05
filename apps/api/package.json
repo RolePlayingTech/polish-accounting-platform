@@ -26,9 +26,10 @@
     "dev:container": "tsx watch src/main.ts",
     "build": "tsc -b",
     "start": "node dist/main.js",
-    "lint": "eslint src test",
+    "lint": "eslint src test vitest.integration.config.ts",
     "typecheck": "tsc -b --pretty false && tsc -p test/tsconfig.json --pretty false",
     "test": "vitest run --config ../../vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "clean": "node -e \"import('node:fs').then(({ rmSync }) => rmSync('dist', { recursive: true, force: true }))\""
   }
 }

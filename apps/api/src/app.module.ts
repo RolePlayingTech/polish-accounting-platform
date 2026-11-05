@@ -1,4 +1,11 @@
-import { type DynamicModule, Module, type Provider } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Module,
+  type DynamicModule,
+  type OnApplicationShutdown,
+  type Provider,
+} from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import {
   OIDC_ACCESS_TOKEN_VERIFIER,
@@ -20,12 +27,26 @@ import {
   ACCOUNTING_WORKSPACE_SERVICE,
   API_RUNTIME_ENV,
   PAP_MCP_GATEWAY,
-  createApiRuntimeServices,
+  createApiRuntimeServicesAsync,
   type ApiRuntimeServices,
 } from './runtime/workspace-runtime.js';
 import { SystemStatusController } from './system-status.controller.js';
 
 export const API_RUNTIME_SERVICES = Symbol('API_RUNTIME_SERVICES');
+
+@Injectable()
+class ApiRuntimeShutdownHook implements OnApplicationShutdown {
+  constructor(
+    @Inject(API_RUNTIME_SERVICES)
+    private readonly runtimeServices: ApiRuntimeServices,
+  ) {}
+
+  async onApplicationShutdown(): Promise<void> {
+    if (this.runtimeServices.close) {
+      await this.runtimeServices.close();
+    }
+  }
+}
 
 function buildRuntimeProviders(
   explicitEnv?: Readonly<Record<string, string | undefined>>,
@@ -38,7 +59,7 @@ function buildRuntimeProviders(
     {
       provide: API_RUNTIME_SERVICES,
       useFactory: (runtimeEnv: Readonly<Record<string, string | undefined>>) =>
-        createApiRuntimeServices(runtimeEnv),
+        createApiRuntimeServicesAsync(runtimeEnv),
       inject: [API_RUNTIME_ENV],
     },
     {
@@ -76,6 +97,7 @@ function buildRuntimeProviders(
       useFactory: (rt: ApiRuntimeServices) => rt.securityAudit,
       inject: [API_RUNTIME_SERVICES],
     },
+    ApiRuntimeShutdownHook,
     JwtBearerAuthGuard,
     RemoteMcpFastifyRegistrar,
     {

@@ -11,7 +11,6 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import type { AccountingWorkspaceService } from '@pap/application';
 import type {
   ApproveAndPostDocumentRequest,
   CreateDocumentRequest,
@@ -25,7 +24,10 @@ import {
   requireRequestActor,
   type JwtAuthenticatedRequest,
 } from '../auth/jwt-bearer.guard.js';
-import { ACCOUNTING_WORKSPACE_SERVICE } from '../runtime/workspace-runtime.js';
+import {
+  ACCOUNTING_WORKSPACE_SERVICE,
+  type WorkspaceRuntimePort,
+} from '../runtime/workspace-runtime.js';
 import { parseOptionalPeriodParam } from './query-helpers.js';
 
 @Controller('/api/v1/tenants/:tenantId/companies/:legalEntityId')
@@ -33,7 +35,7 @@ import { parseOptionalPeriodParam } from './query-helpers.js';
 export class DocumentsBooksController {
   constructor(
     @Inject(ACCOUNTING_WORKSPACE_SERVICE)
-    private readonly workspace: AccountingWorkspaceService,
+    private readonly workspace: WorkspaceRuntimePort,
   ) {}
 
   @Get('/documents')

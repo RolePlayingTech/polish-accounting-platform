@@ -158,6 +158,18 @@ describe('@pap/contracts/api schemas', () => {
         autoPostWithoutHuman: true,
       }),
     ).toThrow();
+
+    expect(() =>
+      ApproveAndPostDocumentRequestSchema.parse({
+        netPln: '9'.repeat(24),
+      }),
+    ).toThrow();
+
+    expect(() =>
+      ApproveAndPostDocumentRequestSchema.parse({
+        vatPln: `${'9'.repeat(21)}.00`,
+      }),
+    ).toThrow();
   });
 
   it('rejects invalid journal account codes, bad confirmation codes, and authority-spoofing notification emails', () => {
@@ -211,5 +223,12 @@ describe('@pap/contracts/api schemas', () => {
       obligations: [],
     });
     expect(calendar.year).toBe(2026);
+
+    expect(() =>
+      ApproveAndPostDocumentRequestSchema.parse({
+        netPln: '123456789012345.00',
+        vatPln: '23.00',
+      }),
+    ).toThrow(/15 znaków/);
   });
 });

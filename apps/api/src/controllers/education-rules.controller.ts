@@ -10,10 +10,7 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import {
-  AccountingWorkspaceValidationError,
-  type AccountingWorkspaceService,
-} from '@pap/application';
+import { AccountingWorkspaceValidationError } from '@pap/application';
 import {
   ExplainLegalRuleRequestSchema,
   TaxProfileCodeSchema,
@@ -21,7 +18,10 @@ import {
   type TaxProfileCode,
 } from '@pap/contracts';
 import { JwtBearerAuthGuard, OptionalJwtAuth } from '../auth/jwt-bearer.guard.js';
-import { ACCOUNTING_WORKSPACE_SERVICE } from '../runtime/workspace-runtime.js';
+import {
+  ACCOUNTING_WORKSPACE_SERVICE,
+  type WorkspaceRuntimePort,
+} from '../runtime/workspace-runtime.js';
 
 @Controller('/api/v1')
 @UseGuards(JwtBearerAuthGuard)
@@ -29,7 +29,7 @@ import { ACCOUNTING_WORKSPACE_SERVICE } from '../runtime/workspace-runtime.js';
 export class EducationRulesController {
   constructor(
     @Inject(ACCOUNTING_WORKSPACE_SERVICE)
-    private readonly workspace: AccountingWorkspaceService,
+    private readonly workspace: WorkspaceRuntimePort,
   ) {}
 
   @Get('/legal-rules')

@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { tenantId as parseTenantId, userId as parseUserId } from '@pap/domain';
 import { and, asc, desc, eq, gt, gte, inArray } from 'drizzle-orm';
+import type { connectDatabase } from './client.js';
 import {
   accountingDocument,
   bankStatementImport,
@@ -23,8 +25,13 @@ import {
   type PostgresCompanyActionScope,
   type PostgresCompanyActionScopeDriver,
 } from './company-operation-probe.js';
+import { companyAccessGrant, legalEntity, tenantMembership } from './core-schema.js';
+import type { PostgresContextSigner } from './signed-context.js';
 
 export type GroszeInput = number | bigint;
+
+export type LegalEntityDirectoryRecord = typeof legalEntity.$inferSelect;
+export type CompanyAccessGrantRecord = typeof companyAccessGrant.$inferSelect;
 
 export type CompanyTaxSettingsRecord = typeof companyTaxSettings.$inferSelect;
 export type AccountingDocumentRecord = typeof accountingDocument.$inferSelect;
@@ -96,6 +103,16 @@ export interface CreateAccountingDocumentInput {
 
 export interface VerifyAccountingDocumentInput {
   readonly documentId: string;
+  readonly documentNumber?: string;
+  readonly issueDate?: string;
+  readonly saleDate?: string;
+  readonly dueDate?: string | null;
+  readonly counterpartyName?: string;
+  readonly counterpartyNip?: string | null;
+  readonly counterpartyAddress?: string | null;
+  readonly netGrosze?: GroszeInput;
+  readonly vatGrosze?: GroszeInput;
+  readonly grossGrosze?: GroszeInput;
   readonly categoryCode?: string;
   readonly vehicleUsage?: AccountingDocumentRecord['vehicleUsage'];
   readonly description?: string;
@@ -103,6 +120,8 @@ export interface VerifyAccountingDocumentInput {
   readonly ksefMarker?: AccountingDocumentRecord['ksefMarker'];
   readonly verifiedAt?: Date;
 }
+
+export type VerifyAndPostAccountingDocumentInput = VerifyAccountingDocumentInput;
 
 export interface AppendKpirEntryInput {
   readonly id?: string;
@@ -350,6 +369,7 @@ export interface AppendSandboxMailboxMessageInput {
  * - brak ekspozycji `PostgresTransaction` (`tx`) na zewnątrz.
  */
 export interface PostgresAccountingScope extends PostgresCompanyActionScope {
+  getLegalEntitySummary(): Promise<LegalEntityDirectoryRecord | null>;
   getCompanyTaxSettings(): Promise<CompanyTaxSettingsRecord | null>;
   upsertCompanyTaxSettings(input: UpsertCompanyTaxSettingsInput): Promise<CompanyTaxSettingsRecord>;
 
@@ -505,6 +525,21 @@ export function createPostgresAccountingScope(
       const probe = await probePromise;
       assertActive();
       return probe;
+    },
+
+    async getLegalEntitySummary() {
+      assertActive();
+      const [row] = await tx
+        .select()
+        .from(legalEntity)
+        .where(
+          and(
+            eq(legalEntity.tenantId, context.tenantId),
+            eq(legalEntity.id, context.legalEntityId),
+          ),
+        );
+      assertActive();
+      return deepFreeze(row ?? null);
     },
 
     async getCompanyTaxSettings() {
@@ -763,11 +798,42 @@ export function createPostgresAccountingScope(
       if (current.status === 'archived') {
         throw new Error('Nie można zaksięgować zarchiwizowanego dokumentu.');
       }
+      const netGrosze =
+        input.netGrosze === undefined
+          ? Number(current.netGrosze)
+          : toSafeGrosze(input.netGrosze, 'netGrosze');
+      const vatGrosze =
+        input.vatGrosze === undefined
+          ? Number(current.vatGrosze)
+          : toSafeGrosze(input.vatGrosze, 'vatGrosze');
+      const grossGrosze =
+        input.grossGrosze === undefined
+          ? Number(current.grossGrosze)
+          : toSafeGrosze(input.grossGrosze, 'grossGrosze');
+      if (netGrosze + vatGrosze !== grossGrosze) {
+        throw new Error(
+          'Niespójność kwot dokumentu przy zatwierdzaniu: netGrosze + vatGrosze musi równać się grossGrosze.',
+        );
+      }
       const verifiedAt = input.verifiedAt ?? decisionTimestamp();
       const [updated] = await tx
         .update(accountingDocument)
         .set({
           status: 'verified_posted',
+          documentNumber: input.documentNumber ?? current.documentNumber,
+          issueDate: input.issueDate ?? current.issueDate,
+          saleDate: input.saleDate ?? current.saleDate,
+          dueDate: input.dueDate === undefined ? current.dueDate : input.dueDate,
+          counterpartyName: input.counterpartyName ?? current.counterpartyName,
+          counterpartyNip:
+            input.counterpartyNip === undefined ? current.counterpartyNip : input.counterpartyNip,
+          counterpartyAddress:
+            input.counterpartyAddress === undefined
+              ? current.counterpartyAddress
+              : input.counterpartyAddress,
+          netGrosze,
+          vatGrosze,
+          grossGrosze,
           categoryCode: input.categoryCode ?? current.categoryCode,
           vehicleUsage: input.vehicleUsage ?? current.vehicleUsage,
           description: input.description ?? current.description,
@@ -2406,5 +2472,105 @@ export function createPostgresAccountingScope(
       assertActive();
       return deepFreeze(rows);
     },
+  });
+}
+
+export interface ListTenantCompanyGrantsForAdminFactsInput {
+  readonly tenantId: string;
+  readonly candidateUserIds: readonly string[];
+}
+
+export interface TenantCompanyGrantsAdminDiscoveryResult {
+  readonly memberships: readonly (typeof tenantMembership.$inferSelect)[];
+  readonly grants: readonly CompanyAccessGrantRecord[];
+}
+
+/**
+ * Czysto odczytowe odkrywanie wszystkich grantów podmiotowych (`company_access_grant`) oraz
+ * członkostw (`tenant_membership`) w danym tenancie zgodnie z polityką `FORCE RLS`
+ * `pap_grant_read` + `pap_admin_allowed` (`0006_security-foundation.sql:21-35, 454-461`).
+ * Podpisuje kontekst administracyjny `facts` z obiektem `command` dla aktywnego właściciela
+ * lub administratora tenanta — zero DML, zero wierszy w `security_decision_event`.
+ */
+export async function listTenantCompanyGrantsForAdminFacts(
+  db: Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>,
+  signer: PostgresContextSigner,
+  input: ListTenantCompanyGrantsForAdminFactsInput,
+): Promise<TenantCompanyGrantsAdminDiscoveryResult> {
+  const canonicalTenantId = parseTenantId(input.tenantId);
+  const candidateIds = Array.from(new Set(input.candidateUserIds.map((raw) => parseUserId(raw))));
+  if (candidateIds.length === 0) {
+    return Object.freeze({ memberships: [], grants: [] });
+  }
+
+  return db.transaction(async (tx) => {
+    const memberships: (typeof tenantMembership.$inferSelect)[] = [];
+    let adminUserId: ReturnType<typeof parseUserId> | null = null;
+
+    for (const candidateUserId of candidateIds) {
+      await signer.apply(tx, {
+        purpose: 'facts',
+        actorUserId: candidateUserId,
+        tenantId: canonicalTenantId,
+      });
+      const [mRow] = await tx
+        .select()
+        .from(tenantMembership)
+        .where(
+          and(
+            eq(tenantMembership.tenantId, canonicalTenantId),
+            eq(tenantMembership.userId, candidateUserId),
+          ),
+        );
+      if (mRow) {
+        memberships.push(mRow);
+        if (
+          adminUserId === null &&
+          mRow.status === 'active' &&
+          (mRow.role === 'tenant_owner' || mRow.role === 'tenant_admin')
+        ) {
+          adminUserId = candidateUserId;
+        }
+      }
+    }
+
+    if (!adminUserId) {
+      return deepFreeze({ memberships, grants: [] });
+    }
+
+    const grantsByGrantId = new Map<string, CompanyAccessGrantRecord>();
+    for (const targetUserId of candidateIds) {
+      await signer.apply(tx, {
+        purpose: 'facts',
+        actorUserId: adminUserId,
+        tenantId: canonicalTenantId,
+        targetUserId,
+        command: {
+          kind: 'revoke_grant',
+          operationId: randomUUID(),
+          tenantId: canonicalTenantId,
+          userId: targetUserId,
+          grantId: '00000000-0000-4000-8000-000000000000',
+        },
+      });
+      const rows = await tx
+        .select()
+        .from(companyAccessGrant)
+        .where(
+          and(
+            eq(companyAccessGrant.tenantId, canonicalTenantId),
+            eq(companyAccessGrant.userId, targetUserId),
+          ),
+        )
+        .orderBy(asc(companyAccessGrant.validFrom), asc(companyAccessGrant.grantId));
+      for (const row of rows) {
+        grantsByGrantId.set(row.grantId, row);
+      }
+    }
+
+    return deepFreeze({
+      memberships,
+      grants: Array.from(grantsByGrantId.values()),
+    });
   });
 }

@@ -931,4 +931,123 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
       'Propozycja MCP w stanie terminalnym jest niezmienna',
     );
   });
+
+  it('utrwala skorygowane przez człowieka kolumny relacyjne accounting_document przy przejściu draft/ai_proposed -> verified_posted i trwale je pieczętuje', async () => {
+    const created = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+      async (scope) =>
+        scope.createAccountingDocument({
+          documentType: 'purchase_invoice',
+          documentNumber: 'FV/AI/2026/11/DRAFT-01',
+          issueDate: '2026-11-02',
+          saleDate: '2026-11-02',
+          dueDate: '2026-11-16',
+          counterpartyName: 'Dostawca OCR Szkic Sp. z o.o.',
+          counterpartyNip: '5213007228',
+          counterpartyAddress: 'ul. Szkicowa 1, Warszawa',
+          netGrosze: 250_000,
+          vatGrosze: 57_500,
+          grossGrosze: 307_500,
+          sha256Hash: sha256Hex('human-override-doc-p1-1'),
+          status: 'ai_proposed',
+          categoryCode: 'uslugi_obce',
+          aiProposalJson: { confidenceBps: 8100 },
+        }),
+    );
+    expect(created.allowed).toBe(true);
+    if (!created.allowed) throw new Error('Nie utworzono dokumentu ai_proposed');
+
+    // Próba zatwierdzenia z niespójnymi kwotami (net + vat !== gross) kończy się błędem walidacji i rollbackiem
+    let caughtMismatchError: unknown = null;
+    const mismatched = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+      async (scope) => {
+        try {
+          return await scope.verifyAndPostAccountingDocument({
+            documentId: created.data.document.id,
+            netGrosze: 280_000,
+            vatGrosze: 64_400,
+            grossGrosze: 999_999,
+          });
+        } catch (err) {
+          caughtMismatchError = err;
+          throw err;
+        }
+      },
+    );
+    expect(mismatched.allowed).toBe(false);
+    expect(caughtMismatchError).toBeInstanceOf(Error);
+    expect((caughtMismatchError as Error).message).toContain(
+      'netGrosze + vatGrosze musi równać się grossGrosze',
+    );
+
+    // Zatwierdzenie z ludzką korektą kwot, numeru, dat oraz kontrahenta zapisuje nowe kolumny relacyjne SQL
+    const verified = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA1, action: 'write' },
+      async (scope) =>
+        scope.verifyAndPostAccountingDocument({
+          documentId: created.data.document.id,
+          documentNumber: 'FV/KOREKTA-LUDZKA/2026/11/01',
+          issueDate: '2026-11-03',
+          saleDate: '2026-11-04',
+          dueDate: '2026-11-18',
+          counterpartyName: 'Zweryfikowany Dostawca IT Sp. z o.o.',
+          counterpartyNip: '5250001003',
+          counterpartyAddress: 'ul. Zweryfikowana 10, Kraków',
+          netGrosze: 280_000,
+          vatGrosze: 64_400,
+          grossGrosze: 344_400,
+          categoryCode: 'pozostale_wydatki_kpir',
+        }),
+    );
+    expect(verified.allowed).toBe(true);
+
+    const [sqlRow] = await owner.client<
+      {
+        status: string;
+        document_number: string;
+        issue_date: string;
+        sale_date: string;
+        due_date: string | null;
+        counterparty_name: string;
+        counterparty_nip: string | null;
+        counterparty_address: string | null;
+        net_grosze: string;
+        vat_grosze: string;
+        gross_grosze: string;
+        category_code: string;
+      }[]
+    >`
+      SELECT
+        status,
+        document_number,
+        issue_date::text AS issue_date,
+        sale_date::text AS sale_date,
+        due_date::text AS due_date,
+        counterparty_name,
+        counterparty_nip,
+        counterparty_address,
+        net_grosze::text AS net_grosze,
+        vat_grosze::text AS vat_grosze,
+        gross_grosze::text AS gross_grosze,
+        category_code
+      FROM accounting_document
+      WHERE id = ${created.data.document.id}
+    `;
+
+    expect(sqlRow).toEqual({
+      status: 'verified_posted',
+      document_number: 'FV/KOREKTA-LUDZKA/2026/11/01',
+      issue_date: '2026-11-03',
+      sale_date: '2026-11-04',
+      due_date: '2026-11-18',
+      counterparty_name: 'Zweryfikowany Dostawca IT Sp. z o.o.',
+      counterparty_nip: '5250001003',
+      counterparty_address: 'ul. Zweryfikowana 10, Kraków',
+      net_grosze: '280000',
+      vat_grosze: '64400',
+      gross_grosze: '344400',
+      category_code: 'pozostale_wydatki_kpir',
+    });
+  });
 });

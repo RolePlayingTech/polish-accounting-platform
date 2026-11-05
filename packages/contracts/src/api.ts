@@ -750,10 +750,12 @@ export const ApproveAndPostDocumentRequestSchema = z
     description: z.string().min(1).max(1000).optional(),
     netPln: z
       .string()
+      .max(15, 'Kwota PLN nie może przekraczać 15 znaków.')
       .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 100.00')
       .optional(),
     vatPln: z
       .string()
+      .max(15, 'Kwota PLN nie może przekraczać 15 znaków.')
       .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 23.00')
       .optional(),
     vatRate: VatRateCodeSchema.optional(),
@@ -1290,9 +1292,9 @@ export const McpProposalListItemSchema = z
         counterpartyNip: z.string().regex(/^\d{10}$/),
         issueDate: IsoDateSchema,
         dueDate: IsoDateSchema,
-        netAmountPln: z.string().min(1),
-        vatAmountPln: z.string().min(1),
-        grossAmountPln: z.string().min(1),
+        netAmountPln: z.string().min(1).max(20),
+        vatAmountPln: z.string().min(1).max(20),
+        grossAmountPln: z.string().min(1).max(20),
         expenseDescription: UntrustedDocumentTextEnvelopeSchema,
         suggestedCategory: ProposedPostingCategorySchema,
       })

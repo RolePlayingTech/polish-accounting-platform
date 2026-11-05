@@ -5,7 +5,6 @@ import {
   AccountingWorkspaceValidationError,
   resolveDemoPersonaSeed,
   systemClock,
-  type AccountingWorkspaceService,
   type Clock,
 } from '@pap/application';
 import {
@@ -234,12 +233,14 @@ export class SandboxOidcService implements OnModuleInit {
     });
   }
 
-  listPersonas(workspace: AccountingWorkspaceService): ListSandboxPersonasResponse {
+  listPersonas(workspace: {
+    listSandboxPersonas(issuer?: string): ListSandboxPersonasResponse;
+  }): ListSandboxPersonasResponse {
     return workspace.listSandboxPersonas(this.issuer);
   }
 
   async issueToken(
-    workspace: AccountingWorkspaceService,
+    workspace: { listSandboxPersonas(issuer?: string): ListSandboxPersonasResponse },
     rawBody: unknown,
   ): Promise<IssueSandboxTokenResponse> {
     const parsed = IssueSandboxTokenRequestSchema.parse(rawBody ?? {});

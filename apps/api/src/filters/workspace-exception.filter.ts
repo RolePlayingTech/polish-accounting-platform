@@ -3,6 +3,7 @@ import { AccountingWorkspaceError } from '@pap/application';
 import {
   DoubleEntryValidationError,
   InvalidIdentifierError,
+  InvalidMoneyAmountError,
   LegalRuleNotFoundError,
   UnverifiedLegalRuleError,
 } from '@pap/domain';
@@ -82,6 +83,16 @@ export class AccountingWorkspaceExceptionFilter implements ExceptionFilter {
         error: 'bad_request',
         reasonCode: 'invalid_identifier',
         message: 'Niepoprawny format identyfikatora UUID zasobu.',
+      });
+      return;
+    }
+
+    if (exception instanceof InvalidMoneyAmountError) {
+      reply.status(400).send({
+        statusCode: 400,
+        error: 'bad_request',
+        reasonCode: 'invalid_money_amount',
+        message: exception.message,
       });
       return;
     }

@@ -59,7 +59,10 @@ export {
 } from './company-operation-probe.js';
 export {
   createPostgresAccountingScope,
+  listTenantCompanyGrantsForAdminFacts,
   type PostgresAccountingScope,
+  type ListTenantCompanyGrantsForAdminFactsInput,
+  type TenantCompanyGrantsAdminDiscoveryResult,
   type GroszeInput,
   type CompanyTaxSettingsRecord,
   type AccountingDocumentRecord,
