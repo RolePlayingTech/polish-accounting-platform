@@ -570,10 +570,14 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       facts.membership.status !== 'active' ||
       (facts.membership.role !== 'tenant_owner' && facts.membership.role !== 'tenant_admin')
     ) {
-      const reason =
+      const auditReason =
         !facts.membership || facts.membership.status !== 'active'
           ? 'active_membership_required'
-          : 'tenant_admin_role_required';
+          : 'access_management_denied';
+      const errorReason =
+        !facts.membership || facts.membership.status !== 'active'
+          ? 'active_membership_required'
+          : 'admin_role_required';
       await this.runtime.securityServices.securityAudit.recordDecision({
         requestId: actor.requestId ?? randomUUID(),
         actorId: parseUserId(actor.userId),
@@ -583,12 +587,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         kind: 'company',
         decision: 'deny',
         outcome: 'denied',
-        reason,
+        reason: auditReason,
       });
       throw new AccountingWorkspaceAccessError(
         403,
-        reason,
-        'Tworzenie nowego podmiotu prawnego wymaga aktywnej roli właściciela lub administratora organizacji.',
+        errorReason,
+        'Tworzenie nowej firmy wymaga aktywnej roli właściciela lub administratora tenanta.',
       );
     }
 
@@ -1423,8 +1427,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     this.boundGateways.add(gateway);
 
     const origIssueChallenge = gateway.issueHumanConfirmationChallenge.bind(gateway);
-    gateway.issueHumanConfirmationChallenge = (callContext, rawInput) =>
-      this.runAtomicMutation(async () => origIssueChallenge(callContext, rawInput));
+    gateway.issueHumanConfirmationChallenge = (input) =>
+      this.runAtomicMutation(async () => origIssueChallenge(input));
 
     const origPrepare = gateway.prepareInvoiceAndPostingProposal.bind(gateway);
     gateway.prepareInvoiceAndPostingProposal = (callContext, rawInput) =>

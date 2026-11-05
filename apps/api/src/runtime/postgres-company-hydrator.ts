@@ -770,11 +770,12 @@ async function readCompanyReadOnlyWithSignedContext<T>(
       const scope = createPostgresAccountingScope({
         tx,
         context: {
-          actorUserId: params.actorUserId,
-          tenantId: params.tenantId,
-          legalEntityId: params.legalEntityId,
+          actorUserId: parseUserId(params.actorUserId),
+          tenantId: parseTenantId(params.tenantId),
+          legalEntityId: parseLegalEntityId(params.legalEntityId),
           action: 'read',
           operationId,
+          decisionAt: new Date().toISOString(),
         },
         assertActive: () => {
           if (!active) {
