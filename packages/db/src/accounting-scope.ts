@@ -23,8 +23,12 @@ import {
   type PostgresCompanyActionScope,
   type PostgresCompanyActionScopeDriver,
 } from './company-operation-probe.js';
+import { companyAccessGrant, legalEntity } from './core-schema.js';
 
 export type GroszeInput = number | bigint;
+
+export type LegalEntityDirectoryRecord = typeof legalEntity.$inferSelect;
+export type CompanyAccessGrantRecord = typeof companyAccessGrant.$inferSelect;
 
 export type CompanyTaxSettingsRecord = typeof companyTaxSettings.$inferSelect;
 export type AccountingDocumentRecord = typeof accountingDocument.$inferSelect;
@@ -96,6 +100,16 @@ export interface CreateAccountingDocumentInput {
 
 export interface VerifyAccountingDocumentInput {
   readonly documentId: string;
+  readonly documentNumber?: string;
+  readonly issueDate?: string;
+  readonly saleDate?: string;
+  readonly dueDate?: string | null;
+  readonly counterpartyName?: string;
+  readonly counterpartyNip?: string | null;
+  readonly counterpartyAddress?: string | null;
+  readonly netGrosze?: GroszeInput;
+  readonly vatGrosze?: GroszeInput;
+  readonly grossGrosze?: GroszeInput;
   readonly categoryCode?: string;
   readonly vehicleUsage?: AccountingDocumentRecord['vehicleUsage'];
   readonly description?: string;
@@ -103,6 +117,8 @@ export interface VerifyAccountingDocumentInput {
   readonly ksefMarker?: AccountingDocumentRecord['ksefMarker'];
   readonly verifiedAt?: Date;
 }
+
+export type VerifyAndPostAccountingDocumentInput = VerifyAccountingDocumentInput;
 
 export interface AppendKpirEntryInput {
   readonly id?: string;
@@ -350,6 +366,8 @@ export interface AppendSandboxMailboxMessageInput {
  * - brak ekspozycji `PostgresTransaction` (`tx`) na zewnątrz.
  */
 export interface PostgresAccountingScope extends PostgresCompanyActionScope {
+  getLegalEntitySummary(): Promise<LegalEntityDirectoryRecord | null>;
+  listActorTenantCompanyGrants(): Promise<readonly CompanyAccessGrantRecord[]>;
   getCompanyTaxSettings(): Promise<CompanyTaxSettingsRecord | null>;
   upsertCompanyTaxSettings(input: UpsertCompanyTaxSettingsInput): Promise<CompanyTaxSettingsRecord>;
 
@@ -505,6 +523,37 @@ export function createPostgresAccountingScope(
       const probe = await probePromise;
       assertActive();
       return probe;
+    },
+
+    async getLegalEntitySummary() {
+      assertActive();
+      const [row] = await tx
+        .select()
+        .from(legalEntity)
+        .where(
+          and(
+            eq(legalEntity.tenantId, context.tenantId),
+            eq(legalEntity.id, context.legalEntityId),
+          ),
+        );
+      assertActive();
+      return deepFreeze(row ?? null);
+    },
+
+    async listActorTenantCompanyGrants() {
+      assertActive();
+      const rows = await tx
+        .select()
+        .from(companyAccessGrant)
+        .where(
+          and(
+            eq(companyAccessGrant.tenantId, context.tenantId),
+            eq(companyAccessGrant.userId, context.actorUserId),
+          ),
+        )
+        .orderBy(asc(companyAccessGrant.validFrom), asc(companyAccessGrant.grantId));
+      assertActive();
+      return deepFreeze(rows);
     },
 
     async getCompanyTaxSettings() {
@@ -763,11 +812,42 @@ export function createPostgresAccountingScope(
       if (current.status === 'archived') {
         throw new Error('Nie można zaksięgować zarchiwizowanego dokumentu.');
       }
+      const netGrosze =
+        input.netGrosze === undefined
+          ? Number(current.netGrosze)
+          : toSafeGrosze(input.netGrosze, 'netGrosze');
+      const vatGrosze =
+        input.vatGrosze === undefined
+          ? Number(current.vatGrosze)
+          : toSafeGrosze(input.vatGrosze, 'vatGrosze');
+      const grossGrosze =
+        input.grossGrosze === undefined
+          ? Number(current.grossGrosze)
+          : toSafeGrosze(input.grossGrosze, 'grossGrosze');
+      if (netGrosze + vatGrosze !== grossGrosze) {
+        throw new Error(
+          'Niespójność kwot dokumentu przy zatwierdzaniu: netGrosze + vatGrosze musi równać się grossGrosze.',
+        );
+      }
       const verifiedAt = input.verifiedAt ?? decisionTimestamp();
       const [updated] = await tx
         .update(accountingDocument)
         .set({
           status: 'verified_posted',
+          documentNumber: input.documentNumber ?? current.documentNumber,
+          issueDate: input.issueDate ?? current.issueDate,
+          saleDate: input.saleDate ?? current.saleDate,
+          dueDate: input.dueDate === undefined ? current.dueDate : input.dueDate,
+          counterpartyName: input.counterpartyName ?? current.counterpartyName,
+          counterpartyNip:
+            input.counterpartyNip === undefined ? current.counterpartyNip : input.counterpartyNip,
+          counterpartyAddress:
+            input.counterpartyAddress === undefined
+              ? current.counterpartyAddress
+              : input.counterpartyAddress,
+          netGrosze,
+          vatGrosze,
+          grossGrosze,
           categoryCode: input.categoryCode ?? current.categoryCode,
           vehicleUsage: input.vehicleUsage ?? current.vehicleUsage,
           description: input.description ?? current.description,

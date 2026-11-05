@@ -119,9 +119,15 @@ export function resolveDatabaseContextKeyMaterial(
       });
     }
 
+    if (envOrSecret.PAP_DATABASE_ENV?.trim() !== 'test') {
+      throw new DatabaseConfigError(
+        'Poza środowiskiem PAP_DATABASE_ENV=test sekret podpisu kontekstu DB (PAP_DB_CONTEXT_SECRET lub PAP_DB_CONTEXT_KEY_HEX) musi być pełnym 256-bitowym kluczem szesnastkowym (64 znaki hex lub <keyId>:<64-hex>).',
+      );
+    }
+
     if (rawSecret.length < 16) {
       throw new DatabaseConfigError(
-        'Sekret PAP_DB_CONTEXT_SECRET musi mieć co najmniej 16 znaków (lub 64 znaki szesnastkowe).',
+        'Sekret PAP_DB_CONTEXT_SECRET w środowisku testowym musi mieć co najmniej 16 znaków (lub 64 znaki szesnastkowe).',
       );
     }
 
@@ -161,6 +167,12 @@ export async function connectPostgresRuntime(
   env: Readonly<Record<string, string | undefined>>,
 ): Promise<ConnectedPostgresRuntime> {
   const databaseEnv = resolveDatabaseEnvName(env);
+  const enforceSecurity = env.PAP_ENFORCE_RUNTIME_DB_SECURITY !== 'false';
+  if (!enforceSecurity && databaseEnv !== 'test') {
+    throw new DatabaseConfigError(
+      'Wyłączenie kontroli bezpieczeństwa roli runtime (PAP_ENFORCE_RUNTIME_DB_SECURITY=false) jest dozwolone wyłącznie w środowisku PAP_DATABASE_ENV=test.',
+    );
+  }
   const dataSchema = resolveDatabaseDataSchema(env);
   const keyMaterial = resolveDatabaseContextKeyMaterial(env);
   const signer = new PostgresContextSigner(keyMaterial);
@@ -175,7 +187,6 @@ export async function connectPostgresRuntime(
   );
 
   try {
-    const enforceSecurity = env.PAP_ENFORCE_RUNTIME_DB_SECURITY !== 'false';
     let securityServices: PostgresSecurityServices<PostgresAccountingScope>;
 
     if (enforceSecurity) {

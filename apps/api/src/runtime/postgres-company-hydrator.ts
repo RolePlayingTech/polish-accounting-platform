@@ -2,8 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { CompanyDocumentItemContract, SettlementItemContract } from '@pap/contracts';
 import {
   AccountingWorkspaceService,
-  COMPANY_JDG_KPIR_ID,
-  COMPANY_TENANT_2_ID,
   DEMO_COMPANIES_SEED,
   DEMO_EVALUATION_DATE,
   DEMO_PERSONAS_SEED,
@@ -12,8 +10,7 @@ import {
   InMemoryAccountingWorkspaceStore,
   TENANT_1_ID,
   TENANT_2_ID,
-  executeAuthorizedCompanyAction,
-  type OidcAccessTokenVerifier,
+  type AuditLogEntry,
   type WorkspaceCompanyState,
   type WorkspaceStoredMcpProposal,
 } from '@pap/application';
@@ -26,16 +23,17 @@ import type {
   PrepareInvoiceAndPostingProposalInput,
   ProposedAccountingPreview,
 } from '@pap/contracts/mcp-tools';
-import type {
-  AccountingDocumentRecord,
-  BankTransactionRecord,
-  JournalEntryWithLinesRecord,
-  KpirEntryRecord,
-  McpPreparedProposalRecord,
-  PostgresAccountingScope,
-  RyczaltEntryRecord,
-  SettlementItemRecord,
-  VatRegisterEntryRecord,
+import {
+  createPostgresAccountingScope,
+  type AccountingDocumentRecord,
+  type BankTransactionRecord,
+  type JournalEntryWithLinesRecord,
+  type KpirEntryRecord,
+  type McpPreparedProposalRecord,
+  type PostgresAccountingScope,
+  type RyczaltEntryRecord,
+  type SettlementItemRecord,
+  type VatRegisterEntryRecord,
 } from '@pap/db';
 import {
   formatPlnFromGrosze,
@@ -50,7 +48,6 @@ import {
 } from '@pap/domain';
 import {
   INTERNAL_MCP_PROPOSAL_INDEX_CATEGORY,
-  INTERNAL_TENANT_COMPANY_INDEX_CATEGORY,
   decodeBankMatchNotes,
   decodeBankTxExternalRef,
   decodeCompanyMetaFromAddress,
@@ -64,17 +61,97 @@ import {
 } from './postgres-mappers.js';
 import type { ConnectedPostgresRuntime } from './postgres-runtime-config.js';
 
-function createInternalHydrationVerifier(issuer: string): OidcAccessTokenVerifier {
+function mapSqlDocumentStatus(
+  status: AccountingDocumentRecord['status'],
+): CompanyDocumentItemContract['status'] {
+  if (status === 'verified_posted') return 'posted';
+  if (status === 'archived') return 'archived';
+  if (status === 'draft') return 'draft';
+  return 'ai_proposed';
+}
+
+function overlaySqlDocumentColumns(
+  base: CompanyDocumentItemContract,
+  row: AccountingDocumentRecord,
+  cleanDescription: string,
+): CompanyDocumentItemContract {
+  const netGrosze = Number(row.netGrosze);
+  const vatGrosze = Number(row.vatGrosze);
+  const grossGrosze = Number(row.grossGrosze);
+  const mappedStatus = mapSqlDocumentStatus(row.status);
+  const ksefMarker = mapDbKsefMarkerToContract(row.ksefMarker, row.ksefReference);
+
+  const linesNetSum = base.document.lines.reduce((acc, line) => acc + line.netGrosze, 0);
+  const linesVatSum = base.document.lines.reduce((acc, line) => acc + line.vatGrosze, 0);
+  const linesGrossSum = base.document.lines.reduce((acc, line) => acc + line.grossGrosze, 0);
+  const firstLine = base.document.lines[0];
+
+  const lines: CompanyDocumentItemContract['document']['lines'] =
+    base.document.lines.length > 0 &&
+    linesNetSum === netGrosze &&
+    linesVatSum === vatGrosze &&
+    linesGrossSum === grossGrosze
+      ? base.document.lines
+      : [
+          {
+            lineNumber: 1,
+            description: cleanDescription || firstLine?.description || row.documentNumber,
+            quantity: firstLine?.quantity ?? '1',
+            unit: firstLine?.unit ?? 'usł.',
+            netGrosze,
+            vatRate:
+              vatGrosze > 0
+                ? firstLine?.vatRate && firstLine.vatRate !== 'zw' && firstLine.vatRate !== '0'
+                  ? firstLine.vatRate
+                  : '23'
+                : firstLine?.vatRate === '0' || firstLine?.vatRate === 'np'
+                  ? firstLine.vatRate
+                  : 'zw',
+            vatGrosze,
+            grossGrosze,
+            annex15Item: firstLine?.annex15Item ?? false,
+          },
+        ];
+
+  const {
+    dueDate: _prevDueDate,
+    counterpartyNip: _prevNip,
+    counterpartyAddress: _prevAddress,
+    ksefReferenceNumber: _prevKsefRef,
+    ...restDocument
+  } = base.document;
+  void _prevDueDate;
+  void _prevNip;
+  void _prevAddress;
+  void _prevKsefRef;
+
   return {
-    async verifyAccessToken(rawToken: string) {
-      const subject = rawToken.replace(/^hydrate-token:/, '');
-      return {
-        ok: true,
-        identity: {
-          issuer,
-          subject,
-        },
-      };
+    ...base,
+    documentId: row.id,
+    tenantId: row.tenantId,
+    legalEntityId: row.legalEntityId,
+    status: mappedStatus,
+    sha256Hash: row.sha256Hash,
+    updatedAt: (row.verifiedAt ?? row.createdAt).toISOString(),
+    approvedByUserId: row.verifiedBy ?? base.approvedByUserId,
+    approvedAt: row.verifiedAt ? row.verifiedAt.toISOString() : base.approvedAt,
+    document: {
+      ...restDocument,
+      documentId: row.id,
+      documentNumber: row.documentNumber,
+      issueDate: row.issueDate,
+      eventDate: row.saleDate,
+      ...(row.dueDate ? { dueDate: row.dueDate } : {}),
+      counterpartyName: row.counterpartyName,
+      ...(row.counterpartyNip ? { counterpartyNip: row.counterpartyNip } : {}),
+      ...(row.counterpartyAddress ? { counterpartyAddress: row.counterpartyAddress } : {}),
+      ...(row.ksefReference ? { ksefReferenceNumber: row.ksefReference } : {}),
+      ksefMarker,
+      lines,
+      totalNetGrosze: netGrosze,
+      totalVatGrosze: vatGrosze,
+      totalGrossGrosze: grossGrosze,
+      totalGrossFormatted: formatPlnFromGrosze(grossGrosze),
     },
   };
 }
@@ -89,7 +166,7 @@ function hydrateDocumentFromRecord(
     for (const [k, v] of Object.entries(postedSnapshot.explanations ?? {})) {
       explanationsOut.set(k, v);
     }
-    return postedSnapshot.documentItem;
+    return overlaySqlDocumentColumns(postedSnapshot.documentItem, row, cleanDescription);
   }
 
   const aiJson = (row.aiProposalJson ?? {}) as Record<string, unknown>;
@@ -102,18 +179,7 @@ function hydrateDocumentFromRecord(
 
   const draftSnapshot = aiJson._papDocSnapshot as CompanyDocumentItemContract | undefined;
   if (draftSnapshot && typeof draftSnapshot === 'object' && 'documentId' in draftSnapshot) {
-    const mappedStatus: CompanyDocumentItemContract['status'] =
-      row.status === 'verified_posted'
-        ? 'posted'
-        : row.status === 'archived'
-          ? 'archived'
-          : draftSnapshot.status;
-    return {
-      ...draftSnapshot,
-      status: mappedStatus,
-      approvedByUserId: row.verifiedBy ?? draftSnapshot.approvedByUserId,
-      approvedAt: row.verifiedAt ? row.verifiedAt.toISOString() : draftSnapshot.approvedAt,
-    };
+    return overlaySqlDocumentColumns(draftSnapshot, row, cleanDescription);
   }
 
   const netGrosze = Number(row.netGrosze);
@@ -395,7 +461,9 @@ function hydrateBankFromRecords(rows: readonly BankTransactionRecord[]): {
   return { bankTransactions, reconciliationMatches };
 }
 
-function hydrateMcpProposalFromRecord(row: McpPreparedProposalRecord): WorkspaceStoredMcpProposal {
+export function hydrateMcpProposalFromRecord(
+  row: McpPreparedProposalRecord,
+): WorkspaceStoredMcpProposal {
   const invRaw = { ...(row.invoiceJson as Record<string, unknown>) };
   const rawIdem =
     typeof invRaw._papRawIdempotencyKey === 'string'
@@ -430,6 +498,14 @@ function hydrateMcpProposalFromRecord(row: McpPreparedProposalRecord): Workspace
   };
 }
 
+function resolvePersonaDisplayLabel(actorUserId: string | null): string {
+  if (!actorUserId) {
+    return 'System PAP';
+  }
+  const persona = DEMO_PERSONAS_SEED.find((p) => p.userId === actorUserId);
+  return persona?.displayName ?? `Użytkownik ${actorUserId.slice(0, 8)}`;
+}
+
 async function hydrateSingleCompanyFromScope(
   scope: PostgresAccountingScope,
   rawTenantId: string,
@@ -437,7 +513,7 @@ async function hydrateSingleCompanyFromScope(
 ): Promise<{
   readonly company: WorkspaceCompanyState;
   readonly mcpProposals: readonly WorkspaceStoredMcpProposal[];
-  readonly discoveredCompanyIds: readonly string[];
+  readonly auditEvents: readonly AuditLogEntry[];
   readonly notificationPrefs: readonly {
     readonly userId: string;
     readonly recipientEmail: string;
@@ -451,11 +527,16 @@ async function hydrateSingleCompanyFromScope(
     return null;
   }
 
+  const entitySummary = await scope.getLegalEntitySummary();
   const meta = decodeCompanyMetaFromAddress(settings.addressSummary);
   const seedFallback = DEMO_COMPANIES_SEED.find(
     (s) => s.tenantId === rawTenantId && s.legalEntityId === rawLegalEntityId,
   );
-  const displayName = meta?.displayName ?? seedFallback?.displayName ?? `Firma ${settings.nip}`;
+  const displayName =
+    meta?.displayName ??
+    entitySummary?.displayName ??
+    seedFallback?.displayName ??
+    `Firma ${settings.nip}`;
   const legalForm = settings.legalForm === 'sp_z_o_o' ? 'sp_z_o_o' : 'jdg';
   const vatStatusSimple = settings.vatStatus;
   const taxProfile: TaxProfileConfigContract = meta?.taxProfile ??
@@ -485,19 +566,12 @@ async function hydrateSingleCompanyFromScope(
     };
 
   const rawDocs = await scope.listAccountingDocuments();
-  const discoveredCompanyIds: string[] = [];
   const mcpProposalIds = new Set<string>();
   const explanationsById = new Map<string, WorkspaceExplanationRecord>();
   const documents: CompanyDocumentItemContract[] = [];
+  const auditEvents: AuditLogEntry[] = [];
 
   for (const row of rawDocs) {
-    if (row.categoryCode === INTERNAL_TENANT_COMPANY_INDEX_CATEGORY) {
-      const json = (row.aiProposalJson ?? {}) as Record<string, unknown>;
-      if (typeof json.createdLegalEntityId === 'string') {
-        discoveredCompanyIds.push(json.createdLegalEntityId);
-      }
-      continue;
-    }
     if (row.categoryCode === INTERNAL_MCP_PROPOSAL_INDEX_CATEGORY) {
       const json = (row.aiProposalJson ?? {}) as Record<string, unknown>;
       if (typeof json.proposalId === 'string') {
@@ -508,7 +582,37 @@ async function hydrateSingleCompanyFromScope(
     if (isInternalIndexDocumentCategory(row.categoryCode)) {
       continue;
     }
-    documents.push(hydrateDocumentFromRecord(row, explanationsById));
+    const doc = hydrateDocumentFromRecord(row, explanationsById);
+    documents.push(doc);
+
+    auditEvents.push({
+      auditEventId: `pg-doc-created-${row.id}`,
+      occurredAt: row.createdAt.toISOString(),
+      channel: 'accounting',
+      action: 'document_created',
+      actorUserId: row.createdBy,
+      actorDisplayLabel: resolvePersonaDisplayLabel(row.createdBy),
+      tenantId: rawTenantId,
+      legalEntityId: rawLegalEntityId,
+      outcome: 'allow',
+      reasonCode: 'document_registered',
+      summaryPl: `Zarejestrowano dokument ${row.documentNumber} (${formatPlnFromGrosze(Number(row.grossGrosze))}).`,
+    });
+    if (row.status === 'verified_posted' && row.verifiedAt) {
+      auditEvents.push({
+        auditEventId: `pg-doc-posted-${row.id}`,
+        occurredAt: row.verifiedAt.toISOString(),
+        channel: 'accounting',
+        action: 'document_approved_and_posted',
+        actorUserId: row.verifiedBy,
+        actorDisplayLabel: resolvePersonaDisplayLabel(row.verifiedBy),
+        tenantId: rawTenantId,
+        legalEntityId: rawLegalEntityId,
+        outcome: 'allow',
+        reasonCode: 'human_approved_posting',
+        summaryPl: `Zatwierdzono i zaksięgowano dokument ${row.documentNumber} (${formatPlnFromGrosze(Number(row.grossGrosze))}).`,
+      });
+    }
   }
 
   const docById = new Map(documents.map((d) => [d.documentId, d]));
@@ -552,8 +656,44 @@ async function hydrateSingleCompanyFromScope(
   for (const propId of mcpProposalIds) {
     const rec = await scope.getMcpPreparedProposal(propId);
     if (rec) {
-      mcpProposals.push(hydrateMcpProposalFromRecord(rec));
+      const hydratedProposal = hydrateMcpProposalFromRecord(rec);
+      mcpProposals.push(hydratedProposal);
+      auditEvents.push({
+        auditEventId: `pg-mcp-prop-${rec.proposalId}`,
+        occurredAt: (rec.confirmedAt ?? rec.createdAt).toISOString(),
+        channel: 'mcp',
+        action:
+          rec.status === 'confirmed'
+            ? 'confirm_prepared_proposal'
+            : rec.status === 'rejected'
+              ? 'reject_prepared_proposal'
+              : 'prepare_invoice_and_posting_proposal',
+        actorUserId: rec.confirmedBy ?? rec.preparedBy,
+        actorDisplayLabel: resolvePersonaDisplayLabel(rec.confirmedBy ?? rec.preparedBy),
+        tenantId: rawTenantId,
+        legalEntityId: rawLegalEntityId,
+        outcome: 'allow',
+        reasonCode: `mcp_${rec.status}`,
+        summaryPl: `Propozycja MCP ${rec.proposalId.slice(0, 8)} (${hydratedProposal.invoice.invoiceNumber}): ${rec.status}.`,
+      });
     }
+  }
+
+  const settingsHistory = meta?.settingsHistory ? [...meta.settingsHistory] : [];
+  for (const hist of settingsHistory) {
+    auditEvents.push({
+      auditEventId: `pg-settings-v${hist.version}-${rawLegalEntityId}`,
+      occurredAt: hist.changedAt,
+      channel: 'accounting',
+      action: 'company_settings_updated',
+      actorUserId: hist.changedByUserId,
+      actorDisplayLabel: resolvePersonaDisplayLabel(hist.changedByUserId),
+      tenantId: rawTenantId,
+      legalEntityId: rawLegalEntityId,
+      outcome: 'allow',
+      reasonCode: 'settings_version_saved',
+      summaryPl: hist.changeSummaryPl,
+    });
   }
 
   const notificationPrefs: {
@@ -587,7 +727,7 @@ async function hydrateSingleCompanyFromScope(
       taxRegime: settings.taxRegime,
       vatStatusSimple,
       taxProfile,
-      settingsHistory: meta?.settingsHistory ? [...meta.settingsHistory] : [],
+      settingsHistory,
       documents,
       kpirEntries,
       ryczaltEntries,
@@ -600,9 +740,53 @@ async function hydrateSingleCompanyFromScope(
       explanationsById,
     },
     mcpProposals,
-    discoveredCompanyIds,
+    auditEvents,
     notificationPrefs,
   };
+}
+
+async function readCompanyReadOnlyWithSignedContext<T>(
+  runtime: ConnectedPostgresRuntime,
+  params: {
+    readonly purpose: 'facts' | 'company';
+    readonly actorUserId: string;
+    readonly tenantId: string;
+    readonly legalEntityId: string;
+  },
+  work: (scope: PostgresAccountingScope) => Promise<T>,
+): Promise<T> {
+  return runtime.connection.db.transaction(async (tx) => {
+    const operationId = randomUUID();
+    await runtime.signer.apply(tx, {
+      purpose: params.purpose,
+      actorUserId: params.actorUserId,
+      tenantId: params.tenantId,
+      legalEntityId: params.legalEntityId,
+      action: 'read',
+      operationId,
+    });
+    let active = true;
+    try {
+      const scope = createPostgresAccountingScope({
+        tx,
+        context: {
+          actorUserId: params.actorUserId,
+          tenantId: params.tenantId,
+          legalEntityId: params.legalEntityId,
+          action: 'read',
+          operationId,
+        },
+        assertActive: () => {
+          if (!active) {
+            throw new Error('Zakres odczytu hydracji został już zamknięty.');
+          }
+        },
+      });
+      return await work(scope);
+    } finally {
+      active = false;
+    }
+  });
 }
 
 export async function hydrateWorkspaceFromPostgres(
@@ -611,7 +795,6 @@ export async function hydrateWorkspaceFromPostgres(
 ): Promise<AccountingWorkspaceService> {
   const store = new InMemoryAccountingWorkspaceStore();
   const workspace = new AccountingWorkspaceService({ store, seedDemoData: false });
-  const verifier = createInternalHydrationVerifier(sandboxIssuer);
 
   // 1. Hydracja kont użytkowników z app_user + user_oidc_identity przez pap_resolve_identity
   for (const persona of DEMO_PERSONAS_SEED) {
@@ -630,12 +813,52 @@ export async function hydrateWorkspaceFromPostgres(
     }
   }
 
-  // 2. Kolejka znanych firm (4 firmy bazowe + ewentualne nowe firmy utworzone przez POST /companies)
+  // 2. Odkrycie wszystkich firm w każdym tenancie bezpośrednio z tabeli company_access_grant
+  //    w czystej transakcji odczytowej z podpisanym kontekstem `facts` (zero sztucznych wierszy
+  //    w accounting_document oraz zero sztucznych zdarzeń w security_decision_event).
   const queue: { tenantId: string; legalEntityId: string }[] = DEMO_COMPANIES_SEED.map((c) => ({
     tenantId: c.tenantId,
     legalEntityId: c.legalEntityId,
   }));
+  const knownKeys = new Set(queue.map((q) => `${q.tenantId}:${q.legalEntityId}`));
+
+  for (const rawTenantId of [TENANT_1_ID, TENANT_2_ID]) {
+    const fallbackEntityId =
+      DEMO_COMPANIES_SEED.find((c) => c.tenantId === rawTenantId)?.legalEntityId ??
+      '00000000-0000-4000-8000-000000000000';
+    for (const user of store.listUsers()) {
+      const grantRows = await readCompanyReadOnlyWithSignedContext(
+        runtime,
+        {
+          purpose: 'facts',
+          actorUserId: user.userId,
+          tenantId: rawTenantId,
+          legalEntityId: fallbackEntityId,
+        },
+        (scope) => scope.listActorTenantCompanyGrants(),
+      );
+      for (const row of grantRows) {
+        store.upsertGrant({
+          grantId: row.grantId,
+          tenantId: parseTenantId(row.tenantId),
+          userId: parseUserId(row.userId),
+          legalEntityId: parseLegalEntityId(row.legalEntityId),
+          action: row.action,
+          validFrom: row.validFrom,
+          validUntil: row.validUntil,
+          revokedAt: row.revokedAt,
+        });
+        const key = `${row.tenantId}:${row.legalEntityId}`;
+        if (!knownKeys.has(key)) {
+          knownKeys.add(key);
+          queue.push({ tenantId: row.tenantId, legalEntityId: row.legalEntityId });
+        }
+      }
+    }
+  }
+
   const visited = new Set<string>();
+  const collectedAudits: AuditLogEntry[] = [];
 
   while (queue.length > 0) {
     const target = queue.shift()!;
@@ -648,15 +871,11 @@ export async function hydrateWorkspaceFromPostgres(
     const tId = parseTenantId(target.tenantId);
     const leId = parseLegalEntityId(target.legalEntityId);
 
-    // Hydracja członkostw i grantów dostępu dla wszystkich person z bazy PostgreSQL
-    for (const persona of DEMO_PERSONAS_SEED) {
-      const uId = parseUserId(persona.userId);
-      if (!store.getUserById(uId)) {
-        continue;
-      }
+    // Hydracja członkostw i grantów dostępu (read + write) dla wszystkich użytkowników
+    for (const user of store.listUsers()) {
       for (const action of ['read', 'write'] as const) {
         const facts = await runtime.securityServices.authorizationDataSource.getFacts({
-          userId: uId,
+          userId: user.userId,
           tenantId: tId,
           legalEntityId: leId,
           action,
@@ -670,72 +889,60 @@ export async function hydrateWorkspaceFromPostgres(
       }
     }
 
-    const ownerUserId =
+    const activeReaderGrant = store
+      .listGrantsForCompany(tId, leId)
+      .find((g) => g.revokedAt === null && store.getUserById(g.userId) !== null);
+    const defaultOwnerId =
       target.tenantId === TENANT_1_ID
         ? DEMO_USER_JAN_ID
         : target.tenantId === TENANT_2_ID
           ? DEMO_USER_PIOTR_ID
           : null;
-    if (!ownerUserId || !store.getUserById(parseUserId(ownerUserId))) {
+    const readerUserId =
+      activeReaderGrant?.userId ??
+      (defaultOwnerId && store.getUserById(parseUserId(defaultOwnerId)) ? defaultOwnerId : null);
+    if (!readerUserId) {
       continue;
     }
 
-    const hydrated = await executeAuthorizedCompanyAction(
+    const hydrated = await readCompanyReadOnlyWithSignedContext(
+      runtime,
       {
-        requestId: randomUUID(),
-        rawBearerToken: `hydrate-token:${ownerUserId}`,
-        tenantId: tId,
-        legalEntityId: leId,
-        action: 'read',
+        purpose: 'company',
+        actorUserId: readerUserId,
+        tenantId: target.tenantId,
+        legalEntityId: target.legalEntityId,
       },
-      {
-        ...runtime.securityServices,
-        verifier,
-      },
-      (_ctx, scope) => hydrateSingleCompanyFromScope(scope, target.tenantId, target.legalEntityId),
+      (scope) => hydrateSingleCompanyFromScope(scope, target.tenantId, target.legalEntityId),
     );
 
-    if (!hydrated.allowed || !hydrated.data) {
+    if (!hydrated) {
       continue;
     }
 
-    store.saveCompany(hydrated.data.company);
-    for (const proposal of hydrated.data.mcpProposals) {
+    store.saveCompany(hydrated.company);
+    for (const proposal of hydrated.mcpProposals) {
       store.upsertMcpProposal(proposal);
     }
-    for (const extraLeId of hydrated.data.discoveredCompanyIds) {
-      if (!visited.has(`${target.tenantId}:${extraLeId}`)) {
-        queue.push({ tenantId: target.tenantId, legalEntityId: extraLeId });
-      }
-    }
-    for (const pref of hydrated.data.notificationPrefs) {
-      const persona = DEMO_PERSONAS_SEED.find((p) => p.userId === pref.userId);
-      if (persona) {
-        await workspace.updateNotificationPreferences(
-          {
-            userId: persona.userId,
-            issuer: sandboxIssuer,
-            subject: persona.userId,
-            displayName: persona.displayName,
-            email: persona.email,
-            scopes: persona.defaultScopes,
-          },
-          target.tenantId,
-          target.legalEntityId,
-          {
-            recipientEmail: pref.recipientEmail,
-            frequency: pref.frequency,
-            optionalRemindersOptedOut: pref.optOut,
-            explicitDisabledStages: pref.disabledStages as never[],
-          },
-        );
-      }
+    collectedAudits.push(...hydrated.auditEvents);
+
+    for (const pref of hydrated.notificationPrefs) {
+      await workspace.notificationsEngine.configurePreferences({
+        tenantId: target.tenantId,
+        legalEntityId: target.legalEntityId,
+        userId: pref.userId,
+        recipientEmail: pref.recipientEmail,
+        frequency: pref.frequency,
+        optionalRemindersOptedOut: pref.optOut,
+        explicitDisabledStages: pref.disabledStages as never[],
+      });
     }
   }
 
-  // Odkrycie dodatkowych firm z dokumentów indeksowych w firmach kotwiczących (defensywnie)
-  void COMPANY_JDG_KPIR_ID;
-  void COMPANY_TENANT_2_ID;
+  collectedAudits.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+  for (const auditEvent of collectedAudits) {
+    store.appendAuditEvent(auditEvent);
+  }
 
   return workspace;
 }

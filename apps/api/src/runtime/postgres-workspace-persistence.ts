@@ -2,6 +2,7 @@ import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/comm
 import { randomUUID } from 'node:crypto';
 import {
   AccessMutationResponseSchema,
+  CreateCompanyRequestSchema,
   GrantCompanyAccessRequestSchema,
   RevokeCompanyAccessRequestSchema,
   type AccessMutationResponse,
@@ -55,6 +56,7 @@ import {
   type VatViewResponse,
 } from '@pap/contracts';
 import type {
+  McpToolErrorCode,
   PrepareInvoiceAndPostingProposalInput,
   PrepareInvoiceAndPostingProposalOutput,
 } from '@pap/contracts/mcp-tools';
@@ -101,6 +103,11 @@ import {
   persistRyczaltEntryToScope,
 } from './postgres-demo-seed.js';
 import { deterministicUuidV4 } from './postgres-mappers.js';
+import {
+  AsyncMutationMutex,
+  captureWorkspaceRamSnapshot,
+  restoreWorkspaceRamSnapshot,
+} from './postgres-ram-snapshot.js';
 import type { ConnectedPostgresRuntime } from './postgres-runtime-config.js';
 import {
   persistApproveAndPostDocumentMutation,
@@ -108,7 +115,6 @@ import {
   persistBankReconciliationMatchesAndSettlements,
   persistCalendarObligationStatusMutation,
   persistConfirmMcpProposalMutation,
-  persistNewCompanyIndexDocumentToAnchor,
   persistNotificationsStateMutation,
   persistSandboxTestEmailMutation,
   provisionNewCompanyDirectoryWithMigrator,
@@ -183,6 +189,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   private readonly oidcVerifier: OidcAccessTokenVerifier;
   private readonly sandboxIssuer: string;
   private readonly migratorDatabaseUrl: string | undefined;
+  private readonly mutationMutex = new AsyncMutationMutex();
+  private readonly boundGateways = new Set<PapMcpGateway>();
 
   constructor(options: PostgresBackedWorkspaceServiceOptions) {
     this.runtime = options.runtime;
@@ -199,6 +207,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       const base = origPortFactory();
       return {
         ...base,
+        listCandidateCompaniesForUser: async (uId) => {
+          for (const comp of this.store.listAllCompanies()) {
+            await this.syncCompanyGrantsIntoMemory(uId, comp.tenantId, comp.legalEntityId);
+          }
+          return base.listCandidateCompaniesForUser(uId);
+        },
         resolveVerifiedIdentity: (identity) =>
           this.runtime.securityServices.identityResolver.resolveVerifiedIdentity(identity),
         getFacts: (query) => this.runtime.securityServices.authorizationDataSource.getFacts(query),
@@ -208,6 +222,18 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         },
       };
     };
+  }
+
+  private runAtomicMutation<T>(work: () => Promise<T>): Promise<T> {
+    return this.mutationMutex.runExclusive(async () => {
+      const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
+      try {
+        return await work();
+      } catch (error) {
+        restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+        throw error;
+      }
+    });
   }
 
   private resolveVerifierAndTokenForActor(actor: WorkspaceActorContext): {
@@ -221,6 +247,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       };
     }
     const syntheticToken = `internal:${actor.userId}`;
+    const defaultIssuer = this.sandboxIssuer;
     const fallbackVerifier: OidcAccessTokenVerifier = {
       async verifyAccessToken(token) {
         if (token !== syntheticToken) {
@@ -229,7 +256,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         return {
           ok: true,
           identity: Object.freeze({
-            issuer: actor.issuer || 'https://sandbox-oidc.pap.local',
+            issuer: actor.issuer || defaultIssuer,
             subject: actor.subject ?? actor.userId,
             ...(actor.scopes ? { scopes: actor.scopes } : {}),
           }),
@@ -275,13 +302,14 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     );
   }
 
-  private async runCompanyOperation<TOutput>(
+  private async executeCompanyOperationUnlocked<TOutput>(
     actor: WorkspaceActorContext,
     rawTenantId: string,
     rawLegalEntityId: string,
     action: 'read' | 'write',
     work: (scope: PostgresAccountingScope) => Promise<TOutput> | TOutput,
   ): Promise<TOutput> {
+    await this.syncCompanyGrantsIntoMemory(actor.userId, rawTenantId, rawLegalEntityId);
     const { rawBearerToken, verifier } = this.resolveVerifierAndTokenForActor(actor);
     let capturedDomainError: unknown = null;
 
@@ -321,25 +349,83 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     return txRes.data;
   }
 
+  private runCompanyOperation<TOutput>(
+    actor: WorkspaceActorContext,
+    rawTenantId: string,
+    rawLegalEntityId: string,
+    action: 'read' | 'write',
+    work: (scope: PostgresAccountingScope) => Promise<TOutput> | TOutput,
+  ): Promise<TOutput> {
+    if (action === 'write') {
+      return this.runAtomicMutation(() =>
+        this.executeCompanyOperationUnlocked(actor, rawTenantId, rawLegalEntityId, action, work),
+      );
+    }
+    return this.executeCompanyOperationUnlocked(actor, rawTenantId, rawLegalEntityId, action, work);
+  }
+
   private async syncCompanyGrantsIntoMemory(
     userIdStr: string,
     tenantIdStr: string,
     legalEntityIdStr: string,
   ): Promise<void> {
-    const uId = parseUserId(userIdStr);
-    const tId = parseTenantId(tenantIdStr);
-    const leId = parseLegalEntityId(legalEntityIdStr);
-    const facts = await this.runtime.securityServices.authorizationDataSource.getFacts({
-      userId: uId,
-      tenantId: tId,
-      legalEntityId: leId,
-      action: 'read',
-    });
-    if (facts.membership) {
-      this.store.upsertMembership(facts.membership);
+    let uId;
+    let tId;
+    let leId;
+    try {
+      uId = parseUserId(userIdStr);
+      tId = parseTenantId(tenantIdStr);
+      leId = parseLegalEntityId(legalEntityIdStr);
+    } catch (err) {
+      if (err instanceof InvalidIdentifierError) {
+        return;
+      }
+      throw err;
     }
-    for (const g of facts.grants) {
+
+    const [readFacts, writeFacts] = await Promise.all([
+      this.runtime.securityServices.authorizationDataSource.getFacts({
+        userId: uId,
+        tenantId: tId,
+        legalEntityId: leId,
+        action: 'read',
+      }),
+      this.runtime.securityServices.authorizationDataSource.getFacts({
+        userId: uId,
+        tenantId: tId,
+        legalEntityId: leId,
+        action: 'write',
+      }),
+    ]);
+
+    const membership = readFacts.membership ?? writeFacts.membership;
+    if (membership) {
+      this.store.upsertMembership(membership);
+    } else {
+      const cachedMembership = this.store.getMembership(tId, uId);
+      if (cachedMembership && cachedMembership.status === 'active') {
+        this.store.upsertMembership({
+          ...cachedMembership,
+          status: 'revoked',
+        });
+      }
+    }
+
+    const dbGrants = [...readFacts.grants, ...writeFacts.grants];
+    const seenGrantIds = new Set<string>();
+    for (const g of dbGrants) {
+      seenGrantIds.add(g.grantId);
       this.store.upsertGrant(g);
+    }
+
+    const now = new Date();
+    for (const cached of this.store.listGrantsForCompany(tId, leId)) {
+      if (cached.userId === uId && cached.revokedAt === null && !seenGrantIds.has(cached.grantId)) {
+        this.store.upsertGrant({
+          ...cached,
+          revokedAt: now,
+        });
+      }
     }
   }
 
@@ -445,63 +531,119 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       );
     }
 
-    const created = this.innerWorkspace.createCompany(actor, rawTenantId, req);
+    let tId;
+    try {
+      tId = parseTenantId(rawTenantId);
+    } catch (err) {
+      if (err instanceof InvalidIdentifierError) {
+        throw new AccountingWorkspaceValidationError(
+          400,
+          'invalid_tenant_id',
+          'Niepoprawny identyfikator organizacji (tenantId).',
+        );
+      }
+      throw err;
+    }
 
-    await provisionNewCompanyDirectoryWithMigrator({
-      migratorUrl: this.migratorDatabaseUrl,
-      databaseEnv: this.runtime.databaseEnv,
-      dataSchema: this.runtime.dataSchema,
-      tenantId: created.company.tenantId,
-      legalEntityId: created.company.legalEntityId,
-      displayName: created.company.displayName,
-      profileCode: created.taxProfile.profileCode,
-      ownerUserId: actor.userId,
+    const parsedReq = CreateCompanyRequestSchema.safeParse(req);
+    if (!parsedReq.success) {
+      throw new AccountingWorkspaceValidationError(
+        400,
+        'invalid_company_request',
+        parsedReq.error.issues[0]?.message ?? 'Niepoprawne dane tworzonego podmiotu prawnego.',
+      );
+    }
+
+    const anchorEntityId =
+      tId === TENANT_2_ID
+        ? parseLegalEntityId(COMPANY_TENANT_2_ID)
+        : parseLegalEntityId(COMPANY_JDG_KPIR_ID);
+    const facts = await this.runtime.securityServices.authorizationDataSource.getFacts({
+      userId: parseUserId(actor.userId),
+      tenantId: tId,
+      legalEntityId: anchorEntityId,
+      action: 'write',
     });
 
-    const anchorCompanyId =
-      created.company.tenantId === TENANT_2_ID ? COMPANY_TENANT_2_ID : COMPANY_JDG_KPIR_ID;
-    await this.runCompanyOperation(
-      actor,
-      created.company.tenantId,
-      anchorCompanyId,
-      'write',
-      async (scope) => {
-        await persistNewCompanyIndexDocumentToAnchor(
-          scope,
-          created.company.tenantId,
-          created.company.legalEntityId,
-          created.company.displayName,
-        );
-      },
-    );
+    if (
+      !facts.membership ||
+      facts.membership.status !== 'active' ||
+      (facts.membership.role !== 'tenant_owner' && facts.membership.role !== 'tenant_admin')
+    ) {
+      const reason =
+        !facts.membership || facts.membership.status !== 'active'
+          ? 'active_membership_required'
+          : 'tenant_admin_role_required';
+      await this.runtime.securityServices.securityAudit.recordDecision({
+        requestId: actor.requestId ?? randomUUID(),
+        actorId: parseUserId(actor.userId),
+        tenantId: auditIdentifier(rawTenantId),
+        legalEntityId: null,
+        action: 'write',
+        kind: 'company',
+        decision: 'deny',
+        outcome: 'denied',
+        reason,
+      });
+      throw new AccountingWorkspaceAccessError(
+        403,
+        reason,
+        'Tworzenie nowego podmiotu prawnego wymaga aktywnej roli właściciela lub administratora organizacji.',
+      );
+    }
 
-    await this.runCompanyOperation(
-      actor,
-      created.company.tenantId,
-      created.company.legalEntityId,
-      'write',
-      async (scope) => {
-        const comp = this.store.getCompany(
-          parseTenantId(created.company.tenantId),
-          parseLegalEntityId(created.company.legalEntityId),
-        );
-        if (comp) {
-          await persistCompanyTaxSettingsToScope(scope, comp);
-          await ensureLedgerAccountsInScope(scope, comp);
-          await scope.upsertNotificationPreference({
-            id: deterministicUuidV4(
-              `notif-pref:${comp.tenantId}:${comp.legalEntityId}:${actor.userId}`,
-            ),
-            userId: actor.userId,
-            recipientEmail: actor.email || 'powiadomienia-sandbox@pap.local',
-            frequency: 'standard',
-            optOut: false,
-          });
-        }
-      },
-    );
+    const migratorUrl = this.migratorDatabaseUrl;
+    const verifiedMembership = facts.membership;
 
-    return created;
+    return this.runAtomicMutation(async () => {
+      this.store.upsertMembership(verifiedMembership);
+      const created = this.innerWorkspace.createCompany(actor, rawTenantId, parsedReq.data);
+
+      await provisionNewCompanyDirectoryWithMigrator({
+        migratorUrl,
+        databaseEnv: this.runtime.databaseEnv,
+        dataSchema: this.runtime.dataSchema,
+        tenantId: created.company.tenantId,
+        legalEntityId: created.company.legalEntityId,
+        displayName: created.company.displayName,
+        profileCode: created.taxProfile.profileCode,
+        ownerUserId: actor.userId,
+      });
+
+      await this.executeCompanyOperationUnlocked(
+        actor,
+        created.company.tenantId,
+        created.company.legalEntityId,
+        'write',
+        async (scope) => {
+          const comp = this.store.getCompany(
+            parseTenantId(created.company.tenantId),
+            parseLegalEntityId(created.company.legalEntityId),
+          );
+          if (comp) {
+            await persistCompanyTaxSettingsToScope(scope, comp);
+            await ensureLedgerAccountsInScope(scope, comp);
+            await scope.upsertNotificationPreference({
+              id: deterministicUuidV4(
+                `notif-pref:${comp.tenantId}:${comp.legalEntityId}:${actor.userId}`,
+              ),
+              userId: actor.userId,
+              recipientEmail: actor.email || 'powiadomienia-sandbox@pap.example',
+              frequency: 'standard',
+              optOut: false,
+            });
+          }
+        },
+      );
+
+      await this.syncCompanyGrantsIntoMemory(
+        actor.userId,
+        created.company.tenantId,
+        created.company.legalEntityId,
+      );
+
+      return created;
+    });
   }
 
   getCompanyOverview(
@@ -562,172 +704,188 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     });
   }
 
-  async grantCompanyAccess(
+  grantCompanyAccess(
     actor: WorkspaceActorContext,
     tenantId: string,
     legalEntityId: string,
     req: GrantCompanyAccessRequest,
   ): Promise<AccessMutationResponse> {
-    const parsed = GrantCompanyAccessRequestSchema.parse(req);
-    const tId = parseTenantId(tenantId);
-    const leId = parseLegalEntityId(legalEntityId);
-    const targetUserId = parseUserId(parsed.targetUserId);
-    const { rawBearerToken, verifier } = this.resolveVerifierAndTokenForActor(actor);
+    return this.runAtomicMutation(async () => {
+      const parsed = GrantCompanyAccessRequestSchema.parse(req);
+      const tId = parseTenantId(tenantId);
+      const leId = parseLegalEntityId(legalEntityId);
+      const targetUserId = parseUserId(parsed.targetUserId);
+      const { rawBearerToken, verifier } = this.resolveVerifierAndTokenForActor(actor);
 
-    const result = await manageAccess(
-      {
-        kind: 'grant',
-        operationId: parsed.operationId ?? randomUUID(),
-        tenantId: tId,
-        userId: targetUserId,
-        grantId: parsed.grantId ?? randomUUID(),
-        legalEntityId: leId,
-        action: parsed.action,
-        validFrom: parsed.validFrom ?? null,
-        validUntil: parsed.validUntil ?? null,
-      },
-      {
-        store: this.runtime.accessManagementStore,
-        actors: createOidcAccessManagementActorSource(rawBearerToken, {
-          verifier,
-          identityResolver: this.runtime.securityServices.identityResolver,
-        }),
-        authorizer: createTenantAccessManagementAuthorizer(undefined),
-      },
-    );
-
-    if (!result.ok) {
-      if (result.reason === 'invalid_command') {
-        throw new AccountingWorkspaceValidationError(
-          400,
-          'invalid_command',
-          'Niepoprawna komenda nadania grantu dostępu.',
-        );
-      }
-      if (result.reason === 'operation_conflict') {
-        throw new AccountingWorkspaceConflictError(
-          'operation_conflict',
-          'Konflikt idempotencji operacji administracyjnej nadania grantu.',
-        );
-      }
-      if (
-        result.reason === 'access_management_unavailable' ||
-        result.reason === 'authorization_audit_unavailable' ||
-        result.reason === 'transaction_outcome_unknown'
-      ) {
-        throw new ServiceUnavailableException({
-          statusCode: 503,
-          error: 'service_unavailable',
-          reasonCode: result.reason,
-          message: 'Podsystem zarządzania dostępem PostgreSQL jest niedostępny (fail-closed).',
-        });
-      }
-      throw new AccountingWorkspaceAccessError(
-        403,
-        result.reason,
-        'Odmowa nadania grantu dostępu do firmy w bieżącej organizacji.',
+      const result = await manageAccess(
+        {
+          kind: 'grant',
+          operationId: parsed.operationId ?? randomUUID(),
+          tenantId: tId,
+          userId: targetUserId,
+          grantId: parsed.grantId ?? randomUUID(),
+          legalEntityId: leId,
+          action: parsed.action,
+          validFrom: parsed.validFrom ?? null,
+          validUntil: parsed.validUntil ?? null,
+        },
+        {
+          store: this.runtime.accessManagementStore,
+          actors: createOidcAccessManagementActorSource(rawBearerToken, {
+            verifier,
+            identityResolver: this.runtime.securityServices.identityResolver,
+          }),
+          authorizer: createTenantAccessManagementAuthorizer(undefined),
+        },
       );
-    }
 
-    await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId);
-    return AccessMutationResponseSchema.parse({
-      ok: true,
-      receipt: result.receipt,
+      if (!result.ok) {
+        if (result.reason === 'invalid_command') {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_command',
+            'Niepoprawna komenda nadania grantu dostępu.',
+          );
+        }
+        if (result.reason === 'operation_conflict') {
+          throw new AccountingWorkspaceConflictError(
+            'operation_conflict',
+            'Konflikt idempotencji operacji administracyjnej nadania grantu.',
+          );
+        }
+        if (
+          result.reason === 'access_management_unavailable' ||
+          result.reason === 'authorization_audit_unavailable' ||
+          result.reason === 'transaction_outcome_unknown'
+        ) {
+          throw new ServiceUnavailableException({
+            statusCode: 503,
+            error: 'service_unavailable',
+            reasonCode: result.reason,
+            message: 'Podsystem zarządzania dostępem PostgreSQL jest niedostępny (fail-closed).',
+          });
+        }
+        throw new AccountingWorkspaceAccessError(
+          403,
+          result.reason,
+          'Odmowa nadania grantu dostępu do firmy w bieżącej organizacji.',
+        );
+      }
+
+      await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId);
+      return AccessMutationResponseSchema.parse({
+        ok: true,
+        receipt: result.receipt,
+      });
     });
   }
 
-  async revokeCompanyAccess(
+  revokeCompanyAccess(
     actor: WorkspaceActorContext,
     tenantId: string,
     legalEntityId: string,
     req: RevokeCompanyAccessRequest,
   ): Promise<AccessMutationResponse> {
-    const parsed = RevokeCompanyAccessRequestSchema.parse(req);
-    const tId = parseTenantId(tenantId);
-    const leId = parseLegalEntityId(legalEntityId);
+    return this.runAtomicMutation(async () => {
+      const parsed = RevokeCompanyAccessRequestSchema.parse(req);
+      const tId = parseTenantId(tenantId);
+      const leId = parseLegalEntityId(legalEntityId);
 
-    const companyGrants = this.store.listGrantsForCompany(tId, leId);
-    const matchedGrant = parsed.grantId
-      ? companyGrants.find((g) => g.grantId === parsed.grantId)
-      : parsed.targetUserId
-        ? companyGrants.find((g) => g.userId === parsed.targetUserId && g.revokedAt === null)
-        : undefined;
+      const candidateUserIds = new Set<string>(this.store.listUsers().map((u) => u.userId));
+      for (const m of this.store.listTenantMemberships(tId)) {
+        candidateUserIds.add(m.userId);
+      }
+      if (parsed.targetUserId) {
+        candidateUserIds.add(parsed.targetUserId);
+      }
+      for (const candidateUserId of candidateUserIds) {
+        await this.syncCompanyGrantsIntoMemory(candidateUserId, tId, leId);
+      }
 
-    const resolvedGrantId = parsed.grantId ?? matchedGrant?.grantId;
-    const resolvedTargetUserStr = parsed.targetUserId ?? matchedGrant?.userId;
-    if (!resolvedGrantId || !resolvedTargetUserStr) {
-      throw new AccountingWorkspaceValidationError(
-        400,
-        'missing_revoke_grant_selector',
-        'Wymagane jest wskazanie grantId lub aktywnego grantu użytkownika do cofnięcia.',
-      );
-    }
+      const companyGrants = this.store.listGrantsForCompany(tId, leId);
+      const matchedGrant = parsed.grantId
+        ? companyGrants.find((g) => g.grantId === parsed.grantId)
+        : parsed.targetUserId
+          ? companyGrants.find((g) => g.userId === parsed.targetUserId && g.revokedAt === null)
+          : undefined;
 
-    const targetUserId = parseUserId(resolvedTargetUserStr);
-    const { rawBearerToken, verifier } = this.resolveVerifierAndTokenForActor(actor);
-
-    const result = await manageAccess(
-      {
-        kind: 'revoke_grant',
-        operationId: parsed.operationId ?? randomUUID(),
-        tenantId: tId,
-        userId: targetUserId,
-        grantId: resolvedGrantId,
-      },
-      {
-        store: this.runtime.accessManagementStore,
-        actors: createOidcAccessManagementActorSource(rawBearerToken, {
-          verifier,
-          identityResolver: this.runtime.securityServices.identityResolver,
-        }),
-        authorizer: createTenantAccessManagementAuthorizer(undefined),
-      },
-    );
-
-    if (!result.ok) {
-      if (result.reason === 'invalid_command') {
+      const resolvedGrantId = parsed.grantId ?? matchedGrant?.grantId;
+      const resolvedTargetUserStr =
+        parsed.targetUserId ?? matchedGrant?.userId ?? (parsed.grantId ? actor.userId : undefined);
+      if (!resolvedGrantId || !resolvedTargetUserStr) {
         throw new AccountingWorkspaceValidationError(
           400,
-          'invalid_command',
-          'Niepoprawna komenda cofnięcia grantu dostępu.',
+          'missing_revoke_grant_selector',
+          'Wymagane jest wskazanie grantId lub aktywnego grantu użytkownika do cofnięcia.',
         );
       }
-      if (result.reason === 'operation_conflict') {
-        throw new AccountingWorkspaceConflictError(
-          'operation_conflict',
-          'Konflikt idempotencji operacji administracyjnej cofnięcia grantu.',
+
+      const targetUserId = parseUserId(resolvedTargetUserStr);
+      const { rawBearerToken, verifier } = this.resolveVerifierAndTokenForActor(actor);
+
+      const result = await manageAccess(
+        {
+          kind: 'revoke_grant',
+          operationId: parsed.operationId ?? randomUUID(),
+          tenantId: tId,
+          userId: targetUserId,
+          grantId: resolvedGrantId,
+        },
+        {
+          store: this.runtime.accessManagementStore,
+          actors: createOidcAccessManagementActorSource(rawBearerToken, {
+            verifier,
+            identityResolver: this.runtime.securityServices.identityResolver,
+          }),
+          authorizer: createTenantAccessManagementAuthorizer(undefined),
+        },
+      );
+
+      if (!result.ok) {
+        if (result.reason === 'invalid_command') {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_command',
+            'Niepoprawna komenda cofnięcia grantu dostępu.',
+          );
+        }
+        if (result.reason === 'operation_conflict') {
+          throw new AccountingWorkspaceConflictError(
+            'operation_conflict',
+            'Konflikt idempotencji operacji administracyjnej cofnięcia grantu.',
+          );
+        }
+        if (
+          result.reason === 'access_management_unavailable' ||
+          result.reason === 'authorization_audit_unavailable' ||
+          result.reason === 'transaction_outcome_unknown'
+        ) {
+          throw new ServiceUnavailableException({
+            statusCode: 503,
+            error: 'service_unavailable',
+            reasonCode: result.reason,
+            message: 'Podsystem zarządzania dostępem PostgreSQL jest niedostępny (fail-closed).',
+          });
+        }
+        throw new AccountingWorkspaceAccessError(
+          403,
+          result.reason,
+          'Odmowa cofnięcia grantu dostępu do firmy w bieżącej organizacji.',
         );
       }
-      if (
-        result.reason === 'access_management_unavailable' ||
-        result.reason === 'authorization_audit_unavailable' ||
-        result.reason === 'transaction_outcome_unknown'
-      ) {
-        throw new ServiceUnavailableException({
-          statusCode: 503,
-          error: 'service_unavailable',
-          reasonCode: result.reason,
-          message: 'Podsystem zarządzania dostępem PostgreSQL jest niedostępny (fail-closed).',
+
+      if (matchedGrant && matchedGrant.revokedAt === null) {
+        this.store.upsertGrant({
+          ...matchedGrant,
+          revokedAt: new Date(result.receipt.occurredAt),
         });
       }
-      throw new AccountingWorkspaceAccessError(
-        403,
-        result.reason,
-        'Odmowa cofnięcia grantu dostępu do firmy w bieżącej organizacji.',
-      );
-    }
+      await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId);
 
-    if (matchedGrant && matchedGrant.revokedAt === null) {
-      this.store.upsertGrant({
-        ...matchedGrant,
-        revokedAt: new Date(result.receipt.occurredAt),
+      return AccessMutationResponseSchema.parse({
+        ok: true,
+        receipt: result.receipt,
       });
-    }
-    await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId);
-
-    return AccessMutationResponseSchema.parse({
-      ok: true,
-      receipt: result.receipt,
     });
   }
 
@@ -1195,7 +1353,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     proposalId: string,
   ): Promise<IssueMcpChallengeResponse> {
-    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', () =>
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'write', () =>
       this.innerWorkspace.issueMcpProposalChallenge(actor, tenantId, legalEntityId, proposalId),
     );
   }
@@ -1262,117 +1420,229 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
 
   createBoundMcpGateway(): PapMcpGateway {
     const gateway = this.innerWorkspace.createBoundMcpGateway(this.oidcVerifier);
+    this.boundGateways.add(gateway);
+
+    const origIssueChallenge = gateway.issueHumanConfirmationChallenge.bind(gateway);
+    gateway.issueHumanConfirmationChallenge = (callContext, rawInput) =>
+      this.runAtomicMutation(async () => origIssueChallenge(callContext, rawInput));
 
     const origPrepare = gateway.prepareInvoiceAndPostingProposal.bind(gateway);
-    gateway.prepareInvoiceAndPostingProposal = async (callContext, rawInput) => {
-      const result = await origPrepare(callContext, rawInput);
-      if (result.ok && !result.data.idempotentReplay && callContext.rawBearerToken) {
-        const stored = this.store.getMcpProposal(result.data.proposalId);
-        if (stored) {
-          const txRes = await executeAuthorizedCompanyAction(
-            {
-              rawBearerToken: callContext.rawBearerToken,
-              requestId: callContext.correlationId ?? randomUUID(),
-              operationId: randomUUID(),
-              tenantId: stored.tenantId,
-              legalEntityId: stored.legalEntityId,
-              action: 'write',
-            },
-            {
-              ...this.runtime.securityServices,
-              verifier: this.oidcVerifier,
-            },
-            async (_ctx, scope) => {
-              const existing = await scope.getMcpPreparedProposal(stored.proposalId);
-              if (!existing) {
-                await persistMcpProposalWithIndexToScope(scope, stored);
-              }
-            },
-          );
-          if (!txRes.allowed) {
+    gateway.prepareInvoiceAndPostingProposal = (callContext, rawInput) =>
+      this.mutationMutex.runExclusive(async () => {
+        const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
+        let result: Awaited<ReturnType<typeof origPrepare>>;
+        try {
+          result = await origPrepare(callContext, rawInput);
+        } catch (error) {
+          restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+          throw error;
+        }
+
+        if (result.ok && !result.data.idempotentReplay) {
+          if (!callContext.rawBearerToken) {
+            restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
             return {
               ok: false,
               error: {
                 ok: false,
-                errorCode: 'audit_unavailable',
-                messagePl:
-                  'Podsystem persystencji i audytu PostgreSQL jest niedostępny (fail-closed).',
+                errorCode: 'unauthenticated',
+                messagePl: 'Brak uwierzytelnionego tokena OIDC do utrwalenia propozycji MCP.',
                 auditEventId: result.data.auditEventId,
-                retryable: true,
+                retryable: false,
               },
             };
           }
+
+          const stored = this.store.getMcpProposal(result.data.proposalId);
+          if (stored) {
+            let dbError: unknown = null;
+            let txRes: ExecuteAuthorizedCompanyActionResult<void> | null = null;
+            try {
+              txRes = await executeAuthorizedCompanyAction(
+                {
+                  rawBearerToken: callContext.rawBearerToken,
+                  requestId: callContext.correlationId ?? randomUUID(),
+                  operationId: randomUUID(),
+                  tenantId: stored.tenantId,
+                  legalEntityId: stored.legalEntityId,
+                  action: 'write',
+                },
+                {
+                  ...this.runtime.securityServices,
+                  verifier: this.oidcVerifier,
+                },
+                async (_ctx, scope) => {
+                  try {
+                    const existing = await scope.getMcpPreparedProposal(stored.proposalId);
+                    if (!existing) {
+                      await persistMcpProposalWithIndexToScope(scope, stored);
+                    }
+                    await scope.recordOperationProbe();
+                  } catch (err) {
+                    dbError = err;
+                    throw err;
+                  }
+                },
+              );
+            } catch (err) {
+              dbError ??= err;
+            }
+
+            if (dbError !== null || !txRes || !txRes.allowed) {
+              restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+              const errorCode: McpToolErrorCode =
+                txRes && !txRes.allowed && txRes.status === 'forbidden'
+                  ? 'forbidden'
+                  : txRes && !txRes.allowed && txRes.status === 'unauthenticated'
+                    ? 'unauthenticated'
+                    : 'audit_unavailable';
+              return {
+                ok: false,
+                error: {
+                  ok: false,
+                  errorCode,
+                  messagePl:
+                    errorCode === 'forbidden'
+                      ? 'Odmowa zapisu propozycji MCP w PostgreSQL (brak uprawnień do firmy).'
+                      : 'Podsystem persystencji i audytu PostgreSQL jest niedostępny — wycofano zmianę w pamięci (fail-closed).',
+                  auditEventId: result.data.auditEventId,
+                  retryable: errorCode === 'audit_unavailable',
+                },
+              };
+            }
+          }
         }
-      }
-      return result;
-    };
+        return result;
+      });
 
     const origConfirm = gateway.confirmPreparedProposal.bind(gateway);
-    gateway.confirmPreparedProposal = async (callContext, rawInput) => {
-      const parsedObj =
-        typeof rawInput === 'object' && rawInput !== null
-          ? (rawInput as { tenantId?: unknown; legalEntityId?: unknown; proposalId?: unknown })
-          : {};
-      const rawTenantId = typeof parsedObj.tenantId === 'string' ? parsedObj.tenantId : null;
-      const rawLeId = typeof parsedObj.legalEntityId === 'string' ? parsedObj.legalEntityId : null;
-      const prevDocIds = new Set<string>();
-      if (rawTenantId && rawLeId) {
-        try {
-          const compBefore = this.store.getCompany(
-            parseTenantId(rawTenantId),
-            parseLegalEntityId(rawLeId),
-          );
-          for (const d of compBefore?.documents ?? []) {
-            prevDocIds.add(d.documentId);
+    gateway.confirmPreparedProposal = (callContext, rawInput) =>
+      this.mutationMutex.runExclusive(async () => {
+        const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
+        const parsedObj =
+          typeof rawInput === 'object' && rawInput !== null
+            ? (rawInput as { tenantId?: unknown; legalEntityId?: unknown; proposalId?: unknown })
+            : {};
+        const rawTenantId = typeof parsedObj.tenantId === 'string' ? parsedObj.tenantId : null;
+        const rawLeId =
+          typeof parsedObj.legalEntityId === 'string' ? parsedObj.legalEntityId : null;
+        const prevDocIds = new Set<string>();
+        if (rawTenantId && rawLeId) {
+          try {
+            const compBefore = this.store.getCompany(
+              parseTenantId(rawTenantId),
+              parseLegalEntityId(rawLeId),
+            );
+            for (const d of compBefore?.documents ?? []) {
+              prevDocIds.add(d.documentId);
+            }
+          } catch {
+            // Zostanie odrzucone przez walidator kontraktu w gateway.
           }
-        } catch {
-          // Zostanie odrzucone przez walidator kontraktu w gateway.
         }
-      }
 
-      const result = await origConfirm(callContext, rawInput);
-      if (result.ok && !result.data.idempotentReplay && callContext.rawBearerToken) {
-        const comp = this.store.getCompany(
-          parseTenantId(result.data.tenantId),
-          parseLegalEntityId(result.data.legalEntityId),
-        );
-        const stored = this.store.getMcpProposal(result.data.proposalId);
-        const postedDoc = comp?.documents.find((d) => !prevDocIds.has(d.documentId)) ?? null;
-        if (comp && stored) {
-          const txRes = await executeAuthorizedCompanyAction(
-            {
-              rawBearerToken: callContext.rawBearerToken,
-              requestId: callContext.correlationId ?? randomUUID(),
-              operationId: randomUUID(),
-              tenantId: result.data.tenantId,
-              legalEntityId: result.data.legalEntityId,
-              action: 'write',
-            },
-            {
-              ...this.runtime.securityServices,
-              verifier: this.oidcVerifier,
-            },
-            async (_ctx, scope) => {
-              await persistConfirmMcpProposalMutation(scope, comp, stored, postedDoc);
-            },
-          );
-          if (!txRes.allowed) {
+        let result: Awaited<ReturnType<typeof origConfirm>>;
+        try {
+          result = await origConfirm(callContext, rawInput);
+        } catch (error) {
+          restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+          throw error;
+        }
+
+        if (result.ok && !result.data.idempotentReplay) {
+          if (!callContext.rawBearerToken) {
+            restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
             return {
               ok: false,
               error: {
                 ok: false,
-                errorCode: 'audit_unavailable',
-                messagePl:
-                  'Podsystem persystencji i audytu PostgreSQL jest niedostępny (fail-closed).',
+                errorCode: 'unauthenticated',
+                messagePl: 'Brak uwierzytelnionego tokena OIDC do zatwierdzenia propozycji MCP.',
                 auditEventId: result.data.auditEventId,
-                retryable: true,
+                retryable: false,
               },
             };
           }
+
+          const comp = this.store.getCompany(
+            parseTenantId(result.data.tenantId),
+            parseLegalEntityId(result.data.legalEntityId),
+          );
+          const stored = this.store.getMcpProposal(result.data.proposalId);
+          const postedDoc = comp?.documents.find((d) => !prevDocIds.has(d.documentId)) ?? null;
+          if (comp && stored) {
+            let dbError: unknown = null;
+            let txRes: ExecuteAuthorizedCompanyActionResult<void> | null = null;
+            try {
+              txRes = await executeAuthorizedCompanyAction(
+                {
+                  rawBearerToken: callContext.rawBearerToken,
+                  requestId: callContext.correlationId ?? randomUUID(),
+                  operationId: randomUUID(),
+                  tenantId: result.data.tenantId,
+                  legalEntityId: result.data.legalEntityId,
+                  action: 'write',
+                },
+                {
+                  ...this.runtime.securityServices,
+                  verifier: this.oidcVerifier,
+                },
+                async (_ctx, scope) => {
+                  try {
+                    await persistConfirmMcpProposalMutation(scope, comp, stored, postedDoc);
+                    await scope.recordOperationProbe();
+                  } catch (err) {
+                    dbError = err;
+                    throw err;
+                  }
+                },
+              );
+            } catch (err) {
+              dbError ??= err;
+            }
+
+            if (dbError !== null || !txRes || !txRes.allowed) {
+              restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+              let errorCode: McpToolErrorCode = 'audit_unavailable';
+              let messagePl =
+                'Transakcja księgowania w PostgreSQL nie powiodła się — wycofano stan pamięci RAM (brak split-brain).';
+              let retryable = true;
+
+              if (dbError instanceof AccountingWorkspaceConflictError) {
+                errorCode =
+                  dbError.reasonCode === 'proposal_expired'
+                    ? 'proposal_expired'
+                    : 'proposal_already_processed';
+                messagePl = dbError.message;
+                retryable = false;
+              } else if (txRes && !txRes.allowed) {
+                if (txRes.status === 'forbidden') {
+                  errorCode = 'forbidden';
+                  messagePl =
+                    'Odmowa zatwierdzenia propozycji MCP w PostgreSQL (brak uprawnień zapisu).';
+                  retryable = false;
+                } else if (txRes.status === 'unauthenticated') {
+                  errorCode = 'unauthenticated';
+                  messagePl = 'Weryfikacja tokena OIDC zakończyła się odmową.';
+                  retryable = false;
+                }
+              }
+
+              return {
+                ok: false,
+                error: {
+                  ok: false,
+                  errorCode,
+                  messagePl,
+                  auditEventId: result.data.auditEventId,
+                  retryable,
+                },
+              };
+            }
+          }
         }
-      }
-      return result;
-    };
+        return result;
+      });
 
     return gateway;
   }

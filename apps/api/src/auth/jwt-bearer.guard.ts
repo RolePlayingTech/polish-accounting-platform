@@ -10,6 +10,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { randomUUID } from 'node:crypto';
 import {
+  InMemoryAccountingWorkspaceStore,
   auditIdentifier,
   type OidcAccessTokenVerifier,
   type SecurityAuditRecorder,
@@ -222,9 +223,12 @@ export class JwtBearerAuthGuard implements CanActivate {
           userId: dbResolved.userId,
           subject: identity.subject,
           displayName: identity.subject,
-          email: 'uzytkownik@pap.local',
+          email: 'uzytkownik@pap.example',
           active: true,
         };
+        if (this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {
+          this.workspace.store.upsertUser(resolvedUser);
+        }
       }
     }
 

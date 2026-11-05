@@ -4,10 +4,13 @@ import type {
   NotificationsViewResponse,
   SandboxMailboxMessageContract,
 } from '@pap/contracts';
-import type { WorkspaceCompanyState, WorkspaceStoredMcpProposal } from '@pap/application';
+import {
+  AccountingWorkspaceConflictError,
+  type WorkspaceCompanyState,
+  type WorkspaceStoredMcpProposal,
+} from '@pap/application';
 import { connectDatabase, type DatabaseEnvironment, type PostgresAccountingScope } from '@pap/db';
 import {
-  INTERNAL_TENANT_COMPANY_INDEX_CATEGORY,
   computeMcpProposalSealHash,
   deterministicUuidV4,
   encodeBankMatchNotes,
@@ -89,6 +92,16 @@ export async function persistApproveAndPostDocumentMutation(
         : 'none';
     await scope.verifyAndPostAccountingDocument({
       documentId: postedDoc.documentId,
+      documentNumber: postedDoc.document.documentNumber,
+      issueDate: postedDoc.document.issueDate,
+      saleDate: postedDoc.document.eventDate,
+      dueDate: postedDoc.document.dueDate ?? null,
+      counterpartyName: postedDoc.document.counterpartyName,
+      counterpartyNip: postedDoc.document.counterpartyNip ?? null,
+      counterpartyAddress: postedDoc.document.counterpartyAddress ?? null,
+      netGrosze: postedDoc.document.totalNetGrosze,
+      vatGrosze: postedDoc.document.totalVatGrosze,
+      grossGrosze: postedDoc.document.totalGrossGrosze,
       categoryCode: postedDoc.aiProposal.suggestedCategory,
       vehicleUsage,
       description: encodedDesc,
@@ -225,10 +238,32 @@ export async function persistConfirmMcpProposalMutation(
   proposal: WorkspaceStoredMcpProposal,
   postedDoc: CompanyDocumentItemContract | null,
 ): Promise<void> {
-  if (postedDoc) {
-    await persistDocumentItemToScope(scope, company, postedDoc);
-    await persistPostedDocumentChildrenToScope(scope, company, postedDoc);
+  const existingDbProposal = await scope.getMcpPreparedProposal(proposal.proposalId);
+  if (!existingDbProposal) {
+    throw new AccountingWorkspaceConflictError(
+      'proposal_not_found_in_postgres',
+      'Propozycja MCP nie istnieje w bazie PostgreSQL i nie może zostać zaksięgowana.',
+    );
   }
+  if (existingDbProposal.status === 'rejected') {
+    throw new AccountingWorkspaceConflictError(
+      'proposal_already_rejected',
+      'Odrzucona propozycja MCP nie może zostać zatwierdzona ani zaksięgowana.',
+    );
+  }
+  if (existingDbProposal.status === 'expired') {
+    throw new AccountingWorkspaceConflictError(
+      'proposal_expired',
+      'Wygasła propozycja MCP nie może zostać zatwierdzona ani zaksięgowana.',
+    );
+  }
+  if (existingDbProposal.status !== 'pending_human_approval') {
+    throw new AccountingWorkspaceConflictError(
+      'proposal_already_processed',
+      'Propozycja MCP nie oczekuje już na zatwierdzenie człowieka w PostgreSQL.',
+    );
+  }
+
   const sealHash = computeMcpProposalSealHash(
     proposal.tenantId,
     proposal.legalEntityId,
@@ -245,6 +280,10 @@ export async function persistConfirmMcpProposalMutation(
     ledgerEntryId: ledgerEntryUuid,
     ...(proposal.confirmedAtIso ? { confirmedAt: new Date(proposal.confirmedAtIso) } : {}),
   });
+  if (postedDoc) {
+    await persistDocumentItemToScope(scope, company, postedDoc);
+    await persistPostedDocumentChildrenToScope(scope, company, postedDoc);
+  }
 }
 
 export async function persistNotificationsStateMutation(
@@ -363,60 +402,48 @@ export async function provisionNewCompanyDirectoryWithMigrator(params: {
   const sql = migrator.client;
   try {
     const nowIso = new Date().toISOString();
-    await sql`
-      INSERT INTO legal_entity (id, tenant_id, display_name, created_at)
-      VALUES (${params.legalEntityId}, ${params.tenantId}, ${params.displayName}, ${nowIso})
-      ON CONFLICT (id) DO NOTHING
-    `;
-    const profileVerId = deterministicUuidV4(
-      `entity-profile-v1:${params.tenantId}:${params.legalEntityId}`,
-    );
-    await sql`
-      INSERT INTO entity_profile_version (id, tenant_id, legal_entity_id, profile_code, valid_from)
-      VALUES (${profileVerId}, ${params.tenantId}, ${params.legalEntityId}, ${params.profileCode}, ${nowIso})
-      ON CONFLICT (id) DO NOTHING
-    `;
-    for (const action of ['read', 'write'] as const) {
-      const grantId = deterministicUuidV4(
-        `owner-grant:${params.tenantId}:${params.legalEntityId}:${params.ownerUserId}:${action}`,
-      );
-      await sql`
-        INSERT INTO company_access_grant (grant_id, tenant_id, user_id, legal_entity_id, action, valid_from)
-        VALUES (${grantId}, ${params.tenantId}, ${params.ownerUserId}, ${params.legalEntityId}, ${action}, ${nowIso})
-        ON CONFLICT (grant_id) DO NOTHING
+    await sql.begin(async (txRaw) => {
+      const txSql = txRaw as unknown as typeof sql;
+      await txSql`
+        INSERT INTO legal_entity (id, tenant_id, display_name, created_at)
+        VALUES (${params.legalEntityId}, ${params.tenantId}, ${params.displayName}, ${nowIso})
+        ON CONFLICT (id) DO NOTHING
       `;
-    }
+      const profileVerId = deterministicUuidV4(
+        `entity-profile-v1:${params.tenantId}:${params.legalEntityId}`,
+      );
+      await txSql`
+        INSERT INTO entity_profile_version (id, tenant_id, legal_entity_id, profile_code, valid_from)
+        VALUES (${profileVerId}, ${params.tenantId}, ${params.legalEntityId}, ${params.profileCode}, ${nowIso})
+        ON CONFLICT (id) DO NOTHING
+      `;
+
+      const ownerRows = await txSql<{ user_id: string }[]>`
+        SELECT user_id::text AS user_id
+        FROM tenant_membership
+        WHERE tenant_id = ${params.tenantId}
+          AND role = 'tenant_owner'
+          AND status = 'active'
+      `;
+      const grantees = new Set<string>([
+        params.ownerUserId,
+        ...ownerRows.map((row) => row.user_id),
+      ]);
+
+      for (const granteeUserId of grantees) {
+        for (const action of ['read', 'write'] as const) {
+          const grantId = deterministicUuidV4(
+            `owner-grant:${params.tenantId}:${params.legalEntityId}:${granteeUserId}:${action}`,
+          );
+          await txSql`
+            INSERT INTO company_access_grant (grant_id, tenant_id, user_id, legal_entity_id, action, valid_from)
+            VALUES (${grantId}, ${params.tenantId}, ${granteeUserId}, ${params.legalEntityId}, ${action}, ${nowIso})
+            ON CONFLICT (grant_id) DO NOTHING
+          `;
+        }
+      }
+    });
   } finally {
     await sql.end({ timeout: 3 }).catch(() => undefined);
   }
-}
-
-export async function persistNewCompanyIndexDocumentToAnchor(
-  scope: PostgresAccountingScope,
-  tenantId: string,
-  createdLegalEntityId: string,
-  displayName: string,
-): Promise<void> {
-  const indexDocId = deterministicUuidV4(`tenant-company-idx:${tenantId}:${createdLegalEntityId}`);
-  const indexSha = sha256Hex(`pap-tenant-company-idx:${tenantId}:${createdLegalEntityId}`);
-  const todayIso = new Date().toISOString().slice(0, 10);
-  await scope.createAccountingDocument({
-    id: indexDocId,
-    documentType: 'internal_note',
-    documentNumber: `COMP-IDX/${createdLegalEntityId.slice(0, 8)}`,
-    issueDate: todayIso,
-    saleDate: todayIso,
-    counterpartyName: displayName,
-    netGrosze: 0,
-    vatGrosze: 0,
-    grossGrosze: 0,
-    sha256Hash: indexSha,
-    status: 'draft',
-    categoryCode: INTERNAL_TENANT_COMPANY_INDEX_CATEGORY,
-    description: `Indeks utworzonej firmy ${createdLegalEntityId}`,
-    aiProposalJson: {
-      createdLegalEntityId,
-      displayName,
-    },
-  });
 }
