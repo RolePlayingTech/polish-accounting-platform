@@ -69,6 +69,7 @@ import {
   COMPANY_JDG_KPIR_ID,
   COMPANY_TENANT_2_ID,
   DEMO_DEFAULT_PERIOD,
+  TENANT_1_ID,
   TENANT_2_ID,
   auditIdentifier,
   createOidcAccessManagementActorSource,
@@ -93,6 +94,10 @@ import {
   tenantId as parseTenantId,
   userId as parseUserId,
 } from '@pap/domain';
+import {
+  discoverAndHydrateMissingCompaniesForTenants,
+  hydrateCompanyIntoWorkspaceIfMissing,
+} from './postgres-company-hydrator.js';
 import {
   ensureLedgerAccountsInScope,
   persistCompanyTaxSettingsToScope,
@@ -208,6 +213,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       return {
         ...base,
         listCandidateCompaniesForUser: async (uId) => {
+          await discoverAndHydrateMissingCompaniesForTenants(
+            this.runtime,
+            this.innerWorkspace,
+            this.getKnownTenantIds(),
+            [uId],
+          );
           for (const comp of this.store.listAllCompanies()) {
             await this.syncCompanyGrantsIntoMemory(uId, comp.tenantId, comp.legalEntityId);
           }
@@ -349,13 +360,53 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     return txRes.data;
   }
 
-  private runCompanyOperation<TOutput>(
+  private getKnownTenantIds(extraTenantId?: string): string[] {
+    const ids = new Set<string>([TENANT_1_ID, TENANT_2_ID]);
+    for (const comp of this.store.listAllCompanies()) {
+      ids.add(comp.tenantId);
+    }
+    if (extraTenantId) {
+      ids.add(extraTenantId);
+    }
+    return Array.from(ids);
+  }
+
+  private async ensureCompanyHydratedIfValid(
+    rawTenantId: string,
+    rawLegalEntityId: string,
+    preferredActorUserId?: string,
+  ): Promise<void> {
+    let tId;
+    let leId;
+    try {
+      tId = parseTenantId(rawTenantId);
+      leId = parseLegalEntityId(rawLegalEntityId);
+    } catch (err) {
+      if (err instanceof InvalidIdentifierError) {
+        return;
+      }
+      throw err;
+    }
+    if (this.store.getCompany(tId, leId) !== null) {
+      return;
+    }
+    await hydrateCompanyIntoWorkspaceIfMissing(
+      this.runtime,
+      this.innerWorkspace,
+      tId,
+      leId,
+      preferredActorUserId,
+    );
+  }
+
+  private async runCompanyOperation<TOutput>(
     actor: WorkspaceActorContext,
     rawTenantId: string,
     rawLegalEntityId: string,
     action: 'read' | 'write',
     work: (scope: PostgresAccountingScope) => Promise<TOutput> | TOutput,
   ): Promise<TOutput> {
+    await this.ensureCompanyHydratedIfValid(rawTenantId, rawLegalEntityId, actor.userId);
     if (action === 'write') {
       return this.runAtomicMutation(() =>
         this.executeCompanyOperationUnlocked(actor, rawTenantId, rawLegalEntityId, action, work),
@@ -457,6 +508,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   }
 
   async getMyCompanies(actor: WorkspaceActorContext): Promise<GetMyCompaniesResponse> {
+    await discoverAndHydrateMissingCompaniesForTenants(
+      this.runtime,
+      this.innerWorkspace,
+      this.getKnownTenantIds(),
+      [actor.userId],
+    );
     for (const comp of this.store.listAllCompanies()) {
       await this.syncCompanyGrantsIntoMemory(actor.userId, comp.tenantId, comp.legalEntityId);
     }
@@ -512,6 +569,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     }
 
     this.store.upsertMembership(facts.membership);
+    await discoverAndHydrateMissingCompaniesForTenants(
+      this.runtime,
+      this.innerWorkspace,
+      [tId],
+      [actor.userId],
+    );
     for (const comp of this.store.listCompaniesForTenant(tId)) {
       await this.syncCompanyGrantsIntoMemory(actor.userId, tId, comp.legalEntityId);
     }
@@ -708,12 +771,13 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     });
   }
 
-  grantCompanyAccess(
+  async grantCompanyAccess(
     actor: WorkspaceActorContext,
     tenantId: string,
     legalEntityId: string,
     req: GrantCompanyAccessRequest,
   ): Promise<AccessMutationResponse> {
+    await this.ensureCompanyHydratedIfValid(tenantId, legalEntityId, actor.userId);
     return this.runAtomicMutation(async () => {
       const parsed = GrantCompanyAccessRequestSchema.parse(req);
       const tId = parseTenantId(tenantId);
@@ -784,12 +848,13 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     });
   }
 
-  revokeCompanyAccess(
+  async revokeCompanyAccess(
     actor: WorkspaceActorContext,
     tenantId: string,
     legalEntityId: string,
     req: RevokeCompanyAccessRequest,
   ): Promise<AccessMutationResponse> {
+    await this.ensureCompanyHydratedIfValid(tenantId, legalEntityId, actor.userId);
     return this.runAtomicMutation(async () => {
       const parsed = RevokeCompanyAccessRequestSchema.parse(req);
       const tId = parseTenantId(tenantId);
@@ -1431,8 +1496,21 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       this.runAtomicMutation(async () => origIssueChallenge(input));
 
     const origPrepare = gateway.prepareInvoiceAndPostingProposal.bind(gateway);
-    gateway.prepareInvoiceAndPostingProposal = (callContext, rawInput) =>
-      this.mutationMutex.runExclusive(async () => {
+    gateway.prepareInvoiceAndPostingProposal = async (callContext, rawInput) => {
+      const parsedPrepareObj =
+        typeof rawInput === 'object' && rawInput !== null
+          ? (rawInput as { tenantId?: unknown; legalEntityId?: unknown })
+          : {};
+      if (
+        typeof parsedPrepareObj.tenantId === 'string' &&
+        typeof parsedPrepareObj.legalEntityId === 'string'
+      ) {
+        await this.ensureCompanyHydratedIfValid(
+          parsedPrepareObj.tenantId,
+          parsedPrepareObj.legalEntityId,
+        );
+      }
+      return this.mutationMutex.runExclusive(async () => {
         const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
         let result: Awaited<ReturnType<typeof origPrepare>>;
         try {
@@ -1518,18 +1596,31 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         }
         return result;
       });
+    };
 
     const origConfirm = gateway.confirmPreparedProposal.bind(gateway);
-    gateway.confirmPreparedProposal = (callContext, rawInput) =>
-      this.mutationMutex.runExclusive(async () => {
+    gateway.confirmPreparedProposal = async (callContext, rawInput) => {
+      const parsedConfirmObj =
+        typeof rawInput === 'object' && rawInput !== null
+          ? (rawInput as { tenantId?: unknown; legalEntityId?: unknown; proposalId?: unknown })
+          : {};
+      if (
+        typeof parsedConfirmObj.tenantId === 'string' &&
+        typeof parsedConfirmObj.legalEntityId === 'string'
+      ) {
+        await this.ensureCompanyHydratedIfValid(
+          parsedConfirmObj.tenantId,
+          parsedConfirmObj.legalEntityId,
+        );
+      }
+      return this.mutationMutex.runExclusive(async () => {
         const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
-        const parsedObj =
-          typeof rawInput === 'object' && rawInput !== null
-            ? (rawInput as { tenantId?: unknown; legalEntityId?: unknown; proposalId?: unknown })
-            : {};
-        const rawTenantId = typeof parsedObj.tenantId === 'string' ? parsedObj.tenantId : null;
+        const rawTenantId =
+          typeof parsedConfirmObj.tenantId === 'string' ? parsedConfirmObj.tenantId : null;
         const rawLeId =
-          typeof parsedObj.legalEntityId === 'string' ? parsedObj.legalEntityId : null;
+          typeof parsedConfirmObj.legalEntityId === 'string'
+            ? parsedConfirmObj.legalEntityId
+            : null;
         const prevDocIds = new Set<string>();
         if (rawTenantId && rawLeId) {
           try {
@@ -1647,6 +1738,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         }
         return result;
       });
+    };
 
     return gateway;
   }

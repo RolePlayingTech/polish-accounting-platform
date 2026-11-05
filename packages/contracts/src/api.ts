@@ -750,12 +750,12 @@ export const ApproveAndPostDocumentRequestSchema = z
     description: z.string().min(1).max(1000).optional(),
     netPln: z
       .string()
-      .max(20, 'Kwota PLN nie może przekraczać 20 znaków.')
+      .max(15, 'Kwota PLN nie może przekraczać 15 znaków.')
       .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 100.00')
       .optional(),
     vatPln: z
       .string()
-      .max(20, 'Kwota PLN nie może przekraczać 20 znaków.')
+      .max(15, 'Kwota PLN nie może przekraczać 15 znaków.')
       .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 23.00')
       .optional(),
     vatRate: VatRateCodeSchema.optional(),

@@ -17,8 +17,10 @@ import {
 import {
   CompanyDocumentItemSchema,
   ConfirmMcpProposalResponseSchema,
+  CreateCompanyResponseSchema,
   DocumentsListResponseSchema,
   FinanceViewResponseSchema,
+  GetMyCompaniesResponseSchema,
   ImportBankStatementResponseSchema,
   IssueMcpChallengeResponseSchema,
   IssueSandboxTokenResponseSchema,
@@ -988,5 +990,229 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     openApps.delete(appB);
     await appA.close();
     openApps.delete(appA);
+  });
+
+  it('odkrywa nowo utworzone firmy (POST /companies) na żywej równoległej instancji oraz po zimnym restarcie z 0 syntetycznych wpisów audytu i odrzuca zbyt duże kwoty PLN kodem 400 (NEW-P1-1, P3)', async () => {
+    const runtimeEnv: NodeJS.ProcessEnv = {
+      DATABASE_URL: runtimeUrl,
+      PAP_MIGRATOR_DATABASE_URL: migratorUrl,
+      PAP_DATABASE_ENV: 'test',
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_SECRET: `${keyId}:${keyHex}`,
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+    };
+
+    const { app: app1, baseUrl: baseUrl1 } = await bootApiInstance(runtimeEnv);
+    openApps.add(app1);
+    const { app: appPeer, baseUrl: baseUrlPeer } = await bootApiInstance(runtimeEnv);
+    openApps.add(appPeer);
+
+    const janToken1 = await issuePersonaToken(baseUrl1, 'jan-testowy');
+    const janHeaders1 = {
+      authorization: `Bearer ${janToken1}`,
+      'content-type': 'application/json',
+    };
+
+    // 1. Utworzenie nowej firmy przez POST /api/v1/tenants/:tenantId/companies na Instancji #1
+    const createCompanyRes = await fetch(`${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+      method: 'POST',
+      headers: janHeaders1,
+      body: JSON.stringify({
+        displayName: 'Nowa Pracownia Architektoniczna Test',
+        nip: '5270009002',
+        legalForm: 'jdg',
+        taxRegime: 'kpir_liniowy',
+        vatStatus: 'czynny',
+        zusStage: 'duzy_zus',
+      }),
+    });
+    expect(createCompanyRes.status).toBe(201);
+    const createdCompany = CreateCompanyResponseSchema.parse(await createCompanyRes.json());
+    const newLegalEntityId = createdCompany.company.legalEntityId;
+
+    // 2. Dodanie dokumentu w nowo utworzonej firmie na Instancji #1
+    const newDocNumber = 'FV-NEW-COMPANY/2026/03/01';
+    const createDocRes = await fetch(
+      `${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/documents`,
+      {
+        method: 'POST',
+        headers: janHeaders1,
+        body: JSON.stringify({
+          documentNumber: newDocNumber,
+          direction: 'purchase',
+          issueDate: '2026-03-30',
+          dueDate: '2026-04-14',
+          counterpartyName: 'Dostawca Projektowy Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaSprzetu,
+          suggestedCategory: 'uslugi_obce',
+          lines: [
+            {
+              description: 'Licencja oprogramowania CAD na marzec 2026',
+              netGrosze: 150_000,
+              vatRate: '23',
+            },
+          ],
+        }),
+      },
+    );
+    expect(createDocRes.status).toBe(201);
+    const createdDoc = CompanyDocumentItemSchema.parse(await createDocRes.json());
+
+    // 3. P3: Kwoty PLN > 15 znaków lub przekraczające MAX_SAFE_INTEGER groszy zwracają 400 (nigdy 500)
+    const tooLongPlnRes = await fetch(
+      `${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/documents/${createdDoc.documentId}/approve-and-post`,
+      {
+        method: 'POST',
+        headers: janHeaders1,
+        body: JSON.stringify({
+          netPln: '123456789012345.00',
+          vatPln: '23.00',
+        }),
+      },
+    );
+    expect(tooLongPlnRes.status).toBe(400);
+
+    const unsafeSafeIntPlnRes = await fetch(
+      `${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/documents/${createdDoc.documentId}/approve-and-post`,
+      {
+        method: 'POST',
+        headers: janHeaders1,
+        body: JSON.stringify({
+          netPln: '999999999999999',
+          vatPln: '0.00',
+        }),
+      },
+    );
+    expect(unsafeSafeIntPlnRes.status).toBe(400);
+
+    // 4. NEW-P1-1 (równoległa żywa Instancja B bez restartu): widoczność nowej firmy i dokumentu we wszystkich 4 punktach wejścia
+    const janTokenPeer = await issuePersonaToken(baseUrlPeer, 'jan-testowy');
+    const janHeadersPeer = {
+      authorization: `Bearer ${janTokenPeer}`,
+      'content-type': 'application/json',
+    };
+
+    const myCompaniesOnPeer = GetMyCompaniesResponseSchema.parse(
+      await (await fetch(`${baseUrlPeer}/api/v1/me/companies`, { headers: janHeadersPeer })).json(),
+    );
+    expect(myCompaniesOnPeer.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
+      true,
+    );
+
+    const tenantCompaniesOnPeer = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${baseUrlPeer}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+          headers: janHeadersPeer,
+        })
+      ).json(),
+    );
+    expect(tenantCompaniesOnPeer.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
+      true,
+    );
+
+    await withMcpClient(baseUrlPeer, janTokenPeer, async (mcpJanPeer) => {
+      const mcpCompaniesPeer = ListMyCompaniesOutputSchema.parse(
+        (await mcpJanPeer.callTool({ name: 'list_my_companies', arguments: {} })).structuredContent,
+      );
+      expect(mcpCompaniesPeer.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
+        true,
+      );
+    });
+
+    const docsOnPeer = DocumentsListResponseSchema.parse(
+      await (
+        await fetch(
+          `${baseUrlPeer}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/documents`,
+          { headers: janHeadersPeer },
+        )
+      ).json(),
+    );
+    expect(docsOnPeer.documents.some((d) => d.document.documentNumber === newDocNumber)).toBe(true);
+
+    // 5. NEW-P1-1 (zimny restart): 0 syntetycznych wpisów w security_decision_event przy starcie oraz pełna widoczność nowej firmy i dokumentu
+    await appPeer.close();
+    openApps.delete(appPeer);
+    await app1.close();
+    openApps.delete(app1);
+
+    const [auditBeforeCold] = await owner!.client<{ cnt: number }[]>`
+      SELECT count(*)::int AS cnt
+      FROM ${owner!.client(dataSchema)}.security_decision_event
+    `;
+    const countBeforeColdBoot = auditBeforeCold!.cnt;
+
+    const { app: appCold, baseUrl: baseUrlCold } = await bootApiInstance(runtimeEnv);
+    openApps.add(appCold);
+
+    const [auditAfterCold] = await owner!.client<{ cnt: number }[]>`
+      SELECT count(*)::int AS cnt
+      FROM ${owner!.client(dataSchema)}.security_decision_event
+    `;
+    expect(auditAfterCold!.cnt).toBe(countBeforeColdBoot);
+
+    const janTokenCold = await issuePersonaToken(baseUrlCold, 'jan-testowy');
+    const janHeadersCold = {
+      authorization: `Bearer ${janTokenCold}`,
+      'content-type': 'application/json',
+    };
+
+    const myCompaniesOnCold = GetMyCompaniesResponseSchema.parse(
+      await (await fetch(`${baseUrlCold}/api/v1/me/companies`, { headers: janHeadersCold })).json(),
+    );
+    expect(myCompaniesOnCold.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
+      true,
+    );
+
+    const tenantCompaniesOnCold = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${baseUrlCold}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+          headers: janHeadersCold,
+        })
+      ).json(),
+    );
+    expect(tenantCompaniesOnCold.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
+      true,
+    );
+
+    await withMcpClient(baseUrlCold, janTokenCold, async (mcpJanCold) => {
+      const mcpCompaniesCold = ListMyCompaniesOutputSchema.parse(
+        (await mcpJanCold.callTool({ name: 'list_my_companies', arguments: {} })).structuredContent,
+      );
+      expect(mcpCompaniesCold.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
+        true,
+      );
+    });
+
+    const docsOnCold = DocumentsListResponseSchema.parse(
+      await (
+        await fetch(
+          `${baseUrlCold}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/documents`,
+          { headers: janHeadersCold },
+        )
+      ).json(),
+    );
+    expect(docsOnCold.documents.some((d) => d.document.documentNumber === newDocNumber)).toBe(true);
+
+    // Izolacja międzytenantowa: Piotr z TENANT_2 nie widzi nowej firmy z TENANT_1 ani jej dokumentów
+    const piotrHeadersCold = await issuePersonaHeaders(baseUrlCold, 'piotr-izolacyjny');
+    const piotrMyCompaniesCold = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${baseUrlCold}/api/v1/me/companies`, { headers: piotrHeadersCold })
+      ).json(),
+    );
+    expect(piotrMyCompaniesCold.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
+      false,
+    );
+
+    const piotrDocsForbidden = await fetch(
+      `${baseUrlCold}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/documents`,
+      { headers: piotrHeadersCold },
+    );
+    expect(piotrDocsForbidden.status).toBe(403);
+
+    await appCold.close();
+    openApps.delete(appCold);
   });
 });

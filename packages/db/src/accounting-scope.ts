@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { tenantId as parseTenantId, userId as parseUserId } from '@pap/domain';
 import { and, asc, desc, eq, gt, gte, inArray } from 'drizzle-orm';
+import type { connectDatabase } from './client.js';
 import {
   accountingDocument,
   bankStatementImport,
@@ -23,7 +25,8 @@ import {
   type PostgresCompanyActionScope,
   type PostgresCompanyActionScopeDriver,
 } from './company-operation-probe.js';
-import { companyAccessGrant, legalEntity } from './core-schema.js';
+import { companyAccessGrant, legalEntity, tenantMembership } from './core-schema.js';
+import type { PostgresContextSigner } from './signed-context.js';
 
 export type GroszeInput = number | bigint;
 
@@ -367,7 +370,6 @@ export interface AppendSandboxMailboxMessageInput {
  */
 export interface PostgresAccountingScope extends PostgresCompanyActionScope {
   getLegalEntitySummary(): Promise<LegalEntityDirectoryRecord | null>;
-  listActorTenantCompanyGrants(): Promise<readonly CompanyAccessGrantRecord[]>;
   getCompanyTaxSettings(): Promise<CompanyTaxSettingsRecord | null>;
   upsertCompanyTaxSettings(input: UpsertCompanyTaxSettingsInput): Promise<CompanyTaxSettingsRecord>;
 
@@ -538,22 +540,6 @@ export function createPostgresAccountingScope(
         );
       assertActive();
       return deepFreeze(row ?? null);
-    },
-
-    async listActorTenantCompanyGrants() {
-      assertActive();
-      const rows = await tx
-        .select()
-        .from(companyAccessGrant)
-        .where(
-          and(
-            eq(companyAccessGrant.tenantId, context.tenantId),
-            eq(companyAccessGrant.userId, context.actorUserId),
-          ),
-        )
-        .orderBy(asc(companyAccessGrant.validFrom), asc(companyAccessGrant.grantId));
-      assertActive();
-      return deepFreeze(rows);
     },
 
     async getCompanyTaxSettings() {
@@ -2486,5 +2472,105 @@ export function createPostgresAccountingScope(
       assertActive();
       return deepFreeze(rows);
     },
+  });
+}
+
+export interface ListTenantCompanyGrantsForAdminFactsInput {
+  readonly tenantId: string;
+  readonly candidateUserIds: readonly string[];
+}
+
+export interface TenantCompanyGrantsAdminDiscoveryResult {
+  readonly memberships: readonly (typeof tenantMembership.$inferSelect)[];
+  readonly grants: readonly CompanyAccessGrantRecord[];
+}
+
+/**
+ * Czysto odczytowe odkrywanie wszystkich grantów podmiotowych (`company_access_grant`) oraz
+ * członkostw (`tenant_membership`) w danym tenancie zgodnie z polityką `FORCE RLS`
+ * `pap_grant_read` + `pap_admin_allowed` (`0006_security-foundation.sql:21-35, 454-461`).
+ * Podpisuje kontekst administracyjny `facts` z obiektem `command` dla aktywnego właściciela
+ * lub administratora tenanta — zero DML, zero wierszy w `security_decision_event`.
+ */
+export async function listTenantCompanyGrantsForAdminFacts(
+  db: Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>,
+  signer: PostgresContextSigner,
+  input: ListTenantCompanyGrantsForAdminFactsInput,
+): Promise<TenantCompanyGrantsAdminDiscoveryResult> {
+  const canonicalTenantId = parseTenantId(input.tenantId);
+  const candidateIds = Array.from(new Set(input.candidateUserIds.map((raw) => parseUserId(raw))));
+  if (candidateIds.length === 0) {
+    return Object.freeze({ memberships: [], grants: [] });
+  }
+
+  return db.transaction(async (tx) => {
+    const memberships: (typeof tenantMembership.$inferSelect)[] = [];
+    let adminUserId: ReturnType<typeof parseUserId> | null = null;
+
+    for (const candidateUserId of candidateIds) {
+      await signer.apply(tx, {
+        purpose: 'facts',
+        actorUserId: candidateUserId,
+        tenantId: canonicalTenantId,
+      });
+      const [mRow] = await tx
+        .select()
+        .from(tenantMembership)
+        .where(
+          and(
+            eq(tenantMembership.tenantId, canonicalTenantId),
+            eq(tenantMembership.userId, candidateUserId),
+          ),
+        );
+      if (mRow) {
+        memberships.push(mRow);
+        if (
+          adminUserId === null &&
+          mRow.status === 'active' &&
+          (mRow.role === 'tenant_owner' || mRow.role === 'tenant_admin')
+        ) {
+          adminUserId = candidateUserId;
+        }
+      }
+    }
+
+    if (!adminUserId) {
+      return deepFreeze({ memberships, grants: [] });
+    }
+
+    const grantsByGrantId = new Map<string, CompanyAccessGrantRecord>();
+    for (const targetUserId of candidateIds) {
+      await signer.apply(tx, {
+        purpose: 'facts',
+        actorUserId: adminUserId,
+        tenantId: canonicalTenantId,
+        targetUserId,
+        command: {
+          kind: 'revoke_grant',
+          operationId: randomUUID(),
+          tenantId: canonicalTenantId,
+          userId: targetUserId,
+          grantId: '00000000-0000-4000-8000-000000000000',
+        },
+      });
+      const rows = await tx
+        .select()
+        .from(companyAccessGrant)
+        .where(
+          and(
+            eq(companyAccessGrant.tenantId, canonicalTenantId),
+            eq(companyAccessGrant.userId, targetUserId),
+          ),
+        )
+        .orderBy(asc(companyAccessGrant.validFrom), asc(companyAccessGrant.grantId));
+      for (const row of rows) {
+        grantsByGrantId.set(row.grantId, row);
+      }
+    }
+
+    return deepFreeze({
+      memberships,
+      grants: Array.from(grantsByGrantId.values()),
+    });
   });
 }

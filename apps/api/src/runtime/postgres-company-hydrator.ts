@@ -25,6 +25,7 @@ import type {
 } from '@pap/contracts/mcp-tools';
 import {
   createPostgresAccountingScope,
+  listTenantCompanyGrantsForAdminFacts,
   type AccountingDocumentRecord,
   type BankTransactionRecord,
   type JournalEntryWithLinesRecord,
@@ -790,6 +791,215 @@ async function readCompanyReadOnlyWithSignedContext<T>(
   });
 }
 
+export async function hydrateCompanyIntoWorkspaceIfMissing(
+  runtime: ConnectedPostgresRuntime,
+  workspace: AccountingWorkspaceService,
+  rawTenantId: string,
+  rawLegalEntityId: string,
+  preferredActorUserId?: string,
+): Promise<boolean> {
+  const store = workspace.store;
+  const tId = parseTenantId(rawTenantId);
+  const leId = parseLegalEntityId(rawLegalEntityId);
+
+  if (store.getCompany(tId, leId) !== null) {
+    return true;
+  }
+
+  const candidateUsers = new Set<string>(store.listUsers().map((u) => u.userId));
+  if (preferredActorUserId) {
+    candidateUsers.add(parseUserId(preferredActorUserId));
+  }
+
+  for (const rawUserId of candidateUsers) {
+    const uId = parseUserId(rawUserId);
+    for (const action of ['read', 'write'] as const) {
+      const facts = await runtime.securityServices.authorizationDataSource.getFacts({
+        userId: uId,
+        tenantId: tId,
+        legalEntityId: leId,
+        action,
+      });
+      if (facts.membership) {
+        store.upsertMembership(facts.membership);
+      }
+      for (const grant of facts.grants) {
+        store.upsertGrant(grant);
+      }
+    }
+  }
+
+  const activeReaderGrant = store
+    .listGrantsForCompany(tId, leId)
+    .find(
+      (g) =>
+        g.action === 'read' &&
+        g.revokedAt === null &&
+        (store.getUserById(g.userId) !== null || g.userId === preferredActorUserId),
+    );
+  const defaultOwnerId =
+    tId === TENANT_1_ID ? DEMO_USER_JAN_ID : tId === TENANT_2_ID ? DEMO_USER_PIOTR_ID : null;
+  const fallbackOwnerReadGrant = defaultOwnerId
+    ? store
+        .listGrantsForCompany(tId, leId)
+        .find(
+          (g) =>
+            g.userId === defaultOwnerId &&
+            g.action === 'read' &&
+            g.revokedAt === null &&
+            store.getUserById(parseUserId(defaultOwnerId)) !== null,
+        )
+    : undefined;
+  const readerUserId = activeReaderGrant?.userId ?? fallbackOwnerReadGrant?.userId ?? null;
+  if (!readerUserId) {
+    return false;
+  }
+
+  const hydrated = await readCompanyReadOnlyWithSignedContext(
+    runtime,
+    {
+      purpose: 'company',
+      actorUserId: readerUserId,
+      tenantId: tId,
+      legalEntityId: leId,
+    },
+    (scope) => hydrateSingleCompanyFromScope(scope, tId, leId),
+  );
+
+  if (!hydrated) {
+    return false;
+  }
+
+  store.saveCompany(hydrated.company);
+  for (const proposal of hydrated.mcpProposals) {
+    store.upsertMcpProposal(proposal);
+  }
+
+  const existingAuditIds = new Set(
+    store.listAuditEvents({ tenantId: tId, legalEntityId: leId }).map((e) => e.auditEventId),
+  );
+  const newAudits = hydrated.auditEvents
+    .filter((e) => !existingAuditIds.has(e.auditEventId))
+    .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+  for (const auditEvent of newAudits) {
+    store.appendAuditEvent(auditEvent);
+  }
+
+  for (const pref of hydrated.notificationPrefs) {
+    await workspace.notificationsEngine.configurePreferences({
+      tenantId: tId,
+      legalEntityId: leId,
+      userId: pref.userId,
+      recipientEmail: pref.recipientEmail,
+      frequency: pref.frequency,
+      optionalRemindersOptedOut: pref.optOut,
+      explicitDisabledStages: pref.disabledStages as never[],
+    });
+  }
+
+  return true;
+}
+
+export async function discoverAndHydrateMissingCompaniesForTenants(
+  runtime: ConnectedPostgresRuntime,
+  workspace: AccountingWorkspaceService,
+  rawTenantIds: readonly string[],
+  extraCandidateUserIds: readonly string[] = [],
+  options?: { readonly includeDemoSeedFallback?: boolean },
+): Promise<void> {
+  const store = workspace.store;
+  const candidateUserIds = Array.from(
+    new Set<string>([
+      ...store.listUsers().map((u) => u.userId),
+      ...DEMO_PERSONAS_SEED.map((p) => p.userId),
+      ...extraCandidateUserIds,
+    ]),
+  );
+
+  const queue: { tenantId: string; legalEntityId: string }[] = [];
+  const queuedKeys = new Set<string>();
+  const enqueue = (tenantId: string, legalEntityId: string): void => {
+    const key = `${tenantId}:${legalEntityId}`;
+    if (!queuedKeys.has(key)) {
+      queuedKeys.add(key);
+      queue.push({ tenantId, legalEntityId });
+    }
+  };
+
+  if (options?.includeDemoSeedFallback) {
+    for (const seedComp of DEMO_COMPANIES_SEED) {
+      if (rawTenantIds.includes(seedComp.tenantId)) {
+        enqueue(seedComp.tenantId, seedComp.legalEntityId);
+      }
+    }
+  }
+
+  for (const rawTenantId of Array.from(new Set(rawTenantIds))) {
+    const tId = parseTenantId(rawTenantId);
+    const discovered = await listTenantCompanyGrantsForAdminFacts(
+      runtime.connection.db,
+      runtime.signer,
+      {
+        tenantId: tId,
+        candidateUserIds,
+      },
+    );
+
+    for (const mRow of discovered.memberships) {
+      store.upsertMembership({
+        ...mRow,
+        tenantId: parseTenantId(mRow.tenantId),
+        userId: parseUserId(mRow.userId),
+      });
+    }
+
+    const seenGrantIds = new Set<string>();
+    const discoveredUserIds = new Set<string>(discovered.memberships.map((m) => m.userId));
+    for (const gRow of discovered.grants) {
+      seenGrantIds.add(gRow.grantId);
+      discoveredUserIds.add(gRow.userId);
+      store.upsertGrant({
+        grantId: gRow.grantId,
+        tenantId: parseTenantId(gRow.tenantId),
+        userId: parseUserId(gRow.userId),
+        legalEntityId: parseLegalEntityId(gRow.legalEntityId),
+        action: gRow.action,
+        validFrom: gRow.validFrom,
+        validUntil: gRow.validUntil,
+        revokedAt: gRow.revokedAt,
+      });
+      enqueue(gRow.tenantId, gRow.legalEntityId);
+    }
+
+    if (discovered.grants.length > 0) {
+      const now = new Date();
+      for (const comp of store.listCompaniesForTenant(tId)) {
+        for (const cached of store.listGrantsForCompany(tId, comp.legalEntityId)) {
+          if (
+            discoveredUserIds.has(cached.userId) &&
+            cached.revokedAt === null &&
+            !seenGrantIds.has(cached.grantId)
+          ) {
+            store.upsertGrant({
+              ...cached,
+              revokedAt: now,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  for (const target of queue) {
+    await hydrateCompanyIntoWorkspaceIfMissing(
+      runtime,
+      workspace,
+      target.tenantId,
+      target.legalEntityId,
+    );
+  }
+}
+
 export async function hydrateWorkspaceFromPostgres(
   runtime: ConnectedPostgresRuntime,
   sandboxIssuer: string,
@@ -814,136 +1024,16 @@ export async function hydrateWorkspaceFromPostgres(
     }
   }
 
-  // 2. Odkrycie wszystkich firm w każdym tenancie bezpośrednio z tabeli company_access_grant
-  //    w czystej transakcji odczytowej z podpisanym kontekstem `facts` (zero sztucznych wierszy
-  //    w accounting_document oraz zero sztucznych zdarzeń w security_decision_event).
-  const queue: { tenantId: string; legalEntityId: string }[] = DEMO_COMPANIES_SEED.map((c) => ({
-    tenantId: c.tenantId,
-    legalEntityId: c.legalEntityId,
-  }));
-  const knownKeys = new Set(queue.map((q) => `${q.tenantId}:${q.legalEntityId}`));
-
-  for (const rawTenantId of [TENANT_1_ID, TENANT_2_ID]) {
-    const fallbackEntityId =
-      DEMO_COMPANIES_SEED.find((c) => c.tenantId === rawTenantId)?.legalEntityId ??
-      '00000000-0000-4000-8000-000000000000';
-    for (const user of store.listUsers()) {
-      const grantRows = await readCompanyReadOnlyWithSignedContext(
-        runtime,
-        {
-          purpose: 'facts',
-          actorUserId: user.userId,
-          tenantId: rawTenantId,
-          legalEntityId: fallbackEntityId,
-        },
-        (scope) => scope.listActorTenantCompanyGrants(),
-      );
-      for (const row of grantRows) {
-        store.upsertGrant({
-          grantId: row.grantId,
-          tenantId: parseTenantId(row.tenantId),
-          userId: parseUserId(row.userId),
-          legalEntityId: parseLegalEntityId(row.legalEntityId),
-          action: row.action,
-          validFrom: row.validFrom,
-          validUntil: row.validUntil,
-          revokedAt: row.revokedAt,
-        });
-        const key = `${row.tenantId}:${row.legalEntityId}`;
-        if (!knownKeys.has(key)) {
-          knownKeys.add(key);
-          queue.push({ tenantId: row.tenantId, legalEntityId: row.legalEntityId });
-        }
-      }
-    }
-  }
-
-  const visited = new Set<string>();
-  const collectedAudits: AuditLogEntry[] = [];
-
-  while (queue.length > 0) {
-    const target = queue.shift()!;
-    const key = `${target.tenantId}:${target.legalEntityId}`;
-    if (visited.has(key)) {
-      continue;
-    }
-    visited.add(key);
-
-    const tId = parseTenantId(target.tenantId);
-    const leId = parseLegalEntityId(target.legalEntityId);
-
-    // Hydracja członkostw i grantów dostępu (read + write) dla wszystkich użytkowników
-    for (const user of store.listUsers()) {
-      for (const action of ['read', 'write'] as const) {
-        const facts = await runtime.securityServices.authorizationDataSource.getFacts({
-          userId: user.userId,
-          tenantId: tId,
-          legalEntityId: leId,
-          action,
-        });
-        if (facts.membership) {
-          store.upsertMembership(facts.membership);
-        }
-        for (const grant of facts.grants) {
-          store.upsertGrant(grant);
-        }
-      }
-    }
-
-    const activeReaderGrant = store
-      .listGrantsForCompany(tId, leId)
-      .find((g) => g.revokedAt === null && store.getUserById(g.userId) !== null);
-    const defaultOwnerId =
-      target.tenantId === TENANT_1_ID
-        ? DEMO_USER_JAN_ID
-        : target.tenantId === TENANT_2_ID
-          ? DEMO_USER_PIOTR_ID
-          : null;
-    const readerUserId =
-      activeReaderGrant?.userId ??
-      (defaultOwnerId && store.getUserById(parseUserId(defaultOwnerId)) ? defaultOwnerId : null);
-    if (!readerUserId) {
-      continue;
-    }
-
-    const hydrated = await readCompanyReadOnlyWithSignedContext(
-      runtime,
-      {
-        purpose: 'company',
-        actorUserId: readerUserId,
-        tenantId: target.tenantId,
-        legalEntityId: target.legalEntityId,
-      },
-      (scope) => hydrateSingleCompanyFromScope(scope, target.tenantId, target.legalEntityId),
-    );
-
-    if (!hydrated) {
-      continue;
-    }
-
-    store.saveCompany(hydrated.company);
-    for (const proposal of hydrated.mcpProposals) {
-      store.upsertMcpProposal(proposal);
-    }
-    collectedAudits.push(...hydrated.auditEvents);
-
-    for (const pref of hydrated.notificationPrefs) {
-      await workspace.notificationsEngine.configurePreferences({
-        tenantId: target.tenantId,
-        legalEntityId: target.legalEntityId,
-        userId: pref.userId,
-        recipientEmail: pref.recipientEmail,
-        frequency: pref.frequency,
-        optionalRemindersOptedOut: pref.optOut,
-        explicitDisabledStages: pref.disabledStages as never[],
-      });
-    }
-  }
-
-  collectedAudits.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
-  for (const auditEvent of collectedAudits) {
-    store.appendAuditEvent(auditEvent);
-  }
+  // 2. Odkrycie i hydracja wszystkich firm w każdym tenancie przez administracyjne `facts`
+  //    z obiektem `command` (`pap_admin_allowed` + `pap_grant_read`, zero DML i zero wpisów
+  //    w `security_decision_event`).
+  await discoverAndHydrateMissingCompaniesForTenants(
+    runtime,
+    workspace,
+    [TENANT_1_ID, TENANT_2_ID],
+    [],
+    { includeDemoSeedFallback: true },
+  );
 
   return workspace;
 }

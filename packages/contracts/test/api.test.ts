@@ -223,5 +223,12 @@ describe('@pap/contracts/api schemas', () => {
       obligations: [],
     });
     expect(calendar.year).toBe(2026);
+
+    expect(() =>
+      ApproveAndPostDocumentRequestSchema.parse({
+        netPln: '123456789012345.00',
+        vatPln: '23.00',
+      }),
+    ).toThrow(/15 znaków/);
   });
 });
