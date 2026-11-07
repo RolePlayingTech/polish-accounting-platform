@@ -36,8 +36,15 @@ const OFFICIAL_POLISH_LEGAL_PUBLISHERS: ReadonlySet<string> = new Set([
   'www.monitorpolski.gov.pl',
   'podatki.gov.pl',
   'www.podatki.gov.pl',
+  'ksef.podatki.gov.pl',
+  'gov.pl',
+  'www.gov.pl',
   'zus.pl',
   'www.zus.pl',
+  'nbp.pl',
+  'www.nbp.pl',
+  'uodo.gov.pl',
+  'www.uodo.gov.pl',
 ]);
 
 export function isOfficialPolishLegalUrl(value: string): boolean {
