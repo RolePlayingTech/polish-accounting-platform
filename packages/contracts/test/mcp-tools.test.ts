@@ -119,6 +119,11 @@ describe('MCP tool contracts', () => {
       OfficialHttpsUrlSchema.safeParse('https://phishing.example.com/isap.sejm.gov.pl').success,
     ).toBe(false);
     expect(
+      OfficialHttpsUrlSchema.safeParse('https://podatki.gov.pl.attacker.example/ksef').success,
+    ).toBe(false);
+    expect(OfficialHttpsUrlSchema.safeParse('https://evil-gov.pl/edoreczenia').success).toBe(false);
+    expect(OfficialHttpsUrlSchema.safeParse('http://ksef.podatki.gov.pl/').success).toBe(false);
+    expect(
       OfficialHttpsUrlSchema.safeParse(
         'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20240000361',
       ).success,
@@ -126,6 +131,18 @@ describe('MCP tool contracts', () => {
     expect(
       OfficialHttpsUrlSchema.safeParse('https://dziennikustaw.gov.pl/DU/2024/361').success,
     ).toBe(true);
+    expect(
+      OfficialHttpsUrlSchema.safeParse(
+        'https://ksef.podatki.gov.pl/informacje-ogolne-ksef-20/harmonogram-wdrozenia-ksef/',
+      ).success,
+    ).toBe(true);
+    expect(OfficialHttpsUrlSchema.safeParse('https://www.gov.pl/web/e-doreczenia').success).toBe(
+      true,
+    );
+    expect(OfficialHttpsUrlSchema.safeParse('https://nbp.pl/statystyka-i-sprawozdawczosc/').success).toBe(
+      true,
+    );
+    expect(OfficialHttpsUrlSchema.safeParse('https://uodo.gov.pl/').success).toBe(true);
 
     expect(KsefReferenceNumberSchema.safeParse('5260258901-20261015-ABCDEF-01').success).toBe(true);
     expect(KsefReferenceNumberSchema.safeParse('5260258901-20260231-ABCDEF-01').success).toBe(

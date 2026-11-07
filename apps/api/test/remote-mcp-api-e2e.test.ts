@@ -3,7 +3,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { COMPANY_JDG_KPIR_ID, SYNTHETIC_COUNTERPARTY_NIPS, TENANT_1_ID } from '@pap/application';
+import {
+  COMPANY_JDG_KPIR_ID,
+  COMPANY_JDG_RYCZALT_ID,
+  COMPANY_SPZOO_ID,
+  SYNTHETIC_COUNTERPARTY_NIPS,
+  TENANT_1_ID,
+} from '@pap/application';
+import { POLISH_LEGAL_RULES_REGISTRY } from '@pap/domain';
 import {
   IssueMcpChallengeResponseSchema,
   IssueSandboxTokenResponseSchema,
@@ -15,6 +22,7 @@ import {
   ExplainAccountingItemOutputSchema,
   GetLegalBasisOutputSchema,
   GetMonthCloseChecklistOutputSchema,
+  GetMonthlyTaxObligationsOutputSchema,
   ListMyCompaniesOutputSchema,
   ListUnpaidInvoicesOutputSchema,
   McpToolErrorEnvelopeSchema,
@@ -152,6 +160,49 @@ describe('Live Streamable HTTP MCP (/api/v1/mcp) inside @pap/api', () => {
       expect(legalBasisCall.isError).toBeFalsy();
       const legalBasis = GetLegalBasisOutputSchema.parse(legalBasisCall.structuredContent);
       expect(legalBasis.legalBasis.actTitle).toContain('podatku od towarów i usług');
+
+      for (const rule of POLISH_LEGAL_RULES_REGISTRY) {
+        const ruleCall = await client.callTool({
+          name: 'get_legal_basis',
+          arguments: {
+            obligationOrRuleCode: rule.ruleCode,
+            asOfDate: rule.validFrom,
+          },
+        });
+        expect(
+          ruleCall.isError,
+          `Expected get_legal_basis(${rule.ruleCode} @ ${rule.validFrom}) to succeed`,
+        ).toBeFalsy();
+        const parsedRule = GetLegalBasisOutputSchema.parse(ruleCall.structuredContent);
+        expect(parsedRule.legalBasis.officialUrl.startsWith('https://')).toBe(true);
+      }
+
+      for (const entityId of [COMPANY_JDG_KPIR_ID, COMPANY_JDG_RYCZALT_ID, COMPANY_SPZOO_ID]) {
+        const obligationsCall = await client.callTool({
+          name: 'get_monthly_tax_obligations',
+          arguments: {
+            tenantId: TENANT_1_ID,
+            legalEntityId: entityId,
+            period: '2026-03',
+          },
+        });
+        expect(
+          obligationsCall.isError,
+          `Expected get_monthly_tax_obligations(${entityId}) to succeed`,
+        ).toBeFalsy();
+        const obligationsOut = GetMonthlyTaxObligationsOutputSchema.parse(
+          obligationsCall.structuredContent,
+        );
+        expect(obligationsOut.obligations.length).toBeGreaterThan(0);
+        expect(
+          obligationsOut.obligations.some((o) =>
+            o.legalBasis.officialUrl.includes('ksef.podatki.gov.pl'),
+          ),
+        ).toBe(true);
+        expect(
+          obligationsOut.obligations.some((o) => o.legalBasis.officialUrl.includes('gov.pl')),
+        ).toBe(true);
+      }
 
       const unpaidCall = await client.callTool({
         name: 'list_unpaid_invoices',
