@@ -1066,7 +1066,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
           legalForm: 'jdg',
           taxRegime: 'ryczalt',
           vatStatus: 'zwolniony',
-          zusStage: 'maly_zus_plus',
+          zusStage: 'preferencyjny_zus',
         }),
       });
       expect(failedRes.status).toBe(500);
@@ -1132,7 +1132,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
         legalForm: 'jdg',
         taxRegime: 'ryczalt',
         vatStatus: 'zwolniony',
-        zusStage: 'maly_zus_plus',
+        zusStage: 'preferencyjny_zus',
       }),
     });
     expect(retryRes.status).toBe(201);
