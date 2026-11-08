@@ -118,7 +118,6 @@ export async function createApiRuntimeServicesAsync(
       innerWorkspace,
       oidcVerifier,
       sandboxIssuer: sandboxOidc.getIssuer(),
-      migratorDatabaseUrl: env.PAP_MIGRATOR_DATABASE_URL,
     });
     const mcpGateway = workspace.createBoundMcpGateway();
 

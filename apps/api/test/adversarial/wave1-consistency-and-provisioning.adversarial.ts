@@ -29,7 +29,7 @@ import {
   connectDatabase,
   provisionDatabaseContextKey,
 } from '@pap/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../../src/app.module.js';
 import type { PostgresBackedWorkspaceService } from '../../src/runtime/postgres-workspace-persistence.js';
 import { ACCOUNTING_WORKSPACE_SERVICE } from '../../src/runtime/workspace-runtime.js';
@@ -154,6 +154,13 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
     });
     await seedApp.close();
+  });
+
+  afterEach(async () => {
+    for (const app of openApps) {
+      await app.close();
+    }
+    openApps.clear();
   });
 
   afterAll(async () => {
@@ -916,8 +923,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
     expect(martaReplayAfterRevokeRes.status).toBe(403);
   });
 
-  // Odblokowywane w PR dla Issue #80 (atomowy provisioning firmy i unikalność NIP w DB)
-  it.skip('ADV-80-01: 20 równoczesnych prób utworzenia firmy o tym samym NIP na dwóch instancjach tworzy dokładnie 1 kompletną firmę, a pozostałe kończą się 409 bez sierot w DB', async () => {
+  it('ADV-80-01: 20 równoczesnych prób utworzenia firmy o tym samym NIP na dwóch instancjach tworzy dokładnie 1 kompletną firmę, a pozostałe kończą się 409 bez sierot w DB', async () => {
     const runtimeEnv = {
       NODE_ENV: 'test',
       PAP_DATABASE_ENV: 'test',
@@ -1014,5 +1020,128 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
     expect(companiesOnB.companies.find((c) => c.nip === contestedNip)?.legalEntityId).toBe(
       winnerEntityId,
     );
+  });
+
+  it('ADV-80-02: awaria w połowie provisioningu firmy (po zapisie legal_entity, grantów i company_tax_settings) wycofuje całą transakcję bez sierot w DB i w pamięci RAM', async () => {
+    const runtimeEnv = {
+      NODE_ENV: 'test',
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: runtimeUrl,
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_KEY_ID: keyId,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
+    };
+
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
+    openApps.add(appA);
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
+    openApps.add(appB);
+
+    const serviceA = appA.get<PostgresBackedWorkspaceService>(ACCOUNTING_WORKSPACE_SERVICE);
+    const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
+    const headersB = await issuePersonaHeaders(urlB, 'jan-testowy');
+
+    // Poprawny modulo-11 NIP testowy (7740001454)
+    const rollbackNip = '7740001454';
+    let abortedLegalEntityId: string | null = null;
+
+    serviceA.beforeProvisionCommitHook = async (info) => {
+      if (info.nip === rollbackNip) {
+        abortedLegalEntityId = info.legalEntityId;
+        throw new Error('simulated_halfway_provisioning_failure_adv_80_02');
+      }
+    };
+
+    try {
+      const failedRes = await fetch(`${urlA}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          displayName: 'Firma Wycofana W Połowie Provisioningu',
+          nip: rollbackNip,
+          legalForm: 'jdg',
+          taxRegime: 'ryczalt',
+          vatStatus: 'zwolniony',
+          zusStage: 'preferencyjny_zus',
+        }),
+      });
+      expect(failedRes.status).toBe(500);
+      expect(abortedLegalEntityId).not.toBeNull();
+    } finally {
+      serviceA.beforeProvisionCommitHook = undefined;
+    }
+
+    // 1. W bazie PostgreSQL nie pozostał żaden ślad po wycofanej firmie
+    const taxRowsAfterAbort = await owner!.client<{ legal_entity_id: string }[]>`
+      SELECT legal_entity_id
+      FROM ${owner!.client(dataSchema)}.company_tax_settings
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND nip = ${rollbackNip}
+    `;
+    expect(taxRowsAfterAbort).toHaveLength(0);
+
+    const profileRowsAfterAbort = await owner!.client<{ legal_entity_id: string }[]>`
+      SELECT legal_entity_id
+      FROM ${owner!.client(dataSchema)}.entity_profile_version
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND profile_json->>'nip' = ${rollbackNip}
+    `;
+    expect(profileRowsAfterAbort).toHaveLength(0);
+
+    const entityRowsAfterAbort = await owner!.client<{ id: string }[]>`
+      SELECT id
+      FROM ${owner!.client(dataSchema)}.legal_entity
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND id = ${abortedLegalEntityId!}::uuid
+    `;
+    expect(entityRowsAfterAbort).toHaveLength(0);
+
+    const grantRowsAfterAbort = await owner!.client<{ grant_id: string }[]>`
+      SELECT grant_id
+      FROM ${owner!.client(dataSchema)}.company_access_grant
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND legal_entity_id = ${abortedLegalEntityId!}::uuid
+    `;
+    expect(grantRowsAfterAbort).toHaveLength(0);
+
+    // 2. Ani Instancja A (autor wycofanej transakcji), ani Instancja B nie widzą wycofanej firmy
+    const listA = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${urlA}/api/v1/tenants/${TENANT_1_ID}/companies`, { headers: headersA })
+      ).json(),
+    );
+    const listB = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${urlB}/api/v1/tenants/${TENANT_1_ID}/companies`, { headers: headersB })
+      ).json(),
+    );
+    expect(listA.companies.filter((c) => c.nip === rollbackNip)).toHaveLength(0);
+    expect(listB.companies.filter((c) => c.nip === rollbackNip)).toHaveLength(0);
+
+    // 3. Ponowienie po usunięciu awarii tworzy kompletną firmę z tym samym NIP bez fałszywego 409
+    const retryRes = await fetch(`${urlB}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+      method: 'POST',
+      headers: headersB,
+      body: JSON.stringify({
+        displayName: 'Firma Utworzona Po Wycofaniu Provisioningu',
+        nip: rollbackNip,
+        legalForm: 'jdg',
+        taxRegime: 'ryczalt',
+        vatStatus: 'zwolniony',
+        zusStage: 'preferencyjny_zus',
+      }),
+    });
+    expect(retryRes.status).toBe(201);
+
+    const listAAfterRetry = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${urlA}/api/v1/tenants/${TENANT_1_ID}/companies`, { headers: headersA })
+      ).json(),
+    );
+    expect(listAAfterRetry.companies.filter((c) => c.nip === rollbackNip)).toHaveLength(1);
   });
 });

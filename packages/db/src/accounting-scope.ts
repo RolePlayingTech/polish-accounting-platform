@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ConfirmedTransactionRollbackError,
+  type CompanyRlsSessionContext,
+} from '@pap/application';
+import {
   legalEntityId as parseLegalEntityId,
   tenantId as parseTenantId,
   userId as parseUserId,
@@ -26,6 +30,7 @@ import {
 } from './accounting-schema.js';
 import {
   createPostgresCompanyActionScope,
+  ScopeClosedError,
   type PostgresCompanyActionScope,
   type PostgresCompanyActionScopeDriver,
 } from './company-operation-probe.js';
@@ -37,7 +42,11 @@ import {
 } from './core-schema.js';
 import { appendSecurityDecision } from './security-audit.js';
 import type { PostgresContextSigner } from './signed-context.js';
-import { readTransactionClockNow, runManagedTransaction } from './transaction-primitives.js';
+import {
+  applyLocalRlsSessionContext,
+  readTransactionClockNow,
+  runManagedTransaction,
+} from './transaction-primitives.js';
 
 export type GroszeInput = number | bigint;
 
@@ -2756,6 +2765,9 @@ export interface ProvisionCompanyInPostgresInput {
   readonly profileJson?: Readonly<Record<string, unknown>>;
   readonly nip: string;
   readonly decisionAt?: Date;
+  readonly onProvisionedInTransaction?:
+    | ((scope: PostgresAccountingScope) => Promise<void>)
+    | undefined;
 }
 
 export type ProvisionCompanyDeniedReason =
@@ -2781,10 +2793,36 @@ export type ProvisionCompanyInPostgresResult =
       readonly reason: ProvisionCompanyDeniedReason;
     };
 
+function isDuplicateCompanyNipRollbackError(error: unknown): boolean {
+  let current: unknown =
+    error instanceof ConfirmedTransactionRollbackError ? error.cause : error;
+  for (let depth = 0; depth < 4 && typeof current === 'object' && current !== null; depth += 1) {
+    const rec = current as {
+      readonly code?: unknown;
+      readonly constraint_name?: unknown;
+      readonly constraint?: unknown;
+      readonly message?: unknown;
+      readonly cause?: unknown;
+    };
+    if (
+      rec.code === '23505' &&
+      (rec.constraint_name === 'company_tax_settings_tenant_nip_unique' ||
+        rec.constraint === 'company_tax_settings_tenant_nip_unique' ||
+        (typeof rec.message === 'string' &&
+          rec.message.includes('company_tax_settings_tenant_nip_unique')))
+    ) {
+      return true;
+    }
+    current = rec.cause;
+  }
+  return false;
+}
+
 /**
- * Bezpieczne utworzenie firmy (`legal_entity`), początkowego profilu (`entity_profile_version`)
- * oraz nadanie uprawnień `read`/`write` dla aktywnych właścicieli i administratorów tenanta
- * przez rolę runtime (`NOSUPERUSER`, `NOBYPASSRLS`) bez użycia `PAP_MIGRATOR_DATABASE_URL` (#58).
+ * Bezpieczne, jedno-transakcyjne utworzenie firmy (`legal_entity`), początkowego profilu (`entity_profile_version`),
+ * nadanie uprawnień `read`/`write` dla aktywnych właścicieli i administratorów tenanta oraz opcjonalny zapis
+ * `company_tax_settings`, planu kont i preferencji powiadomień przez rolę runtime (`NOSUPERUSER`, `NOBYPASSRLS`)
+ * bez użycia `PAP_MIGRATOR_DATABASE_URL` (#58, #80, ADR-010).
  * Operacja wymaga kontekstu `purpose = 'provision_company'`, aktywnej roli `tenant_owner`/`tenant_admin`
  * w `pap_admin_allowed(tenant_id)` oraz powiązanego rekordu audytu w `access_management_event`
  * i `security_decision_event`.
@@ -2797,102 +2835,178 @@ export async function provisionCompanyInPostgres(
   const canonicalTenantId = parseTenantId(input.tenantId);
   const canonicalActorId = parseUserId(input.actorUserId);
   const canonicalLegalEntityId = parseLegalEntityId(input.legalEntityId);
+  const canonicalNip = input.nip.replace(/[\s-]/g, '').trim();
   const operationId = input.operationId ?? randomUUID();
   const requestId = input.requestId ?? operationId;
 
-  return runManagedTransaction(
-    db,
-    async (tx) => {
-      const decisionTime = input.decisionAt ?? (await readTransactionClockNow(tx));
-      const decisionAtIso = decisionTime.toISOString();
-      await signer.apply(tx, {
-        purpose: 'provision_company',
-        actorUserId: canonicalActorId,
-        targetUserId: canonicalActorId,
-        tenantId: canonicalTenantId,
-        legalEntityId: canonicalLegalEntityId,
-        operationId,
-        decisionAt: decisionAtIso,
-        command: {
-          kind: 'provision_company',
-          operationId,
+  try {
+    return await runManagedTransaction(
+      db,
+      async (tx) => {
+        if (/^\d{10}$/.test(canonicalNip)) {
+          await tx.execute(
+            sql`SELECT pg_advisory_xact_lock(hashtext(${`pap:provision:${canonicalTenantId}`}), hashtext(${canonicalNip}))`,
+          );
+        }
+
+        const decisionTime = input.decisionAt ?? (await readTransactionClockNow(tx));
+        const decisionAtIso = decisionTime.toISOString();
+        await signer.apply(tx, {
+          purpose: 'provision_company',
+          actorUserId: canonicalActorId,
+          targetUserId: canonicalActorId,
           tenantId: canonicalTenantId,
-          userId: canonicalActorId,
           legalEntityId: canonicalLegalEntityId,
-          displayName: input.displayName,
-          profileCode: input.profileCode,
-          profileJson: input.profileJson ?? {},
-          nip: input.nip,
-        },
-      });
-
-      const [row] = await tx.execute<{
-        result:
-          | {
-              readonly ok: true;
-              readonly receipt: {
-                readonly operationId: string;
-                readonly occurredAt: string;
-                readonly changed: boolean;
-                readonly grantId: string | null;
-                readonly legalEntityId: string;
-              };
-            }
-          | {
-              readonly ok: false;
-              readonly reason: ProvisionCompanyDeniedReason;
-            };
-      }>(sql`SELECT pap_provision_company() AS result`);
-
-      const payload = row?.result;
-      if (!payload) {
-        throw new Error('Brak wyniku z funkcji pap_provision_company().');
-      }
-
-      if (!payload.ok) {
-        return deepFreeze({
-          ok: false as const,
-          reason: payload.reason,
-        });
-      }
-
-      const occurredAtDate = new Date(payload.receipt.occurredAt);
-      const deduplicated = occurredAtDate.getTime() !== decisionTime.getTime();
-
-      if (!deduplicated) {
-        await appendSecurityDecision(
-          tx,
-          {
-            requestId,
+          operationId,
+          decisionAt: decisionAtIso,
+          command: {
+            kind: 'provision_company',
             operationId,
-            accessManagementOperationId: operationId,
-            actorId: canonicalActorId,
-            targetUserId: canonicalActorId,
             tenantId: canonicalTenantId,
+            userId: canonicalActorId,
             legalEntityId: canonicalLegalEntityId,
-            action: 'provision_company',
-            kind: 'access',
-            decision: 'allow',
-            outcome: 'committed',
-            reason: 'authorized_tenant_administration',
-            decidedAt: decisionAtIso,
+            displayName: input.displayName,
+            profileCode: input.profileCode,
+            profileJson: input.profileJson ?? {},
+            nip: canonicalNip,
           },
-          signer,
-        );
-      }
+        });
 
+        const [row] = await tx.execute<{
+          result:
+            | {
+                readonly ok: true;
+                readonly receipt: {
+                  readonly operationId: string;
+                  readonly occurredAt: string;
+                  readonly changed: boolean;
+                  readonly grantId: string | null;
+                  readonly legalEntityId: string;
+                };
+              }
+            | {
+                readonly ok: false;
+                readonly reason: ProvisionCompanyDeniedReason;
+              };
+        }>(sql`SELECT pap_provision_company() AS result`);
+
+        const payload = row?.result;
+        if (!payload) {
+          throw new Error('Brak wyniku z funkcji pap_provision_company().');
+        }
+
+        if (!payload.ok) {
+          return deepFreeze({
+            ok: false as const,
+            reason: payload.reason,
+          });
+        }
+
+        const occurredAtDate = new Date(payload.receipt.occurredAt);
+        const deduplicated = occurredAtDate.getTime() !== decisionTime.getTime();
+
+        if (!deduplicated) {
+          await appendSecurityDecision(
+            tx,
+            {
+              requestId,
+              operationId,
+              accessManagementOperationId: operationId,
+              actorId: canonicalActorId,
+              targetUserId: canonicalActorId,
+              tenantId: canonicalTenantId,
+              legalEntityId: canonicalLegalEntityId,
+              action: 'provision_company',
+              kind: 'access',
+              decision: 'allow',
+              outcome: 'committed',
+              reason: 'authorized_tenant_administration',
+              decidedAt: decisionAtIso,
+            },
+            signer,
+          );
+
+          if (input.onProvisionedInTransaction) {
+            const provisionedEntityId = parseLegalEntityId(payload.receipt.legalEntityId);
+            const companyInitOperationId = randomUUID();
+            const companySessionContext: CompanyRlsSessionContext = Object.freeze({
+              operationId: companyInitOperationId,
+              decisionAt: decisionAtIso,
+              actorUserId: canonicalActorId,
+              tenantId: canonicalTenantId,
+              legalEntityId: provisionedEntityId,
+              action: 'write',
+            });
+            await signer.apply(tx, {
+              purpose: 'company',
+              actorUserId: canonicalActorId,
+              tenantId: canonicalTenantId,
+              legalEntityId: provisionedEntityId,
+              action: 'write',
+              operationId: companyInitOperationId,
+              decisionAt: decisionAtIso,
+            });
+            await applyLocalRlsSessionContext(tx, companySessionContext);
+            let initScopeActive = true;
+            const assertInitScopeActive = (): void => {
+              if (!initScopeActive) {
+                throw new ScopeClosedError();
+              }
+            };
+            const initScope = createPostgresAccountingScope(
+              Object.freeze({
+                tx,
+                context: companySessionContext,
+                assertActive: assertInitScopeActive,
+              }),
+            );
+            try {
+              await initScope.recordOperationProbe(companyInitOperationId);
+              await input.onProvisionedInTransaction(initScope);
+            } finally {
+              initScopeActive = false;
+            }
+            await appendSecurityDecision(
+              tx,
+              {
+                requestId: randomUUID(),
+                operationId: companyInitOperationId,
+                actorId: canonicalActorId,
+                tenantId: canonicalTenantId,
+                legalEntityId: provisionedEntityId,
+                action: 'write',
+                kind: 'company',
+                decision: 'allow',
+                outcome: 'committed',
+                reason: 'explicit_company_grant',
+                decidedAt: decisionAtIso,
+              },
+              signer,
+            );
+          }
+        }
+
+        return deepFreeze({
+          ok: true as const,
+          operationId: payload.receipt.operationId,
+          deduplicated,
+          legalEntityId: payload.receipt.legalEntityId,
+          tenantId: canonicalTenantId,
+          grantId: payload.receipt.grantId ?? null,
+          occurredAt: payload.receipt.occurredAt,
+        });
+      },
+      (result) => result.ok,
+    );
+  } catch (err) {
+    if (isDuplicateCompanyNipRollbackError(err)) {
       return deepFreeze({
-        ok: true as const,
-        operationId: payload.receipt.operationId,
-        deduplicated,
-        legalEntityId: payload.receipt.legalEntityId,
-        tenantId: canonicalTenantId,
-        grantId: payload.receipt.grantId ?? null,
-        occurredAt: payload.receipt.occurredAt,
+        ok: false as const,
+        reason: 'duplicate_company_nip' as const,
       });
-    },
-    (result) => result.ok,
-  );
+    }
+    throw err;
+  }
 }
 
 export interface DiscoveredAccessibleEntityRecord {

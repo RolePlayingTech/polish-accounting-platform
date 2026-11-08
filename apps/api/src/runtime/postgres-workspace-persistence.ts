@@ -69,6 +69,7 @@ import {
   COMPANY_JDG_KPIR_ID,
   COMPANY_TENANT_2_ID,
   DEMO_DEFAULT_PERIOD,
+  InMemoryAccountingWorkspaceStore,
   TENANT_1_ID,
   TENANT_2_ID,
   auditIdentifier,
@@ -134,7 +135,6 @@ import {
   persistMcpChallengeMutation,
   persistNotificationsStateMutation,
   persistSandboxTestEmailMutation,
-  provisionNewCompanyDirectoryWithMigrator,
 } from './postgres-workspace-mutations.js';
 
 type MaybePromise<T> = T | Promise<T>;
@@ -212,7 +212,6 @@ export interface PostgresBackedWorkspaceServiceOptions {
   readonly innerWorkspace: AccountingWorkspaceService;
   readonly oidcVerifier: OidcAccessTokenVerifier;
   readonly sandboxIssuer: string;
-  readonly migratorDatabaseUrl?: string | undefined;
 }
 
 export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
@@ -221,7 +220,6 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   private readonly innerWorkspace: AccountingWorkspaceService;
   private readonly oidcVerifier: OidcAccessTokenVerifier;
   private readonly sandboxIssuer: string;
-  private readonly migratorDatabaseUrl: string | undefined;
   private readonly mutationMutex = new AsyncMutationMutex();
   private readonly boundGateways = new Set<PapMcpGateway>();
   private readonly inFlightBatchSync = new Map<string, Promise<boolean>>();
@@ -237,6 +235,19 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         readonly legalEntityId: string;
         readonly action: 'read' | 'write';
         readonly actionKind: string | undefined;
+      }) => Promise<void> | void)
+    | undefined;
+
+  /**
+   * Test-only hook invoked inside the active PostgreSQL provisioning transaction after
+   * `legal_entity`, `entity_profile_version`, `company_access_grant`, `company_tax_settings`,
+   * `ledger_account` and `notification_preference` are inserted, immediately before `COMMIT`.
+   */
+  public beforeProvisionCommitHook:
+    | ((info: {
+        readonly tenantId: string;
+        readonly legalEntityId: string;
+        readonly nip: string;
       }) => Promise<void> | void)
     | undefined;
 
@@ -260,7 +271,6 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     this.store = options.innerWorkspace.store;
     this.oidcVerifier = options.oidcVerifier;
     this.sandboxIssuer = options.sandboxIssuer;
-    this.migratorDatabaseUrl = options.migratorDatabaseUrl?.trim() || undefined;
 
     const origPortFactory = this.innerWorkspace.createWorkspaceMcpDomainPort.bind(
       this.innerWorkspace,
@@ -1066,136 +1076,126 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     }
 
     const verifiedMembership = facts.membership;
-    await discoverAndHydrateMissingCompaniesForTenants(
-      this.runtime,
-      this.innerWorkspace,
-      [tId],
-      [actor.userId],
+    const txStore = new InMemoryAccountingWorkspaceStore();
+    const txWorkspace = new AccountingWorkspaceService({
+      store: txStore,
+      clock: this.innerWorkspace.clock,
+      seedDemoData: false,
+      sandboxMailboxTransport: this.innerWorkspace.sandboxMailboxTransport,
+    });
+    for (const u of this.store.listUsers()) {
+      txStore.upsertUser(u);
+    }
+    if (!txStore.getUserById(uId)) {
+      txStore.upsertUser({
+        userId: uId,
+        subject: actor.subject ?? uId,
+        displayName: actor.displayName ?? `Użytkownik ${uId.slice(0, 8)}`,
+        email: actor.email ?? 'uzytkownik@pap.example',
+        active: true,
+      });
+    }
+    txStore.upsertMembership(verifiedMembership);
+    const created = txWorkspace.createCompany(actor, rawTenantId, parsedReq.data);
+    const candidateCompany = txWorkspace.store.getCompany(
+      parseTenantId(created.company.tenantId),
+      parseLegalEntityId(created.company.legalEntityId),
+    );
+    if (!candidateCompany) {
+      throw new Error('Nie udało się przygotować stanu nowej firmy przed zapisem w PostgreSQL.');
+    }
+
+    const companyMetaPayload = {
+      displayName: created.company.displayName,
+      nip: created.company.nip,
+      legalForm: created.company.legalForm,
+      taxRegime: created.company.taxRegime,
+      vatStatusSimple: created.company.vatStatus,
+      taxProfile: created.taxProfile,
+      settingsHistory: [],
+      ...(created.address !== undefined ? { address: created.address } : {}),
+    };
+
+    const provisionRes = await provisionCompanyInPostgres(
+      this.runtime.connection.db,
+      this.runtime.signer,
+      {
+        operationId: randomUUID(),
+        requestId: actor.requestId ?? randomUUID(),
+        actorUserId: actor.userId,
+        tenantId: created.company.tenantId,
+        legalEntityId: created.company.legalEntityId,
+        displayName: created.company.displayName,
+        profileCode: created.taxProfile.profileCode,
+        nip: created.company.nip,
+        profileJson: companyMetaPayload as unknown as Record<string, unknown>,
+        onProvisionedInTransaction: async (initScope) => {
+          await persistCompanyTaxSettingsToScope(initScope, candidateCompany);
+          await ensureLedgerAccountsInScope(initScope, candidateCompany);
+          await initScope.upsertNotificationPreference({
+            id: deterministicUuidV4(
+              `notif-pref:${candidateCompany.tenantId}:${candidateCompany.legalEntityId}:${actor.userId}`,
+            ),
+            userId: actor.userId,
+            recipientEmail: actor.email || 'powiadomienia-sandbox@pap.example',
+            frequency: 'standard',
+            optOut: false,
+          });
+          if (this.beforeProvisionCommitHook) {
+            await this.beforeProvisionCommitHook({
+              tenantId: created.company.tenantId,
+              legalEntityId: created.company.legalEntityId,
+              nip: created.company.nip,
+            });
+          }
+        },
+      },
     );
 
-    return this.runAtomicMutation(async () => {
-      this.store.upsertMembership(verifiedMembership);
-      const created = this.innerWorkspace.createCompany(actor, rawTenantId, parsedReq.data);
-
-      const companyMetaPayload = {
-        displayName: created.company.displayName,
-        nip: created.company.nip,
-        legalForm: created.company.legalForm,
-        taxRegime: created.company.taxRegime,
-        vatStatusSimple: created.company.vatStatus,
-        taxProfile: created.taxProfile,
-        settingsHistory: [],
-        ...(created.address !== undefined ? { address: created.address } : {}),
-      };
-
-      let provisionedViaRuntime: boolean;
-      try {
-        const provisionRes = await provisionCompanyInPostgres(
-          this.runtime.connection.db,
-          this.runtime.signer,
-          {
-            operationId: randomUUID(),
-            requestId: actor.requestId ?? randomUUID(),
-            actorUserId: actor.userId,
-            tenantId: created.company.tenantId,
-            legalEntityId: created.company.legalEntityId,
-            displayName: created.company.displayName,
-            profileCode: created.taxProfile.profileCode,
-            nip: created.company.nip,
-            profileJson: companyMetaPayload as unknown as Record<string, unknown>,
-          },
-        );
-        if (!provisionRes.ok) {
-          if (provisionRes.reason === 'duplicate_company_nip') {
-            throw new AccountingWorkspaceConflictError(
-              'duplicate_company_nip',
-              `W tej organizacji istnieje już podmiot z numerem NIP ${created.company.nip}.`,
-            );
-          }
-          if (provisionRes.reason === 'operation_conflict') {
-            throw new AccountingWorkspaceConflictError(
-              'operation_conflict',
-              'Konflikt idempotencji operacji tworzenia firmy w PostgreSQL.',
-            );
-          }
-          if (provisionRes.reason === 'invalid_command') {
-            throw new AccountingWorkspaceValidationError(
-              400,
-              'invalid_company_request',
-              'Niepoprawne dane tworzonego podmiotu prawnego.',
-            );
-          }
-          throw new AccountingWorkspaceAccessError(
-            403,
-            provisionRes.reason === 'active_membership_required'
-              ? 'active_membership_required'
-              : 'admin_role_required',
-            'Odmowa utworzenia nowego podmiotu prawnego w bieżącej organizacji.',
-          );
-        }
-        provisionedViaRuntime = true;
-      } catch (err) {
-        if (
-          err instanceof AccountingWorkspaceConflictError ||
-          err instanceof AccountingWorkspaceValidationError ||
-          err instanceof AccountingWorkspaceAccessError
-        ) {
-          throw err;
-        }
-        if (this.migratorDatabaseUrl) {
-          await provisionNewCompanyDirectoryWithMigrator({
-            migratorUrl: this.migratorDatabaseUrl,
-            databaseEnv: this.runtime.databaseEnv,
-            dataSchema: this.runtime.dataSchema,
-            tenantId: created.company.tenantId,
-            legalEntityId: created.company.legalEntityId,
-            displayName: created.company.displayName,
-            profileCode: created.taxProfile.profileCode,
-            ownerUserId: actor.userId,
-          });
-          provisionedViaRuntime = true;
-        } else {
-          throw err;
-        }
-      }
-
-      if (provisionedViaRuntime) {
-        await this.executeCompanyOperationUnlocked(
-          actor,
-          created.company.tenantId,
-          created.company.legalEntityId,
-          'write',
-          async (scope, txWorkspace) => {
-            const comp = txWorkspace.store.getCompany(
-              parseTenantId(created.company.tenantId),
-              parseLegalEntityId(created.company.legalEntityId),
-            );
-            if (comp) {
-              await persistCompanyTaxSettingsToScope(scope, comp);
-              await ensureLedgerAccountsInScope(scope, comp);
-              await scope.upsertNotificationPreference({
-                id: deterministicUuidV4(
-                  `notif-pref:${comp.tenantId}:${comp.legalEntityId}:${actor.userId}`,
-                ),
-                userId: actor.userId,
-                recipientEmail: actor.email || 'powiadomienia-sandbox@pap.example',
-                frequency: 'standard',
-                optOut: false,
-              });
-            }
-          },
-          { skipInitialHydration: true },
+    if (!provisionRes.ok) {
+      if (provisionRes.reason === 'duplicate_company_nip') {
+        throw new AccountingWorkspaceConflictError(
+          'duplicate_company_nip',
+          `W tej organizacji istnieje już podmiot z numerem NIP ${created.company.nip}.`,
         );
       }
-
-      await this.syncCompanyGrantsIntoMemory(
-        actor.userId,
-        created.company.tenantId,
-        created.company.legalEntityId,
+      if (provisionRes.reason === 'operation_conflict') {
+        throw new AccountingWorkspaceConflictError(
+          'operation_conflict',
+          'Konflikt idempotencji operacji tworzenia firmy w PostgreSQL.',
+        );
+      }
+      if (provisionRes.reason === 'invalid_command') {
+        throw new AccountingWorkspaceValidationError(
+          400,
+          'invalid_company_request',
+          'Niepoprawne dane tworzonego podmiotu prawnego.',
+        );
+      }
+      throw new AccountingWorkspaceAccessError(
+        403,
+        provisionRes.reason === 'active_membership_required'
+          ? 'active_membership_required'
+          : 'admin_role_required',
+        'Odmowa utworzenia nowego podmiotu prawnego w bieżącej organizacji.',
       );
+    }
 
-      return created;
+    this.store.upsertMembership(verifiedMembership);
+    await syncCommittedTxWorkspaceToInner({
+      txWorkspace,
+      innerWorkspace: this.innerWorkspace,
+      rawTenantId: created.company.tenantId,
+      rawLegalEntityId: created.company.legalEntityId,
+      actorUserId: actor.userId,
     });
+    await this.syncCompanyGrantsIntoMemory(
+      actor.userId,
+      created.company.tenantId,
+      created.company.legalEntityId,
+    );
+
+    return created;
   }
 
   getCompanyOverview(
