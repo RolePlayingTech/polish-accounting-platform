@@ -11,6 +11,7 @@ import {
   generateBalanceSheet,
   generateProfitAndLoss,
   generateTrialBalance,
+  qualifyCitVehicleExpense,
 } from '../src/full-ledger/index.js';
 import {
   computeEasterSundayUtc,
@@ -339,6 +340,91 @@ describe('full-ledger (UoR) & CIT — double-entry invariants, Trial Balance, P&
     });
     expect(cit19Exceeded.appliedRatePct).toBe(19);
     expect(cit19Exceeded.advanceDueGrosze).toBe(3_800_000); // 38 000,00 zł
+
+    // Przekroczenie bieżącego limitu 2 mln EUR netto wg kursu NBP z 2 stycznia (8 534 000 zł w 2025 r., 8 431 000 zł w 2026 r. — art. 19 ust. 1 pkt 2 i art. 25 ust. 1g CIT, #65):
+    const cit2025WithinCurrentCap = calculateCitAdvance({
+      period: '2025-10',
+      ytdTaxableRevenuesGrosze: 853_400_000, // równo 8 534 000,00 zł netto <= 8 534 000,00 zł w 2025 r.
+      ytdTaxDeductibleCostsGrosze: 753_400_000, // dochód 1 000 000,00 zł
+      smallTaxpayerStatus: true,
+      priorYearGrossSalesGrosze: 500_000_000,
+    });
+    expect(cit2025WithinCurrentCap.appliedRatePct).toBe(9);
+    expect(cit2025WithinCurrentCap.currentYearSmallTaxpayerLimitNetGrosze).toBe(853_400_000);
+    expect(cit2025WithinCurrentCap.advanceDueGrosze).toBe(9_000_000); // 90 000,00 zł
+
+    const cit2026CurrentCapExceeded = calculateCitAdvance({
+      period: '2026-10',
+      ytdTaxableRevenuesGrosze: 845_000_000, // 8 450 000,00 zł netto > 8 431 000,00 zł w 2026 r.!
+      ytdTaxDeductibleCostsGrosze: 745_000_000, // dochód 1 000 000,00 zł
+      smallTaxpayerStatus: true,
+      priorYearGrossSalesGrosze: 500_000_000, // mały podatnik z roku poprzedniego, ale przekroczył limit bieżący!
+    });
+    expect(cit2026CurrentCapExceeded.appliedRatePct).toBe(19);
+    expect(cit2026CurrentCapExceeded.currentYearSmallTaxpayerLimitNetGrosze).toBe(843_100_000);
+    expect(cit2026CurrentCapExceeded.advanceDueGrosze).toBe(19_000_000); // 190 000,00 zł
+    expect(
+      cit2026CurrentCapExceeded.explanation.warnings.some(
+        (w) => w.code === 'CIT_CURRENT_YEAR_2M_EUR_NET_LIMIT_EXCEEDED',
+      ),
+    ).toBe(true);
+  });
+
+  it('qualifies mixed-use passenger car expenses in CIT as 75% KUP / 25% NKUP (art. 16 ust. 1 pkt 51 CIT) and separates period vs cumulative trial balance turnovers (#65)', () => {
+    // 1 000,00 zł netto + 230,00 zł VAT -> 50% VAT do odliczenia = 115,00 zł; koszt bilansowy = 1 115,00 zł
+    // 75% KUP = 836,25 zł (83 625 gr), 25% NKUP = 278,75 zł (27 875 gr)
+    const carCit = qualifyCitVehicleExpense({
+      eventDate: '2026-03-20',
+      usageKind: 'mixed_use_75',
+      netGrosze: 100_000,
+      vatGrosze: 23_000,
+      taxpayerVatActive: true,
+    });
+    expect(carCit.deductibleVatGrosze).toBe(11_500);
+    expect(carCit.nonDeductibleVatGrosze).toBe(11_500);
+    expect(carCit.accountingExpenseBaseGrosze).toBe(111_500);
+    expect(carCit.taxDeductibleKupGrosze).toBe(83_625);
+    expect(carCit.nonDeductibleNkupGrosze).toBe(27_875);
+
+    const febEntry = createValidatedJournalEntry({
+      id: 'j-feb',
+      entryNumber: 'DK/2026/02/001',
+      bookingDate: '2026-02-10',
+      documentDate: '2026-02-10',
+      documentNumber: 'WB/02/1',
+      description: 'Wpłata kapitału zakładowego',
+      lines: [
+        { accountCode: '130', side: 'Wn', amountGrosze: 1_000_000, description: 'Rachunek bankowy' },
+        { accountCode: '800', side: 'Ma', amountGrosze: 1_000_000, description: 'Kapitał zakładowy' },
+      ],
+    });
+    const marEntry = createValidatedJournalEntry({
+      id: 'j-mar',
+      entryNumber: 'DK/2026/03/001',
+      bookingDate: '2026-03-15',
+      documentDate: '2026-03-15',
+      documentNumber: 'FV/03/1',
+      description: 'Sprzedaż usług w marcu',
+      lines: [
+        { accountCode: '130', side: 'Wn', amountGrosze: 200_000, description: 'Wpływ na rachunek' },
+        { accountCode: '700', side: 'Ma', amountGrosze: 200_000, description: 'Przychód ze sprzedaży' },
+      ],
+    });
+
+    const tbMarch = generateTrialBalance([febEntry, marEntry], undefined, { period: '2026-03' });
+    expect(tbMarch.isBalanced).toBe(true);
+    expect(tbMarch.totalOpeningBalanceWnGrosze).toBe(1_000_000);
+    expect(tbMarch.totalOpeningBalanceMaGrosze).toBe(1_000_000);
+    expect(tbMarch.totalPeriodTurnoverWnGrosze).toBe(200_000);
+    expect(tbMarch.totalPeriodTurnoverMaGrosze).toBe(200_000);
+    expect(tbMarch.totalTurnoverWnGrosze).toBe(1_200_000);
+    expect(tbMarch.totalEndingBalanceWnGrosze).toBe(1_200_000);
+
+    const bankRow = tbMarch.rows.find((r) => r.accountCode === '130');
+    expect(bankRow?.openingBalanceWnGrosze).toBe(1_000_000);
+    expect(bankRow?.periodTurnoverWnGrosze).toBe(200_000);
+    expect(bankRow?.turnoverWnGrosze).toBe(1_200_000);
+    expect(bankRow?.endingBalanceWnGrosze).toBe(1_200_000);
   });
 });
 
@@ -502,5 +588,67 @@ describe('bank-reconciliation — Polish CSV & MT940 parsers and deterministic i
     expect(() => parseMt940Statement(corruptedMt940)).toThrow(
       /Niezgodność kontrolna wyciągu MT940/,
     );
+  });
+
+  it('deducts paid social ZUS from ryczałt revenue before evaluating 60 000 zł / 300 000 zł health tiers (art. 81 ust. 2e u.ś.o.z., #66)', () => {
+    // Przychód narastająco 63 000,00 zł, zapłacone składki społeczne ZUS 5 364,87 zł (3 * 1 788,29 zł):
+    // 63 000,00 - 5 364,87 = 57 635,13 zł <= 60 000,00 zł -> pozostaje w I progu (498,35 zł w 2026 r.)!
+    const withDeduction = calculateMonthlyZusContributions({
+      period: '2026-04',
+      zusScheme: 'duzy_zus',
+      taxForm: 'ryczalt',
+      voluntarySicknessInsurance: true,
+      ytdRyczaltRevenueGrosze: 6_300_000,
+      ytdDeductibleSocialZusGrosze: 536_487,
+    });
+    expect(withDeduction.ryczaltHealthTier).toBe(1);
+    expect(withDeduction.healthContributionGrosze).toBe(49_835);
+  });
+
+  it('supports all three ZUS DRA statutory deadlines (5th, 15th, 20th day per art. 47 ust. 1 pkt 2, 3, 4 u.s.u.s.) and handles MT940 Dec/Jan year rollover (#66)', () => {
+    const budgetZus = generateTaxCalendarObligations(
+      {
+        profileCode: 'spzoo_pelne_ksiegi',
+        vatStatus: 'zwolniony_przedmiotowo',
+        vatSettlementPeriod: 'not_applicable',
+        zusApplicable: true,
+        zusPayerKind: 'budget_5th',
+      },
+      '2026-03',
+    ).find((o) => o.code === 'ZUS_DRA_PAYMENT');
+    expect(budgetZus?.statutoryDueDate).toBe('2026-04-05');
+    expect(budgetZus?.effectiveDueDate).toBe('2026-04-07'); // 5 kwietnia 2026 to Wielkanoc, 6 kwietnia Poniedziałek Wielkanocny -> 7 kwietnia!
+
+    const soleShareholderSpzooZus = generateTaxCalendarObligations(
+      {
+        profileCode: 'spzoo_pelne_ksiegi',
+        vatStatus: 'czynny',
+        vatSettlementPeriod: 'monthly',
+        zusApplicable: true,
+        zusPayerKind: 'other_20th',
+      },
+      '2026-03',
+    ).find((o) => o.code === 'ZUS_DRA_PAYMENT');
+    expect(soleShareholderSpzooZus?.statutoryDueDate).toBe('2026-04-20');
+
+    // MT940 na przełomie roku: valueDate 251231 (2025-12-31) + entryDate 0102 -> bookingDate 2026-01-02;
+    // oraz valueDate 260102 (2026-01-02) + entryDate 1231 -> bookingDate 2025-12-31
+    const mt940YearBoundary = [
+      ':20:STMT-BOUNDARY',
+      ':25:PL61109010140000071219812874',
+      ':60F:C251231PLN1000,00',
+      ':61:2512310102C500,00NTRFNONREF//REF-DEC-JAN',
+      ':86:020~20Wpłata sylwestrowa zaksięgowana w styczniu~32Klient A',
+      ':61:2601021231D200,00NTRFNONREF//REF-JAN-DEC',
+      ':86:020~20Obciążenie z grudnia z walutą styczniową~32Dostawca B',
+      ':62F:C260102PLN1300,00',
+      '-}',
+    ].join('\n');
+
+    const boundaryParsed = parseMt940Statement(mt940YearBoundary);
+    expect(boundaryParsed.transactions[0]?.valueDate).toBe('2025-12-31');
+    expect(boundaryParsed.transactions[0]?.bookingDate).toBe('2026-01-02');
+    expect(boundaryParsed.transactions[1]?.valueDate).toBe('2026-01-02');
+    expect(boundaryParsed.transactions[1]?.bookingDate).toBe('2025-12-31');
   });
 });

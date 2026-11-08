@@ -44,6 +44,7 @@ export interface CreateVatRegisterEntryInput {
   readonly deductionMode?: VatDeductionMode;
   readonly annex15Item?: boolean;
   readonly hasVat26AndMileageLog?: boolean;
+  readonly isFixedAssetPurchase?: boolean;
   readonly ksefReferenceNumber?: string;
   readonly ksefMarker?: KsefInvoiceMarker;
   readonly customRegistry?: readonly LegalRule[];
@@ -63,6 +64,7 @@ export interface VatRegisterEntry {
   readonly vatTotalGrosze: number;
   readonly grossGrosze: number;
   readonly deductionMode: VatDeductionMode;
+  readonly isFixedAssetPurchase?: boolean;
   readonly deductibleVatGrosze: number;
   readonly nonDeductibleVatGrosze: number;
   readonly mandatorySplitPaymentMpp: boolean;
@@ -158,13 +160,37 @@ export function createVatRegisterEntry(input: CreateVatRegisterEntryInput): VatR
     }
   }
 
+  const isFixedAssetPurchase =
+    input.registerType === 'purchase' && input.isFixedAssetPurchase === true;
+
+  if (
+    (input.vatRate === '0' || input.vatRate === 'zw' || input.vatRate === 'np') &&
+    input.vatTotalGrosze !== 0
+  ) {
+    warnings.push({
+      code: 'VAT_NONZERO_FOR_ZERO_OR_EXEMPT_RATE',
+      severity: 'requires_expert_review',
+      message: `Wskazano niezerową kwotę podatku VAT (${formatPlnFromGrosze(input.vatTotalGrosze)}) przy stawce "${input.vatRate}" — wymagana weryfikacja księgowego.`,
+    });
+  }
+
+  const normalizedKsefRef =
+    input.ksefReferenceNumber !== undefined && input.ksefReferenceNumber.trim().length > 0
+      ? input.ksefReferenceNumber.trim()
+      : undefined;
+
   const requireKsefMarkers = jpkSchemaRule.parameters?.['requireKsefMarkers'] === true;
   const resolvedKsefMarker: KsefInvoiceMarker =
-    input.ksefMarker ?? (input.ksefReferenceNumber !== undefined ? 'NrKSeF' : 'BFK');
+    input.ksefMarker ?? (normalizedKsefRef !== undefined ? 'NrKSeF' : 'BFK');
 
-  if (requireKsefMarkers && resolvedKsefMarker === 'NrKSeF' && !input.ksefReferenceNumber) {
+  if (requireKsefMarkers && resolvedKsefMarker === 'NrKSeF' && normalizedKsefRef === undefined) {
     throw new Error(
       'W strukturze JPK_V7M(3) oznaczenie NrKSeF wymaga podania numeru identyfikującego fakturę w KSeF.',
+    );
+  }
+  if (requireKsefMarkers && resolvedKsefMarker !== 'NrKSeF' && normalizedKsefRef !== undefined) {
+    throw new Error(
+      `W strukturze JPK_V7M(3) znacznik "${resolvedKsefMarker}" wyklucza jednoczesne podanie numeru KSeF (<xs:choice> pomiędzy NrKSeF a OFF/BFK/DI).`,
     );
   }
 
@@ -251,13 +277,12 @@ export function createVatRegisterEntry(input: CreateVatRegisterEntryInput): VatR
     vatTotalGrosze: input.vatTotalGrosze,
     grossGrosze,
     deductionMode,
+    ...(input.isFixedAssetPurchase !== undefined ? { isFixedAssetPurchase } : {}),
     deductibleVatGrosze,
     nonDeductibleVatGrosze,
     mandatorySplitPaymentMpp,
     ksefMarker: resolvedKsefMarker,
-    ...(input.ksefReferenceNumber !== undefined
-      ? { ksefReferenceNumber: input.ksefReferenceNumber }
-      : {}),
+    ...(normalizedKsefRef !== undefined ? { ksefReferenceNumber: normalizedKsefRef } : {}),
     explanation,
   };
 }
@@ -454,13 +479,65 @@ export interface CalculateJpkV7mSummaryInput {
   readonly period: string;
   readonly entries: readonly VatRegisterEntry[];
   readonly carryOverInputVatFromPreviousPeriodGrosze?: number;
+  /** Opcjonalna kwota zwrotu na rachunek bankowy wykazywana w polu P_54 (w groszach; pomniejsza P_62 = P_53 - P_54). */
+  readonly refundRequestedP54Grosze?: number;
   readonly customRegistry?: readonly LegalRule[];
+}
+
+/**
+ * Pola części deklaracyjnej JPK_V7M(2) / JPK_V7M(3) w pełnych złotych (zgodnie z typami XSD TKwotaC / TKwotaCNieujemna).
+ */
+export interface JpkV7mDeclarationFields {
+  /** Dostawa towarów oraz świadczenie usług na terytorium kraju, zwolnione od podatku (zw). */
+  readonly P_10: number;
+  /** Dostawa towarów oraz świadczenie usług poza terytorium kraju (np). */
+  readonly P_11: number;
+  /** Dostawa towarów oraz świadczenie usług na terytorium kraju opodatkowane stawką 0%. */
+  readonly P_13: number;
+  /** Podstawa opodatkowania stawką 5% w pełnych złotych. */
+  readonly P_15: number;
+  /** Podatek należny wg stawki 5% w pełnych złotych. */
+  readonly P_16: number;
+  /** Podstawa opodatkowania stawką 7% albo 8% w pełnych złotych. */
+  readonly P_17: number;
+  /** Podatek należny wg stawki 7% albo 8% w pełnych złotych. */
+  readonly P_18: number;
+  /** Podstawa opodatkowania stawką 22% albo 23% w pełnych złotych. */
+  readonly P_19: number;
+  /** Podatek należny wg stawki 22% albo 23% w pełnych złotych. */
+  readonly P_20: number;
+  /** Łączna podstawa opodatkowania (P_10 + P_11 + P_13 + P_15 + P_17 + P_19) w pełnych złotych. */
+  readonly P_37: number;
+  /** Łączna wysokość podatku należnego (P_16 + P_18 + P_20) w pełnych złotych. */
+  readonly P_38: number;
+  /** Wysokość nadwyżki podatku naliczonego nad należnym z poprzedniej deklaracji w pełnych złotych. */
+  readonly P_39: number;
+  /** Wartość netto nabycia towarów i usług zaliczanych do środków trwałych (w części z prawem do odliczenia). */
+  readonly P_40: number;
+  /** Wysokość podatku naliczonego od nabycia środków trwałych w pełnych złotych. */
+  readonly P_41: number;
+  /** Wartość netto nabycia pozostałych towarów i usług (w części z prawem do odliczenia, bez none_0 i z 50% dla art. 86a). */
+  readonly P_42: number;
+  /** Wysokość podatku naliczonego od nabycia pozostałych towarów i usług w pełnych złotych. */
+  readonly P_43: number;
+  /** Łączna wysokość podatku naliczonego do odliczenia (P_39 + P_41 + P_43) w pełnych złotych. */
+  readonly P_48: number;
+  /** Wysokość podatku podlegająca wpłacie do urzędu skarbowego: max(0, P_38 - P_48). */
+  readonly P_51: number;
+  /** Wysokość nadwyżki podatku naliczonego nad należnym: max(0, P_48 - P_38). */
+  readonly P_53: number;
+  /** Kwota nadwyżki do zwrotu na rachunek bankowy podatnika (P_54 <= P_53). */
+  readonly P_54: number;
+  /** Kwota nadwyżki do przeniesienia na następny okres rozliczeniowy (P_62 = P_53 - P_54). */
+  readonly P_62: number;
 }
 
 export interface JpkV7mDeclarationSummary {
   readonly period: string;
   readonly schemaVersion: string;
   readonly salesNetTotalGrosze: number;
+  readonly salesBaseRoundedPlnP37Grosze: number;
+  readonly deductiblePurchaseNetTotalGrosze: number;
   readonly outputVatExactGrosze: number;
   readonly inputVatExactGrosze: number;
   readonly outputVatRoundedPlnGrosze: number;
@@ -469,12 +546,25 @@ export interface JpkV7mDeclarationSummary {
   readonly totalInputVatPlnGrosze: number;
   readonly taxDueToPayP51Grosze: number;
   readonly excessInputVatToCarryOverP53Grosze: number;
+  readonly refundToBankAccountP54Grosze: number;
+  readonly carryForwardToNextPeriodP62Grosze: number;
+  readonly declarationFields: JpkV7mDeclarationFields;
   readonly explanation: LegalExplanation;
+}
+
+function getDeductiblePurchaseNetGrosze(entry: VatRegisterEntry): number {
+  if (entry.deductionMode === 'none_0') {
+    return 0;
+  }
+  if (entry.deductionMode === 'vehicle_mixed_50') {
+    return multiplyGroszeByBps(entry.netGrosze, 5000, 'half_up');
+  }
+  return entry.netGrosze;
 }
 
 /**
  * Agreguje rejestry sprzedaży i zakupów za wskazany miesiąc do części deklaracyjnej JPK_V7M
- * (z zaokrągleniem kwot podatku należnego i naliczonego w części deklaracyjnej do pełnych złotych wg art. 63 § 1 OP).
+ * zgodnie z zasadami zaokrąglania per wiersz stawki/kategorii (`P_10`–`P_62`, art. 63 § 1 OP oraz broszura MF JPK_VAT).
  */
 export function calculateJpkV7mSummary(
   input: CalculateJpkV7mSummaryInput,
@@ -484,6 +574,8 @@ export function calculateJpkV7mSummary(
   }
   const carryOverPrev = input.carryOverInputVatFromPreviousPeriodGrosze ?? 0;
   assertNonNegativeGrosze(carryOverPrev, 'carryOverInputVatFromPreviousPeriodGrosze');
+  const requestedRefundPrevGrosze = input.refundRequestedP54Grosze ?? 0;
+  assertNonNegativeGrosze(requestedRefundPrevGrosze, 'refundRequestedP54Grosze');
 
   const eventDate = `${input.period}-01`;
   const ruleOptions =
@@ -499,15 +591,111 @@ export function calculateJpkV7mSummary(
   const outputVatExactGrosze = sumGrosze(salesEntries.map((item) => item.deductibleVatGrosze));
   const inputVatExactGrosze = sumGrosze(purchaseEntries.map((item) => item.deductibleVatGrosze));
 
-  // W schemie XSD JPK_V7M(2) i JPK_V7M(3) pola P_38 i P_48 są typu TKwotaC (liczby całkowite ze znakiem)
-  const outputVatRounded = roundSignedTaxAmountPln(outputVatExactGrosze).roundedGrosze;
-  const inputVatCurrentRounded = roundSignedTaxAmountPln(inputVatExactGrosze).roundedGrosze;
-  const carryOverRounded = roundTaxAmountOrdynacjaArt63(carryOverPrev).roundedGrosze;
-  const totalInputVatPlnGrosze = addGrosze(inputVatCurrentRounded, carryOverRounded);
+  const salesZwNetGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === 'zw').map((e) => e.netGrosze),
+  );
+  const salesNpNetGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === 'np').map((e) => e.netGrosze),
+  );
+  const sales0NetGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === '0').map((e) => e.netGrosze),
+  );
+  const sales5NetGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === '5').map((e) => e.netGrosze),
+  );
+  const sales5VatGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === '5').map((e) => e.deductibleVatGrosze),
+  );
+  const sales8NetGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === '8').map((e) => e.netGrosze),
+  );
+  const sales8VatGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === '8').map((e) => e.deductibleVatGrosze),
+  );
+  const sales23NetGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === '23').map((e) => e.netGrosze),
+  );
+  const sales23VatGrosze = sumGrosze(
+    salesEntries.filter((e) => e.vatRate === '23').map((e) => e.deductibleVatGrosze),
+  );
 
-  const netDiff = subtractGrosze(outputVatRounded, totalInputVatPlnGrosze);
-  const taxDueToPayP51Grosze = netDiff > 0 ? netDiff : 0;
-  const excessInputVatToCarryOverP53Grosze = netDiff < 0 ? -netDiff : 0;
+  // Zaokrąglenia do pełnych złotych wykonywane są dla każdego pola stawki z osobna (art. 63 § 1 OP + XSD JPK_V7M)
+  const P_10 = roundSignedTaxAmountPln(salesZwNetGrosze).roundedFullPln;
+  const P_11 = roundSignedTaxAmountPln(salesNpNetGrosze).roundedFullPln;
+  const P_13 = roundSignedTaxAmountPln(sales0NetGrosze).roundedFullPln;
+  const P_15 = roundSignedTaxAmountPln(sales5NetGrosze).roundedFullPln;
+  const P_16 = roundSignedTaxAmountPln(sales5VatGrosze).roundedFullPln;
+  const P_17 = roundSignedTaxAmountPln(sales8NetGrosze).roundedFullPln;
+  const P_18 = roundSignedTaxAmountPln(sales8VatGrosze).roundedFullPln;
+  const P_19 = roundSignedTaxAmountPln(sales23NetGrosze).roundedFullPln;
+  const P_20 = roundSignedTaxAmountPln(sales23VatGrosze).roundedFullPln;
+
+  const P_37 = P_10 + P_11 + P_13 + P_15 + P_17 + P_19;
+  const P_38 = P_16 + P_18 + P_20;
+
+  const fixedAssetPurchases = purchaseEntries.filter((e) => e.isFixedAssetPurchase);
+  const otherPurchases = purchaseEntries.filter((e) => !e.isFixedAssetPurchase);
+
+  const fixedAssetNetGrosze = sumGrosze(fixedAssetPurchases.map(getDeductiblePurchaseNetGrosze));
+  const fixedAssetVatGrosze = sumGrosze(fixedAssetPurchases.map((e) => e.deductibleVatGrosze));
+  const otherPurchaseNetGrosze = sumGrosze(otherPurchases.map(getDeductiblePurchaseNetGrosze));
+  const otherPurchaseVatGrosze = sumGrosze(otherPurchases.map((e) => e.deductibleVatGrosze));
+  const deductiblePurchaseNetTotalGrosze = addGrosze(fixedAssetNetGrosze, otherPurchaseNetGrosze);
+
+  const P_39 = roundTaxAmountOrdynacjaArt63(carryOverPrev).roundedFullPln;
+  const P_40 = roundSignedTaxAmountPln(fixedAssetNetGrosze).roundedFullPln;
+  const P_41 = roundSignedTaxAmountPln(fixedAssetVatGrosze).roundedFullPln;
+  const P_42 = roundSignedTaxAmountPln(otherPurchaseNetGrosze).roundedFullPln;
+  const P_43 = roundSignedTaxAmountPln(otherPurchaseVatGrosze).roundedFullPln;
+  const P_48 = P_39 + P_41 + P_43;
+
+  const outputVatRounded = P_38 * 100;
+  const inputVatCurrentRounded = (P_41 + P_43) * 100;
+  const carryOverRounded = P_39 * 100;
+  const totalInputVatPlnGrosze = P_48 * 100;
+  const salesBaseRoundedPlnP37Grosze = P_37 * 100;
+
+  const netDiffPln = P_38 - P_48;
+  const P_51 = netDiffPln > 0 ? netDiffPln : 0;
+  const P_53 = netDiffPln < 0 ? -netDiffPln : 0;
+
+  const requestedRefundPln = roundTaxAmountOrdynacjaArt63(requestedRefundPrevGrosze).roundedFullPln;
+  if (requestedRefundPln > P_53) {
+    throw new Error(
+      `Wnioskowany zwrot VAT na rachunek bankowy P_54 (${String(requestedRefundPln)} zł) nie może przekraczać nadwyżki podatku naliczonego nad należnym P_53 (${String(P_53)} zł).`,
+    );
+  }
+  const P_54 = requestedRefundPln;
+  const P_62 = P_53 - P_54;
+
+  const taxDueToPayP51Grosze = P_51 * 100;
+  const excessInputVatToCarryOverP53Grosze = P_53 * 100;
+  const refundToBankAccountP54Grosze = P_54 * 100;
+  const carryForwardToNextPeriodP62Grosze = P_62 * 100;
+
+  const declarationFields: JpkV7mDeclarationFields = {
+    P_10,
+    P_11,
+    P_13,
+    P_15,
+    P_16,
+    P_17,
+    P_18,
+    P_19,
+    P_20,
+    P_37,
+    P_38,
+    P_39,
+    P_40,
+    P_41,
+    P_42,
+    P_43,
+    P_48,
+    P_51,
+    P_53,
+    P_54,
+    P_62,
+  };
 
   const warnings: ExplanationWarning[] = [];
   if (outputVatRounded < 0 || totalInputVatPlnGrosze < 0) {
@@ -519,17 +707,33 @@ export function calculateJpkV7mSummary(
     });
   }
 
+  const unmappedExemptOrZeroVatGrosze = sumGrosze(
+    salesEntries
+      .filter((e) => e.vatRate === '0' || e.vatRate === 'zw' || e.vatRate === 'np')
+      .map((e) => e.deductibleVatGrosze),
+  );
+  if (unmappedExemptOrZeroVatGrosze !== 0) {
+    warnings.push({
+      code: 'JPK_V7M_UNMAPPED_OUTPUT_VAT_ON_EXEMPT_OR_ZERO_RATE',
+      severity: 'requires_expert_review',
+      message: `W ewidencji sprzedaży wykryto niezerowy VAT (${formatPlnFromGrosze(unmappedExemptOrZeroVatGrosze)}) przypisany do stawki 0% / zw / np — pozycja wymaga korekty przed wysyłką JPK_V7M.`,
+    });
+  }
+
   const schemaVersion = getRequiredStringParameter(jpkRule, 'schemaVersionM');
 
   const steps: ExplanationStep[] = [
     {
       stepNumber: 1,
       label:
-        'Sumowanie podatku należnego z ewidencji sprzedaży i zaokrąglenie ze znakiem TKwotaC (art. 63 § 1 OP)',
-      formula: 'P_38 = round_signed_pln(sum(sales.vat))',
+        'Wyznaczenie zaokrąglonych podstaw opodatkowania (P_10–P_19 -> P_37) oraz podatku należnego per stawka (P_16 + P_18 + P_20 -> P_38)',
+      formula: 'P_38 = round_pln(VAT_5%) + round_pln(VAT_8%) + round_pln(VAT_23%)',
       inputs: {
         salesCount: salesEntries.length,
         outputVatExactGrosze,
+        P_16,
+        P_18,
+        P_20,
       },
       resultFormatted: formatPlnFromGrosze(outputVatRounded),
       resultGrosze: outputVatRounded,
@@ -537,12 +741,15 @@ export function calculateJpkV7mSummary(
     {
       stepNumber: 2,
       label:
-        'Sumowanie podatku naliczonego ze znakiem TKwotaC z ewidencji zakupów wraz z nadwyżką z poprzedniej deklaracji',
-      formula: 'P_48 = round_signed_pln(sum(purchases.deductibleVat)) + round_ordynacja(carryOver)',
+        'Sumowanie podatku naliczonego z ewidencji zakupów (P_41 środki trwałe + P_43 pozostałe) wraz z nadwyżką z poprzedniej deklaracji (P_39)',
+      formula: 'P_48 = P_39 + P_41 + P_43',
       inputs: {
         purchasesCount: purchaseEntries.length,
         inputVatExactGrosze,
         carryOverPrevGrosze: carryOverPrev,
+        P_39,
+        P_41,
+        P_43,
       },
       resultFormatted: formatPlnFromGrosze(totalInputVatPlnGrosze),
       resultGrosze: totalInputVatPlnGrosze,
@@ -550,17 +757,18 @@ export function calculateJpkV7mSummary(
     {
       stepNumber: 3,
       label:
-        'Wyliczenie zobowiązania podatkowego (P_51) lub nadwyżki podatku naliczonego nad należnym (P_53)',
+        'Wyliczenie zobowiązania podatkowego (P_51) lub nadwyżki podatku naliczonego nad należnym (P_53 -> P_54 zwrot / P_62 przeniesienie)',
       formula:
-        'netDiff = P_38 - P_48; if (netDiff > 0) P_51 = netDiff else if (netDiff < 0) P_53 = -netDiff',
+        'netDiff = P_38 - P_48; if (netDiff > 0) P_51 = netDiff else { P_53 = -netDiff; P_62 = P_53 - P_54 }',
       inputs: {
         outputVatRoundedPlnGrosze: outputVatRounded,
         totalInputVatPlnGrosze,
+        refundToBankAccountP54Grosze,
       },
       resultFormatted:
         taxDueToPayP51Grosze > 0
           ? `Do wpłaty P_51: ${formatPlnFromGrosze(taxDueToPayP51Grosze)}`
-          : `Nadwyżka P_53: ${formatPlnFromGrosze(excessInputVatToCarryOverP53Grosze)}`,
+          : `Nadwyżka P_53: ${formatPlnFromGrosze(excessInputVatToCarryOverP53Grosze)} (P_62: ${formatPlnFromGrosze(carryForwardToNextPeriodP62Grosze)})`,
       resultGrosze:
         taxDueToPayP51Grosze > 0 ? taxDueToPayP51Grosze : excessInputVatToCarryOverP53Grosze,
     },
@@ -576,13 +784,17 @@ export function calculateJpkV7mSummary(
       period: input.period,
       entriesCount: periodEntries.length,
       carryOverInputVatFromPreviousPeriodGrosze: carryOverPrev,
+      refundRequestedP54Grosze: requestedRefundPrevGrosze,
     },
     outputs: {
       schemaVersion,
+      salesBaseRoundedPlnP37Grosze,
       outputVatRoundedPlnGrosze: outputVatRounded,
       totalInputVatPlnGrosze,
       taxDueToPayP51Grosze,
       excessInputVatToCarryOverP53Grosze,
+      refundToBankAccountP54Grosze,
+      carryForwardToNextPeriodP62Grosze,
     },
     warnings,
   });
@@ -591,6 +803,8 @@ export function calculateJpkV7mSummary(
     period: input.period,
     schemaVersion,
     salesNetTotalGrosze,
+    salesBaseRoundedPlnP37Grosze,
+    deductiblePurchaseNetTotalGrosze,
     outputVatExactGrosze,
     inputVatExactGrosze,
     outputVatRoundedPlnGrosze: outputVatRounded,
@@ -599,6 +813,9 @@ export function calculateJpkV7mSummary(
     totalInputVatPlnGrosze,
     taxDueToPayP51Grosze,
     excessInputVatToCarryOverP53Grosze,
+    refundToBankAccountP54Grosze,
+    carryForwardToNextPeriodP62Grosze,
+    declarationFields,
     explanation,
   };
 }

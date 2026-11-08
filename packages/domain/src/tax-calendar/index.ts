@@ -29,12 +29,21 @@ export interface DeadlineShiftResult {
   readonly shiftedFromNonWorkingDays: readonly ShiftedNonWorkingDay[];
 }
 
+export type ZusPayerDeadlineKind = 'budget_5th' | 'legal_person_15th' | 'other_20th';
+
 export interface TaxProfileCalendarConfig {
   readonly profileCode: TaxProfileCode;
   readonly supportLevel?: ProfileSupportLevel;
   readonly vatStatus: 'czynny' | 'zwolniony_art_113' | 'zwolniony_przedmiotowo';
   readonly vatSettlementPeriod: 'monthly' | 'quarterly' | 'not_applicable';
   readonly zusApplicable: boolean;
+  /**
+   * Kategoria płatnika ZUS wg art. 47 ust. 1 u.s.u.s.:
+   * - `budget_5th`: jednostki budżetowe i samorządowe zakłady budżetowe (do 5. dnia — pkt 2)
+   * - `legal_person_15th`: płatnicy z osobowością prawną, w tym Sp. z o.o. zatrudniająca ubezpieczonych (do 15. dnia — pkt 3)
+   * - `other_20th`: pozostali płatnicy, w tym JDG, spółki cywilne oraz wspólnik jednoosobowej Sp. z o.o. płacący własne składki (do 20. dnia — pkt 4)
+   */
+  readonly zusPayerKind?: ZusPayerDeadlineKind;
   readonly ksefSales2024Above200M?: boolean;
   readonly monthlyB2bGrossSalesGrosze?: number;
   readonly ceidgRegisteredBefore2025?: boolean;
@@ -279,21 +288,31 @@ export function generateTaxCalendarObligations(
   const holidaysRule = resolveRuleAtDate('STATUTORY_HOLIDAYS_POLAND', eventDate, ruleOptions);
   const obligations: TaxCalendarObligation[] = [];
 
-  // 1. ZUS DRA i składki (15. dla sp. z o.o. posiadających osobowość prawną, 20. dla JDG)
+  // 1. ZUS DRA i składki (5. dla jednostek budżetowych, 15. dla osób prawnych jak Sp. z o.o., 20. dla JDG i pozostałych)
   if (profile.zusApplicable) {
     const zusRule = resolveRuleAtDate('ZUS_DRA_DEADLINE_ART_47', eventDate, ruleOptions);
+    const effectivePayerKind: ZusPayerDeadlineKind =
+      profile.zusPayerKind ??
+      (profile.profileCode === 'spzoo_pelne_ksiegi' ? 'legal_person_15th' : 'other_20th');
+
     const dueDay =
-      profile.profileCode === 'spzoo_pelne_ksiegi'
-        ? getRequiredNumericParameter(zusRule, 'legalPersonDueDay')
-        : getRequiredNumericParameter(zusRule, 'otherPayersDueDay');
+      effectivePayerKind === 'budget_5th'
+        ? getRequiredNumericParameter(zusRule, 'budgetEntityDueDay')
+        : effectivePayerKind === 'legal_person_15th'
+          ? getRequiredNumericParameter(zusRule, 'legalPersonDueDay')
+          : getRequiredNumericParameter(zusRule, 'otherPayersDueDay');
+
+    const zusTitle =
+      effectivePayerKind === 'budget_5th'
+        ? 'Deklaracja ZUS DRA i opłacenie składek (jednostka budżetowa — do 5. dnia)'
+        : effectivePayerKind === 'legal_person_15th'
+          ? 'Deklaracja ZUS DRA i opłacenie składek (płatnik z osobowością prawną — do 15. dnia)'
+          : 'Deklaracja ZUS DRA i opłacenie składek przedsiębiorcy (do 20. dnia)';
 
     obligations.push(
       createDeadlineObligation({
         code: 'ZUS_DRA_PAYMENT',
-        title:
-          profile.profileCode === 'spzoo_pelne_ksiegi'
-            ? 'Deklaracja ZUS DRA i opłacenie składek (płatnik z osobowością prawną — do 15. dnia)'
-            : 'Deklaracja ZUS DRA i opłacenie składek przedsiębiorcy (do 20. dnia)',
+        title: zusTitle,
         category: 'zus',
         period,
         eventDate,

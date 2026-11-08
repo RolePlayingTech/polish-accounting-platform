@@ -847,7 +847,13 @@ export function calculateKpirPitAdvance(input: CalculateKpirPitAdvanceInput): Kp
     );
     effectiveHealthDeduction = Math.min(healthPaid, remainingCapForIncomeDeduction);
 
-    if (addGrosze(healthPaid, healthInKup) > annualHealthCap) {
+    if (healthInKup > annualHealthCap) {
+      warnings.push({
+        code: 'PIT_FLAT_HEALTH_KUP_EXCEEDS_ANNUAL_CAP',
+        severity: 'requires_expert_review',
+        message: `Składka zdrowotna zaliczona już do KUP (${formatPlnFromGrosze(healthInKup)}) przekracza roczny limit ustawowy (${formatPlnFromGrosze(annualHealthCap)}) — wymagana korekta zmniejszająca KUP o ${formatPlnFromGrosze(subtractGrosze(healthInKup, annualHealthCap))} (art. 23 ust. 1 pkt 58 i art. 30c ust. 2 pkt 2 PIT).`,
+      });
+    } else if (addGrosze(healthPaid, healthInKup) > annualHealthCap) {
       warnings.push({
         code: 'PIT_FLAT_HEALTH_CAP_APPLIED',
         severity: 'info',

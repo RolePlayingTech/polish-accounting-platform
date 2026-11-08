@@ -15,6 +15,7 @@ import {
   assertSafeGrosze,
   formatPlnFromGrosze,
   multiplyGroszeByBps,
+  subtractGrosze,
   sumGrosze,
 } from '../money.js';
 
@@ -28,8 +29,10 @@ export interface CalculateMonthlyZusInput {
   readonly voluntarySicknessInsurance: boolean;
   /** Dla skali i liniowego: dochód z działalności z miesiąca poprzedzającego okres składkowy (może być <= 0 przy stracie). */
   readonly previousMonthIncomeGrosze?: number;
-  /** Dla ryczałtu: przychód narastająco od początku roku kalendarzowego (pomniejszony o zapłacone składki społeczne). */
+  /** Dla ryczałtu: przychód narastająco od początku roku kalendarzowego (przed lub po pomniejszeniu o ZUS społeczny). */
   readonly ytdRyczaltRevenueGrosze?: number;
+  /** Dla ryczałtu (art. 81 ust. 2e u.ś.o.z.): opłacone w danym roku składki społeczne ZUS pomniejszające przychód przy wyznaczaniu progów 60 000 zł i 300 000 zł. */
+  readonly ytdDeductibleSocialZusGrosze?: number;
   /** Opcjonalna zadeklarowana wyższa podstawa wymiaru składek społecznych ZUS. */
   readonly declaredHigherSocialBaseGrosze?: number;
   /** Liczba ubezpieczonych zgłaszanych do ubezpieczenia wypadkowego (domyślnie 1 dla JDG). */
@@ -172,10 +175,16 @@ export function calculateMonthlyZusContributions(
       ruleOptions,
     );
     appliedRules.push(ryczaltHealthRule);
-    const ytdRev = assertNonNegativeGrosze(
+    const ytdRevRaw = assertNonNegativeGrosze(
       input.ytdRyczaltRevenueGrosze ?? 0,
       'ytdRyczaltRevenueGrosze',
     );
+    const ytdSocialDeduction = assertNonNegativeGrosze(
+      input.ytdDeductibleSocialZusGrosze ?? 0,
+      'ytdDeductibleSocialZusGrosze',
+    );
+    // art. 81 ust. 2e u.ś.o.z.: przychody dla celów progów zdrowotnych pomniejsza się o opłacone składki społeczne ZUS
+    const ytdRev = Math.max(0, subtractGrosze(ytdRevRaw, ytdSocialDeduction));
     const tier1Limit = getRequiredNumericParameter(ryczaltHealthRule, 'tier1LimitGrosze');
     const tier2Limit = getRequiredNumericParameter(ryczaltHealthRule, 'tier2LimitGrosze');
 

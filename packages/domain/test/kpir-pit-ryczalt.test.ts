@@ -193,6 +193,23 @@ describe('kpir & pit — expense qualification, corrections, period summaries & 
     expect(res2026.effectiveHealthDeductionFromIncomeGrosze).toBe(1_410_000);
     expect(res2026.roundedTaxBaseFullPln).toBe(85_900);
     expect(res2026.advanceDueGrosze).toBe(1_632_100);
+
+    // Gdy w KUP ujęto już więcej niż roczny limit (np. 15 000 zł > 14 100 zł w 2026 r.), oznacza requiresHumanApproval (#66)
+    const overKup2026 = calculateKpirPitAdvance({
+      period: '2026-12',
+      taxForm: 'liniowy',
+      ytdRevenueGrosze: 12_000_000,
+      ytdCostsGrosze: 2_000_000,
+      healthAlreadyIncludedInKupYtdGrosze: 1_500_000,
+      paidHealthInsuranceYtdGrosze: 100_000,
+    });
+    expect(overKup2026.effectiveHealthDeductionFromIncomeGrosze).toBe(0);
+    expect(overKup2026.explanation.requiresHumanApproval).toBe(true);
+    expect(
+      overKup2026.explanation.warnings.some(
+        (w) => w.code === 'PIT_FLAT_HEALTH_KUP_EXCEEDS_ANNUAL_CAP',
+      ),
+    ).toBe(true);
   });
 });
 

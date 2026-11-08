@@ -185,6 +185,32 @@ function parseYyMmDdToIso(yymmdd: string): string {
   return assertValidIsoCalendarDate(`${String(year)}-${mm}-${dd}`, 'mt940Date');
 }
 
+/**
+ * Wyznacza pełną datę księgowania (`bookingDate`) dla pola `:61:YYMMDD[MMDD]` standardu MT940,
+ * uwzględniając przełom roku kalendarzowego pomiędzy `valueDate` (`YYMMDD`) a `entryDate` (`MMDD`):
+ * - `valueDate` w grudniu (`12`) + `entryDate` w styczniu (`01`) -> rok `valueYear + 1`
+ * - `valueDate` w styczniu (`01`) + `entryDate` w grudniu (`12`) -> rok `valueYear - 1`.
+ */
+function resolveMt940EntryBookingDate(valueDateIso: string, entryMmDd: string): string {
+  const valueYear = Number(valueDateIso.slice(0, 4));
+  const valueMonth = Number(valueDateIso.slice(5, 7));
+  const entryMonthStr = entryMmDd.slice(0, 2);
+  const entryDayStr = entryMmDd.slice(2, 4);
+  const entryMonth = Number(entryMonthStr);
+
+  let bookingYear = valueYear;
+  if (valueMonth === 12 && entryMonth === 1) {
+    bookingYear = valueYear + 1;
+  } else if (valueMonth === 1 && entryMonth === 12) {
+    bookingYear = valueYear - 1;
+  }
+
+  return assertValidIsoCalendarDate(
+    `${String(bookingYear).padStart(4, '0')}-${entryMonthStr}-${entryDayStr}`,
+    'mt940BookingDate',
+  );
+}
+
 function parseMt940BalanceTag(value: string): {
   readonly currency: string;
   readonly signedGrosze: number;
@@ -194,6 +220,7 @@ function parseMt940BalanceTag(value: string): {
     throw new Error(`Nieprawidłowy format pola salda MT940 (:60F:/:62F:): "${value}"`);
   }
   const mark = match[1]!;
+  parseYyMmDdToIso(match[2]!);
   const currency = match[3]!;
   const amountStr = match[4]!;
   const absGrosze = parsePlnToGrosze(amountStr);
@@ -322,11 +349,7 @@ export function parseMt940Statement(mt940Content: string): Mt940ParsedStatement 
       const valueDate = parseYyMmDdToIso(txMatch[1]!);
       const entryMmDd = txMatch[2];
       const bookingDate =
-        entryMmDd !== undefined
-          ? assertValidIsoCalendarDate(
-              `${valueDate.slice(0, 4)}-${entryMmDd.slice(0, 2)}-${entryMmDd.slice(2, 4)}`,
-            )
-          : valueDate;
+        entryMmDd !== undefined ? resolveMt940EntryBookingDate(valueDate, entryMmDd) : valueDate;
       const dcMark = txMatch[3]!;
       const amountStr = txMatch[5]!;
       const customerRef = (txMatch[7] ?? '').trim();

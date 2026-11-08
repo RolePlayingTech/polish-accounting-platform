@@ -274,9 +274,163 @@ describe('vat — sales/purchase registers, 50% vehicle deduction, MPP, art. 113
       period: '2026-04',
       entries: [sale1, purchase1],
       carryOverInputVatFromPreviousPeriodGrosze: 200_000,
+      refundRequestedP54Grosze: 5_900, // 59,00 zł zwrotu na rachunek P_54 -> P_62 = 100 zł
     });
 
     expect(summaryExcess.taxDueToPayP51Grosze).toBe(0);
     expect(summaryExcess.excessInputVatToCarryOverP53Grosze).toBe(15_900);
+    expect(summaryExcess.refundToBankAccountP54Grosze).toBe(5_900);
+    expect(summaryExcess.carryForwardToNextPeriodP62Grosze).toBe(10_000);
+    expect(summaryExcess.declarationFields.P_53).toBe(159);
+    expect(summaryExcess.declarationFields.P_54).toBe(59);
+    expect(summaryExcess.declarationFields.P_62).toBe(100);
+  });
+
+  it('computes JPK_V7M P_37, P_38 and P_48 as sums of per-rate/per-category rounded PLN fields and applies art. 86a / art. 88 to P_40/P_42 (#65)', () => {
+    // 3 sprzedaże z końcówką 40 gr VAT w każdej stawce:
+    // 23%: VAT 10,40 zł -> P_20 = 10 zł
+    // 8%:  VAT 10,40 zł -> P_18 = 10 zł
+    // 5%:  VAT 10,40 zł -> P_16 = 10 zł
+    // Suma P_38 w JPK_V7M MUSI wynosić 10 + 10 + 10 = 30 zł (3 000 gr), a nie round(31,20 zł) = 31 zł!
+    const s23 = createVatRegisterEntry({
+      id: 's-23',
+      registerType: 'sales',
+      period: '2026-05',
+      taxPointDate: '2026-05-05',
+      issueDate: '2026-05-05',
+      documentNumber: 'FV/23',
+      counterpartyName: 'Klient 23',
+      vatRate: '23',
+      netGrosze: 4_522,
+      vatTotalGrosze: 1_040,
+      ksefReferenceNumber: '5250001003-20260505-AA11BB-CC22DD-01',
+    });
+    const s8 = createVatRegisterEntry({
+      id: 's-8',
+      registerType: 'sales',
+      period: '2026-05',
+      taxPointDate: '2026-05-06',
+      issueDate: '2026-05-06',
+      documentNumber: 'FV/8',
+      counterpartyName: 'Klient 8',
+      vatRate: '8',
+      netGrosze: 13_000,
+      vatTotalGrosze: 1_040,
+      ksefReferenceNumber: '5250001003-20260506-AA11BB-CC22DD-02',
+    });
+    const s5 = createVatRegisterEntry({
+      id: 's-5',
+      registerType: 'sales',
+      period: '2026-05',
+      taxPointDate: '2026-05-07',
+      issueDate: '2026-05-07',
+      documentNumber: 'FV/5',
+      counterpartyName: 'Klient 5',
+      vatRate: '5',
+      netGrosze: 20_800,
+      vatTotalGrosze: 1_040,
+      ksefReferenceNumber: '5250001003-20260507-AA11BB-CC22DD-03',
+    });
+
+    // Zakupy:
+    // 1) Środek trwały 10 000,00 zł netto + 2 300,00 zł VAT (100% odliczenia) -> P_40 = 10 000, P_41 = 2 300
+    const pFixed = createVatRegisterEntry({
+      id: 'p-fixed',
+      registerType: 'purchase',
+      period: '2026-05',
+      taxPointDate: '2026-05-10',
+      issueDate: '2026-05-10',
+      documentNumber: 'FZ/ST/1',
+      counterpartyName: 'Dostawca Maszyn',
+      vatRate: '23',
+      netGrosze: 1_000_000,
+      vatTotalGrosze: 230_000,
+      deductionMode: 'full_100',
+      isFixedAssetPurchase: true,
+      ksefReferenceNumber: '5250001003-20260510-AA11BB-CC22DD-04',
+    });
+    // 2) Paliwo mieszane (vehicle_mixed_50): 200,00 zł netto + 46,00 zł VAT -> 50% netto = 100,00 zł (P_42), 50% VAT = 23,00 zł (P_43)
+    const pCar = createVatRegisterEntry({
+      id: 'p-car',
+      registerType: 'purchase',
+      period: '2026-05',
+      taxPointDate: '2026-05-12',
+      issueDate: '2026-05-12',
+      documentNumber: 'FZ/CAR/1',
+      counterpartyName: 'Stacja Paliw',
+      vatRate: '23',
+      netGrosze: 20_000,
+      vatTotalGrosze: 4_600,
+      deductionMode: 'vehicle_mixed_50',
+      ksefMarker: 'BFK',
+    });
+    // 3) Usługa hotelowa (none_0 — art. 88 ust. 1 pkt 4 VAT): 500,00 zł netto + 40,00 zł VAT -> nie wchodzi do P_42 ani P_43!
+    const pHotel = createVatRegisterEntry({
+      id: 'p-hotel',
+      registerType: 'purchase',
+      period: '2026-05',
+      taxPointDate: '2026-05-15',
+      issueDate: '2026-05-15',
+      documentNumber: 'FZ/HOTEL/1',
+      counterpartyName: 'Hotel',
+      vatRate: '8',
+      netGrosze: 50_000,
+      vatTotalGrosze: 4_000,
+      deductionMode: 'none_0',
+      ksefMarker: 'BFK',
+    });
+
+    const jpk = calculateJpkV7mSummary({
+      period: '2026-05',
+      entries: [s23, s8, s5, pFixed, pCar, pHotel],
+    });
+
+    expect(jpk.declarationFields.P_16).toBe(10);
+    expect(jpk.declarationFields.P_18).toBe(10);
+    expect(jpk.declarationFields.P_20).toBe(10);
+    expect(jpk.declarationFields.P_38).toBe(30);
+    expect(jpk.outputVatRoundedPlnGrosze).toBe(3_000);
+    expect(jpk.declarationFields.P_40).toBe(10_000);
+    expect(jpk.declarationFields.P_41).toBe(2_300);
+    expect(jpk.declarationFields.P_42).toBe(100);
+    expect(jpk.declarationFields.P_43).toBe(23);
+    expect(jpk.declarationFields.P_48).toBe(2_323);
+  });
+
+  it('rejects conflicting KSeF marker (BFK/OFF/DI with ksefReferenceNumber) in JPK_V7M(3) and flags non-zero VAT on exempt rate (#65)', () => {
+    expect(() =>
+      createVatRegisterEntry({
+        id: 'vat-conflict-ksef',
+        registerType: 'sales',
+        period: '2026-04',
+        taxPointDate: '2026-04-10',
+        issueDate: '2026-04-10',
+        documentNumber: 'FV/CONFLICT/1',
+        counterpartyName: 'Kontrahent',
+        vatRate: '23',
+        netGrosze: 10_000,
+        vatTotalGrosze: 2_300,
+        ksefMarker: 'BFK',
+        ksefReferenceNumber: '5250001003-20260410-AA11BB-CC22DD-99',
+      }),
+    ).toThrow(/wyklucza jednoczesne podanie numeru KSeF/);
+
+    const anomalousZw = createVatRegisterEntry({
+      id: 'vat-zw-nonzero',
+      registerType: 'sales',
+      period: '2026-04',
+      taxPointDate: '2026-04-10',
+      issueDate: '2026-04-10',
+      documentNumber: 'FV/ZW/1',
+      counterpartyName: 'Kontrahent',
+      vatRate: 'zw',
+      netGrosze: 10_000,
+      vatTotalGrosze: 500,
+      ksefMarker: 'BFK',
+    });
+    expect(anomalousZw.explanation.requiresHumanApproval).toBe(true);
+    expect(
+      anomalousZw.explanation.warnings.some((w) => w.code === 'VAT_NONZERO_FOR_ZERO_OR_EXEMPT_RATE'),
+    ).toBe(true);
   });
 });

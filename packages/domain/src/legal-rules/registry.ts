@@ -1471,26 +1471,26 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
   {
     id: 'zus-dra-deadline-art-47-2025',
     ruleCode: 'ZUS_DRA_DEADLINE_ART_47',
-    version: '2025.1',
+    version: '2025.2',
     title:
-      'Terminy przekazywania deklaracji ZUS DRA i opłacania składek (15. vs 20. dzień miesiąca)',
+      'Terminy przekazywania deklaracji ZUS DRA i opłacania składek (5., 15. oraz 20. dzień miesiąca)',
     description:
-      'Płatnicy składek posiadający osobowość prawną (w tym spółki z o.o.) opłacają składki i składają deklaracje do 15. dnia następnego miesiąca (pkt 2), a pozostali płatnicy składek (w tym przedsiębiorcy JDG i spółki osobowe) — do 20. dnia następnego miesiąca (pkt 3).',
+      'Jednostki budżetowe i samorządowe zakłady budżetowe opłacają składki i składają deklaracje do 5. dnia następnego miesiąca (pkt 2), płatnicy składek posiadający osobowość prawną (w tym spółki z o.o.) — do 15. dnia następnego miesiąca (pkt 3), a pozostali płatnicy składek (w tym przedsiębiorcy JDG, spółki osobowe oraz wspólnik jednoosobowej Sp. z o.o. rozliczający własne składki) — do 20. dnia następnego miesiąca (pkt 4).',
     scope: ALL_PROFILES,
     validFrom: '2025-01-01',
     validTo: null,
     legalBasis: {
       actTitle: 'Ustawa z dnia 13 października 1998 r. o systemie ubezpieczeń społecznych',
       journalReference: 'Dz.U. z 2025 r. poz. 350',
-      article: 'art. 47 ust. 1 pkt 2 i pkt 3',
+      article: 'art. 47 ust. 1 pkt 2, pkt 3 i pkt 4',
     },
     sourceUrl: 'https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/terminy-oplacania-skladek',
     sourceType: 'statute',
-    verifiedAt: '2026-11-04',
+    verifiedAt: '2026-11-07',
     verificationStatus: 'verified',
     exceptions: [
-      'Jednostki budżetowe i samorządowe zakłady budżetowe rozliczają ZUS do 5. dnia następnego miesiąca (art. 47 ust. 1 pkt 1).',
-      'Sp. z o.o. jednoosobowa nieposiadająca pracowników ani zleceniobiorców (gdy jedyny wspólnik płaci ZUS za siebie na własnym koncie płatnika) rozlicza składki wspólnika do 20. dnia miesiąca.',
+      'Jednostki budżetowe i samorządowe zakłady budżetowe rozliczają ZUS do 5. dnia następnego miesiąca (art. 47 ust. 1 pkt 2).',
+      'Sp. z o.o. jednoosobowa nieposiadająca pracowników ani zleceniobiorców (gdy jedyny wspólnik płaci ZUS za siebie na własnym koncie płatnika) rozlicza składki wspólnika do 20. dnia miesiąca (art. 47 ust. 1 pkt 4).',
     ],
     referenceTestCases: [
       {
@@ -1509,6 +1509,7 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       },
     ],
     parameters: {
+      budgetEntityDueDay: 5,
       legalPersonDueDay: 15,
       otherPayersDueDay: 20,
     },
@@ -1673,30 +1674,80 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     ],
   },
 
-  // 32. Stawki CIT 9% vs 19% i zaliczki CIT art. 19 ust. 1 i art. 25 ust. 1a
+  // 32A. Stawki CIT 9% vs 19% i bieżący limit 2 mln EUR w 2025 r. (art. 19 ust. 1 pkt 2 — 8 534 000 zł netto)
   {
-    id: 'cit-rates-art-19-2025-2026',
+    id: 'cit-rates-art-19-2025',
     ruleCode: 'CIT_RATES_ART_19',
     version: '2025.1',
     title:
-      'Stawki podatku dochodowego od osób prawnych CIT (9% mały podatnik vs 19%) i termin zaliczek',
+      'Stawki CIT w 2025 r. (9% mały podatnik vs 19%) i bieżący limit 2 mln EUR netto (8 534 000 zł)',
     description:
-      'Podatek CIT wynosi 19% podstawy opodatkowania, albo 9% podstawy opodatkowania od przychodów innych niż z zysków kapitałowych u małych podatników i podatników rozpoczynających działalność, u których przychody bieżące netto nie przekroczyły równowartości 2 000 000 EUR. Zaliczki wpłaca się do 20. dnia następnego miesiąca.',
+      'W 2025 r. podatek CIT wynosi 19% podstawy opodatkowania albo 9% od przychodów innych niż z zysków kapitałowych u małych podatników i podatników rozpoczynających działalność, u których przychody osiągnięte w 2025 r. (bez VAT) nie przekroczyły równowartości 2 000 000 EUR wg kursu NBP z 2 stycznia 2025 r. (4,2668 zł/EUR, tab. 001/A/NBP/2025), tj. 8 534 000 zł po zaokrągleniu do 1 000 zł.',
     scope: ['spzoo_pelne_ksiegi'],
     validFrom: '2025-01-01',
+    validTo: '2025-12-31',
+    legalBasis: {
+      actTitle: 'Ustawa z dnia 15 lutego 1992 r. o podatku dochodowym od osób prawnych',
+      journalReference: 'Dz.U. z 2025 r. poz. 278',
+      article: 'art. 19 ust. 1 pkt 1–2 oraz art. 25 ust. 1a i ust. 1g',
+      notes:
+        'Tabela nr 001/A/NBP/2025 z dnia 2025-01-02: 1 EUR = 4,2668 PLN -> 2 000 000 EUR = 8 533 600 PLN, w zaokrągleniu do 1 000 zł: 8 534 000 PLN netto.',
+    },
+    sourceUrl: 'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000278',
+    sourceType: 'statute',
+    verifiedAt: '2026-11-07',
+    verificationStatus: 'verified',
+    exceptions: [
+      'Stawki 9% nie stosuje się do podatników utworzonych w wyniku przekształcenia, połączenia lub podziału w roku utworzenia i roku następnym (art. 19 ust. 1a–1c CIT).',
+      'Po przekroczeniu bieżącego limitu 8 534 000 zł netto podatnik oblicza zaliczki wg stawki 19% począwszy od miesiąca przekroczenia (art. 25 ust. 1g CIT).',
+    ],
+    referenceTestCases: [
+      {
+        id: 'tc-cit-9pct-2025-current-cap',
+        description:
+          'Mały podatnik w 2025 r. po przekroczeniu 8 534 000 zł przychodu netto przechodzi z 9% na 19% CIT',
+        eventDate: '2025-10-31',
+        inputSummary: 'ytdNetRev = 853 500 000 gr, smallTaxpayer = true',
+        expectedOutputSummary: 'appliedRatePct = 19',
+      },
+    ],
+    parameters: {
+      smallTaxpayerRateBps: 900,
+      standardRateBps: 1900,
+      dueDayOfMonth: 20,
+      januaryEurRateBps: 42_668,
+      currentYearNetLimitPln: 8_534_000,
+      currentYearNetLimitGrosze: 853_400_000,
+    },
+  },
+
+  // 32B. Stawki CIT 9% vs 19% i bieżący limit 2 mln EUR w 2026 r. (art. 19 ust. 1 pkt 2 — 8 431 000 zł netto)
+  {
+    id: 'cit-rates-art-19-2026',
+    ruleCode: 'CIT_RATES_ART_19',
+    version: '2026.1',
+    title:
+      'Stawki CIT w 2026 r. (9% mały podatnik vs 19%) i bieżący limit 2 mln EUR netto (8 431 000 zł)',
+    description:
+      'W 2026 r. podatek CIT wynosi 19% podstawy opodatkowania albo 9% od przychodów innych niż z zysków kapitałowych u małych podatników i podatników rozpoczynających działalność, u których przychody osiągnięte w 2026 r. (bez VAT) nie przekroczyły równowartości 2 000 000 EUR wg kursu NBP z 2 stycznia 2026 r. (4,2156 zł/EUR, tab. 001/A/NBP/2026), tj. 8 431 000 zł po zaokrągleniu do 1 000 zł.',
+    scope: ['spzoo_pelne_ksiegi'],
+    validFrom: '2026-01-01',
     validTo: null,
     legalBasis: {
       actTitle: 'Ustawa z dnia 15 lutego 1992 r. o podatku dochodowym od osób prawnych',
       journalReference: 'Dz.U. z 2025 r. poz. 278',
-      article: 'art. 19 ust. 1 pkt 1–2 oraz art. 25 ust. 1a',
+      article: 'art. 19 ust. 1 pkt 1–2 oraz art. 25 ust. 1a i ust. 1g',
+      notes:
+        'Tabela nr 001/A/NBP/2026 z dnia 2026-01-02: 1 EUR = 4,2156 PLN -> 2 000 000 EUR = 8 431 200 PLN, w zaokrągleniu do 1 000 zł: 8 431 000 PLN netto.',
     },
     sourceUrl: 'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000278',
     sourceType: 'statute',
-    verifiedAt: '2026-11-04',
+    verifiedAt: '2026-11-07',
     verificationStatus: 'verified',
     exceptions: [
       'Stawki 9% nie stosuje się do podatników utworzonych w wyniku przekształcenia, połączenia lub podziału w roku utworzenia i roku następnym (art. 19 ust. 1a–1c CIT).',
       'Przychody z zysków kapitałowych podlegają zawsze stawce 19%.',
+      'Po przekroczeniu bieżącego limitu 8 431 000 zł netto podatnik traci prawo do 9% CIT i oblicza zaliczki wg stawki 19% (art. 25 ust. 1g CIT).',
     ],
     referenceTestCases: [
       {
@@ -1712,6 +1763,49 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
       smallTaxpayerRateBps: 900,
       standardRateBps: 1900,
       dueDayOfMonth: 20,
+      januaryEurRateBps: 42_156,
+      currentYearNetLimitPln: 8_431_000,
+      currentYearNetLimitGrosze: 843_100_000,
+    },
+  },
+
+  // 33. Samochód osobowy w CIT — wyłączenie 25% NKUP z wydatków eksploatacyjnych (art. 16 ust. 1 pkt 51 CIT)
+  {
+    id: 'cit-car-mixed-75-art-16-2025',
+    ruleCode: 'CIT_CAR_MIXED_EXPENSE_75_ART_16',
+    version: '2025.1',
+    title:
+      'Ograniczenie do 75% KUP (25% NKUP) wydatków eksploatacyjnych samochodu osobowego w CIT',
+    description:
+      'Nie uważa się za koszty uzyskania przychodów w CIT 25% poniesionych wydatków z tytułu kosztów używania samochodu osobowego na potrzeby działalności gospodarczej, jeżeli samochód ten nie jest wykorzystywany wyłącznie do działalności gospodarczej (75% stanowi KUP, 25% stanowi trwałe wyłączenie NKUP; kwota obejmuje także nieodliczony 50% podatek VAT wg art. 16 ust. 1 pkt 46 lit. a CIT).',
+    scope: ['spzoo_pelne_ksiegi'],
+    validFrom: '2025-01-01',
+    validTo: null,
+    legalBasis: {
+      actTitle: 'Ustawa z dnia 15 lutego 1992 r. o podatku dochodowym od osób prawnych',
+      journalReference: 'Dz.U. z 2025 r. poz. 278',
+      article: 'art. 16 ust. 1 pkt 51 oraz art. 16 ust. 1 pkt 46 lit. a',
+    },
+    sourceUrl: 'https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000278',
+    sourceType: 'statute',
+    verifiedAt: '2026-11-07',
+    verificationStatus: 'verified',
+    exceptions: [
+      'Pełne 100% KUP przysługuje wyłącznie przy prowadzeniu szczegółowej ewidencji przebiegu pojazdu (VAT-26) potwierdzającej brak użytku mieszanego (art. 16 ust. 5f–5g CIT).',
+    ],
+    referenceTestCases: [
+      {
+        id: 'tc-cit-car-mixed-75-nkup-25',
+        description:
+          'Faktura 1 000,00 zł netto + 230,00 zł VAT w Sp. z o.o.: koszt bilansowy 1 115,00 zł -> KUP 836,25 zł (75%) i NKUP 278,75 zł (25%)',
+        eventDate: '2026-03-20',
+        inputSummary: 'netGrosze = 100 000 gr, vatGrosze = 23 000 gr, mixed_use_75',
+        expectedOutputSummary: 'kup = 83 625 gr, nkup = 27 875 gr',
+      },
+    ],
+    parameters: {
+      deductibleExpenseBps: 7500,
+      nkupExcludedBps: 2500,
     },
   },
 ];
