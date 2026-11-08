@@ -12,4 +12,5 @@ export type {
   TenantAuthorizationResult,
 } from './tenant-authorization.js';
 export * from './demo-seed.js';
+export * from './document-import-parsers.js';
 export * from './accounting-workspace.js';

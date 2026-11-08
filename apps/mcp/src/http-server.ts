@@ -33,8 +33,19 @@ const FORBIDDEN_SPOOFING_HEADERS = [
   'x-actor-id',
   'x-authenticated-user',
   'x-pap-role',
+  'x-pap-user',
+  'x-pap-tenant',
+  'x-pap-actor',
+  'x-pap-scopes',
   'x-approved',
   'x-forwarded-user',
+  'x-forwarded-host',
+  'x-forwarded-server',
+  'x-original-url',
+  'x-rewrite-url',
+  'x-remote-user',
+  'x-auth-request-user',
+  'x-auth-request-email',
 ] as const;
 
 export interface PapMcpHttpHandlerOptions {
@@ -206,12 +217,14 @@ function createInternalPapMcpHttpEndpoint(
     }
 
     // 2. Parse URL safely against the validated Host header without ever throwing 500
+    //    and enforce RFC 9112 authority consistency on absolute-form request targets (#69)
     let parsedUrl: URL;
+    const isAbsoluteFormUrl =
+      params.rawUrl.startsWith('http://') || params.rawUrl.startsWith('https://');
     try {
-      parsedUrl =
-        params.rawUrl.startsWith('http://') || params.rawUrl.startsWith('https://')
-          ? new URL(params.rawUrl)
-          : new URL(params.rawUrl, `http://${trimmedHost}`);
+      parsedUrl = isAbsoluteFormUrl
+        ? new URL(params.rawUrl)
+        : new URL(params.rawUrl, `http://${trimmedHost}`);
     } catch {
       return {
         ok: false,
@@ -225,6 +238,41 @@ function createInternalPapMcpHttpEndpoint(
           correlationId,
         }),
       };
+    }
+
+    if (parsedUrl.username !== '' || parsedUrl.password !== '') {
+      return {
+        ok: false,
+        response: await recordRejectionResponse({
+          status: 400,
+          body: {
+            error: 'invalid_request',
+            error_description: 'Credentials in request URL authority are forbidden.',
+          },
+          reasonCode: 'url_userinfo_rejected',
+          correlationId,
+        }),
+      };
+    }
+
+    if (isAbsoluteFormUrl) {
+      const urlHostCheck = validateHostHeader(parsedUrl.host, allowedHosts);
+      if (!urlHostCheck.ok || parsedUrl.host.toLowerCase() !== trimmedHost.toLowerCase()) {
+        return {
+          ok: false,
+          response: await recordRejectionResponse({
+            status: 403,
+            body: {
+              error: 'forbidden_host',
+              error_description:
+                'Request URL authority does not match the validated Host header allowlist.',
+            },
+            reasonCode: !urlHostCheck.ok ? urlHostCheck.errorCode : 'url_authority_host_mismatch',
+            correlationId,
+          }),
+        };
+      }
+      parsedUrl = new URL(`${parsedUrl.pathname}${parsedUrl.search}`, `http://${trimmedHost}`);
     }
 
     const sanitizedHeaders = new Headers(params.headers);
@@ -299,7 +347,7 @@ function createInternalPapMcpHttpEndpoint(
       }
     }
 
-    // 6. Security gate: forbid client identity/role spoofing headers
+    // 6. Security gate: forbid client identity/role/routing spoofing headers (#69)
     for (const spoofHeader of FORBIDDEN_SPOOFING_HEADERS) {
       if (params.headers.has(spoofHeader)) {
         return {
@@ -311,6 +359,27 @@ function createInternalPapMcpHttpEndpoint(
               error_description: `Forbidden identity-spoofing header detected (${spoofHeader}).`,
             },
             reasonCode: `spoofed_header_rejected_${spoofHeader}`,
+            correlationId,
+            extraHeaders: {
+              'WWW-Authenticate': 'Bearer realm="pap-mcp", error="invalid_token"',
+            },
+          }),
+        };
+      }
+    }
+    for (const [headerName] of params.headers.entries()) {
+      const lowerHeader = headerName.toLowerCase();
+      if (lowerHeader.startsWith('x-pap-')) {
+        const safeSuffix = lowerHeader.replace(/[^a-z0-9_-]/g, '').slice(0, 32);
+        return {
+          ok: false,
+          response: await recordRejectionResponse({
+            status: 401,
+            body: {
+              error: 'invalid_token',
+              error_description: `Forbidden internal header prefix detected (${lowerHeader}).`,
+            },
+            reasonCode: `spoofed_header_rejected_${safeSuffix}`,
             correlationId,
             extraHeaders: {
               'WWW-Authenticate': 'Bearer realm="pap-mcp", error="invalid_token"',

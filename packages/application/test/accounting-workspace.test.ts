@@ -577,4 +577,67 @@ describe('AccountingWorkspaceService — end-to-end Polish accounting, authz, sa
     });
     expect(explained.ok).toBe(true);
   });
+
+  it('7. [#67] computes ZUS health contribution on M-1 income, sp_z_o_o ZUS deadline on the 15th, and 25% mixed vehicle CIT exclusion', () => {
+    const ws = createWorkspaceForTests();
+    const jan = ws.resolveActorFromPersona('jan-testowy')!;
+
+    // 1. ZUS deadline for Sp. z o.o. (legal person) is 15th of following month (shifted if weekend), whereas JDG is 20th
+    const spzooCal = ws.getCalendarView(jan, TENANT_1_ID, COMPANY_SPZOO_ID, 2026, 3);
+    const spzooZusOb = spzooCal.obligations.find((o) => o.category === 'zus');
+    expect(spzooZusOb?.statutoryDueDate).toBe('2026-04-15');
+
+    const jdgCal = ws.getCalendarView(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, 2026, 3);
+    const jdgZusOb = jdgCal.obligations.find((o) => o.category === 'zus');
+    expect(jdgZusOb?.statutoryDueDate).toBe('2026-04-20');
+
+    // 2. ZUS health contribution in February (2026-02) uses M-1 (January 2026-01 = 0 income -> minimum health base)
+    //    whereas April (2026-04) uses M-1 (March 2026-03 income > 0)
+    const zusFeb = ws.calculateCompanyZus(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, '2026-02');
+    const zusApr = ws.calculateCompanyZus(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, '2026-04');
+    expect(zusFeb.healthContributionGrosze).toBeLessThan(zusApr.healthContributionGrosze);
+
+    // 3. Mixed vehicle purchase in Sp. z o.o. excludes 25% of (net + non-deductible VAT) from CIT tax-deductible costs
+    const ledgerBefore = ws.getLedgerView(
+      jan,
+      TENANT_1_ID,
+      COMPANY_SPZOO_ID,
+      DEMO_DEFAULT_PERIOD,
+    );
+    const mixedCarDoc = ws.createDocument(jan, TENANT_1_ID, COMPANY_SPZOO_ID, {
+      documentNumber: 'FV/SPZOO-AUTO-MIX/2026/03/01',
+      direction: 'purchase',
+      issueDate: '2026-03-25',
+      dueDate: '2026-04-08',
+      counterpartyName: 'Stacja Paliw Flota Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaPaliwo,
+      suggestedCategory: 'eksploatacja_samochodu_mieszana',
+      lines: [
+        {
+          description: 'Paliwo do samochodu osobowego w użytku mieszanym',
+          netGrosze: 100_000,
+          vatRate: '23',
+        },
+      ],
+    });
+    ws.approveAndPostDocument(jan, TENANT_1_ID, COMPANY_SPZOO_ID, mixedCarDoc.documentId, {
+      vatDeductionMode: 'vehicle_mixed_50',
+      kpirQualification: 'vehicle_mixed_75_col13',
+    });
+    const ledgerAfter = ws.getLedgerView(
+      jan,
+      TENANT_1_ID,
+      COMPANY_SPZOO_ID,
+      DEMO_DEFAULT_PERIOD,
+    );
+    // Accounting cost on 401-409 is 1000.00 net + 115.00 non-deductible VAT = 1115.00 PLN (111_500 gr).
+    // 25% NKUP exclusion = round(111_500 * 0.25) = 27_875 gr, so tax-deductible costs increase by 83_625 gr (not 111_500 gr!).
+    expect(
+      ledgerAfter.profitAndLoss.operatingCostsGrosze -
+        ledgerBefore.profitAndLoss.operatingCostsGrosze,
+    ).toBe(111_500);
+    expect(
+      ledgerBefore.citAdvance.taxableIncomeGrosze - ledgerAfter.citAdvance.taxableIncomeGrosze,
+    ).toBe(111_500 - Math.round(111_500 * 0.25));
+  });
 });

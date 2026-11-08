@@ -88,7 +88,13 @@ export const accessManagementEvent = pgTable(
     userId: uuid('user_id').notNull(),
     actorId: uuid('actor_id').notNull(),
     kind: text('kind', {
-      enum: ['revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant'],
+      enum: [
+        'revoke_membership',
+        'reactivate_membership',
+        'grant',
+        'revoke_grant',
+        'provision_company',
+      ],
     }).notNull(),
     grantId: uuid('grant_id'),
     occurredAt: instant('occurred_at').notNull(),
@@ -105,7 +111,11 @@ export const accessManagementEvent = pgTable(
           Record<
             string,
             {
-              table: 'tenant_membership' | 'company_access_grant';
+              table:
+                | 'tenant_membership'
+                | 'company_access_grant'
+                | 'legal_entity'
+                | 'entity_profile_version';
               operation: 'INSERT' | 'UPDATE';
               old: Readonly<Record<string, unknown>> | null;
               new: Readonly<Record<string, unknown>>;
@@ -125,7 +135,7 @@ export const accessManagementEvent = pgTable(
     ),
     check(
       'access_management_event_kind_check',
-      sql`${table.kind} IN ('revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant')`,
+      sql`${table.kind} IN ('revoke_membership', 'reactivate_membership', 'grant', 'revoke_grant', 'provision_company')`,
     ),
     check('access_management_event_time_check', sql`isfinite(${table.occurredAt})`),
   ],
@@ -226,6 +236,10 @@ export const entityProfileVersion = pgTable(
     legalEntityId: uuid('legal_entity_id').notNull(),
     // Wyłącznie etykieta techniczna, bez reguł i deklaracji zgodności podatkowej.
     profileCode: text('profile_code').notNull(),
+    profileJson: jsonb('profile_json')
+      .$type<Readonly<Record<string, unknown>>>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     validFrom: instant('valid_from').notNull(),
     validUntil: instant('valid_until'),
   },
@@ -238,6 +252,10 @@ export const entityProfileVersion = pgTable(
       .onDelete('restrict')
       .onUpdate('restrict'),
     check('entity_profile_version_code_not_blank', sql`btrim(${table.profileCode}) <> ''`),
+    check(
+      'entity_profile_version_profile_json_object_check',
+      sql`jsonb_typeof(${table.profileJson}) = 'object'`,
+    ),
     check(
       'entity_profile_version_validity_check',
       sql`isfinite(${table.validFrom}) AND (${table.validUntil} IS NULL OR (isfinite(${table.validUntil}) AND ${table.validUntil} > ${table.validFrom}))`,

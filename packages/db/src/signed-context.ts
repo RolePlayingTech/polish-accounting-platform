@@ -6,7 +6,14 @@ import type { PostgresTransaction } from './transaction-primitives.js';
 /** Asercja zaufanego serwera. Nigdy DTO klienta ani token OIDC. */
 export interface DatabaseSecurityContext {
   readonly purpose:
-    'actor' | 'facts' | 'company' | 'access' | 'identity' | 'audit' | 'access_event';
+    | 'actor'
+    | 'facts'
+    | 'company'
+    | 'access'
+    | 'identity'
+    | 'audit'
+    | 'access_event'
+    | 'provision_company';
   readonly auditEvent?: Readonly<Record<string, unknown>>;
   readonly accessEvent?: Readonly<Record<string, unknown>>;
   readonly actorUserId?: string;
@@ -14,7 +21,7 @@ export interface DatabaseSecurityContext {
   readonly legalEntityId?: string;
   readonly action?: 'read' | 'write';
   readonly targetUserId?: string;
-  readonly command?: AccessManagementCommand;
+  readonly command?: AccessManagementCommand | Readonly<Record<string, unknown>>;
   readonly decisionAt?: string;
   readonly operationId?: string;
   readonly issuer?: string;

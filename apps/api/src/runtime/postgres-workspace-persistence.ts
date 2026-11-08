@@ -87,7 +87,11 @@ import type {
   RyczaltEntryContract,
 } from '@pap/contracts/accounting';
 import type { PapMcpGateway } from '@pap/application/mcp-gateway';
-import type { PostgresAccountingScope } from '@pap/db';
+import {
+  discoverActorAccessibleEntities,
+  provisionCompanyInPostgres,
+  type PostgresAccountingScope,
+} from '@pap/db';
 import {
   InvalidIdentifierError,
   legalEntityId as parseLegalEntityId,
@@ -120,6 +124,7 @@ import {
   persistBankReconciliationMatchesAndSettlements,
   persistCalendarObligationStatusMutation,
   persistConfirmMcpProposalMutation,
+  persistMcpChallengeMutation,
   persistNotificationsStateMutation,
   persistSandboxTestEmailMutation,
   provisionNewCompanyDirectoryWithMigrator,
@@ -507,6 +512,75 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     return this.innerWorkspace.gradeAcademyLesson(lessonSlug, req);
   }
 
+  private resolveDynamicAnchorEntityId(tId: ReturnType<typeof parseTenantId>): ReturnType<typeof parseLegalEntityId> {
+    const existing = this.store.listCompaniesForTenant(tId)[0];
+    if (existing) {
+      return existing.legalEntityId;
+    }
+    return tId === TENANT_2_ID
+      ? parseLegalEntityId(COMPANY_TENANT_2_ID)
+      : parseLegalEntityId(COMPANY_JDG_KPIR_ID);
+  }
+
+  private async syncActorAccessibleGrantsBatch(
+    actorUserIds: readonly string[],
+    tenantIdFilter?: string,
+  ): Promise<boolean> {
+    const discovered = await discoverActorAccessibleEntities(
+      this.runtime.connection.db,
+      this.runtime.signer,
+      actorUserIds,
+      tenantIdFilter,
+    ).catch(() => null);
+    if (!discovered || (discovered.memberships.length === 0 && discovered.grants.length === 0)) {
+      return false;
+    }
+    const seenUsers = new Set<string>();
+    for (const m of discovered.memberships) {
+      seenUsers.add(`${m.tenantId}:${m.userId}`);
+      this.store.upsertMembership({
+        ...m,
+        tenantId: parseTenantId(m.tenantId),
+        userId: parseUserId(m.userId),
+      });
+    }
+    const seenGrants = new Set<string>();
+    for (const g of discovered.grants) {
+      seenGrants.add(g.grantId);
+      this.store.upsertGrant({
+        grantId: g.grantId,
+        tenantId: parseTenantId(g.tenantId),
+        userId: parseUserId(g.userId),
+        legalEntityId: parseLegalEntityId(g.legalEntityId),
+        action: g.action,
+        validFrom: g.validFrom,
+        validUntil: g.validUntil,
+        revokedAt: g.revokedAt,
+      });
+    }
+    const now = new Date();
+    const candidateUserSet = new Set(actorUserIds.map((u) => parseUserId(u)));
+    const targetCompanies = tenantIdFilter
+      ? this.store.listCompaniesForTenant(parseTenantId(tenantIdFilter))
+      : this.store.listAllCompanies();
+    for (const comp of targetCompanies) {
+      for (const cached of this.store.listGrantsForCompany(comp.tenantId, comp.legalEntityId)) {
+        if (
+          candidateUserSet.has(cached.userId) &&
+          seenUsers.has(`${comp.tenantId}:${cached.userId}`) &&
+          cached.revokedAt === null &&
+          !seenGrants.has(cached.grantId)
+        ) {
+          this.store.upsertGrant({
+            ...cached,
+            revokedAt: now,
+          });
+        }
+      }
+    }
+    return true;
+  }
+
   async getMyCompanies(actor: WorkspaceActorContext): Promise<GetMyCompaniesResponse> {
     await discoverAndHydrateMissingCompaniesForTenants(
       this.runtime,
@@ -514,8 +588,11 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       this.getKnownTenantIds(),
       [actor.userId],
     );
-    for (const comp of this.store.listAllCompanies()) {
-      await this.syncCompanyGrantsIntoMemory(actor.userId, comp.tenantId, comp.legalEntityId);
+    const syncedBatch = await this.syncActorAccessibleGrantsBatch([actor.userId]);
+    if (!syncedBatch) {
+      for (const comp of this.store.listAllCompanies()) {
+        await this.syncCompanyGrantsIntoMemory(actor.userId, comp.tenantId, comp.legalEntityId);
+      }
     }
     return this.innerWorkspace.getMyCompanies(actor);
   }
@@ -538,21 +615,37 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       throw err;
     }
 
-    const anchorEntityId =
-      tId === TENANT_2_ID
-        ? parseLegalEntityId(COMPANY_TENANT_2_ID)
-        : parseLegalEntityId(COMPANY_JDG_KPIR_ID);
-    const facts = await this.runtime.securityServices.authorizationDataSource.getFacts({
-      userId: parseUserId(actor.userId),
-      tenantId: tId,
-      legalEntityId: anchorEntityId,
-      action: 'read',
-    });
+    const uId = parseUserId(actor.userId);
+    const batchDiscovered = await discoverActorAccessibleEntities(
+      this.runtime.connection.db,
+      this.runtime.signer,
+      [uId],
+      tId,
+    ).catch(() => null);
+    const batchMembership = batchDiscovered?.memberships.find(
+      (m) => m.tenantId === tId && m.userId === uId,
+    );
+
+    const anchorEntityId = this.resolveDynamicAnchorEntityId(tId);
+    const facts = batchMembership
+      ? {
+          membership: {
+            ...batchMembership,
+            tenantId: parseTenantId(batchMembership.tenantId),
+            userId: parseUserId(batchMembership.userId),
+          },
+        }
+      : await this.runtime.securityServices.authorizationDataSource.getFacts({
+          userId: uId,
+          tenantId: tId,
+          legalEntityId: anchorEntityId,
+          action: 'read',
+        });
 
     if (!facts.membership || facts.membership.status !== 'active') {
       await this.runtime.securityServices.securityAudit.recordDecision({
         requestId: actor.requestId ?? randomUUID(),
-        actorId: parseUserId(actor.userId),
+        actorId: uId,
         tenantId: auditIdentifier(rawTenantId),
         legalEntityId: null,
         action: 'read',
@@ -575,8 +668,11 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       [tId],
       [actor.userId],
     );
-    for (const comp of this.store.listCompaniesForTenant(tId)) {
-      await this.syncCompanyGrantsIntoMemory(actor.userId, tId, comp.legalEntityId);
+    const syncedBatch = await this.syncActorAccessibleGrantsBatch([actor.userId], tId);
+    if (!syncedBatch) {
+      for (const comp of this.store.listCompaniesForTenant(tId)) {
+        await this.syncCompanyGrantsIntoMemory(actor.userId, tId, comp.legalEntityId);
+      }
     }
     return this.innerWorkspace.listTenantCompanies(actor, rawTenantId);
   }
@@ -586,14 +682,6 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     rawTenantId: string,
     req: CreateCompanyRequest,
   ): Promise<CreateCompanyResponse> {
-    if (!this.migratorDatabaseUrl) {
-      throw new AccountingWorkspaceAccessError(
-        403,
-        'company_provisioning_role_unavailable',
-        'Tworzenie nowego podmiotu prawnego w trybie PostgreSQL wymaga skonfigurowanego połączenia migratora (PAP_MIGRATOR_DATABASE_URL).',
-      );
-    }
-
     let tId;
     try {
       tId = parseTenantId(rawTenantId);
@@ -617,16 +705,32 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       );
     }
 
-    const anchorEntityId =
-      tId === TENANT_2_ID
-        ? parseLegalEntityId(COMPANY_TENANT_2_ID)
-        : parseLegalEntityId(COMPANY_JDG_KPIR_ID);
-    const facts = await this.runtime.securityServices.authorizationDataSource.getFacts({
-      userId: parseUserId(actor.userId),
-      tenantId: tId,
-      legalEntityId: anchorEntityId,
-      action: 'write',
-    });
+    const uId = parseUserId(actor.userId);
+    const batchDiscovered = await discoverActorAccessibleEntities(
+      this.runtime.connection.db,
+      this.runtime.signer,
+      [uId],
+      tId,
+    ).catch(() => null);
+    const batchMembership = batchDiscovered?.memberships.find(
+      (m) => m.tenantId === tId && m.userId === uId,
+    );
+
+    const anchorEntityId = this.resolveDynamicAnchorEntityId(tId);
+    const facts = batchMembership
+      ? {
+          membership: {
+            ...batchMembership,
+            tenantId: parseTenantId(batchMembership.tenantId),
+            userId: parseUserId(batchMembership.userId),
+          },
+        }
+      : await this.runtime.securityServices.authorizationDataSource.getFacts({
+          userId: uId,
+          tenantId: tId,
+          legalEntityId: anchorEntityId,
+          action: 'write',
+        });
 
     if (
       !facts.membership ||
@@ -643,7 +747,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
           : 'admin_role_required';
       await this.runtime.securityServices.securityAudit.recordDecision({
         requestId: actor.requestId ?? randomUUID(),
-        actorId: parseUserId(actor.userId),
+        actorId: uId,
         tenantId: auditIdentifier(rawTenantId),
         legalEntityId: null,
         action: 'write',
@@ -659,49 +763,126 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       );
     }
 
-    const migratorUrl = this.migratorDatabaseUrl;
     const verifiedMembership = facts.membership;
+    await discoverAndHydrateMissingCompaniesForTenants(
+      this.runtime,
+      this.innerWorkspace,
+      [tId],
+      [actor.userId],
+    );
 
     return this.runAtomicMutation(async () => {
       this.store.upsertMembership(verifiedMembership);
       const created = this.innerWorkspace.createCompany(actor, rawTenantId, parsedReq.data);
 
-      await provisionNewCompanyDirectoryWithMigrator({
-        migratorUrl,
-        databaseEnv: this.runtime.databaseEnv,
-        dataSchema: this.runtime.dataSchema,
-        tenantId: created.company.tenantId,
-        legalEntityId: created.company.legalEntityId,
+      const companyMetaPayload = {
         displayName: created.company.displayName,
-        profileCode: created.taxProfile.profileCode,
-        ownerUserId: actor.userId,
-      });
+        nip: created.company.nip,
+        legalForm: created.company.legalForm,
+        taxRegime: created.company.taxRegime,
+        vatStatusSimple: created.company.vatStatus,
+        taxProfile: created.taxProfile,
+        settingsHistory: [],
+      };
 
-      await this.executeCompanyOperationUnlocked(
-        actor,
-        created.company.tenantId,
-        created.company.legalEntityId,
-        'write',
-        async (scope) => {
-          const comp = this.store.getCompany(
-            parseTenantId(created.company.tenantId),
-            parseLegalEntityId(created.company.legalEntityId),
-          );
-          if (comp) {
-            await persistCompanyTaxSettingsToScope(scope, comp);
-            await ensureLedgerAccountsInScope(scope, comp);
-            await scope.upsertNotificationPreference({
-              id: deterministicUuidV4(
-                `notif-pref:${comp.tenantId}:${comp.legalEntityId}:${actor.userId}`,
-              ),
-              userId: actor.userId,
-              recipientEmail: actor.email || 'powiadomienia-sandbox@pap.example',
-              frequency: 'standard',
-              optOut: false,
-            });
+      let provisionedViaRuntime = false;
+      try {
+        const provisionRes = await provisionCompanyInPostgres(
+          this.runtime.connection.db,
+          this.runtime.signer,
+          {
+            operationId: randomUUID(),
+            requestId: actor.requestId ?? randomUUID(),
+            actorUserId: actor.userId,
+            tenantId: created.company.tenantId,
+            legalEntityId: created.company.legalEntityId,
+            displayName: created.company.displayName,
+            profileCode: created.taxProfile.profileCode,
+            nip: created.company.nip,
+            profileJson: companyMetaPayload as unknown as Record<string, unknown>,
+          },
+        );
+        if (!provisionRes.ok) {
+          if (provisionRes.reason === 'duplicate_company_nip') {
+            throw new AccountingWorkspaceConflictError(
+              'duplicate_company_nip',
+              `W tej organizacji istnieje już podmiot z numerem NIP ${created.company.nip}.`,
+            );
           }
-        },
-      );
+          if (provisionRes.reason === 'operation_conflict') {
+            throw new AccountingWorkspaceConflictError(
+              'operation_conflict',
+              'Konflikt idempotencji operacji tworzenia firmy w PostgreSQL.',
+            );
+          }
+          if (provisionRes.reason === 'invalid_command') {
+            throw new AccountingWorkspaceValidationError(
+              400,
+              'invalid_company_request',
+              'Niepoprawne dane tworzonego podmiotu prawnego.',
+            );
+          }
+          throw new AccountingWorkspaceAccessError(
+            403,
+            provisionRes.reason === 'active_membership_required'
+              ? 'active_membership_required'
+              : 'admin_role_required',
+            'Odmowa utworzenia nowego podmiotu prawnego w bieżącej organizacji.',
+          );
+        }
+        provisionedViaRuntime = true;
+      } catch (err) {
+        if (
+          err instanceof AccountingWorkspaceConflictError ||
+          err instanceof AccountingWorkspaceValidationError ||
+          err instanceof AccountingWorkspaceAccessError
+        ) {
+          throw err;
+        }
+        if (this.migratorDatabaseUrl) {
+          await provisionNewCompanyDirectoryWithMigrator({
+            migratorUrl: this.migratorDatabaseUrl,
+            databaseEnv: this.runtime.databaseEnv,
+            dataSchema: this.runtime.dataSchema,
+            tenantId: created.company.tenantId,
+            legalEntityId: created.company.legalEntityId,
+            displayName: created.company.displayName,
+            profileCode: created.taxProfile.profileCode,
+            ownerUserId: actor.userId,
+          });
+          provisionedViaRuntime = true;
+        } else {
+          throw err;
+        }
+      }
+
+      if (provisionedViaRuntime) {
+        await this.executeCompanyOperationUnlocked(
+          actor,
+          created.company.tenantId,
+          created.company.legalEntityId,
+          'write',
+          async (scope) => {
+            const comp = this.store.getCompany(
+              parseTenantId(created.company.tenantId),
+              parseLegalEntityId(created.company.legalEntityId),
+            );
+            if (comp) {
+              await persistCompanyTaxSettingsToScope(scope, comp);
+              await ensureLedgerAccountsInScope(scope, comp);
+              await scope.upsertNotificationPreference({
+                id: deterministicUuidV4(
+                  `notif-pref:${comp.tenantId}:${comp.legalEntityId}:${actor.userId}`,
+                ),
+                userId: actor.userId,
+                recipientEmail: actor.email || 'powiadomienia-sandbox@pap.example',
+                frequency: 'standard',
+                optOut: false,
+              });
+            }
+          },
+        );
+      }
 
       await this.syncCompanyGrantsIntoMemory(
         actor.userId,
@@ -764,8 +945,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
   ): Promise<CompanyAccessResponse> {
     return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', async () => {
-      for (const user of this.store.listUsers()) {
-        await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
+      const allUserIds = this.store.listUsers().map((u) => u.userId);
+      const syncedBatch = await this.syncActorAccessibleGrantsBatch(allUserIds, tenantId);
+      if (!syncedBatch) {
+        for (const user of this.store.listUsers()) {
+          await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
+        }
       }
       return this.innerWorkspace.getCompanyAccess(actor, tenantId, legalEntityId);
     });
@@ -1422,9 +1607,20 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     proposalId: string,
   ): Promise<IssueMcpChallengeResponse> {
-    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'write', () =>
-      this.innerWorkspace.issueMcpProposalChallenge(actor, tenantId, legalEntityId, proposalId),
-    );
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'write', async (scope) => {
+      const res = this.innerWorkspace.issueMcpProposalChallenge(
+        actor,
+        tenantId,
+        legalEntityId,
+        proposalId,
+      );
+      const storedProposal = this.store.getMcpProposal(proposalId);
+      const storedChallenge = this.store.getHumanChallenge(proposalId);
+      if (storedProposal && storedChallenge) {
+        await persistMcpChallengeMutation(scope, storedProposal, storedChallenge);
+      }
+      return res;
+    });
   }
 
   confirmMcpProposal(
@@ -1492,8 +1688,39 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     this.boundGateways.add(gateway);
 
     const origIssueChallenge = gateway.issueHumanConfirmationChallenge.bind(gateway);
-    gateway.issueHumanConfirmationChallenge = (input) =>
-      this.runAtomicMutation(async () => origIssueChallenge(input));
+    gateway.issueHumanConfirmationChallenge = async (input) => {
+      if (typeof input.tenantId === 'string' && typeof input.legalEntityId === 'string') {
+        await this.ensureCompanyHydratedIfValid(input.tenantId, input.legalEntityId);
+      }
+      return this.runAtomicMutation(async () => {
+        const res = await origIssueChallenge(input);
+        if (res.ok && input.humanBearerToken) {
+          const storedProposal = this.store.getMcpProposal(input.proposalId);
+          const storedChallenge = this.store.getHumanChallenge(input.proposalId);
+          if (storedProposal && storedChallenge) {
+            await executeAuthorizedCompanyAction(
+              {
+                rawBearerToken: input.humanBearerToken,
+                requestId: input.correlationId ?? randomUUID(),
+                operationId: randomUUID(),
+                tenantId: storedProposal.tenantId,
+                legalEntityId: storedProposal.legalEntityId,
+                action: 'write',
+              },
+              {
+                ...this.runtime.securityServices,
+                verifier: this.oidcVerifier,
+              },
+              async (_ctx, scope) => {
+                await persistMcpChallengeMutation(scope, storedProposal, storedChallenge);
+                await scope.recordOperationProbe();
+              },
+            );
+          }
+        }
+        return res;
+      });
+    };
 
     const origPrepare = gateway.prepareInvoiceAndPostingProposal.bind(gateway);
     gateway.prepareInvoiceAndPostingProposal = async (callContext, rawInput) => {

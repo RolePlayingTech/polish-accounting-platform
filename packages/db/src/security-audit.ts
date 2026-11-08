@@ -20,6 +20,7 @@ const actions = [
   'reactivate_membership',
   'grant',
   'revoke_grant',
+  'provision_company',
   'unknown',
 ];
 

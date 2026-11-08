@@ -483,6 +483,29 @@ function sha256Hex(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex');
 }
 
+export function computeCanonicalMcpInvoicePayloadHash(
+  tenantIdVal: string,
+  legalEntityIdVal: string,
+  invoice: PrepareInvoiceAndPostingProposalInput['invoice'],
+): string {
+  const canonical = JSON.stringify({
+    tenantId: tenantIdVal.toLowerCase(),
+    legalEntityId: legalEntityIdVal.toLowerCase(),
+    direction: invoice.direction,
+    invoiceNumber: invoice.invoiceNumber.trim(),
+    issueDate: invoice.issueDate,
+    dueDate: invoice.dueDate,
+    counterpartyNip: invoice.counterpartyNip,
+    counterpartyName: invoice.counterpartyName.trim(),
+    netAmountPln: invoice.netAmountPln,
+    vatAmountPln: invoice.vatAmountPln,
+    grossAmountPln: invoice.grossAmountPln,
+    expenseDescription: invoice.expenseDescription.trim(),
+    suggestedCategory: invoice.suggestedCategory,
+  });
+  return sha256Hex(canonical);
+}
+
 function constantTimeHexEquals(leftHex: string, rightHex: string): boolean {
   if (leftHex.length !== rightHex.length) {
     return false;
@@ -2355,16 +2378,11 @@ export class PapMcpGateway {
 
     const proposedPosting = computeProposedAccountingPreview(sanitizedInvoice, companyProfile);
 
-    // Payload hash binds the exact sanitized draft & tax profile reviewed by a human
-    const payloadHash = sha256Hex(
-      JSON.stringify({
-        tenantId: auth.context.tenantId,
-        legalEntityId: auth.context.legalEntityId,
-        taxRegime: companyProfile.taxRegime,
-        vatStatus: companyProfile.vatStatus,
-        invoice: sanitizedInvoice,
-        proposedPosting,
-      }),
+    // Payload hash binds the exact sanitized draft reviewed by a human (canonical across MCP & REST)
+    const payloadHash = computeCanonicalMcpInvoicePayloadHash(
+      auth.context.tenantId,
+      auth.context.legalEntityId,
+      sanitizedInvoice,
     );
 
     // Idempotency canonical hash covers raw caller input so hidden-char mutations also trigger conflict

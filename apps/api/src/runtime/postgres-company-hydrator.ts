@@ -12,6 +12,7 @@ import {
   TENANT_2_ID,
   type AuditLogEntry,
   type WorkspaceCompanyState,
+  type WorkspaceHumanChallenge,
   type WorkspaceStoredMcpProposal,
 } from '@pap/application';
 import { sanitizeUntrustedDocumentTextForMcp } from '@pap/application/mcp-gateway';
@@ -25,6 +26,7 @@ import type {
 } from '@pap/contracts/mcp-tools';
 import {
   createPostgresAccountingScope,
+  discoverActorAccessibleEntities,
   listTenantCompanyGrantsForAdminFacts,
   type AccountingDocumentRecord,
   type BankTransactionRecord,
@@ -462,6 +464,40 @@ function hydrateBankFromRecords(rows: readonly BankTransactionRecord[]): {
   return { bankTransactions, reconciliationMatches };
 }
 
+export function hydrateMcpChallengeFromRecord(
+  row: McpPreparedProposalRecord,
+): WorkspaceHumanChallenge | null {
+  if (row.status !== 'pending_human_approval') {
+    return null;
+  }
+  const invRaw = (row.invoiceJson ?? {}) as Record<string, unknown>;
+  const rawCh = invRaw._papChallenge;
+  if (typeof rawCh !== 'object' || rawCh === null) {
+    return null;
+  }
+  const ch = rawCh as Record<string, unknown>;
+  if (
+    typeof ch.humanUserId !== 'string' ||
+    typeof ch.expectedPayloadHash !== 'string' ||
+    typeof ch.codeSha256Hex !== 'string' ||
+    typeof ch.expiresAtMs !== 'number' ||
+    typeof ch.expiresAtIso !== 'string'
+  ) {
+    return null;
+  }
+  return {
+    proposalId: row.proposalId,
+    tenantId: parseTenantId(row.tenantId),
+    legalEntityId: parseLegalEntityId(row.legalEntityId),
+    humanUserId: parseUserId(ch.humanUserId),
+    expectedPayloadHash: ch.expectedPayloadHash,
+    codeSha256Hex: ch.codeSha256Hex,
+    expiresAtMs: ch.expiresAtMs,
+    expiresAtIso: ch.expiresAtIso,
+    consumedAtIso: typeof ch.consumedAtIso === 'string' ? ch.consumedAtIso : null,
+  };
+}
+
 export function hydrateMcpProposalFromRecord(
   row: McpPreparedProposalRecord,
 ): WorkspaceStoredMcpProposal {
@@ -474,6 +510,7 @@ export function hydrateMcpProposalFromRecord(
     typeof invRaw._papCreatedByUserId === 'string' ? invRaw._papCreatedByUserId : row.preparedBy;
   delete invRaw._papRawIdempotencyKey;
   delete invRaw._papCreatedByUserId;
+  delete invRaw._papChallenge;
 
   const expiresAtMs = row.expiresAt.getTime();
   return {
@@ -514,6 +551,7 @@ async function hydrateSingleCompanyFromScope(
 ): Promise<{
   readonly company: WorkspaceCompanyState;
   readonly mcpProposals: readonly WorkspaceStoredMcpProposal[];
+  readonly mcpChallenges: readonly WorkspaceHumanChallenge[];
   readonly auditEvents: readonly AuditLogEntry[];
   readonly notificationPrefs: readonly {
     readonly userId: string;
@@ -529,18 +567,35 @@ async function hydrateSingleCompanyFromScope(
   }
 
   const entitySummary = await scope.getLegalEntitySummary();
-  const meta = decodeCompanyMetaFromAddress(settings.addressSummary);
+  const latestProfileVersion =
+    typeof scope.getLatestEntityProfileVersion === 'function'
+      ? await scope.getLatestEntityProfileVersion()
+      : null;
+  const profileJsonObj =
+    latestProfileVersion?.profileJson && typeof latestProfileVersion.profileJson === 'object'
+      ? (latestProfileVersion.profileJson as Record<string, unknown>)
+      : null;
+  const addressMeta = decodeCompanyMetaFromAddress(settings.addressSummary);
+  const profileTaxProfile =
+    profileJsonObj?.taxProfile && typeof profileJsonObj.taxProfile === 'object'
+      ? (profileJsonObj.taxProfile as TaxProfileConfigContract)
+      : undefined;
+  const profileSettingsHistory = Array.isArray(profileJsonObj?.settingsHistory)
+    ? (profileJsonObj.settingsHistory as WorkspaceCompanyState['settingsHistory'])
+    : undefined;
   const seedFallback = DEMO_COMPANIES_SEED.find(
     (s) => s.tenantId === rawTenantId && s.legalEntityId === rawLegalEntityId,
   );
   const displayName =
-    meta?.displayName ??
+    addressMeta?.displayName ??
+    (typeof profileJsonObj?.displayName === 'string' ? profileJsonObj.displayName : undefined) ??
     entitySummary?.displayName ??
     seedFallback?.displayName ??
     `Firma ${settings.nip}`;
   const legalForm = settings.legalForm === 'sp_z_o_o' ? 'sp_z_o_o' : 'jdg';
   const vatStatusSimple = settings.vatStatus;
-  const taxProfile: TaxProfileConfigContract = meta?.taxProfile ??
+  const taxProfile: TaxProfileConfigContract = addressMeta?.taxProfile ??
+    profileTaxProfile ??
     seedFallback?.taxProfile ?? {
       profileCode:
         legalForm === 'sp_z_o_o'
@@ -654,33 +709,53 @@ async function hydrateSingleCompanyFromScope(
   }
 
   const mcpProposals: WorkspaceStoredMcpProposal[] = [];
-  for (const propId of mcpProposalIds) {
-    const rec = await scope.getMcpPreparedProposal(propId);
-    if (rec) {
-      const hydratedProposal = hydrateMcpProposalFromRecord(rec);
-      mcpProposals.push(hydratedProposal);
-      auditEvents.push({
-        auditEventId: `pg-mcp-prop-${rec.proposalId}`,
-        occurredAt: (rec.confirmedAt ?? rec.createdAt).toISOString(),
-        channel: 'mcp',
-        action:
-          rec.status === 'confirmed'
-            ? 'confirm_prepared_proposal'
-            : rec.status === 'rejected'
-              ? 'reject_prepared_proposal'
-              : 'prepare_invoice_and_posting_proposal',
-        actorUserId: rec.confirmedBy ?? rec.preparedBy,
-        actorDisplayLabel: resolvePersonaDisplayLabel(rec.confirmedBy ?? rec.preparedBy),
-        tenantId: rawTenantId,
-        legalEntityId: rawLegalEntityId,
-        outcome: 'allow',
-        reasonCode: `mcp_${rec.status}`,
-        summaryPl: `Propozycja MCP ${rec.proposalId.slice(0, 8)} (${hydratedProposal.invoice.invoiceNumber}): ${rec.status}.`,
-      });
+  const mcpChallenges: WorkspaceHumanChallenge[] = [];
+  const mcpRecords: McpPreparedProposalRecord[] = [];
+  if (typeof scope.listMcpPreparedProposals === 'function') {
+    const allMcpRecords = await scope.listMcpPreparedProposals();
+    mcpRecords.push(...allMcpRecords);
+  } else {
+    for (const propId of mcpProposalIds) {
+      const rec = await scope.getMcpPreparedProposal(propId);
+      if (rec) {
+        mcpRecords.push(rec);
+      }
     }
   }
+  const seenProposalIds = new Set<string>();
+  for (const rec of mcpRecords) {
+    if (seenProposalIds.has(rec.proposalId)) {
+      continue;
+    }
+    seenProposalIds.add(rec.proposalId);
+    const hydratedProposal = hydrateMcpProposalFromRecord(rec);
+    mcpProposals.push(hydratedProposal);
+    const hydratedChallenge = hydrateMcpChallengeFromRecord(rec);
+    if (hydratedChallenge) {
+      mcpChallenges.push(hydratedChallenge);
+    }
+    auditEvents.push({
+      auditEventId: `pg-mcp-prop-${rec.proposalId}`,
+      occurredAt: (rec.confirmedAt ?? rec.createdAt).toISOString(),
+      channel: 'mcp',
+      action:
+        rec.status === 'confirmed'
+          ? 'confirm_prepared_proposal'
+          : rec.status === 'rejected'
+            ? 'reject_prepared_proposal'
+            : 'prepare_invoice_and_posting_proposal',
+      actorUserId: rec.confirmedBy ?? rec.preparedBy,
+      actorDisplayLabel: resolvePersonaDisplayLabel(rec.confirmedBy ?? rec.preparedBy),
+      tenantId: rawTenantId,
+      legalEntityId: rawLegalEntityId,
+      outcome: 'allow',
+      reasonCode: `mcp_${rec.status}`,
+      summaryPl: `Propozycja MCP ${rec.proposalId.slice(0, 8)} (${hydratedProposal.invoice.invoiceNumber}): ${rec.status}.`,
+    });
+  }
 
-  const settingsHistory = meta?.settingsHistory ? [...meta.settingsHistory] : [];
+  const rawSettingsHistory = addressMeta?.settingsHistory ?? profileSettingsHistory;
+  const settingsHistory = rawSettingsHistory ? [...rawSettingsHistory] : [];
   for (const hist of settingsHistory) {
     auditEvents.push({
       auditEventId: `pg-settings-v${hist.version}-${rawLegalEntityId}`,
@@ -741,6 +816,7 @@ async function hydrateSingleCompanyFromScope(
       explanationsById,
     },
     mcpProposals,
+    mcpChallenges,
     auditEvents,
     notificationPrefs,
   };
@@ -811,20 +887,49 @@ export async function hydrateCompanyIntoWorkspaceIfMissing(
     candidateUsers.add(parseUserId(preferredActorUserId));
   }
 
-  for (const rawUserId of candidateUsers) {
-    const uId = parseUserId(rawUserId);
-    for (const action of ['read', 'write'] as const) {
-      const facts = await runtime.securityServices.authorizationDataSource.getFacts({
-        userId: uId,
-        tenantId: tId,
-        legalEntityId: leId,
-        action,
+  const batchDiscovered = await discoverActorAccessibleEntities(
+    runtime.connection.db,
+    runtime.signer,
+    Array.from(candidateUsers),
+    tId,
+  ).catch(() => null);
+
+  if (batchDiscovered && (batchDiscovered.memberships.length > 0 || batchDiscovered.grants.length > 0)) {
+    for (const m of batchDiscovered.memberships) {
+      store.upsertMembership({
+        ...m,
+        tenantId: parseTenantId(m.tenantId),
+        userId: parseUserId(m.userId),
       });
-      if (facts.membership) {
-        store.upsertMembership(facts.membership);
-      }
-      for (const grant of facts.grants) {
-        store.upsertGrant(grant);
+    }
+    for (const g of batchDiscovered.grants) {
+      store.upsertGrant({
+        grantId: g.grantId,
+        tenantId: parseTenantId(g.tenantId),
+        userId: parseUserId(g.userId),
+        legalEntityId: parseLegalEntityId(g.legalEntityId),
+        action: g.action,
+        validFrom: g.validFrom,
+        validUntil: g.validUntil,
+        revokedAt: g.revokedAt,
+      });
+    }
+  } else {
+    for (const rawUserId of candidateUsers) {
+      const uId = parseUserId(rawUserId);
+      for (const action of ['read', 'write'] as const) {
+        const facts = await runtime.securityServices.authorizationDataSource.getFacts({
+          userId: uId,
+          tenantId: tId,
+          legalEntityId: leId,
+          action,
+        });
+        if (facts.membership) {
+          store.upsertMembership(facts.membership);
+        }
+        for (const grant of facts.grants) {
+          store.upsertGrant(grant);
+        }
       }
     }
   }
@@ -874,6 +979,10 @@ export async function hydrateCompanyIntoWorkspaceIfMissing(
   for (const proposal of hydrated.mcpProposals) {
     store.upsertMcpProposal(proposal);
   }
+  for (const challenge of hydrated.mcpChallenges) {
+    store.saveHumanChallenge(challenge);
+  }
+  workspace.syncStoreMcpProposalsToBoundGateways(tId, leId);
 
   const existingAuditIds = new Set(
     store.listAuditEvents({ tenantId: tId, legalEntityId: leId }).map((e) => e.auditEventId),
@@ -934,7 +1043,41 @@ export async function discoverAndHydrateMissingCompaniesForTenants(
     }
   }
 
-  for (const rawTenantId of Array.from(new Set(rawTenantIds))) {
+  const tenantSet = new Set<string>(rawTenantIds);
+  const actorDiscovered = await discoverActorAccessibleEntities(
+    runtime.connection.db,
+    runtime.signer,
+    candidateUserIds,
+  ).catch(() => null);
+  if (actorDiscovered) {
+    for (const mRow of actorDiscovered.memberships) {
+      tenantSet.add(mRow.tenantId);
+      store.upsertMembership({
+        ...mRow,
+        tenantId: parseTenantId(mRow.tenantId),
+        userId: parseUserId(mRow.userId),
+      });
+    }
+    for (const gRow of actorDiscovered.grants) {
+      tenantSet.add(gRow.tenantId);
+      store.upsertGrant({
+        grantId: gRow.grantId,
+        tenantId: parseTenantId(gRow.tenantId),
+        userId: parseUserId(gRow.userId),
+        legalEntityId: parseLegalEntityId(gRow.legalEntityId),
+        action: gRow.action,
+        validFrom: gRow.validFrom,
+        validUntil: gRow.validUntil,
+        revokedAt: gRow.revokedAt,
+      });
+      enqueue(gRow.tenantId, gRow.legalEntityId);
+    }
+    for (const ent of actorDiscovered.entities) {
+      enqueue(ent.tenantId, ent.legalEntityId);
+    }
+  }
+
+  for (const rawTenantId of Array.from(tenantSet)) {
     const tId = parseTenantId(rawTenantId);
     const discovered = await listTenantCompanyGrantsForAdminFacts(
       runtime.connection.db,

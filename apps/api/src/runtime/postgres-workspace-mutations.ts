@@ -7,6 +7,7 @@ import type {
 import {
   AccountingWorkspaceConflictError,
   type WorkspaceCompanyState,
+  type WorkspaceHumanChallenge,
   type WorkspaceStoredMcpProposal,
 } from '@pap/application';
 import { connectDatabase, type DatabaseEnvironment, type PostgresAccountingScope } from '@pap/db';
@@ -232,6 +233,38 @@ export async function persistCalendarObligationStatusMutation(
   });
 }
 
+export async function persistMcpChallengeMutation(
+  scope: PostgresAccountingScope,
+  proposal: WorkspaceStoredMcpProposal,
+  challenge: WorkspaceHumanChallenge,
+): Promise<void> {
+  if (typeof scope.updateMcpPreparedProposalChallenge !== 'function') {
+    return;
+  }
+  const existingDbProposal = await scope.getMcpPreparedProposal(proposal.proposalId);
+  if (!existingDbProposal || existingDbProposal.status !== 'pending_human_approval') {
+    return;
+  }
+  await scope.updateMcpPreparedProposalChallenge({
+    proposalId: proposal.proposalId,
+    confirmationChallengeHash: challenge.codeSha256Hex,
+    invoiceJson: {
+      ...existingDbProposal.invoiceJson,
+      _papChallenge: {
+        proposalId: challenge.proposalId,
+        tenantId: challenge.tenantId,
+        legalEntityId: challenge.legalEntityId,
+        humanUserId: challenge.humanUserId,
+        expectedPayloadHash: challenge.expectedPayloadHash,
+        codeSha256Hex: challenge.codeSha256Hex,
+        expiresAtMs: challenge.expiresAtMs,
+        expiresAtIso: challenge.expiresAtIso,
+        consumedAtIso: challenge.consumedAtIso,
+      },
+    },
+  });
+}
+
 export async function persistConfirmMcpProposalMutation(
   scope: PostgresAccountingScope,
   company: WorkspaceCompanyState,
@@ -276,7 +309,7 @@ export async function persistConfirmMcpProposalMutation(
   );
   await scope.confirmMcpPreparedProposal({
     proposalId: proposal.proposalId,
-    confirmationChallengeHash: sealHash,
+    confirmationChallengeHash: existingDbProposal.confirmationChallengeHash || sealHash,
     ledgerEntryId: ledgerEntryUuid,
     ...(proposal.confirmedAtIso ? { confirmedAt: new Date(proposal.confirmedAtIso) } : {}),
   });

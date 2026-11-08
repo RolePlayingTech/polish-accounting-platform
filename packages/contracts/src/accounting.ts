@@ -44,6 +44,15 @@ export const ZusSchemeSchema = z.enum([
   'not_applicable',
 ]);
 
+export const HealthContributionTierSchema = z.enum([
+  'low',
+  'medium',
+  'middle',
+  'high',
+  'standard',
+]);
+export type HealthContributionTierContract = z.infer<typeof HealthContributionTierSchema>;
+
 export const TaxProfileConfigSchema = z
   .object({
     profileCode: TaxProfileCodeSchema,
@@ -69,6 +78,21 @@ export const TaxProfileConfigSchema = z
     ksefSales2024Above200M: z.boolean(),
     ceidgRegisteredBefore2025: z.boolean().optional(),
     krsRegisteredBefore2025: z.boolean().optional(),
+    street: z.string().min(1).max(200).optional(),
+    buildingNumber: z.string().min(1).max(40).optional(),
+    unitNumber: z.string().max(40).nullable().optional(),
+    postalCode: z
+      .string()
+      .regex(/^\d{2}-\d{3}$/, 'Kod pocztowy musi mieć format XX-XXX')
+      .optional(),
+    city: z.string().min(1).max(120).optional(),
+    voivodeship: z.string().min(1).max(80).optional(),
+    taxOfficeName: z.string().min(1).max(200).optional(),
+    vatPayer: z.boolean().optional(),
+    vatPeriod: VatSettlementPeriodSchema.optional(),
+    ksefEnabled: z.boolean().optional(),
+    ryczaltDefaultRate: RyczaltRateCodeSchema.optional(),
+    healthContributionTier: HealthContributionTierSchema.optional(),
   })
   .strict();
 
