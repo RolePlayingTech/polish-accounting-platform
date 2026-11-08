@@ -10,7 +10,7 @@ import {
   type WorkspaceHumanChallenge,
   type WorkspaceStoredMcpProposal,
 } from '@pap/application';
-import { connectDatabase, type DatabaseEnvironment, type PostgresAccountingScope } from '@pap/db';
+import type { PostgresAccountingScope } from '@pap/db';
 import {
   computeMcpProposalSealHash,
   deterministicUuidV4,
@@ -419,71 +419,4 @@ export async function persistSandboxTestEmailMutation(
     rawRfc5322Mime: sent.rawRfc822,
     obligationCode: 'TEST_SANDBOX',
   });
-}
-
-export async function provisionNewCompanyDirectoryWithMigrator(params: {
-  readonly migratorUrl: string;
-  readonly databaseEnv: DatabaseEnvironment;
-  readonly dataSchema: string;
-  readonly tenantId: string;
-  readonly legalEntityId: string;
-  readonly displayName: string;
-  readonly profileCode: string;
-  readonly ownerUserId: string;
-}): Promise<void> {
-  const migrator = connectDatabase(
-    {
-      DATABASE_URL: params.migratorUrl,
-      PAP_DATABASE_ENV: params.databaseEnv,
-    },
-    params.dataSchema,
-    { roleScope: 'migrator', maxConnections: 1 },
-  );
-  const sql = migrator.client;
-  try {
-    const nowIso = new Date().toISOString();
-    await sql.begin(async (txRaw) => {
-      const txSql = txRaw as unknown as typeof sql;
-      await txSql`
-        INSERT INTO legal_entity (id, tenant_id, display_name, created_at)
-        VALUES (${params.legalEntityId}, ${params.tenantId}, ${params.displayName}, ${nowIso})
-        ON CONFLICT (id) DO NOTHING
-      `;
-      const profileVerId = deterministicUuidV4(
-        `entity-profile-v1:${params.tenantId}:${params.legalEntityId}`,
-      );
-      await txSql`
-        INSERT INTO entity_profile_version (id, tenant_id, legal_entity_id, profile_code, valid_from)
-        VALUES (${profileVerId}, ${params.tenantId}, ${params.legalEntityId}, ${params.profileCode}, ${nowIso})
-        ON CONFLICT (id) DO NOTHING
-      `;
-
-      const ownerRows = await txSql<{ user_id: string }[]>`
-        SELECT user_id::text AS user_id
-        FROM tenant_membership
-        WHERE tenant_id = ${params.tenantId}
-          AND role = 'tenant_owner'
-          AND status = 'active'
-      `;
-      const grantees = new Set<string>([
-        params.ownerUserId,
-        ...ownerRows.map((row) => row.user_id),
-      ]);
-
-      for (const granteeUserId of grantees) {
-        for (const action of ['read', 'write'] as const) {
-          const grantId = deterministicUuidV4(
-            `owner-grant:${params.tenantId}:${params.legalEntityId}:${granteeUserId}:${action}`,
-          );
-          await txSql`
-            INSERT INTO company_access_grant (grant_id, tenant_id, user_id, legal_entity_id, action, valid_from)
-            VALUES (${grantId}, ${params.tenantId}, ${granteeUserId}, ${params.legalEntityId}, ${action}, ${nowIso})
-            ON CONFLICT (grant_id) DO NOTHING
-          `;
-        }
-      }
-    });
-  } finally {
-    await sql.end({ timeout: 3 }).catch(() => undefined);
-  }
 }
