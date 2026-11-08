@@ -40,9 +40,9 @@ export default async function DocumentDetailPage({
     );
   }
 
-  let dash: ReturnType<typeof getDashboardSnapshot>;
+  let dash: Awaited<ReturnType<typeof getDashboardSnapshot>>;
   try {
-    dash = getDashboardSnapshot(session);
+    dash = await getDashboardSnapshot(session);
   } catch (err) {
     return (
       <WorkspaceAccessErrorShell
@@ -55,11 +55,11 @@ export default async function DocumentDetailPage({
     );
   }
 
-  let detail: ReturnType<typeof getDocumentDetailSnapshot> | null = null;
+  let detail: Awaited<ReturnType<typeof getDocumentDetailSnapshot>> | null = null;
   let errorMessage = 'Nie znaleziono dokumentu w aktywnej firmie.';
 
   try {
-    detail = getDocumentDetailSnapshot(session, documentId);
+    detail = await getDocumentDetailSnapshot(session, documentId);
   } catch (err) {
     if (err instanceof WorkspaceAccessError) {
       errorMessage = err.message;

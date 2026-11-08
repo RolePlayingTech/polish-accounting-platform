@@ -154,7 +154,7 @@ export function DocumentsWorkbench({
           <div className="flex flex-wrap items-center gap-1.5">
             <Link
               href={`/app/documents/${row.documentId}`}
-              className="font-mono text-xs font-semibold text-[#1d5c42] underline underline-offset-4 hover:text-[#164833]"
+              className="inline-flex min-h-6 items-center font-mono text-xs font-semibold text-[#1d5c42] underline underline-offset-4 hover:text-[#164833]"
             >
               {row.documentNumber}
             </Link>
@@ -196,11 +196,31 @@ export function DocumentsWorkbench({
     },
     {
       id: 'status',
-      header: 'Status obiegu',
+      header: 'Status obiegu i ekstrakcja',
       mobileRole: 'status',
       render: (row) => {
         const meta = STATUS_META[row.status];
-        return <StatusBadge size="sm" tone={meta.tone} label={meta.label} />;
+        const statusLabel =
+          row.status === 'ai_proposal' &&
+          row.extractionMethodLabelPl &&
+          row.extractionMethodLabelPl.includes('deterministyczny')
+            ? 'Zaimportowano (XML/CSV) — wymaga zatwierdzenia'
+            : meta.label;
+        return (
+          <div className="space-y-1">
+            <StatusBadge size="sm" tone={meta.tone} label={statusLabel} />
+            {row.extractionMethodLabelPl ? (
+              <p className="text-[11px] text-[#464c48]">{row.extractionMethodLabelPl}</p>
+            ) : null}
+            <p className="font-mono text-[10px] text-[#636b66]">
+              {row.whiteListStatus === 'verified_kas'
+                ? 'Wykaz KAS: zweryfikowano'
+                : row.whiteListStatus === 'mismatch_alert'
+                  ? 'Uwaga: IBAN poza Białą Listą!'
+                  : 'Wykaz KAS: niesprawdzone w API MF (symulacja)'}
+            </p>
+          </div>
+        );
       },
     },
     {
@@ -341,7 +361,7 @@ export function DocumentsWorkbench({
                     onChange={(e) => setImportFormat(e.target.value as 'fa3_xml' | 'csv' | 'json')}
                   >
                     <option value="fa3_xml">
-                      XML KSeF FA(3) (schemat MF obowiązkowy od 2026 r.)
+                      XML KSeF FA(2) / FA(3) (parser deterministyczny MF)
                     </option>
                     <option value="csv">CSV rozdzielany średnikami (;)</option>
                     <option value="json">Struktura JSON</option>
@@ -561,7 +581,7 @@ export function DocumentsWorkbench({
                     type="checkbox"
                     checked={annex15}
                     onChange={(e) => setAnnex15(e.target.checked)}
-                    className="h-4 w-4 accent-[#1d5c42]"
+                    className="h-6 w-6 shrink-0 accent-[#1d5c42]"
                   />
                   <span>
                     Pozycja z Załącznika nr 15 (weryfikacja MPP powyżej 15 000 PLN brutto)

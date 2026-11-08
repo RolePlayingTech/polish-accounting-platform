@@ -27,21 +27,35 @@ export default async function AppDashboardPage() {
     readServerSession(),
   ]);
 
-  let snapshot: ReturnType<typeof getDashboardSnapshot> | null = null;
+  let snapshot: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   let sessionError: string | null = null;
+  let sessionErrorStatus = 403;
+  let sessionErrorReason = 'access_denied';
 
   if (session) {
     try {
-      snapshot = getDashboardSnapshot(session);
+      snapshot = await getDashboardSnapshot(session);
     } catch (err) {
-      sessionError =
-        err instanceof WorkspaceAccessError
-          ? err.message
-          : 'Nie udało się odczytać kontekstu wybranej firmy.';
+      if (err instanceof WorkspaceAccessError) {
+        sessionError = err.message;
+        sessionErrorStatus = err.statusCode;
+        sessionErrorReason = err.reasonCode;
+      } else {
+        sessionError = 'Nie udało się odczytać kontekstu wybranej firmy.';
+      }
     }
   }
 
   if (!session || !snapshot) {
+    let fallbackAccessible: Awaited<ReturnType<typeof listAccessibleCompaniesForSession>> = [];
+    if (session) {
+      try {
+        fallbackAccessible = await listAccessibleCompaniesForSession(session);
+      } catch {
+        fallbackAccessible = [];
+      }
+    }
+
     return (
       <WorkspaceShell
         activeHref="/app"
@@ -54,16 +68,10 @@ export default async function AppDashboardPage() {
         <div className="space-y-6">
           {session && sessionError ? (
             <WorkspaceAccessDeniedCard
-              statusCode={403}
-              reasonCode="access_denied"
+              statusCode={sessionErrorStatus}
+              reasonCode={sessionErrorReason}
               messagePl={sessionError}
-              accessibleCompanies={(() => {
-                try {
-                  return listAccessibleCompaniesForSession(session);
-                } catch {
-                  return [];
-                }
-              })()}
+              accessibleCompanies={fallbackAccessible}
             />
           ) : null}
 
@@ -110,7 +118,7 @@ export default async function AppDashboardPage() {
       title: `${doc.documentNumber} · ${doc.counterpartyName}`,
       description: doc.isDuplicateSha256
         ? `Wykryto potencjalny duplikat skrótu SHA-256! Sprawdź dokument przed księgowaniem.`
-        : `${doc.description} — propozycja AI (${String(doc.aiConfidencePercent)}%) wymaga weryfikacji i zatwierdzenia człowieka.`,
+        : `${doc.description} — propozycja (${doc.extractionMethodLabelPl ?? 'wymaga weryfikacji człowieka'}) oczekuje na zatwierdzenie człowieka.`,
       category: doc.isDuplicateSha256 ? 'discrepancy' : 'document_verify',
       urgency: doc.isDuplicateSha256 || doc.aiConfidence === 'low' ? 'urgent' : 'attention',
       amountGrosze: doc.grossGrosze,

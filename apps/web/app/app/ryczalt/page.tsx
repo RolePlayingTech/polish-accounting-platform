@@ -30,10 +30,13 @@ export default async function RyczaltPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => ({
-    dash: getDashboardSnapshot(session),
-    ryc: getRyczaltSnapshot(session),
-  }));
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const [dash, ryc] = await Promise.all([
+      getDashboardSnapshot(session),
+      getRyczaltSnapshot(session),
+    ]);
+    return { dash, ryc };
+  });
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell

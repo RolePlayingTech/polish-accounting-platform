@@ -106,7 +106,7 @@ export function LegalBasisPanel({ basis, className = '', id, onClose }: LegalBas
           {onClose && (
             <button
               aria-label="Zamknij panel podstawy prawnej"
-              className={`rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
+              className={`inline-flex min-h-6 items-center rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs font-semibold text-[#464c48] hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing}`}
               onClick={onClose}
               type="button"
             >
@@ -162,15 +162,17 @@ export function LegalBasisPanel({ basis, className = '', id, onClose }: LegalBas
                   </span>
                   {step.formula && (
                     <p
-                      className={`mt-0.5 text-[11px] text-[#636b66] ${ksiegaTokens.typography.tabularNums}`}
+                      className={`mt-0.5 break-words text-[11px] text-[#636b66] ${ksiegaTokens.typography.tabularNums}`}
                     >
                       Wzór: {step.formula}
                     </p>
                   )}
-                  {step.note && <p className="mt-0.5 text-[11px] text-[#636b66]">{step.note}</p>}
+                  {step.note && (
+                    <p className="mt-0.5 break-words text-[11px] text-[#636b66]">{step.note}</p>
+                  )}
                 </div>
                 <span
-                  className={`shrink-0 font-semibold text-[#191c1a] sm:text-right ${ksiegaTokens.typography.financialFigure}`}
+                  className={`min-w-0 max-w-full break-words font-semibold tracking-tight text-[#191c1a] sm:shrink-0 sm:text-right ${ksiegaTokens.typography.tabularNums}`}
                 >
                   {step.valueFormatted}
                 </span>
@@ -235,7 +237,7 @@ export function WhyTrigger({
   };
 
   return (
-    <div className="inline-block text-left align-middle">
+    <div className="inline-block max-w-full text-left align-middle">
       <button
         aria-controls={panelId}
         aria-expanded={isOpen}

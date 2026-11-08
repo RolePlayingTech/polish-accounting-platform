@@ -23,8 +23,8 @@ export const COMPANY_JDG_RYCZALT_ID = '11111111-1111-4111-8111-111111111102';
 export const COMPANY_SPZOO_ID = '11111111-1111-4111-8111-111111111103';
 export const COMPANY_TENANT_2_ID = '22222222-2222-4222-8222-222222222201';
 
-export const AVAILABLE_PERIODS = ['2026-10', '2026-06', '2026-11', '2026-12'] as const;
-export const DEFAULT_ACCOUNTING_PERIOD = '2026-10' as const;
+export const AVAILABLE_PERIODS = ['2026-03', '2026-06', '2026-10', '2026-11', '2026-12'] as const;
+export const DEFAULT_ACCOUNTING_PERIOD = '2026-03' as const;
 
 export interface NotificationOutboxAttempt {
   readonly attemptNumber: number;
@@ -226,7 +226,9 @@ export interface WorkspaceDocumentRecord {
   readonly mimeLabel: string;
   readonly sourceChannel:
     | 'KSeF FA(3) XML'
+    | 'KSeF FA(2) XML'
     | 'Import CSV'
+    | 'Import JSON'
     | 'Skan OCR (syntetyczny)'
     | 'Formularz ręczny'
     | 'Propozycja MCP';
@@ -235,10 +237,16 @@ export interface WorkspaceDocumentRecord {
   readonly gtuCodes: readonly string[];
   readonly procedureCodes: readonly string[];
   readonly annex15Item: boolean;
-  readonly whiteListStatus: 'verified_kas' | 'mismatch_alert' | 'not_required';
+  readonly whiteListStatus:
+    | 'unverified'
+    | 'verified_kas'
+    | 'mismatch_alert'
+    | 'not_required'
+    | 'not_checked';
   readonly whiteListCheckId?: string;
   readonly aiConfidence: AiConfidenceLevel;
-  readonly aiConfidencePercent: number;
+  readonly aiConfidencePercent: number | null;
+  readonly extractionMethodLabelPl?: string;
   readonly aiProposed: AiExtractedFieldsSnapshot;
   readonly expenseQualification: KpirExpenseQualificationKind;
   readonly vatDeductionMode: VatDeductionMode;
@@ -270,12 +278,7 @@ export interface McpPendingProposalRecord {
   readonly netGrosze: number;
   readonly vatGrosze: number;
   readonly grossGrosze: number;
-  readonly suggestedCategory:
-    | 'towary_i_materialy'
-    | 'pozostale_wydatki_kpir'
-    | 'eksploatacja_samochodu_mieszana'
-    | 'uslugi_obce'
-    | 'przychod_sprzedaz';
+  readonly suggestedCategory: string;
   readonly kupPreviewGrosze: number;
   readonly deductibleVatPreviewGrosze: number;
   readonly promptInjectionSuspected: boolean;
@@ -380,7 +383,7 @@ export const SAMPLE_KSEF_FA3_XML = `<?xml version="1.0" encoding="UTF-8"?>
   <Naglowek>
     <KodFormularza kodSystemowy="FA (3)" wersjaSchemy="1-0E">FA</KodFormularza>
     <WariantFormularza>3</WariantFormularza>
-    <DataWytworzeniaFa>2026-10-16T09:30:00Z</DataWytworzeniaFa>
+    <DataWytworzeniaFa>2026-03-16T09:30:00Z</DataWytworzeniaFa>
     <SystemInfo>Syntetyczny Generator KSeF 2.0</SystemInfo>
   </Naglowek>
   <Podmiot1>
@@ -427,22 +430,89 @@ export const SAMPLE_KSEF_FA3_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </Fa>
 </Faktura>`;
 
-export const SAMPLE_INVOICE_CSV = `Numer;Kierunek;DataWystawienia;TerminPlatnosci;Kontrahent;NIP;Opis;NettoPLN;VatPLN;StawkaVAT;NrKSeF
-FV/2026/10/019;sales;2026-10-18;2026-11-02;Innowacje Bałtyckie Sp. z o.o.;7792301205;Projekt makiety produktu cyfrowego UX/UI;8500.00;1955.00;23;5250001003-20261018-UX0190-AB12CD-11`;
+export const SAMPLE_KSEF_FA2_XML = `<?xml version="1.0" encoding="UTF-8"?>
+<Faktura xmlns="http://crd.gov.pl/wzor/2023/06/29/12648/">
+  <Naglowek>
+    <KodFormularza kodSystemowy="FA (2)" wersjaSchemy="1-0E">FA</KodFormularza>
+    <WariantFormularza>2</WariantFormularza>
+    <DataWytworzeniaFa>2026-03-14T11:15:00Z</DataWytworzeniaFa>
+    <SystemInfo>Syntetyczny Generator KSeF FA(2)</SystemInfo>
+  </Naglowek>
+  <Podmiot1>
+    <DaneIdentyfikacyjne>
+      <NIP>5250006006</NIP>
+      <Nazwa>Dostawca Sprzętu Test Sp. z o.o.</Nazwa>
+    </DaneIdentyfikacyjne>
+    <Adres>
+      <KodKraju>PL</KodKraju>
+      <AdresL1>ul. Prosta 51, 00-838 Warszawa</AdresL1>
+    </Adres>
+  </Podmiot1>
+  <Podmiot2>
+    <DaneIdentyfikacyjne>
+      <NIP>5250001003</NIP>
+      <Nazwa>Pracownia Projektowa Jan Testowy</Nazwa>
+    </DaneIdentyfikacyjne>
+  </Podmiot2>
+  <Fa>
+    <KodWaluty>PLN</KodWaluty>
+    <P_1>2026-03-14</P_1>
+    <P_2>FA2/03/2026/051</P_2>
+    <P_6>2026-03-14</P_6>
+    <P_13_1>1600.00</P_13_1>
+    <P_14_1>368.00</P_14_1>
+    <P_15>1968.00</P_15>
+    <NrKSeF>5250006006-20260314-FA2051-77C3D4-22</NrKSeF>
+    <FaWiersz>
+      <NrWierszaFa>1</NrWierszaFa>
+      <P_7>Stacja dokująca USB-C i akcesoria stanowiskowe (dane syntetyczne)</P_7>
+      <P_8A>szt.</P_8A>
+      <P_8B>1</P_8B>
+      <P_11>1600.00</P_11>
+      <P_12>23</P_12>
+    </FaWiersz>
+    <Platnosc>
+      <TerminPlatnosci>
+        <Termin>2026-03-28</Termin>
+      </TerminPlatnosci>
+    </Platnosc>
+  </Fa>
+</Faktura>`;
+
+export const SAMPLE_INVOICE_CSV = `Numer;Data wystawienia;Kontrahent;Kwota netto;Stawka VAT;NIP;Opis
+FV/2026/03/019;2026-03-18;Innowacje Bałtyckie Sp. z o.o.;8500.00;23;7792301205;Projekt makiety produktu cyfrowego UX/UI`;
+
+export const SAMPLE_INVOICE_JSON = JSON.stringify(
+  {
+    documentNumber: 'FV-JSON/2026/03/012',
+    direction: 'purchase',
+    issueDate: '2026-03-19',
+    eventDate: '2026-03-19',
+    dueDate: '2026-04-02',
+    counterpartyName: 'Audyt Systemowy Syntetyk Sp. z o.o.',
+    counterpartyNip: '5250004007',
+    netGrosze: 320000,
+    vatRate: '23',
+    description: 'Audyt bezpieczeństwa aplikacji i przegląd konfiguracji KSeF (dane syntetyczne)',
+  },
+  null,
+  2,
+);
 
 export const SAMPLE_BANK_CSV = `Data księgowania;Data waluty;Kontrahent;Rachunek kontrahenta;Tytuł;Kwota;Waluta;Nr referencyjny
-2026-10-19;2026-10-19;Nordic Design Polska Sp. z o.o.;PL61109010140000071219812874;Zapłata za fakturę FV/2026/10/001 NIP 7792301205;14760,00;PLN;BNK-20261019-001
-2026-10-20;2026-10-20;Flota Serwis Syntetyczny Sp. z o.o.;PL27114020040000300201355387;Opłata za fakturę FZ/2026/10/042 eksploatacja auta;-1968,00;PLN;BNK-20261020-002
-2026-10-21;2026-10-21;Kancelaria Doradcza Syntetyk;PL83102010260000140202763118;Przelew częściowy za usługi październik;-1500,00;PLN;BNK-20261021-003`;
+2026-03-19;2026-03-19;Syntetyczny Software House Sp. z o.o.;PL61109010140000071219812874;Zapłata za fakturę FV/2026/03/001 NIP 5250002008;24600,00;PLN;BNK-20260319-001
+2026-03-20;2026-03-20;Chmura Polska Infrastruktur Test S.A.;PL27114020040000300201355387;Opłata za fakturę FV-CHMURA/03/2026 NIP 5250004007;-1476,00;PLN;BNK-20260320-002
+2026-03-21;2026-03-21;Nordic Design Polska Sp. z o.o.;PL61109010140000071219812874;Zapłata za fakturę FV/2026/10/001 NIP 7792301205;14760,00;PLN;BNK-20261019-001
+2026-03-22;2026-03-22;Kancelaria Doradcza Syntetyk;PL83102010260000140202763118;Przelew częściowy za usługi marzec;-1500,00;PLN;BNK-20260322-003`;
 
-export const SAMPLE_BANK_MT940 = `:20:STMT20261022
+export const SAMPLE_BANK_MT940 = `:20:STMT20260322
 :25:PL61109010140000071219812874
-:60F:C261001PLN45000,00
-:61:2610191019C14760,00NTRFNONREF
-:86:/ORDP/Nordic Design Polska Sp. z o.o. /REMI/Zaplata za fakture FV/2026/10/001 NIP 7792301205
-:61:2610201020D1968,00NTRFNONREF
-:86:/BENM/Flota Serwis Syntetyczny Sp. z o.o. /REMI/Faktura FZ/2026/10/042 serwis i paliwo
-:62F:C261022PLN57792,00`;
+:60F:C260301PLN45000,00
+:61:2603190319C24600,00NTRFNONREF
+:86:/ORDP/Syntetyczny Software House Sp. z o.o. /REMI/Zaplata za fakture FV/2026/03/001 NIP 5250002008
+:61:2603200320D1476,00NTRFNONREF
+:86:/BENM/Chmura Polska Infrastruktur Test S.A. /REMI/Faktura FV-CHMURA/03/2026 chmura i kopie
+:62F:C260322PLN68124,00`;
 
 export interface NotificationOutboxSnapshot {
   readonly preferences: NotificationPrefsState;

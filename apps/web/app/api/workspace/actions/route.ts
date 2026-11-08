@@ -116,7 +116,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           vatStatus: payload['vatStatus'] === 'zwolniony_art_113' ? 'zwolniony_art_113' : 'czynny',
         });
 
-        const switchImmediately = Boolean(payload['switchImmediately']);
+        const switchImmediately = payload['switchImmediately'] !== false;
         const res = NextResponse.json({ ok: true, company: created });
         if (switchImmediately) {
           writeSessionToResponse(res, {
@@ -136,7 +136,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           profileCode: (str(payload['profileCode']) || 'jdg_kpir_skala') as TaxProfileCode,
           vatStatus: payload['vatStatus'] === 'zwolniony_art_113' ? 'zwolniony_art_113' : 'czynny',
           zusScheme: (str(payload['zusScheme']) || 'duzy_zus') as
-            'ulga_na_start' | 'preferencyjny_zus' | 'duzy_zus' | 'not_applicable',
+            | 'ulga_na_start'
+            | 'preferencyjny_zus'
+            | 'duzy_zus'
+            | 'not_applicable',
           smallTaxpayer: Boolean(payload['smallTaxpayer']),
         });
         return NextResponse.json({ ok: true, company: updated });
@@ -147,17 +150,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         const actions: ('read' | 'write')[] = rawActions.includes('write')
           ? ['read', 'write']
           : ['read'];
-        manageCompanyGrantMutation(session, {
+        const targetUserId = str(payload['targetUserId']).trim();
+        await manageCompanyGrantMutation(session, {
           op: 'grant',
           userEmail: str(payload['userEmail']),
           userDisplayName: str(payload['userDisplayName']),
           actions,
+          ...(targetUserId ? { targetUserId } : {}),
         });
         return NextResponse.json({ ok: true });
       }
 
       case 'revoke_access': {
-        manageCompanyGrantMutation(session, {
+        await manageCompanyGrantMutation(session, {
           op: 'revoke',
           grantId: str(payload['grantId']),
         });
@@ -215,7 +220,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       case 'add_kpir_entry': {
         const ksefRef = str(payload['ksefReferenceNumber']).trim();
-        const entry = addManualKpirEntryMutation(session, {
+        const entry = await addManualKpirEntryMutation(session, {
           mode: 'entry',
           eventDate: str(payload['eventDate'], `${session.context.period}-20`),
           documentNumber: str(payload['documentNumber']),
@@ -231,7 +236,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
 
       case 'storno_kpir_entry': {
-        const storno = addManualKpirEntryMutation(session, {
+        const storno = await addManualKpirEntryMutation(session, {
           mode: 'storno',
           targetEntryId: str(payload['targetEntryId']),
           correctionDate: str(payload['correctionDate'], `${session.context.period}-25`),
@@ -244,7 +249,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       case 'add_ryczalt_entry': {
         const nip = str(payload['counterpartyNip']).trim();
         const remarks = str(payload['remarks']).trim();
-        const entry = addRyczaltEntryMutation(session, {
+        const entry = await addRyczaltEntryMutation(session, {
           revenueDate: str(payload['revenueDate'], `${session.context.period}-20`),
           documentNumber: str(payload['documentNumber']),
           counterpartyName: str(payload['counterpartyName']),
@@ -267,7 +272,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             description: str(rec['description']),
           };
         });
-        const entry = addJournalEntryMutation(session, {
+        const entry = await addJournalEntryMutation(session, {
           bookingDate: str(payload['bookingDate'], `${session.context.period}-24`),
           documentNumber: str(payload['documentNumber']),
           description: str(payload['description']),
@@ -286,7 +291,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
 
       case 'toggle_obligation_paid': {
-        const nextPaid = toggleObligationPaidMutation(session, str(payload['obligationCode']));
+        const nextPaid = await toggleObligationPaidMutation(
+          session,
+          str(payload['obligationCode']),
+        );
         return NextResponse.json({ ok: true, isPaid: nextPaid });
       }
 
@@ -311,7 +319,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
 
       case 'mcp_issue_code': {
-        const res = manageMcpProposalMutation(session, {
+        const res = await manageMcpProposalMutation(session, {
           op: 'issue_code',
           proposalId: str(payload['proposalId']),
         });
@@ -320,7 +328,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       case 'mcp_confirm_proposal': {
         const code = str(payload['confirmationCode']).trim();
-        manageMcpProposalMutation(session, {
+        await manageMcpProposalMutation(session, {
           op: 'confirm',
           proposalId: str(payload['proposalId']),
           ...(code ? { confirmationCode: code } : {}),
@@ -328,9 +336,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         return NextResponse.json({ ok: true });
       }
 
-      case 'mcp_create_demo_proposal': {
-        manageMcpProposalMutation(session, { op: 'create_demo_proposal' });
+      case 'mcp_reject_proposal': {
+        const reason = str(payload['reason']).trim();
+        await manageMcpProposalMutation(session, {
+          op: 'reject',
+          proposalId: str(payload['proposalId']),
+          ...(reason ? { reason } : {}),
+        });
         return NextResponse.json({ ok: true });
+      }
+
+      case 'mcp_create_demo_proposal': {
+        const res = await manageMcpProposalMutation(session, { op: 'create_demo_proposal' });
+        return NextResponse.json({ ok: true, ...res });
       }
 
       default:

@@ -33,10 +33,13 @@ export default async function KpirPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => ({
-    dash: getDashboardSnapshot(session),
-    kpir: getKpirSnapshot(session),
-  }));
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const [dash, kpir] = await Promise.all([
+      getDashboardSnapshot(session),
+      getKpirSnapshot(session),
+    ]);
+    return { dash, kpir };
+  });
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell
@@ -80,12 +83,12 @@ export default async function KpirPage() {
           pitSkalaDueGrosze={kpir.pitSkala.advanceDueGrosze}
           pitSkalaBasis={mapDomainExplanationToBasisInfo(
             kpir.pitSkala.explanation,
-            'Zaliczka PIT-5 na skali podatkowej (12% / 32%)',
+            'Zaliczka miesięczna PIT — skala podatkowa (art. 44 ust. 3 PIT)',
           )}
           pitLiniowyDueGrosze={kpir.pitLiniowy.advanceDueGrosze}
           pitLiniowyBasis={mapDomainExplanationToBasisInfo(
             kpir.pitLiniowy.explanation,
-            'Zaliczka PIT-5L na podatku liniowym (19%)',
+            'Zaliczka miesięczna PIT — podatek liniowy 19% (art. 44 ust. 3f PIT)',
           )}
           helpMap={{
             ksefReference: mustResolveUiFieldHelp('ksef_reference'),

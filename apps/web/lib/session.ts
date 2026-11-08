@@ -52,24 +52,24 @@ const CANONICAL_PERSONA_IDENTITY: Readonly<
     PersonaId,
     {
       readonly userId: string;
-      readonly email: string;
+      readonly allowedEmails: readonly string[];
       readonly expectedSyntheticToken: string;
     }
   >
 > = {
   'jan-testowy': {
     userId: '00000000-0000-4000-8000-000000000101',
-    email: 'jan.testowy@syntetyczny.example',
+    allowedEmails: ['jan.testowy@syntetyczny.example', 'jan.testowy@example.test'],
     expectedSyntheticToken: 'pap_synth_oidc_jan_testowy_t1_owner_2026',
   },
   'marta-ksiegowa': {
     userId: '00000000-0000-4000-8000-000000000102',
-    email: 'marta.ksiegowa@biuro-syntetyczne.example',
+    allowedEmails: ['marta.ksiegowa@biuro-syntetyczne.example', 'marta.ksiegowa@example.test'],
     expectedSyntheticToken: 'pap_synth_oidc_marta_ksiegowa_t1_grant_2026',
   },
   'piotr-izolacyjny': {
     userId: '00000000-0000-4000-8000-000000000201',
-    email: 'piotr.izolacyjny@tenant2-syntetyczny.example',
+    allowedEmails: ['piotr.izolacyjny@tenant2-syntetyczny.example', 'piotr.izolacyjny@example.test'],
     expectedSyntheticToken: 'pap_synth_oidc_piotr_izolacyjny_t2_owner_2026',
   },
 };
@@ -119,7 +119,10 @@ function computeSessionHmacDigest(
 
 function isConsistentPersonaIdentity(oidcToken: string, context: SessionContext): boolean {
   const canonical = CANONICAL_PERSONA_IDENTITY[context.personaId];
-  if (context.userId !== canonical.userId || context.email !== canonical.email) {
+  if (
+    context.userId !== canonical.userId ||
+    !canonical.allowedEmails.includes(context.email)
+  ) {
     return false;
   }
 

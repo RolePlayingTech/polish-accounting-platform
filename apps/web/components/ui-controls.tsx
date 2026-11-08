@@ -245,7 +245,7 @@ export function TaxRegimeSelector({ fieldHelp, onChange, value }: TaxRegimeSelec
                 value={opt.code}
                 checked={selected}
                 onChange={() => onChange(opt.code, opt.legalForm)}
-                className="mt-1 h-4 w-4 accent-[#1d5c42] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+                className="mt-1 h-6 w-6 shrink-0 accent-[#1d5c42] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
               />
               <span className="block space-y-1">
                 <span className="block text-sm font-semibold text-[#191c1a]">{opt.title}</span>

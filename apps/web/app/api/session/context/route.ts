@@ -70,7 +70,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     rawPeriod && /^\d{4}-(0[1-9]|1[0-2])$/.test(rawPeriod) ? rawPeriod : session.context.period;
 
   try {
-    const company = verifySessionAccess(session, targetTenantId, targetLegalEntityId, 'read');
+    const company = await verifySessionAccess(
+      session,
+      targetTenantId,
+      targetLegalEntityId,
+      'read',
+    );
     const updatedContext: SessionContext = {
       ...session.context,
       tenantId: company.tenantId,

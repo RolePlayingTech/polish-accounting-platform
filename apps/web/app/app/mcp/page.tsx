@@ -36,10 +36,16 @@ export default async function McpIntegrationPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => ({
-    dash: getDashboardSnapshot(session),
-    snap: getNotificationsAndMcpSnapshot(session),
-  }));
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const [dash, snap] = await Promise.all([
+      getDashboardSnapshot(session),
+      getNotificationsAndMcpSnapshot(session),
+    ]);
+    return {
+      dash,
+      snap,
+    };
+  });
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell

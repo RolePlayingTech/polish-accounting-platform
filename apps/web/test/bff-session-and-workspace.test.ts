@@ -37,6 +37,7 @@ import {
   getPersonaById,
   getRyczaltSnapshot,
   importAndReconcileBankStatementMutation,
+  issuePersonaSession,
   listAccessibleCompaniesForSession,
   listAvailablePersonas,
   manageCompanyGrantMutation,
@@ -53,11 +54,11 @@ import type { ActiveWebSession, SessionContext } from '../lib/session.js';
 
 function makeSessionForPersona(
   personaId: 'jan-testowy' | 'marta-ksiegowa' | 'piotr-izolacyjny',
-  overrides?: { tenantId?: string; legalEntityId?: string; period?: string },
+  overrides?: { tenantId?: string; legalEntityId?: string; period?: string; oidcToken?: string },
 ): ActiveWebSession {
   const persona = getPersonaById(personaId);
   return {
-    oidcToken: persona.syntheticOidcToken,
+    oidcToken: overrides?.oidcToken ?? persona.syntheticOidcToken,
     context: {
       personaId: persona.personaId,
       userId: persona.userId,
@@ -113,6 +114,7 @@ function collectWebSourceFiles(dir: string): string[] {
 describe('BFF API_BASE_URL security, SSRF/path-traversal defense & HMAC-signed HttpOnly session cookies', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.useRealTimers();
   });
@@ -145,7 +147,7 @@ describe('BFF API_BASE_URL security, SSRF/path-traversal defense & HMAC-signed H
     }
   });
 
-  it('blocks SSRF, protocol-relative, backslash, control-char and path-traversal URLs in papBffFetch', async () => {
+  it('blocks SSRF, protocol-relative, backslash, control-char and path-traversal URLs in papBffFetch and preserves 5xx server_error reason codes (#61)', async () => {
     const spy = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), {
         status: 200,
@@ -189,6 +191,30 @@ describe('BFF API_BASE_URL security, SSRF/path-traversal defense & HMAC-signed H
         }),
       }),
     );
+
+    const serverErrSpy = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          reason: 'database_connection_failed',
+          message: 'Baza PostgreSQL jest niedostępna.',
+        }),
+        {
+          status: 503,
+          headers: { 'content-type': 'application/json' },
+        },
+      ),
+    );
+    const serverErrResult = await papBffFetch('/api/v1/me/companies', {
+      apiBaseUrl: 'http://127.0.0.1:4000',
+      bearerToken: 'synth-token-12345678',
+      fetcher: serverErrSpy,
+    });
+    expect(serverErrResult).toEqual({
+      kind: 'server_error',
+      status: 503,
+      reasonCode: 'database_connection_failed',
+      message: 'Baza PostgreSQL jest niedostępna.',
+    });
   });
 
   it('cryptographically signs pap_session_ctx with HMAC-SHA256 and rejects forged, unsigned, or token-swapped cookies', () => {
@@ -291,7 +317,7 @@ describe('BFF API_BASE_URL security, SSRF/path-traversal defense & HMAC-signed H
     ).toBeNull();
   });
 
-  it('prevents Open Redirect (/\\t/evil.com, //evil.com, backslashes) and enforces CSRF Origin checks on POST routes', async () => {
+  it('prevents Open Redirect (/\\t/evil.com, //evil.com, backslashes), enforces CSRF Origin checks, and fails closed on login when API is down (#59)', async () => {
     for (const maliciousRedirect of [
       '/\t/evil.com',
       '/\n/evil.com',
@@ -353,7 +379,57 @@ describe('BFF API_BASE_URL security, SSRF/path-traversal defense & HMAC-signed H
     );
     expect(nullOriginRes.status).toBe(403);
 
+    // W domyślnym trybie online (PAP_WEB_OFFLINE_DEMO_MODE nieustawione) brak połączenia z @pap/api zwraca 503 (#59)
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed')));
+    const failClosedLogin = await loginPost(
+      new NextRequest('http://127.0.0.1:3000/api/session/login', {
+        method: 'POST',
+        headers: {
+          host: '127.0.0.1:3000',
+          origin: 'http://127.0.0.1:3000',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ personaId: 'jan-testowy', redirectTo: '/\t/evil.com' }),
+      }),
+    );
+    expect(failClosedLogin.status).toBe(503);
+
+    // Po odpowiedzi z @pap/api (/api/v1/oidc/token + /api/v1/me/companies) logowanie wydaje sesję i sanityzuje redirectTo
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = input instanceof URL ? input.toString() : String(input);
+        if (url.endsWith('/api/v1/oidc/token')) {
+          return new Response(
+            JSON.stringify({
+              accessToken: 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqYW4ifQ.sig',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            companies: [
+              {
+                tenantId: TENANT_1_ID,
+                legalEntityId: COMPANY_JDG_KPIR_ID,
+                displayName: 'Pracownia Projektowa Jan Testowy',
+                nip: '5250001003',
+                legalForm: 'jdg',
+                taxRegime: 'kpir_skala',
+                vatStatus: 'czynny',
+                zusStage: 'duzy_zus',
+                role: 'tenant_owner',
+                canRead: true,
+                canWrite: true,
+              },
+            ],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }),
+    );
+
     const sameOriginLogin = await loginPost(
       new NextRequest('http://127.0.0.1:3000/api/session/login', {
         method: 'POST',
@@ -371,7 +447,7 @@ describe('BFF API_BASE_URL security, SSRF/path-traversal defense & HMAC-signed H
   });
 });
 
-describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & accounting invariants', () => {
+describe('Online BFF Unification (#57, #58, #59, #60, #62, #63) & Offline Demo Mode invariants', () => {
   beforeEach(() => {
     resetSyntheticWorkspaceForTests();
   });
@@ -379,36 +455,51 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
-  it('enforces hard cross-tenant isolation (403 active_membership_required) when Piotr (Tenant 2) accesses Tenant 1', () => {
+  it('enforces hard cross-tenant isolation (403 active_membership_required) when Piotr (Tenant 2) accesses Tenant 1', async () => {
+    vi.stubEnv('PAP_WEB_OFFLINE_DEMO_MODE', 'true');
     const piotrSession = makeSessionForPersona('piotr-izolacyjny');
-    const piotrCompanies = listAccessibleCompaniesForSession(piotrSession);
+    const piotrCompanies = await listAccessibleCompaniesForSession(piotrSession);
     expect(piotrCompanies.map((c) => c.legalEntityId)).toEqual([COMPANY_TENANT_2_ID]);
     expect(piotrCompanies[0]?.tenantId).toBe(TENANT_2_ID);
 
-    expect(() =>
+    await expect(
       verifySessionAccess(piotrSession, TENANT_1_ID, COMPANY_JDG_KPIR_ID, 'read'),
-    ).toThrowError(WorkspaceAccessError);
-
-    try {
-      verifySessionAccess(piotrSession, TENANT_1_ID, COMPANY_JDG_KPIR_ID, 'read');
-    } catch (error) {
-      expect(error).toBeInstanceOf(WorkspaceAccessError);
-      const accessErr = error as WorkspaceAccessError;
-      expect(accessErr.statusCode).toBe(403);
-      expect(accessErr.reasonCode).toBe('active_membership_required');
-    }
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      reasonCode: 'active_membership_required',
+    });
   });
 
-  it('fails closed on 401/403/422 from apps/api WITHOUT mutating local synthetic workspace state', async () => {
+  it('fails closed on unavailable/401/403/409/422/503 from apps/api in default online mode (#57, #59)', async () => {
     const janSession = makeSessionForPersona('jan-testowy', {
       legalEntityId: COMPANY_JDG_KPIR_ID,
+      oidcToken: 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqYW4ifQ.sig',
     });
-    const docsBefore = getDocumentsForActiveCompany(janSession).length;
-    const companiesBefore = listAccessibleCompaniesForSession(janSession).length;
 
+    // 1. Gdy @pap/api jest niedostępne, odczyty SSR i mutacje BFF rzucają 503 api_unavailable (zero cichego fallbacku!)
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed')));
+    await expect(issuePersonaSession('jan-testowy', '2026-10')).rejects.toMatchObject({
+      statusCode: 503,
+      reasonCode: 'api_unavailable',
+    });
+    await expect(listAccessibleCompaniesForSession(janSession)).rejects.toMatchObject({
+      statusCode: 503,
+      reasonCode: 'api_unavailable',
+    });
+    await expect(getDashboardSnapshot(janSession)).rejects.toMatchObject({
+      statusCode: 503,
+      reasonCode: 'api_unavailable',
+    });
+    await expect(getDocumentsForActiveCompany(janSession)).rejects.toMatchObject({
+      statusCode: 503,
+      reasonCode: 'api_unavailable',
+    });
+
+    // 2. Błąd 403 z @pap/api jest propagowany
     vi.stubGlobal(
       'fetch',
       vi.fn<typeof fetch>().mockImplementation(
@@ -434,26 +525,32 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
       reasonCode: 'explicit_company_grant_required',
     });
 
+    // 3. Błąd 409 duplicate_document_sha256 z @pap/api NIGDY nie jest wyciszany jako sukces (#59)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({
+              reason: 'duplicate_document_sha256',
+              message: 'Wykryto duplikat SHA-256 w tej firmie.',
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+    );
     await expect(
-      createCompanyMutation(janSession, {
-        companyName: 'Nieautoryzowana Spółka Testowa',
-        nip: '5213004125',
-        address: 'ul. Testowa 1, 00-001 Warszawa',
-        legalForm: 'jdg',
-        profileCode: 'jdg_kpir_skala',
-        vatStatus: 'czynny',
+      createOrImportDocumentMutation(janSession, {
+        mode: 'import_xml_or_csv',
+        format: 'fa3_xml',
+        rawPayload: SAMPLE_KSEF_FA3_XML,
       }),
     ).rejects.toMatchObject({
-      statusCode: 403,
+      statusCode: 409,
+      reasonCode: 'duplicate_document_sha256',
     });
 
-    // Stan lokalny nie został zmutowany po 403 z API
-    vi.unstubAllGlobals();
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed')));
-    expect(getDocumentsForActiveCompany(janSession).length).toBe(docsBefore);
-    expect(listAccessibleCompaniesForSession(janSession).length).toBe(companiesBefore);
-
-    // Również błąd walidacji 422 z API jest fail-closed i nie mutuje stanu
+    // 4. Błąd 422 z @pap/api jest propagowany
     vi.stubGlobal(
       'fetch',
       vi.fn<typeof fetch>().mockImplementation(
@@ -479,12 +576,191 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
     });
   });
 
-  it('enforces granular company grants for Marta Księgowa (read-only on Ryczałt, no grant revocation rights)', () => {
+  it('uses remote legalEntityId from POST /api/v1/tenants/:tenantId/companies (#58) and wires real MCP flow (#60)', async () => {
+    const janSession = makeSessionForPersona('jan-testowy', {
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      oidcToken: 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqYW4ifQ.sig',
+    });
+    const remoteCompanyUuid = '88888888-8888-4888-8888-888888888888';
+    const remoteProposalUuid = '99999999-9999-4999-8999-999999999999';
+    const expectedPayloadHash = 'a'.repeat(64);
+    const capturedCalls: Array<{ url: string; body: unknown }> = [];
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(async (input, init) => {
+        const url = input instanceof URL ? input.toString() : String(input);
+        const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
+        capturedCalls.push({ url, body });
+
+        if (url.endsWith(`/tenants/${TENANT_1_ID}/companies`)) {
+          return new Response(
+            JSON.stringify({
+              company: {
+                tenantId: TENANT_1_ID,
+                legalEntityId: remoteCompanyUuid,
+                displayName: 'Nowa Spółka Zdalna Test',
+                nip: '5213004125',
+                legalForm: 'jdg',
+                taxRegime: 'kpir_skala',
+                vatStatus: 'czynny',
+                zusStage: 'preferencyjny_zus',
+                role: 'tenant_owner',
+                canRead: true,
+                canWrite: true,
+              },
+              taxProfile: {
+                tenantId: TENANT_1_ID,
+                legalEntityId: remoteCompanyUuid,
+                companyName: 'Nowa Spółka Zdalna Test',
+                nip: '5213004125',
+                legalForm: 'jdg',
+                profileCode: 'jdg_kpir_skala',
+                vatStatus: 'czynny',
+                vatSettlementPeriod: 'monthly',
+                zusScheme: 'preferencyjny_zus',
+                voluntarySicknessInsurance: false,
+                smallTaxpayer: true,
+                activityStartDate: '2026-01-01',
+              },
+            }),
+            { status: 201, headers: { 'content-type': 'application/json' } },
+          );
+        }
+
+        if (url.endsWith('/api/v1/mcp')) {
+          return new Response(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              result: {
+                structuredContent: {
+                  proposalId: remoteProposalUuid,
+                  status: 'pending_human_confirmation',
+                  payloadHash: expectedPayloadHash,
+                },
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+
+        if (url.endsWith(`/mcp/proposals/${remoteProposalUuid}/challenge`)) {
+          return new Response(
+            JSON.stringify({
+              proposalId: remoteProposalUuid,
+              confirmationCode: 'PAP-HUMAN-ABCDEF123456',
+              payloadHash: expectedPayloadHash,
+              expiresAt: '2026-10-30T12:00:00.000Z',
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+
+        if (url.endsWith('/mcp/proposals')) {
+          return new Response(
+            JSON.stringify({
+              proposals: [
+                {
+                  proposalId: remoteProposalUuid,
+                  tenantId: TENANT_1_ID,
+                  legalEntityId: COMPANY_JDG_KPIR_ID,
+                  toolName: 'prepare_invoice_and_posting_proposal',
+                  status: 'pending_human_confirmation',
+                  payloadHash: expectedPayloadHash,
+                  createdAt: '2026-10-20T10:00:00.000Z',
+                  expiresAt: '2026-10-30T12:00:00.000Z',
+                  confirmedAt: null,
+                  confirmedByUserId: null,
+                  invoiceNumber: 'FZ/MCP/2026/10/99',
+                  counterpartyName: 'Syntetyczne Chmury Obliczeniowe Sp. z o.o.',
+                  counterpartyNip: '5213004125',
+                  issueDate: '2026-10-20',
+                  eventDate: '2026-10-20',
+                  netGrosze: 160_000,
+                  vatGrosze: 36_800,
+                  grossGrosze: 196_800,
+                  vatRate: '23',
+                  suggestedCategory: 'other_kup_100',
+                  kpirQualification: 'other_expenses_100_col13',
+                  vatDeductionMode: 'full_100',
+                  promptInjectionSuspected: false,
+                  untrustedDescriptionText: 'Test',
+                  preview: {
+                    postingTarget: 'kpir',
+                    deductibleVatGrosze: 36_800,
+                    nonDeductibleVatGrosze: 0,
+                    taxDeductibleCostGrosze: 160_000,
+                    nonDeductibleCostGrosze: 0,
+                    summaryPl: 'Podgląd ujęcia',
+                  },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }),
+    );
+
+    const createdCompany = await createCompanyMutation(janSession, {
+      companyName: 'Nowa Spółka Zdalna Test',
+      nip: '5213004125',
+      address: 'ul. Zdalna 10, 00-100 Warszawa',
+      legalForm: 'jdg',
+      profileCode: 'jdg_kpir_skala',
+      vatStatus: 'czynny',
+    });
+    expect(createdCompany.legalEntityId).toBe(remoteCompanyUuid);
+    expect(createdCompany.address).toBe('ul. Zdalna 10, 00-100 Warszawa');
+
+    await manageMcpProposalMutation(janSession, { op: 'create_demo_proposal' });
+    expect(capturedCalls.some((c) => c.url.endsWith('/api/v1/mcp'))).toBe(true);
+
+    const challengeRes = await manageMcpProposalMutation(janSession, {
+      op: 'issue_code',
+      proposalId: remoteProposalUuid,
+    });
+    expect(challengeRes.confirmationCode).toBe('PAP-HUMAN-ABCDEF123456');
+
+    await manageMcpProposalMutation(janSession, {
+      op: 'confirm',
+      proposalId: remoteProposalUuid,
+      confirmationCode: 'PAP-HUMAN-ABCDEF123456',
+    });
+    const confirmCall = capturedCalls.find((c) =>
+      c.url.endsWith(`/mcp/proposals/${remoteProposalUuid}/confirm`),
+    );
+    expect(confirmCall?.body).toMatchObject({
+      confirmationCode: 'PAP-HUMAN-ABCDEF123456',
+      expectedPayloadHash,
+    });
+
+    await manageMcpProposalMutation(janSession, {
+      op: 'reject',
+      proposalId: remoteProposalUuid,
+      reason: 'Odrzucono w teście.',
+    });
+    const rejectCall = capturedCalls.find((c) =>
+      c.url.endsWith(`/mcp/proposals/${remoteProposalUuid}/reject`),
+    );
+    expect(rejectCall?.body).toMatchObject({
+      reason: 'Odrzucono w teście.',
+    });
+  });
+
+  it('enforces granular company grants for Marta Księgowa (read-only on Ryczałt, no grant revocation rights)', async () => {
+    vi.stubEnv('PAP_WEB_OFFLINE_DEMO_MODE', 'true');
     const martaRyczaltSession = makeSessionForPersona('marta-ksiegowa', {
       legalEntityId: COMPANY_JDG_RYCZALT_ID,
     });
 
-    const company = verifySessionAccess(
+    const company = await verifySessionAccess(
       martaRyczaltSession,
       TENANT_1_ID,
       COMPANY_JDG_RYCZALT_ID,
@@ -492,28 +768,28 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
     );
     expect(company.grantedActions).toEqual(['read']);
 
-    expect(() =>
+    await expect(
       verifySessionAccess(martaRyczaltSession, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, 'write'),
-    ).toThrowError(/Brak wymaganego grantu podmiotowego/);
+    ).rejects.toThrowError(/Brak wymaganego grantu podmiotowego/);
 
     const martaKpirSession = makeSessionForPersona('marta-ksiegowa', {
       legalEntityId: COMPANY_JDG_KPIR_ID,
     });
-    expect(() =>
+    await expect(
       manageCompanyGrantMutation(martaKpirSession, {
         op: 'revoke',
         grantId: 'grant-marta-kpir',
       }),
-    ).toThrowError(/wymaga uprawnień właściciela organizacji/);
+    ).rejects.toThrowError(/wymaga uprawnień właściciela organizacji/);
   });
 
-  it('imports KSeF FA(3) XML as unposted AI proposal, detects SHA-256 duplicates, and posts to KPiR, Ryczałt, and Sp. z o.o. ledger on human approval', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed')));
+  it('imports KSeF FA(3) XML as unposted proposal, rejects SHA-256 duplicates with 409, and posts to KPiR, Ryczałt, and Sp. z o.o. ledger on human approval', async () => {
+    vi.stubEnv('PAP_WEB_OFFLINE_DEMO_MODE', 'true');
 
     const janKpirSession = makeSessionForPersona('jan-testowy', {
       legalEntityId: COMPANY_JDG_KPIR_ID,
     });
-    const beforeDash = getDashboardSnapshot(janKpirSession);
+    const beforeDash = await getDashboardSnapshot(janKpirSession);
     const initialRevenue = beforeDash.monthlyRevenueGrosze;
     const initialCosts = beforeDash.monthlyKupCostsGrosze;
 
@@ -525,17 +801,23 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
     expect(firstImport.status).toBe('ai_proposal');
     expect(firstImport.isDuplicateSha256).toBe(false);
     expect(firstImport.ksefReferenceNumber).toBe('5213004125-20261016-FA3084-99A1B2-44');
+    expect(firstImport.whiteListStatus).toBe('not_checked');
+    expect(firstImport.aiConfidencePercent).toBeNull();
 
-    const midDash = getDashboardSnapshot(janKpirSession);
+    const midDash = await getDashboardSnapshot(janKpirSession);
     expect(midDash.monthlyRevenueGrosze).toBe(initialRevenue);
     expect(midDash.monthlyKupCostsGrosze).toBe(initialCosts);
 
-    const duplicateImport = await createOrImportDocumentMutation(janKpirSession, {
-      mode: 'import_xml_or_csv',
-      format: 'fa3_xml',
-      rawPayload: SAMPLE_KSEF_FA3_XML,
+    await expect(
+      createOrImportDocumentMutation(janKpirSession, {
+        mode: 'import_xml_or_csv',
+        format: 'fa3_xml',
+        rawPayload: SAMPLE_KSEF_FA3_XML,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      reasonCode: 'duplicate_document_sha256',
     });
-    expect(duplicateImport.isDuplicateSha256).toBe(true);
 
     const approvedKpir = await approveAndPostDocumentMutation(janKpirSession, {
       documentId: firstImport.documentId,
@@ -549,13 +831,15 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
       vatDeductionMode: 'vehicle_mixed_50',
     });
     expect(approvedKpir.status).toBe('approved_posted');
-    expect(getDashboardSnapshot(janKpirSession).monthlyKupCostsGrosze).toBe(initialCosts + 200_700);
+    expect((await getDashboardSnapshot(janKpirSession)).monthlyKupCostsGrosze).toBe(
+      initialCosts + 200_700,
+    );
 
     // Profil ryczałtowy: zatwierdzenie faktury sprzedaży księguje przychód w ewidencji ryczałtu
     const janRyczaltSession = makeSessionForPersona('jan-testowy', {
       legalEntityId: COMPANY_JDG_RYCZALT_ID,
     });
-    const rycBefore = getRyczaltSnapshot(janRyczaltSession).entries.length;
+    const rycBefore = (await getRyczaltSnapshot(janRyczaltSession)).entries.length;
     const rycSalesDoc = await createOrImportDocumentMutation(janRyczaltSession, {
       mode: 'manual',
       documentKind: 'sales',
@@ -582,13 +866,13 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
       expenseQualification: 'none',
       vatDeductionMode: 'none_0',
     });
-    expect(getRyczaltSnapshot(janRyczaltSession).entries.length).toBe(rycBefore + 1);
+    expect((await getRyczaltSnapshot(janRyczaltSession)).entries.length).toBe(rycBefore + 1);
 
     // Pełne księgi Sp. z o.o.: zatwierdzenie faktury tworzy zbilansowany dekret Wn === Ma
     const janSpzooSession = makeSessionForPersona('jan-testowy', {
       legalEntityId: COMPANY_SPZOO_ID,
     });
-    const jrnBefore = getFullLedgerSnapshot(janSpzooSession).journalEntries.length;
+    const jrnBefore = (await getFullLedgerSnapshot(janSpzooSession)).journalEntries.length;
     const spzooDoc = await createOrImportDocumentMutation(janSpzooSession, {
       mode: 'import_xml_or_csv',
       format: 'fa3_xml',
@@ -605,90 +889,93 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
       expenseQualification: 'other_expenses_100_col13',
       vatDeductionMode: 'full_100',
     });
-    const ledgerAfter = getFullLedgerSnapshot(janSpzooSession);
+    const ledgerAfter = await getFullLedgerSnapshot(janSpzooSession);
     expect(ledgerAfter.journalEntries.length).toBe(jrnBefore + 1);
     expect(ledgerAfter.trialBalance.isBalanced).toBe(true);
     expect(ledgerAfter.balanceSheet.isBalanced).toBe(true);
   });
 
-  it('enforces strict two-step human confirmation code, status, and expiry for MCP proposals', () => {
+  it('enforces strict two-step human confirmation code, status, rejection, and expiry for MCP proposals', async () => {
+    vi.stubEnv('PAP_WEB_OFFLINE_DEMO_MODE', 'true');
     const janSession = makeSessionForPersona('jan-testowy', {
       legalEntityId: COMPANY_JDG_KPIR_ID,
     });
 
-    const initialProposals = getNotificationsAndMcpSnapshot(janSession).mcpProposals;
+    const initialProposals = (await getNotificationsAndMcpSnapshot(janSession)).mcpProposals;
     const pendingProposal = initialProposals.find((p) => p.status === 'pending_human_approval');
     expect(pendingProposal).toBeDefined();
     const proposalId = pendingProposal!.proposalId;
 
     // 1. Próba zatwierdzenia bez wygenerowanego kodu wyzwania człowieka jest odrzucana
-    expect(() =>
+    await expect(
       manageMcpProposalMutation(janSession, {
         op: 'confirm',
         proposalId,
       }),
-    ).toThrowError(WorkspaceAccessError);
+    ).rejects.toThrowError(WorkspaceAccessError);
 
     // 2. Wygenerowanie wyzwania kodu człowieka
-    const issued = manageMcpProposalMutation(janSession, {
+    const issued = await manageMcpProposalMutation(janSession, {
       op: 'issue_code',
       proposalId,
     });
     expect(issued.confirmationCode).toMatch(/^PAP-HUMAN-[A-F0-9]{12}$/);
 
     // 3. Błędny kod potwierdzenia człowieka jest odrzucany w stałym czasie
-    expect(() =>
+    await expect(
       manageMcpProposalMutation(janSession, {
         op: 'confirm',
         proposalId,
         confirmationCode: 'PAP-HUMAN-000000000000',
       }),
-    ).toThrowError(/Nieprawidłowy jednorazowy kod potwierdzenia człowieka/);
+    ).rejects.toThrowError(/Nieprawidłowy jednorazowy kod potwierdzenia człowieka/);
 
     // 4. Dokładny kod wyzwania zatwierdza propozycję jednorazowo
-    manageMcpProposalMutation(janSession, {
+    await manageMcpProposalMutation(janSession, {
       op: 'confirm',
       proposalId,
       confirmationCode: issued.confirmationCode!,
     });
 
-    const updated = getNotificationsAndMcpSnapshot(janSession).mcpProposals.find(
+    const updated = (await getNotificationsAndMcpSnapshot(janSession)).mcpProposals.find(
       (p) => p.proposalId === proposalId,
     );
     expect(updated?.status).toBe('confirmed');
 
     // 5. Ponowne użycie tego samego kodu na już zatwierdzonej propozycji jest odrzucane
-    expect(() =>
+    await expect(
       manageMcpProposalMutation(janSession, {
         op: 'confirm',
         proposalId,
         confirmationCode: issued.confirmationCode!,
       }),
-    ).toThrowError(/nie oczekuje już na zatwierdzenie/);
+    ).rejects.toThrowError(/nie oczekuje już na zatwierdzenie/);
 
     // 6. Przeterminowana propozycja MCP jest odrzucana jako wygasła
-    manageMcpProposalMutation(janSession, { op: 'create_demo_proposal' });
-    const freshDemo = getNotificationsAndMcpSnapshot(janSession).mcpProposals.find(
+    await manageMcpProposalMutation(janSession, { op: 'create_demo_proposal' });
+    const freshDemo = (await getNotificationsAndMcpSnapshot(janSession)).mcpProposals.find(
       (p) => p.status === 'pending_human_approval',
     )!;
-    const demoCode = manageMcpProposalMutation(janSession, {
-      op: 'issue_code',
-      proposalId: freshDemo.proposalId,
-    }).confirmationCode!;
+    const demoCode = (
+      await manageMcpProposalMutation(janSession, {
+        op: 'issue_code',
+        proposalId: freshDemo.proposalId,
+      })
+    ).confirmationCode!;
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date(Date.parse(freshDemo.expiresAt) + 60_000));
-    expect(() =>
+    await expect(
       manageMcpProposalMutation(janSession, {
         op: 'confirm',
         proposalId: freshDemo.proposalId,
         confirmationCode: demoCode,
       }),
-    ).toThrowError(/wygasła/);
+    ).rejects.toThrowError(/wygasła/);
   });
 
   it('rejects invalid NIP checksums, impossible calendar dates (2026-02-31), and oversized (>256 KB) payloads', async () => {
-    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockRejectedValue(new TypeError('fetch failed')));
+    vi.stubEnv('PAP_WEB_OFFLINE_DEMO_MODE', 'true');
     const janSession = makeSessionForPersona('jan-testowy');
 
     // Nieprawidłowa suma kontrolna NIP w imporcie CSV (kolumny: docNum;direction;issueDate;dueDate;name;nip;desc;net;vat)
@@ -766,12 +1053,13 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
     expect(resolveUiFieldHelp('mcp_human_approval')).toBeDefined();
   });
 
-  it('rejects unbalanced double-entry journal lines (Wn !== Ma) and accepts balanced Sp. z o.o. postings', () => {
+  it('rejects unbalanced double-entry journal lines (Wn !== Ma) and accepts balanced Sp. z o.o. postings', async () => {
+    vi.stubEnv('PAP_WEB_OFFLINE_DEMO_MODE', 'true');
     const janSpzooSession = makeSessionForPersona('jan-testowy', {
       legalEntityId: COMPANY_SPZOO_ID,
     });
 
-    expect(() =>
+    await expect(
       addJournalEntryMutation(janSpzooSession, {
         bookingDate: '2026-10-22',
         documentNumber: 'PK/2026/10/ERR',
@@ -781,9 +1069,9 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
           { accountCode: '130', side: 'Ma', amountPln: '900.00', description: 'Rachunek' },
         ],
       }),
-    ).toThrowError(WorkspaceAccessError);
+    ).rejects.toThrowError(WorkspaceAccessError);
 
-    const posted = addJournalEntryMutation(janSpzooSession, {
+    const posted = await addJournalEntryMutation(janSpzooSession, {
       bookingDate: '2026-10-22',
       documentNumber: 'PK/2026/10/OK',
       description: 'Opłata notarialna opłacona z rachunku bieżącego',
@@ -795,17 +1083,70 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
     expect(posted.totalWnGrosze).toBe(100_000);
     expect(posted.totalMaGrosze).toBe(100_000);
 
-    const ledgerSnap = getFullLedgerSnapshot(janSpzooSession);
+    const ledgerSnap = await getFullLedgerSnapshot(janSpzooSession);
     expect(ledgerSnap.trialBalance.isBalanced).toBe(true);
     expect(ledgerSnap.balanceSheet.isBalanced).toBe(true);
   });
 
-  it('preserves live API documentId UUID across import -> approve-and-post and sends only matched bank settlements', async () => {
+  it('preserves live API documentId UUID across import -> approve-and-post and forwards rawPayload + sourceFormat (#62)', async () => {
     const janSession = makeSessionForPersona('jan-testowy', {
       legalEntityId: COMPANY_JDG_KPIR_ID,
+      oidcToken: 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqYW4ifQ.sig',
     });
     const remoteUuid = '77777777-7777-4777-8777-777777777777';
     const capturedCalls: Array<{ url: string; body: unknown }> = [];
+
+    const mockRemoteDoc = {
+      documentId: remoteUuid,
+      tenantId: TENANT_1_ID,
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      status: 'ai_proposed',
+      sourceFormat: 'ksef_xml',
+      sha256Hash: 'b'.repeat(64),
+      createdAt: '2026-10-16T10:00:00.000Z',
+      updatedAt: '2026-10-16T10:00:00.000Z',
+      approvedByUserId: null,
+      approvedAt: null,
+      isCorrection: false,
+      document: {
+        documentId: remoteUuid,
+        documentNumber: 'FV/FA3/2026/10/084',
+        direction: 'purchase',
+        issueDate: '2026-10-16',
+        eventDate: '2026-10-16',
+        dueDate: '2026-10-30',
+        counterpartyName: 'Centrum Flotowe i Paliwowe Syntetyka Sp. z o.o.',
+        counterpartyNip: '5213004125',
+        ksefReferenceNumber: '5213004125-20261016-FA3084-99A1B2-44',
+        ksefMarker: 'NrKSeF',
+        lines: [
+          {
+            lineNumber: 1,
+            description: 'Paliwo i serwis eksploatacyjny samochodu osobowego',
+            quantity: '1',
+            unit: 'szt.',
+            netGrosze: 240_000,
+            vatRate: '23',
+            vatGrosze: 55_200,
+            grossGrosze: 295_200,
+            annex15Item: false,
+          },
+        ],
+        totalNetGrosze: 240_000,
+        totalVatGrosze: 55_200,
+        totalGrossGrosze: 295_200,
+      },
+      aiProposal: {
+        status: 'ai_proposed',
+        confidenceScoreBps: 9500,
+        suggestedCategory: 'vehicle_mixed_75_50',
+        vatDeductionMode: 'vehicle_mixed_50',
+        kpirQualification: 'vehicle_mixed_75_col13',
+        extractedSummaryPl: 'Parser deterministyczny XML KSeF',
+        promptInjectionSuspected: false,
+      },
+      postingResult: null,
+    };
 
     vi.stubGlobal(
       'fetch',
@@ -814,11 +1155,46 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
         const body = typeof init?.body === 'string' ? JSON.parse(init.body) : undefined;
         capturedCalls.push({ url, body });
 
-        if (url.endsWith('/documents')) {
-          return new Response(JSON.stringify({ documentId: remoteUuid, status: 'ai_proposed' }), {
+        if (url.endsWith('/documents') && init?.method === 'POST') {
+          return new Response(JSON.stringify(mockRemoteDoc), {
             status: 201,
             headers: { 'content-type': 'application/json' },
           });
+        }
+        if (url.endsWith(`/documents/${remoteUuid}/approve-and-post`)) {
+          return new Response(
+            JSON.stringify({
+              document: {
+                ...mockRemoteDoc,
+                status: 'posted',
+                approvedByUserId: janSession.context.userId,
+                approvedAt: '2026-10-16T11:00:00.000Z',
+                postingResult: {
+                  accountingItemId: 'item-1',
+                  kpirEntryId: 'kpir-1',
+                  ryczaltEntryId: null,
+                  journalEntryId: null,
+                },
+              },
+              postingResult: {
+                accountingItemId: 'item-1',
+                kpirEntryId: 'kpir-1',
+                ryczaltEntryId: null,
+                journalEntryId: null,
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
+        }
+        if (url.endsWith('/finance/bank-import')) {
+          return new Response(
+            JSON.stringify({
+              importedTransactionsCount: 2,
+              matchedExactCount: 1,
+              unmatchedCount: 1,
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          );
         }
         return new Response(JSON.stringify({ ok: true }), {
           status: 200,
@@ -833,6 +1209,14 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
       rawPayload: SAMPLE_KSEF_FA3_XML,
     });
     expect(imported.documentId).toBe(remoteUuid);
+    expect(imported.whiteListStatus).toBe('not_checked');
+    expect(imported.aiConfidencePercent).toBeNull();
+
+    const importCall = capturedCalls.find((c) => c.url.endsWith('/documents'));
+    expect(importCall?.body).toEqual({
+      sourceFormat: 'ksef_xml',
+      rawPayload: SAMPLE_KSEF_FA3_XML,
+    });
 
     await approveAndPostDocumentMutation(janSession, {
       documentId: imported.documentId,
@@ -861,14 +1245,11 @@ describe('Synthetic workspace RBAC, fail-closed API semantics, MCP human gate & 
       content: SAMPLE_BANK_CSV,
       applySettlements: true,
     });
-    expect(bankRes.importedCount).toBeGreaterThanOrEqual(2);
-    expect(bankRes.matchedCount).toBeGreaterThanOrEqual(1);
+    expect(bankRes.importedCount).toBe(2);
+    expect(bankRes.matchedCount).toBe(1);
 
-    const reconcileCall = capturedCalls.find((c) => c.url.endsWith('/finance/reconcile'));
-    expect(reconcileCall).toBeDefined();
-    const sentMatches = (reconcileCall?.body as { matches?: Array<{ matchedDocumentId?: string }> })
-      ?.matches;
-    expect(Array.isArray(sentMatches)).toBe(true);
-    expect(sentMatches?.every((m) => typeof m.matchedDocumentId === 'string')).toBe(true);
+    const bankImportCall = capturedCalls.find((c) => c.url.endsWith('/finance/bank-import'));
+    expect(bankImportCall).toBeDefined();
+    expect(bankImportCall?.body).toMatchObject({ format: 'csv', applySettlements: true });
   });
 });

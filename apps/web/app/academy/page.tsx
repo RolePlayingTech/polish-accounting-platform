@@ -7,10 +7,10 @@ import { AcademyCatalogClient } from './academy-catalog-client';
 
 export default async function AcademyHomePage() {
   const session = await readServerSession();
-  let dash: ReturnType<typeof getDashboardSnapshot> | null = null;
+  let dash: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   if (session) {
     try {
-      dash = getDashboardSnapshot(session);
+      dash = await getDashboardSnapshot(session);
     } catch {
       dash = null;
     }

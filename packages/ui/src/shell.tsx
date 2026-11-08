@@ -129,7 +129,7 @@ export function CompanyPeriodHeader({
               </strong>
               {onSwitchCompany && (
                 <button
-                  className={`rounded-md border border-[#858177] bg-[#faf9f5] px-2 py-0.5 text-[11px] font-medium text-[#191c1a] hover:bg-[#f4f2ec] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+                  className={`inline-flex min-h-6 items-center rounded-md border border-[#858177] bg-[#faf9f5] px-2.5 py-0.5 text-[11px] font-medium text-[#191c1a] hover:bg-[#f4f2ec] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
                   onClick={onSwitchCompany}
                   type="button"
                 >
@@ -173,7 +173,7 @@ export function CompanyPeriodHeader({
                 </label>
                 <select
                   aria-label="Okres rozliczeniowy (RRRR-MM)"
-                  className={`bg-transparent text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums} ${ksiegaTokens.a11y.focusRing}`}
+                  className={`min-h-6 min-w-6 bg-transparent py-0.5 text-xs font-semibold text-[#191c1a] ${ksiegaTokens.typography.tabularNums} ${ksiegaTokens.a11y.focusRing}`}
                   id={periodControlId}
                   onChange={(event) => onPeriodChange?.(event.target.value)}
                   value={normalizedPeriod}
@@ -508,7 +508,7 @@ export function AppShell({
         {contextHeader}
 
         <main
-          className="mx-auto w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
+          className="mx-auto min-w-0 w-full max-w-[1400px] flex-1 px-4 py-6 sm:px-6 sm:py-8 lg:px-8"
           id="main-content"
           tabIndex={-1}
         >

@@ -41,12 +41,12 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
   }, [open]);
 
   return (
-    <span className="inline-block align-middle">
+    <div className="contents">
       <button
         aria-controls={panelId}
         aria-expanded={open}
         aria-label={`Pomoc kontekstowa: ${help.title}`}
-        className={`inline-grid size-6 place-items-center rounded-full border border-[#858177] bg-[#faf9f5] text-xs font-bold text-[#464c48] hover:border-[#1d5c42] hover:bg-[#e7f1ec] hover:text-[#164833] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+        className={`inline-grid size-7 shrink-0 place-items-center rounded-full border border-[#858177] bg-[#faf9f5] text-xs font-bold text-[#464c48] hover:border-[#1d5c42] hover:bg-[#e7f1ec] hover:text-[#164833] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
         data-field-help-id={help.fieldHelpId}
         onClick={() => setOpen((prev) => !prev)}
         type="button"
@@ -57,7 +57,7 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
       {open && (
         <div
           aria-label={`Objaśnienie pola: ${help.title}`}
-          className="mt-2 rounded-xl border border-[#b7d4c5] bg-[#f1f7f4] p-3.5 text-left text-xs text-[#191c1a]"
+          className="mt-1.5 w-full basis-full rounded-xl border border-[#b7d4c5] bg-[#f1f7f4] p-3.5 text-left text-xs text-[#191c1a]"
           data-help-panel-for={help.fieldHelpId}
           id={panelId}
           role="region"
@@ -66,7 +66,7 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
             <p className="font-semibold text-[#164833]">{help.title}</p>
             <button
               aria-label="Zamknij pomoc kontekstową"
-              className={`rounded border border-[#858177] bg-white px-2 py-0.5 text-[11px] font-semibold text-[#164833] ${ksiegaTokens.a11y.focusRing}`}
+              className={`inline-flex min-h-6 shrink-0 items-center rounded border border-[#858177] bg-white px-2.5 py-1 text-[11px] font-semibold text-[#164833] ${ksiegaTokens.a11y.focusRing}`}
               onClick={() => setOpen(false)}
               type="button"
             >
@@ -84,7 +84,7 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
             <div className="mt-2.5 border-t border-[#b7d4c5] pt-2">
               {safeLessonHref ? (
                 <a
-                  className={`inline-flex items-center gap-1 font-semibold text-[#164833] underline underline-offset-2 ${ksiegaTokens.a11y.focusRing}`}
+                  className={`inline-flex min-h-6 items-center gap-1 py-0.5 font-semibold text-[#164833] underline underline-offset-2 ${ksiegaTokens.a11y.focusRing}`}
                   href={safeLessonHref}
                   rel={safeLessonHref.startsWith('https://') ? 'noopener noreferrer' : undefined}
                 >
@@ -93,7 +93,7 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
                 </a>
               ) : (
                 <button
-                  className={`inline-flex items-center gap-1 font-semibold text-[#164833] underline underline-offset-2 ${ksiegaTokens.a11y.focusRing}`}
+                  className={`inline-flex min-h-6 items-center gap-1 py-0.5 font-semibold text-[#164833] underline underline-offset-2 ${ksiegaTokens.a11y.focusRing}`}
                   onClick={() => help.onOpenLesson?.(help.fieldHelpId)}
                   type="button"
                 >
@@ -105,7 +105,7 @@ export function FieldHelpButton({ defaultOpen = false, help }: FieldHelpButtonPr
           )}
         </div>
       )}
-    </span>
+    </div>
   );
 }
 
@@ -149,14 +149,14 @@ export function FormField({
   const describedByIds = [hintId, errorId].filter(Boolean).join(' ') || undefined;
   const hasError = Boolean(error);
 
-  const defaultInputClass = `w-full rounded-lg border px-3 py-2 text-sm text-[#191c1a] bg-white ${
+  const defaultInputClass = `min-w-0 max-w-full w-full rounded-lg border px-3 py-2 text-sm text-[#191c1a] bg-white ${
     hasError ? 'border-[#991b1b] bg-[#fff7f7]' : 'border-[#858177]'
   } ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`;
 
   return (
-    <div className={`space-y-1.5 ${className}`.trim()}>
+    <div className={`min-w-0 space-y-1.5 ${className}`.trim()}>
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+        <div className="flex w-full flex-wrap items-center gap-2">
           <label className="text-xs font-semibold text-[#191c1a]" htmlFor={id}>
             {label}
             {required ? (

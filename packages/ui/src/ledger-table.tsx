@@ -371,12 +371,12 @@ export function LedgerTable<TRow>({
 
               return (
                 <li className="space-y-2.5 p-4" key={getRowKey(row, rowIndex)}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 text-sm font-semibold text-[#191c1a]">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0 flex-1 basis-48 text-sm font-semibold text-[#191c1a]">
                       {titleColumn ? titleColumn.render(row, rowIndex) : null}
                     </div>
                     {statusColumn && (
-                      <div className="shrink-0">{statusColumn.render(row, rowIndex)}</div>
+                      <div className="min-w-0 max-w-full">{statusColumn.render(row, rowIndex)}</div>
                     )}
                   </div>
 
@@ -401,7 +401,7 @@ export function LedgerTable<TRow>({
                             {col.unit ? ` (${col.unit})` : ''}
                           </dt>
                           <dd
-                            className={`mt-0.5 truncate font-medium text-[#191c1a] ${
+                            className={`mt-0.5 break-words font-medium text-[#191c1a] ${
                               col.numeric ? ksiegaTokens.typography.tabularNums : ''
                             }`}
                           >

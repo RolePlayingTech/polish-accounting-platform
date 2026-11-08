@@ -411,6 +411,25 @@ export function McpWorkbench({
                     >
                       2. Zatwierdź propozycję z kodem człowieka
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      disabled={busy || !canWrite}
+                      onClick={() =>
+                        void runMcpAction(
+                          {
+                            action: 'mcp_reject_proposal',
+                            proposalId: prop.proposalId,
+                            reason:
+                              'Odrzucono propozycję podczas weryfikacji człowieka w UI (/app/mcp).',
+                          },
+                          'Propozycja MCP została odrzucona przez człowieka',
+                          'Szkic przygotowany przez agenta AI został trwale odrzucony i oznaczony w dzienniku audytu (MCP_PROPOSAL_REJECTED).',
+                        )
+                      }
+                    >
+                      3. Odrzuć propozycję
+                    </Button>
                   </div>
                 ) : null}
               </div>
@@ -463,7 +482,7 @@ export function McpWorkbench({
             <p className="text-xs font-semibold text-[#191c1a]">
               {configSnippets[clientTab].title}
             </p>
-            <pre className="mt-1.5 overflow-x-auto rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3.5 font-mono text-xs leading-relaxed text-[#191c1a]">
+            <pre className="mt-1.5 max-w-full overflow-x-auto break-all rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3.5 font-mono text-xs leading-relaxed text-[#191c1a] sm:break-normal">
               {configSnippets[clientTab].code}
             </pre>
           </div>

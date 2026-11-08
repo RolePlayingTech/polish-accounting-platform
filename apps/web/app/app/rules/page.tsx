@@ -9,10 +9,10 @@ export default async function LegalRulesPage() {
   const session = await readServerSession();
   const rawRules = getLegalRulesCatalog();
 
-  let dash: ReturnType<typeof getDashboardSnapshot> | null = null;
+  let dash: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   if (session) {
     try {
-      dash = getDashboardSnapshot(session);
+      dash = await getDashboardSnapshot(session);
     } catch {
       dash = null;
     }
