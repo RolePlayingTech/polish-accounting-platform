@@ -9,6 +9,7 @@ import {
   COMPANY_JDG_RYCZALT_ID,
   DEMO_FIRMA_1_PENDING_MCP_PROPOSAL_ID,
   DEMO_INITIAL_GRANTS_SEED,
+  DEMO_USER_JAN_ID,
   DEMO_USER_MARTA_ID,
   DEMO_USER_PIOTR_ID,
   SYNTHETIC_COUNTERPARTY_NIPS,
@@ -827,7 +828,7 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
           documentNumber: 'DW-PEER/2026/04/01',
           counterpartyName: 'Kontrahent Równoległy Sp. z o.o.',
           counterpartyAddress: 'ul. Testowa 1, Warszawa',
-          eventDescription: 'Wpis zajmujący lp=1 w okresie 2026-04 w bazie PostgreSQL',
+          eventDescription: 'Wpis utworzony na Instancji B w okresie 2026-04 w bazie PostgreSQL',
           entryKind: 'other_expenses_100_col13',
           netGrosze: 40_000,
           vatRate: '23',
@@ -836,7 +837,57 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     );
     expect(peerKpirRes.status).toBe(201);
 
-    // Instancja A nie ma w RAM wpisu z 2026-04, więc spróbuje nadać lp=1, co PostgreSQL odrzuci ograniczeniem UNIQUE
+    // Wstawiamy surowy wiersz w kpir_entry (bez _papKpirEntry w JSON) zajmujący kolejny lp w okresie 2026-04,
+    // aby wymusić rzeczywistą kolizję UNIQUE (tenant_id, legal_entity_id, period, lp) podczas INSERT na Instancji A
+    await owner!.client`
+      INSERT INTO ${owner!.client(dataSchema)}.kpir_entry (
+        id,
+        tenant_id,
+        legal_entity_id,
+        lp,
+        period,
+        event_date,
+        document_number,
+        counterparty_name,
+        counterparty_address,
+        description,
+        regulation_version,
+        col_7_sales_revenue_grosze,
+        col_8_other_revenue_grosze,
+        col_9_total_revenue_grosze,
+        col_10_goods_materials_grosze,
+        col_11_incidental_costs_grosze,
+        col_12_remuneration_grosze,
+        col_13_other_expenses_grosze,
+        col_14_total_expenses_grosze,
+        rd_cost_grosze,
+        is_storno,
+        rule_code,
+        legal_explanation_json,
+        created_by
+      )
+      SELECT
+        ${randomUUID()},
+        ${TENANT_1_ID},
+        ${COMPANY_JDG_KPIR_ID},
+        count(*)::int + 1,
+        '2026-04',
+        '2026-04-11',
+        'DW-RAW-COLLISION/2026/04/99',
+        'Surowa Kolizja SQL',
+        'Warszawa',
+        'Surowy wpis SQL wymuszający kolizję UNIQUE (period, lp)',
+        'pkpir_2026_ksef',
+        0, 0, 0, 0, 0, 0, 1000, 1000, 0,
+        false,
+        'KPIR_2026',
+        '{}'::jsonb,
+        ${DEMO_USER_JAN_ID}
+      FROM ${owner!.client(dataSchema)}.kpir_entry
+      WHERE tenant_id = ${TENANT_1_ID}
+        AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}
+    `;
+
     const conflictingHttpKpirRes = await fetch(
       `${baseUrlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`,
       {
@@ -867,7 +918,15 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     expect(kpirAprilOnA.entries.some((e) => e.documentNumber === 'DW-SPLIT-HTTP/2026/04/02')).toBe(
       false,
     );
-    expect(kpirAprilOnA.entries).toHaveLength(0);
+    expect(kpirAprilOnA.entries.some((e) => e.documentNumber === 'DW-PEER/2026/04/01')).toBe(true);
+    expect(kpirAprilOnA.entries).toHaveLength(1);
+
+    await owner!.client`
+      DELETE FROM ${owner!.client(dataSchema)}.kpir_entry
+      WHERE tenant_id = ${TENANT_1_ID}
+        AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}
+        AND document_number = 'DW-RAW-COLLISION/2026/04/99'
+    `;
 
     // === 4. P1-3 (MCP): confirm_prepared_proposal na propozycji odrzuconej równolegle w DB wycofuje stan RAM Instancji A ===
     const docsBeforeMcp = DocumentsListResponseSchema.parse(

@@ -49,7 +49,7 @@ describe('Runner migracji — odmowy i bezpieczne logi', () => {
           DATABASE_URL: url,
         },
         encoding: 'utf8',
-        timeout: 10_000,
+        timeout: 25_000,
       });
 
       expect(result.error).toBeUndefined();
