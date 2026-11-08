@@ -13,7 +13,6 @@ import {
 import type { PostgresAccountingScope } from '@pap/db';
 import {
   computeMcpProposalSealHash,
-  deterministicUuidV4,
   encodeBankMatchNotes,
   encodeBankTxExternalRef,
   encodePostedDocumentSnapshotInDescription,
