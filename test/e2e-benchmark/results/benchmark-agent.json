@@ -1,0 +1,417 @@
+{
+  "generatedAt": "2026-11-08T09:47:59.112Z",
+  "nodeVersion": "v24.22.2",
+  "ports": {
+    "apiPort": 41801,
+    "webPort": 31801
+  },
+  "locComparison": {
+    "playwrightSuite": {
+      "totalLines": 235,
+      "nonBlankNonCommentLoc": 200
+    },
+    "e2eDeterministicSuite": {
+      "totalLines": 247,
+      "nonBlankNonCommentLoc": 212
+    },
+    "e2eAgentSuite": {
+      "totalLines": 30,
+      "nonBlankNonCommentLoc": 25
+    }
+  },
+  "playwrightDeterministic": null,
+  "e2eDeterministic": null,
+  "e2eAgent": {
+    "coldRun": {
+      "exitCode": 0,
+      "wallClockMs": 5776,
+      "runnerDurationMs": 4998,
+      "summary": {
+        "discovered": 7,
+        "selected": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "interrupted": 0,
+        "flaky": 0,
+        "skipped": 0
+      },
+      "usage": {
+        "discoveredResults": 7,
+        "maxAgentContextBytes": 150,
+        "maxLedgerBytes": 644,
+        "maxObservationBytes": 17389,
+        "artifactBytes": 120535,
+        "downloads": 0,
+        "events": 19,
+        "modelTokens": 13385,
+        "maxModelCallsInStep": 2,
+        "maxActionStepsInStep": 2
+      },
+      "steps": [
+        {
+          "api": "app.open",
+          "label": "/login",
+          "status": "passed",
+          "durationMs": 328,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.act",
+          "label": "Click the button to log in as Jan Testowy",
+          "status": "passed",
+          "durationMs": 303,
+          "cache": {
+            "mode": "missed",
+            "reason": "no-entry",
+            "replayedActions": 0,
+            "totalActions": 0,
+            "entry": "f91c059cdc6deaaaf190258559a7def526c7b6c9b0049470504f2a9f1a3cdaee",
+            "write": "saved"
+          },
+          "metrics": {
+            "modelCalls": 1,
+            "actionSteps": 1,
+            "observationBytes": 4106,
+            "contextBytes": 150,
+            "ledgerBytes": 28
+          },
+          "error": null
+        },
+        {
+          "api": "browser.waitForURL",
+          "label": "/\\/app$/",
+          "status": "passed",
+          "durationMs": 310,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "expect.toBeVisible",
+          "label": "getByText(\"Aktor: Jan Testowy\")",
+          "status": "passed",
+          "durationMs": 7,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "app.open",
+          "label": "/app/documents",
+          "status": "passed",
+          "durationMs": 180,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.act",
+          "label": "Click the button \"Wczytaj przykładową fakturę XML FA(3)\" and then click \"Importuj i utwórz propozycję do weryfikacji\"",
+          "status": "passed",
+          "durationMs": 2795,
+          "cache": {
+            "mode": "missed",
+            "reason": "no-entry",
+            "replayedActions": 0,
+            "totalActions": 0,
+            "entry": "c5fd1958403d0a53cdf433c93200d24c521c7a7afd34ff2e2569859a796153f6",
+            "write": "saved"
+          },
+          "metrics": {
+            "modelCalls": 2,
+            "actionSteps": 2,
+            "observationBytes": 17389,
+            "contextBytes": 150,
+            "ledgerBytes": 301
+          },
+          "error": null
+        },
+        {
+          "api": "expect.toBeVisible",
+          "label": "getByText(\"Dokument przyjęty jako propozycja do weryfikacji człowieka\")",
+          "status": "passed",
+          "durationMs": 7,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.assert",
+          "label": "The screen confirms that a document was accepted as a proposal for human verification and shows a link to open Split-View verification",
+          "status": "passed",
+          "durationMs": 202,
+          "cache": null,
+          "metrics": {
+            "modelCalls": 1,
+            "actionSteps": 0,
+            "observationBytes": 17389,
+            "contextBytes": 150,
+            "ledgerBytes": 644
+          },
+          "error": null
+        }
+      ],
+      "cacheFilesWritten": [
+        "c5fd1958403d0a53cdf433c93200d24c521c7a7afd34ff2e2569859a796153f6.json",
+        "f91c059cdc6deaaaf190258559a7def526c7b6c9b0049470504f2a9f1a3cdaee.json"
+      ],
+      "stderrTail": "serve       6  2967ms   495ms  2114ms\n  engine.init         1   307ms   307ms   307ms\n  agent.action        3   253ms    84ms    89ms\n  engine.prepare      1   199ms   199ms   199ms\n  config.load         1   196ms   196ms   196ms\n  agent.model         4    71ms    18ms    20ms\n  collect             1    19ms    19ms    19ms\n  session.launch      1    12ms    12ms    12ms\n  session.close       1     6ms     6ms     6ms\n[e2e debug] agent steps (execution order)\n  step                                                                                                via   total  model  observe  action  calls  tokens in/out  cached  cost\n  agent.act \"Click the button to log in as Jan Testowy\"             pap-semantic-executor/semantic-act-v1   303ms   18ms    215ms    80ms      1         997/42       -     -\n  agent.act \"Click the button \\\"Wczytaj przykładową fakturę XML F…  pap-semantic-executor/semantic-act-v1  2795ms   38ms   2613ms   173ms      2        7781/92       -     -\n  agent.assert \"The screen confirms that a document was accepted …   pap-semantic-judge/semantic-judge-v1   202ms   15ms    138ms     0ms      1        4437/36       -     -\n[e2e debug] report .e2e-out\\report.json\n"
+    },
+    "warmCachedRun": {
+      "exitCode": 0,
+      "wallClockMs": 20107,
+      "runnerDurationMs": 19313,
+      "summary": {
+        "discovered": 7,
+        "selected": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "interrupted": 0,
+        "flaky": 0,
+        "skipped": 0
+      },
+      "usage": {
+        "discoveredResults": 7,
+        "maxAgentContextBytes": 150,
+        "maxLedgerBytes": 662,
+        "maxObservationBytes": 20181,
+        "artifactBytes": 113821,
+        "downloads": 0,
+        "events": 29,
+        "modelTokens": 9859,
+        "maxModelCallsInStep": 1,
+        "maxActionStepsInStep": 3
+      },
+      "steps": [
+        {
+          "api": "app.open",
+          "label": "/login",
+          "status": "passed",
+          "durationMs": 308,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.act",
+          "label": "Click the button to log in as Jan Testowy",
+          "status": "passed",
+          "durationMs": 207,
+          "cache": {
+            "mode": "self-finalized",
+            "replayedActions": 1,
+            "totalActions": 1,
+            "entry": "f91c059cdc6deaaaf190258559a7def526c7b6c9b0049470504f2a9f1a3cdaee",
+            "write": "kept"
+          },
+          "metrics": {
+            "modelCalls": 0,
+            "actionSteps": 1,
+            "observationBytes": 4106,
+            "contextBytes": 150,
+            "ledgerBytes": 0
+          },
+          "error": null
+        },
+        {
+          "api": "browser.waitForURL",
+          "label": "/\\/app$/",
+          "status": "passed",
+          "durationMs": 212,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "expect.toBeVisible",
+          "label": "getByText(\"Aktor: Jan Testowy\")",
+          "status": "passed",
+          "durationMs": 18,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "app.open",
+          "label": "/app/documents",
+          "status": "passed",
+          "durationMs": 180,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.act",
+          "label": "Click the button \"Wczytaj przykładową fakturę XML FA(3)\" and then click \"Importuj i utwórz propozycję do weryfikacji\"",
+          "status": "passed",
+          "durationMs": 17218,
+          "cache": {
+            "mode": "agent-concluded",
+            "reason": "end-mismatch",
+            "replayedActions": 2,
+            "totalActions": 2,
+            "entry": "c5fd1958403d0a53cdf433c93200d24c521c7a7afd34ff2e2569859a796153f6",
+            "detail": "every recorded action ran, but the recorded end state did not show on /app/documents: missing status \"Dokument przyjęty jako propozycja do we…\" and node \"Zaimportowano dokument do kolejki weryf…\" (+1 more), unrecorded alert \"Dokument przyjęty jako propozycja do we…\"",
+            "write": "evicted"
+          },
+          "metrics": {
+            "modelCalls": 1,
+            "actionSteps": 3,
+            "observationBytes": 18885,
+            "contextBytes": 150,
+            "ledgerBytes": 319
+          },
+          "error": null
+        },
+        {
+          "api": "expect.toBeVisible",
+          "label": "getByText(\"Dokument przyjęty jako propozycja do weryfikacji człowieka\")",
+          "status": "passed",
+          "durationMs": 21,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.assert",
+          "label": "The screen confirms that a document was accepted as a proposal for human verification and shows a link to open Split-View verification",
+          "status": "passed",
+          "durationMs": 350,
+          "cache": null,
+          "metrics": {
+            "modelCalls": 1,
+            "actionSteps": 0,
+            "observationBytes": 20181,
+            "contextBytes": 150,
+            "ledgerBytes": 662
+          },
+          "error": null
+        }
+      ]
+    },
+    "noCacheRun": {
+      "exitCode": 0,
+      "wallClockMs": 5224,
+      "runnerDurationMs": 4467,
+      "summary": {
+        "discovered": 7,
+        "selected": 1,
+        "executed": 1,
+        "passed": 1,
+        "failed": 0,
+        "interrupted": 0,
+        "flaky": 0,
+        "skipped": 0
+      },
+      "usage": {
+        "discoveredResults": 7,
+        "maxAgentContextBytes": 150,
+        "maxLedgerBytes": 644,
+        "maxObservationBytes": 21527,
+        "artifactBytes": 122884,
+        "downloads": 0,
+        "events": 17,
+        "modelTokens": 16337,
+        "maxModelCallsInStep": 2,
+        "maxActionStepsInStep": 2
+      },
+      "steps": [
+        {
+          "api": "app.open",
+          "label": "/login",
+          "status": "passed",
+          "durationMs": 300,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.act",
+          "label": "Click the button to log in as Jan Testowy",
+          "status": "passed",
+          "durationMs": 194,
+          "cache": null,
+          "metrics": {
+            "modelCalls": 1,
+            "actionSteps": 1,
+            "observationBytes": 4073,
+            "contextBytes": 150,
+            "ledgerBytes": 28
+          },
+          "error": null
+        },
+        {
+          "api": "browser.waitForURL",
+          "label": "/\\/app$/",
+          "status": "passed",
+          "durationMs": 208,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "expect.toBeVisible",
+          "label": "getByText(\"Aktor: Jan Testowy\")",
+          "status": "passed",
+          "durationMs": 8,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "app.open",
+          "label": "/app/documents",
+          "status": "passed",
+          "durationMs": 178,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.act",
+          "label": "Click the button \"Wczytaj przykładową fakturę XML FA(3)\" and then click \"Importuj i utwórz propozycję do weryfikacji\"",
+          "status": "passed",
+          "durationMs": 2527,
+          "cache": null,
+          "metrics": {
+            "modelCalls": 2,
+            "actionSteps": 2,
+            "observationBytes": 19575,
+            "contextBytes": 150,
+            "ledgerBytes": 301
+          },
+          "error": null
+        },
+        {
+          "api": "expect.toBeVisible",
+          "label": "getByText(\"Dokument przyjęty jako propozycja do weryfikacji człowieka\")",
+          "status": "passed",
+          "durationMs": 16,
+          "cache": null,
+          "metrics": null,
+          "error": null
+        },
+        {
+          "api": "agent.assert",
+          "label": "The screen confirms that a document was accepted as a proposal for human verification and shows a link to open Split-View verification",
+          "status": "passed",
+          "durationMs": 229,
+          "cache": null,
+          "metrics": {
+            "modelCalls": 1,
+            "actionSteps": 0,
+            "observationBytes": 21527,
+            "contextBytes": 150,
+            "ledgerBytes": 644
+          },
+          "error": null
+        }
+      ]
+    }
+  },
+  "splitBrainDiagnostics": null
+}

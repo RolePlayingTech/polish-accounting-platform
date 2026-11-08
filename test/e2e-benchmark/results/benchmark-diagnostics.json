@@ -1,0 +1,55 @@
+{
+  "generatedAt": "2026-11-08T07:37:09.381Z",
+  "nodeVersion": "v24.22.2",
+  "ports": {
+    "apiPort": 41801,
+    "webPort": 31801
+  },
+  "locComparison": {
+    "playwrightSuite": {
+      "totalLines": 227,
+      "nonBlankNonCommentLoc": 192
+    },
+    "e2eDeterministicSuite": {
+      "totalLines": 237,
+      "nonBlankNonCommentLoc": 202
+    },
+    "e2eAgentSuite": {
+      "totalLines": 30,
+      "nonBlankNonCommentLoc": 25
+    }
+  },
+  "playwrightDeterministic": null,
+  "e2eDeterministic": null,
+  "e2eAgent": null,
+  "splitBrainDiagnostics": {
+    "playwright": {
+      "exitCode": 0,
+      "wallClockMs": 2422,
+      "findings": {
+        "tool": "playwright",
+        "uiShowsApprovedDocument": true,
+        "issue63_hasSyntheticKasBadgeInUi": true,
+        "issue62_apiReceivedDocument": false,
+        "issue62_apiPreservedRawXmlPayload": false,
+        "issue60_apiMcpProposalsEndpointStatus": 200,
+        "issue60_apiMcpProposalsCount": 0,
+        "issue57_59_ramOnlyMutationHttpStatus": 200
+      }
+    },
+    "e2e": {
+      "exitCode": 0,
+      "wallClockMs": 2678,
+      "findings": {
+        "tool": "e2e",
+        "uiShowsApprovedDocument": true,
+        "issue63_hasSyntheticKasBadgeInUi": true,
+        "issue62_apiReceivedDocument": false,
+        "issue62_apiPreservedRawXmlPayload": false,
+        "issue60_apiMcpProposalsEndpointStatus": 200,
+        "issue60_apiMcpProposalsCount": 0,
+        "issue57_59_ramOnlyMutationHttpStatus": 200
+      }
+    }
+  }
+}
