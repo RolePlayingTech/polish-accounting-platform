@@ -1385,6 +1385,12 @@ export class NotificationsEngine {
     return result;
   }
 
+  seedPersistedOutboxEntry(entry: NotificationOutboxEntry): void {
+    const cloned = this.cloneOutboxEntry(entry);
+    this.outboxById.set(cloned.outboxId, cloned);
+    this.outboxByDedupKey.set(cloned.deduplicationKey, cloned);
+  }
+
   private isEntryDue(entry: NotificationOutboxEntry, nowMs: number): boolean {
     return (
       entry.status === 'pending' ||

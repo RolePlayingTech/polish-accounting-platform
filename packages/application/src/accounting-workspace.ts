@@ -377,6 +377,7 @@ export interface WorkspaceActorContext {
   readonly scopes?: readonly string[] | undefined;
   readonly rawBearerToken?: string | undefined;
   readonly requestId?: string | undefined;
+  readonly idempotencyKey?: string | undefined;
 }
 
 export type AuditLogEntry = CompanyAuditItemContract & {

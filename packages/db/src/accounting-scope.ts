@@ -400,6 +400,7 @@ export interface PostgresAccountingScope extends PostgresCompanyActionScope {
     input: UpsertEntityProfileVersionInput,
   ): Promise<EntityProfileVersionRecord>;
   getCompanyTaxSettings(): Promise<CompanyTaxSettingsRecord | null>;
+  lockCompanyTaxSettingsForUpdate(): Promise<CompanyTaxSettingsRecord | null>;
   upsertCompanyTaxSettings(input: UpsertCompanyTaxSettingsInput): Promise<CompanyTaxSettingsRecord>;
 
   listAccountingDocuments(
@@ -642,6 +643,25 @@ export function createPostgresAccountingScope(
             eq(companyTaxSettings.legalEntityId, context.legalEntityId),
           ),
         );
+      assertActive();
+      return deepFreeze(row ?? null);
+    },
+
+    async lockCompanyTaxSettingsForUpdate() {
+      assertActive();
+      if (context.action !== 'write') {
+        throw new Error('Blokada zapisu profilu podatkowego firmy wymaga jawnego prawa zapisu.');
+      }
+      const [row] = await tx
+        .select()
+        .from(companyTaxSettings)
+        .where(
+          and(
+            eq(companyTaxSettings.tenantId, context.tenantId),
+            eq(companyTaxSettings.legalEntityId, context.legalEntityId),
+          ),
+        )
+        .for('update');
       assertActive();
       return deepFreeze(row ?? null);
     },

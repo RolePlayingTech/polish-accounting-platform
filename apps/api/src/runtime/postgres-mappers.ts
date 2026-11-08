@@ -20,6 +20,7 @@ export type WorkspaceExplanationRecord =
 
 export const INTERNAL_TENANT_COMPANY_INDEX_CATEGORY = '__pap_tenant_company_index__' as const;
 export const INTERNAL_MCP_PROPOSAL_INDEX_CATEGORY = '__pap_mcp_proposal_index__' as const;
+export const INTERNAL_COMMAND_RECEIPT_INDEX_CATEGORY = '__pap_command_receipt__' as const;
 
 const META_MARKER = ' ##pap_meta:';
 const POSTED_DOC_MARKER = ' ##pap_posted:';
@@ -29,8 +30,23 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 export function isInternalIndexDocumentCategory(categoryCode: string): boolean {
   return (
     categoryCode === INTERNAL_TENANT_COMPANY_INDEX_CATEGORY ||
-    categoryCode === INTERNAL_MCP_PROPOSAL_INDEX_CATEGORY
+    categoryCode === INTERNAL_MCP_PROPOSAL_INDEX_CATEGORY ||
+    categoryCode === INTERNAL_COMMAND_RECEIPT_INDEX_CATEGORY
   );
+}
+
+export function canonicalJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value ?? null);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalJsonStringify(item)).join(',')}]`;
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj)
+    .filter((k) => obj[k] !== undefined)
+    .sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJsonStringify(obj[k])}`).join(',')}}`;
 }
 
 export function sha256Hex(input: string): string {
