@@ -65,7 +65,12 @@ const FORBIDDEN_IDENTITY_SPOOF_HEADERS = [
   'x-actor-id',
   'x-authenticated-user',
   'x-forwarded-user',
+  'x-forwarded-host',
+  'x-forwarded-server',
+  'x-original-url',
+  'x-rewrite-url',
   'x-auth-request-user',
+  'x-auth-request-email',
   'x-remote-user',
   'x-pap-user-id',
   'x-pap-actor-id',
@@ -81,6 +86,12 @@ function hasSpoofedIdentitySignal(request: FastifyRequest): string | null {
   for (const headerName of FORBIDDEN_IDENTITY_SPOOF_HEADERS) {
     if (request.headers[headerName] !== undefined) {
       return `spoofed_header_${headerName}`;
+    }
+  }
+  for (const rawKey of Object.keys(request.headers)) {
+    const lower = rawKey.toLowerCase();
+    if (lower.startsWith('x-pap-') && request.headers[rawKey] !== undefined) {
+      return `spoofed_header_${lower}`;
     }
   }
   const query = request.query;
@@ -208,31 +219,28 @@ export class JwtBearerAuthGuard implements CanActivate {
     }
 
     const { identity } = verified;
-    let resolvedUser = this.workspace.store.getUserBySubject(identity.subject);
-    if (!resolvedUser) {
-      try {
-        resolvedUser = this.workspace.store.getUserById(parseUserId(identity.subject));
-      } catch {
-        resolvedUser = null;
-      }
-    }
-    if (!resolvedUser) {
-      const dbResolved = await this.identityResolver.resolveVerifiedIdentity(identity);
-      if (dbResolved) {
-        resolvedUser = {
-          userId: dbResolved.userId,
-          subject: identity.subject,
-          displayName: identity.subject,
-          email: 'uzytkownik@pap.example',
-          active: true,
-        };
-        if (this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {
-          this.workspace.store.upsertUser(resolvedUser);
-        }
-      }
-    }
+    const dbResolved = await this.identityResolver.resolveVerifiedIdentity(identity);
+    const storeUserBySubject = this.workspace.store.getUserBySubject(identity.subject);
 
-    if (!resolvedUser) {
+    if (!dbResolved) {
+      if (storeUserBySubject) {
+        if (
+          storeUserBySubject.active &&
+          this.workspace.store instanceof InMemoryAccountingWorkspaceStore
+        ) {
+          this.workspace.store.upsertUser({
+            ...storeUserBySubject,
+            active: false,
+          });
+        }
+        await this.recordDenial(requestId, params, 'authentication_failed');
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'forbidden',
+          reasonCode: 'inactive_user_account',
+          message: 'Konto użytkownika jest nieaktywne lub zablokowane.',
+        });
+      }
       await this.recordDenial(requestId, params, 'authentication_failed');
       throw new ForbiddenException({
         statusCode: 403,
@@ -242,7 +250,9 @@ export class JwtBearerAuthGuard implements CanActivate {
       });
     }
 
-    if (!resolvedUser.active) {
+    const storeUser =
+      this.workspace.store.getUserById(dbResolved.userId) ?? storeUserBySubject ?? null;
+    if (storeUser && !storeUser.active) {
       await this.recordDenial(requestId, params, 'authentication_failed');
       throw new ForbiddenException({
         statusCode: 403,
@@ -250,6 +260,17 @@ export class JwtBearerAuthGuard implements CanActivate {
         reasonCode: 'inactive_user_account',
         message: 'Konto użytkownika jest nieaktywne lub zablokowane.',
       });
+    }
+
+    const resolvedUser = storeUser ?? {
+      userId: dbResolved.userId,
+      subject: identity.subject,
+      displayName: identity.subject,
+      email: 'uzytkownik@pap.example',
+      active: true,
+    };
+    if (!storeUser && this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {
+      this.workspace.store.upsertUser(resolvedUser);
     }
 
     if (!isOptional) {

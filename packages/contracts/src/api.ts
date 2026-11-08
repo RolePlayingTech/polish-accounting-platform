@@ -11,6 +11,7 @@ import {
   BankReconciliationMatchSchema,
   BankStatementTransactionSchema,
   DocumentLineItemSchema,
+  HealthContributionTierSchema,
   JournalEntryLineSchema,
   JournalEntrySchema,
   KpirEntrySchema,
@@ -171,6 +172,28 @@ export const AuthenticatedActorSummarySchema = z
 
 export type AuthenticatedActorSummary = z.infer<typeof AuthenticatedActorSummarySchema>;
 
+export const CompanyStructuredAddressSchema = z
+  .object({
+    street: z.string().min(1).max(200),
+    buildingNumber: z.string().min(1).max(40),
+    unitNumber: z.string().max(40).nullable().optional(),
+    postalCode: z.string().regex(/^\d{2}-\d{3}$/, 'Kod pocztowy musi mieć format XX-XXX'),
+    city: z.string().min(1).max(120),
+    voivodeship: z.string().min(1).max(80).optional(),
+    taxOfficeName: z.string().min(1).max(200).optional(),
+    countryCode: z.string().length(2).optional(),
+  })
+  .strict();
+
+export type CompanyStructuredAddressContract = z.infer<typeof CompanyStructuredAddressSchema>;
+
+export const CompanyAddressSchema = z.union([
+  z.string().min(2).max(400),
+  CompanyStructuredAddressSchema,
+]);
+
+export type CompanyAddressContract = z.infer<typeof CompanyAddressSchema>;
+
 export const AccessibleCompanyItemSchema = z
   .object({
     tenantId: UuidSelectorSchema,
@@ -184,6 +207,14 @@ export const AccessibleCompanyItemSchema = z
     role: TenantMemberRoleSchema,
     canRead: z.boolean(),
     canWrite: z.boolean(),
+    address: CompanyAddressSchema.optional(),
+    street: z.string().min(1).max(240).optional(),
+    buildingNumber: z.string().min(1).max(40).optional(),
+    unitNumber: z.string().max(40).nullable().optional(),
+    postalCode: z.string().min(1).max(20).optional(),
+    city: z.string().min(1).max(160).optional(),
+    voivodeship: z.string().min(1).max(120).optional(),
+    taxOfficeName: z.string().min(1).max(240).optional(),
   })
   .strict();
 
@@ -202,13 +233,25 @@ export const CreateCompanyRequestSchema = z
   .object({
     displayName: z.string().min(2).max(240).optional(),
     companyName: z.string().min(2).max(240).optional(),
-    address: z.string().min(2).max(400).optional(),
+    address: CompanyAddressSchema.optional(),
+    street: z.string().min(1).max(200).optional(),
+    buildingNumber: z.string().min(1).max(40).optional(),
+    unitNumber: z.string().max(40).nullable().optional(),
+    postalCode: z
+      .string()
+      .regex(/^\d{2}-\d{3}$/, 'Kod pocztowy musi mieć format XX-XXX')
+      .optional(),
+    city: z.string().min(1).max(120).optional(),
+    voivodeship: z.string().min(1).max(80).optional(),
+    taxOfficeName: z.string().min(1).max(200).optional(),
     nip: z.string().regex(/^\d{10}$/, 'NIP musi składać się z 10 cyfr'),
     legalForm: CompanyLegalFormSchema,
     taxRegime: CompanyTaxRegimeSchema.optional(),
     profileCode: TaxProfileCodeSchema.optional(),
-    vatStatus: VatStatusSchema,
+    vatStatus: z.union([VatStatusSchema, CompanyVatStatusSimpleSchema]).optional(),
+    vatPayer: z.boolean().optional(),
     vatSettlementPeriod: VatSettlementPeriodSchema.optional(),
+    vatPeriod: VatSettlementPeriodSchema.optional(),
     zusStage: ZusSchemeSchema.optional(),
     zusScheme: ZusSchemeSchema.optional(),
     activityStartDate: IsoCalendarDateSchema.optional(),
@@ -222,6 +265,11 @@ export const CreateCompanyRequestSchema = z
       .optional(),
     voluntarySicknessInsurance: z.boolean().optional(),
     smallTaxpayer: z.boolean().optional(),
+    ksefEnabled: z.boolean().optional(),
+    ryczaltDefaultRate: RyczaltRateCodeSchema.optional(),
+    healthContributionTier: HealthContributionTierSchema.optional(),
+    accidentRateBps: z.number().int().min(0).max(500).optional(),
+    insuredPersonsCount: z.number().int().min(0).optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -239,6 +287,13 @@ export const CreateCompanyRequestSchema = z
         message: 'Wymagane jest podanie formy opodatkowania (taxRegime lub profileCode).',
       });
     }
+    if (val.vatStatus === undefined && val.vatPayer === undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['vatStatus'],
+        message: 'Wymagane jest podanie statusu VAT (vatStatus lub vatPayer).',
+      });
+    }
   });
 
 export type CreateCompanyRequest = z.infer<typeof CreateCompanyRequestSchema>;
@@ -247,6 +302,7 @@ export const CreateCompanyResponseSchema = z
   .object({
     company: AccessibleCompanyItemSchema,
     taxProfile: TaxProfileConfigSchema,
+    address: CompanyAddressSchema.optional(),
   })
   .strict();
 
@@ -492,13 +548,26 @@ export const UpdateCompanySettingsRequestSchema = z
     displayName: z.string().min(2).max(240).optional(),
     companyName: z.string().min(2).max(240).optional(),
     profileCode: TaxProfileCodeSchema.optional(),
-    vatStatus: VatStatusSchema.optional(),
+    vatStatus: z.union([VatStatusSchema, CompanyVatStatusSimpleSchema]).optional(),
+    vatPayer: z.boolean().optional(),
     vatSettlementPeriod: VatSettlementPeriodSchema.optional(),
+    vatPeriod: VatSettlementPeriodSchema.optional(),
     zusScheme: ZusSchemeSchema.optional(),
     voluntarySicknessInsurance: z.boolean().optional(),
     accidentRateBps: z.number().int().min(0).max(500).optional(),
     insuredPersonsCount: z.number().int().min(0).optional(),
     smallTaxpayer: z.boolean().optional(),
+    ksefEnabled: z.boolean().optional(),
+    ryczaltDefaultRate: RyczaltRateCodeSchema.optional(),
+    healthContributionTier: HealthContributionTierSchema.optional(),
+    address: CompanyAddressSchema.optional(),
+    street: z.string().min(1).max(240).optional(),
+    buildingNumber: z.string().min(1).max(40).optional(),
+    unitNumber: z.string().max(40).nullable().optional(),
+    postalCode: z.string().min(1).max(20).optional(),
+    city: z.string().min(1).max(160).optional(),
+    voivodeship: z.string().min(1).max(120).optional(),
+    taxOfficeName: z.string().min(1).max(240).optional(),
     effectiveFrom: IsoCalendarDateSchema.optional(),
     changeSummaryPl: z.string().min(3).max(400).optional(),
   })
@@ -598,6 +667,32 @@ export const DocumentSourceFormatSchema = z.enum([
 ]);
 export type DocumentSourceFormatContract = z.infer<typeof DocumentSourceFormatSchema>;
 
+export const DocumentVerificationSourceSchema = z.enum([
+  'not_checked',
+  'deterministic_parser',
+  'demo_heuristic',
+  'human_verified',
+  'manual_entry',
+  'mcp_proposal',
+]);
+export type DocumentVerificationSourceContract = z.infer<typeof DocumentVerificationSourceSchema>;
+
+export const KasWhiteListVerificationStatusSchema = z.enum([
+  'not_checked',
+  'demo_simulated',
+  'demo_simulated_iban_check',
+]);
+export type KasWhiteListVerificationStatusContract = z.infer<
+  typeof KasWhiteListVerificationStatusSchema
+>;
+
+export const GtuReviewStatusSchema = z.enum([
+  'not_applicable',
+  'requires_human_review',
+  'human_confirmed',
+]);
+export type GtuReviewStatusContract = z.infer<typeof GtuReviewStatusSchema>;
+
 export const DocumentAiProposalSchema = z
   .object({
     status: z.enum(['ai_proposed', 'human_approved', 'not_applicable']),
@@ -611,6 +706,9 @@ export const DocumentAiProposalSchema = z
     promptInjectionSuspected: z.boolean(),
     untrustedCounterpartyName: UntrustedDocumentTextEnvelopeSchema,
     untrustedDescription: UntrustedDocumentTextEnvelopeSchema,
+    verificationSource: DocumentVerificationSourceSchema.optional(),
+    kasWhiteListStatus: KasWhiteListVerificationStatusSchema.optional(),
+    gtuReviewStatus: GtuReviewStatusSchema.optional(),
   })
   .strict();
 
@@ -705,7 +803,22 @@ export const CreateDocumentImportInputSchema = z
   .object({
     sourceFormat: z.enum(['ksef_xml', 'json', 'csv']),
     rawPayload: z.string().min(1).max(262_144),
+    sha256: Sha256HexSchema.optional(),
+    documentNumber: z.string().min(1).max(128).optional(),
     direction: z.enum(['sales', 'purchase']).optional(),
+    issueDate: IsoCalendarDateSchema.optional(),
+    eventDate: IsoCalendarDateSchema.optional(),
+    dueDate: IsoCalendarDateSchema.optional(),
+    counterpartyName: z.string().min(1).max(512).optional(),
+    counterpartyNip: z
+      .string()
+      .regex(/^[A-Z]{0,2}\d{8,12}$/)
+      .optional(),
+    netGrosze: SafeGroszeSchema.optional(),
+    vatGrosze: SafeGroszeSchema.optional(),
+    grossGrosze: SafeGroszeSchema.optional(),
+    vatRate: VatRateCodeSchema.optional(),
+    description: z.string().min(1).max(1000).optional(),
     suggestedCategory: ProposedPostingCategorySchema.optional(),
     vatDeductionMode: VatDeductionModeSchema.optional(),
     ryczaltRate: RyczaltRateCodeSchema.optional(),
@@ -714,19 +827,31 @@ export const CreateDocumentImportInputSchema = z
 
 export const CreateDocumentBffQuickInputSchema = z
   .object({
+    sourceFormat: z.enum(['manual', 'ksef_xml', 'json', 'csv']).optional(),
+    rawPayload: z.string().min(1).max(262_144).optional(),
     documentNumber: z.string().min(1).max(128),
     sha256: Sha256HexSchema,
     direction: z.enum(['sales', 'purchase']).optional(),
     issueDate: IsoCalendarDateSchema.optional(),
+    eventDate: IsoCalendarDateSchema.optional(),
     dueDate: IsoCalendarDateSchema.optional(),
     counterpartyName: z.string().min(1).max(512).optional(),
     counterpartyNip: z
       .string()
       .regex(/^[A-Z]{0,2}\d{8,12}$/)
       .optional(),
+    counterpartyAddress: z.string().min(1).max(512).optional(),
+    ksefReferenceNumber: z.string().min(1).max(80).optional(),
+    ksefMarker: KsefInvoiceMarkerSchema.optional(),
     netGrosze: SafeGroszeSchema.optional(),
+    vatGrosze: SafeGroszeSchema.optional(),
+    grossGrosze: SafeGroszeSchema.optional(),
     vatRate: VatRateCodeSchema.optional(),
     description: z.string().min(1).max(1000).optional(),
+    suggestedCategory: ProposedPostingCategorySchema.optional(),
+    vatDeductionMode: VatDeductionModeSchema.optional(),
+    ryczaltRate: RyczaltRateCodeSchema.optional(),
+    lines: z.array(CreateDocumentLineInputSchema).min(1).optional(),
   })
   .strict();
 
@@ -1312,6 +1437,31 @@ export const McpProposalsListResponseSchema = z
   .strict();
 
 export type McpProposalsListResponse = z.infer<typeof McpProposalsListResponseSchema>;
+
+export const PrepareMcpProposalInvoiceInputSchema = z
+  .object({
+    direction: z.enum(['purchase', 'sales']),
+    invoiceNumber: z.string().min(1).max(120),
+    counterpartyName: z.string().min(1).max(240),
+    counterpartyNip: z.string().regex(/^\d{10}$/, 'NIP musi składać się z 10 cyfr'),
+    issueDate: IsoDateSchema,
+    dueDate: IsoDateSchema,
+    netAmountPln: z.string().regex(/^\d+\.\d{2}$/, 'Kwota musi mieć postać 0.00'),
+    vatAmountPln: z.string().regex(/^\d+\.\d{2}$/, 'Kwota musi mieć postać 0.00'),
+    grossAmountPln: z.string().regex(/^\d+\.\d{2}$/, 'Kwota musi mieć postać 0.00'),
+    expenseDescription: z.string().min(1).max(1000),
+    suggestedCategory: ProposedPostingCategorySchema,
+  })
+  .strict();
+
+export const PrepareMcpProposalRequestSchema = z
+  .object({
+    idempotencyKey: UuidSelectorSchema.optional(),
+    invoice: PrepareMcpProposalInvoiceInputSchema,
+  })
+  .strict();
+
+export type PrepareMcpProposalRequest = z.infer<typeof PrepareMcpProposalRequestSchema>;
 
 export const IssueMcpChallengeResponseSchema = z
   .object({

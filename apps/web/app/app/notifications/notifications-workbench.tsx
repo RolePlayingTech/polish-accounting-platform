@@ -163,7 +163,7 @@ export function NotificationsWorkbench({
                   type="checkbox"
                   checked={optedOut}
                   onChange={(e) => setOptedOut(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 accent-[#1d5c42]"
+                  className="mt-0.5 h-6 w-6 shrink-0 accent-[#1d5c42]"
                 />
                 <span>
                   <strong className="font-semibold">
@@ -193,7 +193,7 @@ export function NotificationsWorkbench({
                         type="checkbox"
                         checked={enabled}
                         onChange={() => toggleStage(stage)}
-                        className="h-4 w-4 accent-[#1d5c42]"
+                        className="h-6 w-6 shrink-0 accent-[#1d5c42]"
                       />
                       <span>{STAGE_LABELS[stage]}</span>
                     </label>
@@ -294,7 +294,7 @@ export function NotificationsWorkbench({
                     <dt className="font-semibold text-[#636b66]">
                       Klucz deduplikacji (idempotentność):
                     </dt>
-                    <dd className="font-mono text-[11px] text-[#464c48]">
+                    <dd className="break-all font-mono text-[11px] text-[#464c48]">
                       {selectedMessage.deduplicationKey}
                     </dd>
                   </div>
@@ -305,7 +305,7 @@ export function NotificationsWorkbench({
                     Treść tekstowa (text/plain · zamaskowany NIP + link do podstawy prawnej + stopka
                     anty-podszywania)
                   </p>
-                  <pre className="mt-1.5 whitespace-pre-wrap rounded-lg border border-[#e5e2d9] bg-white p-3.5 font-mono text-xs leading-relaxed text-[#191c1a]">
+                  <pre className="mt-1.5 max-w-full overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-[#e5e2d9] bg-white p-3.5 font-mono text-xs leading-relaxed text-[#191c1a]">
                     {selectedMessage.email.textBody}
                   </pre>
                 </div>
@@ -314,7 +314,7 @@ export function NotificationsWorkbench({
                   <p className="text-xs font-semibold uppercase tracking-wider text-[#636b66]">
                     Nagłówki protokołu RFC 5322 / MIME
                   </p>
-                  <pre className="mt-1.5 overflow-x-auto rounded-lg border border-[#e5e2d9] bg-[#f4f2ec] p-3 font-mono text-[11px] leading-relaxed text-[#464c48]">
+                  <pre className="mt-1.5 max-w-full overflow-x-auto whitespace-pre-wrap break-all rounded-lg border border-[#e5e2d9] bg-[#f4f2ec] p-3 font-mono text-[11px] leading-relaxed text-[#464c48] sm:whitespace-pre">
                     {Object.entries(selectedMessage.email.headers)
                       .map(([k, v]) => `${k}: ${v}`)
                       .join('\n')}

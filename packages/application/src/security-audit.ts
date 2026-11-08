@@ -38,6 +38,7 @@ export type SecurityAuditAction =
   | 'reactivate_membership'
   | 'grant'
   | 'revoke_grant'
+  | 'provision_company'
   | 'unknown';
 
 export interface SecurityAuditEvent {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import {
   Body,
   Controller,
@@ -31,6 +32,10 @@ import {
   type UpdateNotificationPreferencesRequest,
   type UpdateObligationStatusRequest,
 } from '@pap/contracts';
+import {
+  PrepareInvoiceAndPostingProposalInputSchema,
+  type PrepareInvoiceAndPostingProposalInput,
+} from '@pap/contracts/mcp-tools';
 import { ReminderStageSchema } from '@pap/contracts/notifications';
 import { z } from 'zod';
 import {
@@ -384,6 +389,65 @@ export class OperationsAutomationController {
   ) {
     const actor = requireRequestActor(request);
     return this.workspace.listMcpProposals(actor, tenantId, legalEntityId);
+  }
+
+  @Post(['/mcp/proposals', '/mcp/proposals/prepare'])
+  @HttpCode(201)
+  @Header('Cache-Control', 'no-store')
+  prepareMcpProposal(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('legalEntityId') legalEntityId: string,
+    @Body() body: unknown,
+  ) {
+    const actor = requireRequestActor(request);
+    if (actor.scopes !== undefined && !actor.scopes.includes('pap:mcp:prepare')) {
+      throw new AccountingWorkspaceAccessError(
+        403,
+        'insufficient_scope',
+        'Brak wymaganego zakresu uprawnień pap:mcp:prepare do przygotowania propozycji MCP.',
+      );
+    }
+
+    const rawBody =
+      typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {};
+    const rawInvoice =
+      typeof rawBody['invoice'] === 'object' && rawBody['invoice'] !== null
+        ? (rawBody['invoice'] as Record<string, unknown>)
+        : rawBody;
+    const direction = rawInvoice['direction'] === 'sales' ? 'sales' : 'purchase';
+    const defaultCategory = direction === 'sales' ? 'sales_revenue' : 'other_deductible_expense';
+
+    const candidateInput = {
+      tenantId,
+      legalEntityId,
+      idempotencyKey:
+        typeof rawBody['idempotencyKey'] === 'string' && rawBody['idempotencyKey'].trim().length > 0
+          ? rawBody['idempotencyKey'].trim()
+          : randomUUID(),
+      invoice: {
+        ...rawInvoice,
+        direction: rawInvoice['direction'] ?? direction,
+        dueDate: rawInvoice['dueDate'] ?? rawInvoice['issueDate'],
+        suggestedCategory: rawInvoice['suggestedCategory'] ?? defaultCategory,
+      },
+    };
+
+    const parsed = PrepareInvoiceAndPostingProposalInputSchema.safeParse(candidateInput);
+    if (!parsed.success) {
+      throw new AccountingWorkspaceValidationError(
+        422,
+        'validation_failed',
+        parsed.error.issues
+          .map((issue) => `${issue.path.join('.') || 'body'}: ${issue.message}`)
+          .join('; '),
+      );
+    }
+
+    return this.workspace.prepareMcpProposal(
+      actor,
+      parsed.data as PrepareInvoiceAndPostingProposalInput,
+    );
   }
 
   @Post('/mcp/proposals/:proposalId/challenge')

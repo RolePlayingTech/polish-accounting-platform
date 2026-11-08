@@ -33,7 +33,7 @@ export default async function CompaniesPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => getCompaniesManagementSnapshot(session));
+  const loaded = await tryLoadWorkspaceData(() => getCompaniesManagementSnapshot(session));
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell

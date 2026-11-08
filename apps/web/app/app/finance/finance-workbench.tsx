@@ -190,7 +190,9 @@ export function FinanceWorkbench({
                 ? 'IBAN w Wykazie KAS'
                 : row.whiteListStatus === 'mismatch_alert'
                   ? 'Uwaga: IBAN poza Białą Listą!'
-                  : 'Nie dotyczy WL'
+                  : row.whiteListStatus === 'not_checked'
+                    ? 'Niesprawdzone w API KAS (symulacja)'
+                    : 'Nie dotyczy WL'
             }
           />
           {row.annex15Item && row.grossGrosze > 1_500_000 ? (
@@ -391,7 +393,7 @@ export function FinanceWorkbench({
                 )}
               </FormField>
 
-              <div className="flex items-end pb-2">
+              <div className="flex min-w-0 items-end pb-2">
                 <label
                   htmlFor="bank-import-apply-settlements"
                   className="flex items-center gap-2 text-xs font-medium text-[#191c1a]"
@@ -401,7 +403,7 @@ export function FinanceWorkbench({
                     type="checkbox"
                     checked={applySettlements}
                     onChange={(e) => setApplySettlements(e.target.checked)}
-                    className="h-4 w-4 accent-[#1d5c42]"
+                    className="h-6 w-6 shrink-0 accent-[#1d5c42]"
                   />
                   <span>Rozlicz automatycznie jednoznacznie dopasowane faktury</span>
                 </label>

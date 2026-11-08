@@ -57,8 +57,9 @@ describe('Kontrakt plików migracji', () => {
     const audit = readJson('0005_snapshot.json');
     const foundation = readJson('0006_snapshot.json');
     const accounting = readJson('0007_snapshot.json');
+    const provisioning = readJson('0008_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(8);
+    expect(migrations).toHaveLength(9);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
@@ -68,6 +69,10 @@ describe('Kontrakt plików migracji', () => {
     expect(audit.prevId).toBe(runtime.id);
     expect(foundation.prevId).toBe(audit.id);
     expect(accounting.prevId).toBe(foundation.id);
+    expect(provisioning.prevId).toBe(accounting.id);
+    expect(
+      provisioning.tables['public.entity_profile_version'].columns.profile_json,
+    ).toBeDefined();
     expect(
       foundation.tables['public.access_management_event'].columns.transaction_id,
     ).toBeDefined();
@@ -75,6 +80,7 @@ describe('Kontrakt plików migracji', () => {
     expect(Object.keys(audit.tables)).toHaveLength(11);
     expect(Object.values(runtime.tables)).toHaveLength(10);
     expect(Object.keys(accounting.tables)).toHaveLength(27);
+    expect(Object.keys(provisioning.tables)).toHaveLength(27);
     for (const table of Object.values(runtime.tables) as { isRLSEnabled: boolean }[]) {
       expect(table.isRLSEnabled).toBe(true);
     }
@@ -93,6 +99,7 @@ describe('Kontrakt plików migracji', () => {
       '0005_security-audit',
       '0006_security-foundation',
       '0007_accounting-core',
+      '0008_runtime-company-provisioning',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -115,6 +122,7 @@ describe('Kontrakt plików migracji', () => {
       '0005_security-audit.sql',
       '0006_security-foundation.sql',
       '0007_accounting-core.sql',
+      '0008_runtime-company-provisioning.sql',
     ]) {
       const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
       expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);

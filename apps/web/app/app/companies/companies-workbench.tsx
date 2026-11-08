@@ -365,7 +365,7 @@ export function CompaniesWorkbench({
                   type="checkbox"
                   checked={editSmallTaxpayer}
                   onChange={(e) => setEditSmallTaxpayer(e.target.checked)}
-                  className="h-4 w-4 accent-[#1d5c42]"
+                  className="h-6 w-6 shrink-0 accent-[#1d5c42]"
                 />
                 <span>
                   Status małego podatnika (limit 2 000 000 EUR brutto — m.in. CIT 9% / metoda
@@ -475,7 +475,7 @@ export function CompaniesWorkbench({
                     onChange={(e) =>
                       setNewVatStatus(e.target.checked ? 'czynny' : 'zwolniony_art_113')
                     }
-                    className="h-4 w-4 accent-[#1d5c42]"
+                    className="h-6 w-6 shrink-0 accent-[#1d5c42]"
                   />
                   <span>Zarejestrowany jako czynny podatnik VAT (VAT-R)</span>
                 </label>
@@ -580,7 +580,7 @@ export function CompaniesWorkbench({
                   type="checkbox"
                   checked={grantWrite}
                   onChange={(e) => setGrantWrite(e.target.checked)}
-                  className="h-4 w-4 accent-[#1d5c42]"
+                  className="h-6 w-6 shrink-0 accent-[#1d5c42]"
                 />
                 <span>Zezwól na zapis i księgowanie dokumentów (read + write)</span>
               </label>

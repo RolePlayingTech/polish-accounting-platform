@@ -33,10 +33,13 @@ export default async function FinancePage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => ({
-    dash: getDashboardSnapshot(session),
-    fin: getFinanceSnapshot(session),
-  }));
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const [dash, fin] = await Promise.all([
+      getDashboardSnapshot(session),
+      getFinanceSnapshot(session),
+    ]);
+    return { dash, fin };
+  });
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell

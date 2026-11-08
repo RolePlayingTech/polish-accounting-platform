@@ -36,10 +36,13 @@ export default async function DocumentsPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => ({
-    dash: getDashboardSnapshot(session),
-    documents: getDocumentsForActiveCompany(session),
-  }));
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const [dash, documents] = await Promise.all([
+      getDashboardSnapshot(session),
+      getDocumentsForActiveCompany(session),
+    ]);
+    return { dash, documents };
+  });
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell

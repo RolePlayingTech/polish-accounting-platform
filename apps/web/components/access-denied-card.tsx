@@ -50,22 +50,42 @@ export function WorkspaceAccessDeniedCard({
   }
 
   const badgeLabel =
-    statusCode === 404
-      ? '404 · Zasób niedostępny'
-      : statusCode === 401
-        ? '401 · Wymagane ponowne logowanie'
-        : '403 · Brak uprawnień do podmiotu';
+    statusCode >= 500
+      ? `${String(statusCode)} · Usługa API niedostępna (Fail-Closed)`
+      : statusCode === 404
+        ? '404 · Zasób niedostępny'
+        : statusCode === 401
+          ? '401 · Wymagane ponowne logowanie'
+          : '403 · Brak uprawnień do podmiotu';
+
+  const cardTitle =
+    statusCode >= 500
+      ? `${String(statusCode)} Niedostępność backendu API (Fail-Closed)`
+      : statusCode === 404
+        ? '404 Zasób księgowy nie został znaleziony'
+        : statusCode === 401
+          ? '401 Sesja wygasła lub wymaga ponownego uwierzytelnienia'
+          : '403 Brak uprawnień do wybranego podmiotu';
+
+  const alertTitle =
+    statusCode >= 500
+      ? 'Operacja zablokowana — brak połączenia z backendem API (Fail-Closed)'
+      : statusCode === 404
+        ? 'Żądany zasób nie istnieje w wybranym podmiocie'
+        : statusCode === 401
+          ? 'Wymagane uwierzytelnienie OIDC'
+          : 'Odmowa dostępu do danych księgowych';
 
   return (
     <Card
       as="section"
       tone="subtle"
       eyebrow="Ochrona izolacji organizacji i grantów podmiotowych (ADR-003)"
-      title="403 Brak uprawnień do wybranego podmiotu"
+      title={cardTitle}
       actions={<StatusBadge size="sm" tone="danger" label={badgeLabel} />}
     >
       <div role="alert" className="space-y-4">
-        <AlertBanner tone="danger" title="Odmowa dostępu do danych księgowych">
+        <AlertBanner tone="danger" title={alertTitle}>
           <p>{messagePl}</p>
           {reasonCode ? (
             <p className="mt-1 font-mono text-xs text-[#6e1c18]">

@@ -81,6 +81,15 @@ export async function persistCompanyTaxSettingsToScope(
   scope: PostgresAccountingScope,
   company: WorkspaceCompanyState,
 ): Promise<void> {
+  const companyMetaPayload = {
+    displayName: company.displayName,
+    nip: company.nip,
+    legalForm: company.legalForm,
+    taxRegime: company.taxRegime,
+    vatStatusSimple: company.vatStatusSimple,
+    taxProfile: company.taxProfile,
+    settingsHistory: company.settingsHistory,
+  };
   await scope.upsertCompanyTaxSettings({
     id: deterministicUuidV4(`tax-settings:${company.tenantId}:${company.legalEntityId}`),
     nip: company.nip,
@@ -91,17 +100,16 @@ export async function persistCompanyTaxSettingsToScope(
     vatStatus: company.vatStatusSimple,
     zusStage: mapZusSchemeToDbStage(company.taxProfile.zusScheme),
     ksefMode: resolveDbKsefMode(company.taxProfile),
-    addressSummary: encodeCompanyMetaInAddress({
-      displayName: company.displayName,
-      legalForm: company.legalForm,
-      taxRegime: company.taxRegime,
-      vatStatusSimple: company.vatStatusSimple,
-      taxProfile: company.taxProfile,
-      settingsHistory: company.settingsHistory,
-    }),
+    addressSummary: encodeCompanyMetaInAddress(companyMetaPayload),
     smallTaxpayer: company.taxProfile.smallTaxpayer,
     voluntarySicknessInsurance: company.taxProfile.voluntarySicknessInsurance,
   });
+  if (typeof scope.upsertEntityProfileVersion === 'function') {
+    await scope.upsertEntityProfileVersion({
+      profileCode: company.taxProfile.profileCode,
+      profileJson: companyMetaPayload as unknown as Record<string, unknown>,
+    });
+  }
 }
 
 export async function persistDocumentItemToScope(

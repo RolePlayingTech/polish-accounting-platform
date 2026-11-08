@@ -223,7 +223,7 @@ export function AcademyCatalogClient({ glossaryTerms, modules }: AcademyCatalogC
                     <Link
                       key={slug}
                       href={getCanonicalLessonHref(slug)}
-                      className="text-xs font-semibold text-[#1d5c42] underline underline-offset-4 hover:text-[#164833]"
+                      className="inline-flex min-h-6 items-center text-xs font-semibold text-[#1d5c42] underline underline-offset-4 hover:text-[#164833]"
                     >
                       Powiązana lekcja: {slug} →
                     </Link>

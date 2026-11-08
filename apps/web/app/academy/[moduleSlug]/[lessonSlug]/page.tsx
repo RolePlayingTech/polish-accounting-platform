@@ -32,10 +32,10 @@ export default async function AcademyLessonPage({
   }
 
   const session = await readServerSession();
-  let dash: ReturnType<typeof getDashboardSnapshot> | null = null;
+  let dash: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   if (session) {
     try {
-      dash = getDashboardSnapshot(session);
+      dash = await getDashboardSnapshot(session);
     } catch {
       dash = null;
     }
@@ -209,12 +209,15 @@ export default async function AcademyLessonPage({
           {prevLesson ? (
             <Link
               href={getCanonicalLessonHref(prevLesson.slug)}
-              className="text-xs font-semibold text-[#1d5c42] hover:underline"
+              className="inline-flex min-h-6 items-center text-xs font-semibold text-[#1d5c42] hover:underline"
             >
               ← Poprzednia: {prevLesson.title}
             </Link>
           ) : (
-            <Link href="/academy" className="text-xs font-semibold text-[#636b66] hover:underline">
+            <Link
+              href="/academy"
+              className="inline-flex min-h-6 items-center text-xs font-semibold text-[#636b66] hover:underline"
+            >
               ← Powrót do katalogu Akademii
             </Link>
           )}
@@ -222,12 +225,15 @@ export default async function AcademyLessonPage({
           {nextLesson ? (
             <Link
               href={getCanonicalLessonHref(nextLesson.slug)}
-              className="text-xs font-semibold text-[#1d5c42] hover:underline"
+              className="inline-flex min-h-6 items-center text-xs font-semibold text-[#1d5c42] hover:underline"
             >
               Następna: {nextLesson.title} →
             </Link>
           ) : (
-            <Link href="/academy" className="text-xs font-semibold text-[#1d5c42] hover:underline">
+            <Link
+              href="/academy"
+              className="inline-flex min-h-6 items-center text-xs font-semibold text-[#1d5c42] hover:underline"
+            >
               Zakończ kurs — wróć do spisu modułów →
             </Link>
           )}

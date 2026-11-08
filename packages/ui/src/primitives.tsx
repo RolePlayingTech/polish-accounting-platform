@@ -174,7 +174,7 @@ export function Card({
   const toneClass = CARD_TONE_CLASSES[tone];
 
   return (
-    <Element className={`rounded-xl border p-5 ${toneClass} ${className}`.trim()} {...props}>
+    <Element className={`min-w-0 rounded-xl border p-5 ${toneClass} ${className}`.trim()} {...props}>
       {(title || eyebrow || icon || actions) && (
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -182,7 +182,7 @@ export function Card({
             {title && <h2 className={ksiegaTokens.typography.sectionTitle}>{title}</h2>}
           </div>
           {(icon || actions) && (
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
               {icon}
               {actions}
             </div>
@@ -218,12 +218,12 @@ export function StatusBadge({
 
   return (
     <span
-      className={`inline-flex items-center rounded-md border font-semibold leading-tight ${toneSpec.badgeClass} ${sizeClass} ${className}`.trim()}
+      className={`inline-flex max-w-full items-center rounded-md border font-semibold leading-tight ${toneSpec.badgeClass} ${sizeClass} ${className}`.trim()}
       data-status-tone={tone}
       {...props}
     >
       {icon ?? <ToneIcon className="size-3.5 shrink-0" tone={tone} />}
-      <span>{label}</span>
+      <span className="min-w-0 break-words">{label}</span>
     </span>
   );
 }

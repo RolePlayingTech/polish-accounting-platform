@@ -230,7 +230,7 @@ export function DocumentVerificationClient({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Link
           href="/app/documents"
-          className="text-xs font-semibold text-[#1d5c42] underline underline-offset-4 hover:text-[#164833]"
+          className="inline-flex min-h-6 items-center text-xs font-semibold text-[#1d5c42] underline underline-offset-4 hover:text-[#164833]"
         >
           ← Powrót do listy dokumentów
         </Link>
@@ -268,7 +268,7 @@ export function DocumentVerificationClient({
           verificationStatusLabel={
             isAlreadyPosted
               ? `Zaksięgowano (${document.postedEntryId ?? 'OK'})`
-              : `Propozycja AI (${String(document.aiConfidencePercent)}%) — czeka na decyzję człowieka`
+              : `${document.extractionMethodLabelPl ?? 'Heurystyka demonstracyjna — wymaga weryfikacji człowieka'}${document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined ? ` (${String(document.aiConfidencePercent)}%)` : ''} — czeka na decyzję człowieka`
           }
           verificationTone={isAlreadyPosted ? 'success' : 'warning'}
           primaryActionLabel="Zatwierdź i zaksięguj dokument"
@@ -284,7 +284,12 @@ export function DocumentVerificationClient({
                   Treść oryginału / XML KSeF FA(3)
                 </span>
                 <span className="font-mono">
-                  Biała Lista KAS: {document.whiteListCheckId ?? 'zweryfikowano'}
+                  Biała Lista KAS:{' '}
+                  {document.whiteListStatus === 'verified_kas'
+                    ? (document.whiteListCheckId ?? 'zweryfikowano w API MF')
+                    : document.whiteListStatus === 'mismatch_alert'
+                      ? 'Uwaga: IBAN poza Białą Listą!'
+                      : 'Niesprawdzone w API KAS (symulacja demo)'}
                 </span>
               </div>
               <pre className="overflow-x-auto whitespace-pre-wrap rounded border border-[#e5e2d9] bg-[#faf9f5] p-3 font-mono text-xs leading-relaxed text-[#191c1a]">
@@ -301,8 +306,11 @@ export function DocumentVerificationClient({
             value={docNumber}
             onChange={setDocNumber}
             confidence={document.aiConfidence}
-            confidencePercent={document.aiConfidencePercent}
-            extractionSource={document.sourceChannel}
+            {...(document.aiConfidencePercent !== null &&
+            document.aiConfidencePercent !== undefined
+              ? { confidencePercent: document.aiConfidencePercent }
+              : {})}
+            extractionSource={document.extractionMethodLabelPl ?? document.sourceChannel}
             readOnly={isAlreadyPosted || !canWrite}
           />
 
@@ -313,7 +321,10 @@ export function DocumentVerificationClient({
             value={issueDate}
             onChange={setIssueDate}
             confidence={document.aiConfidence}
-            confidencePercent={document.aiConfidencePercent}
+            {...(document.aiConfidencePercent !== null &&
+            document.aiConfidencePercent !== undefined
+              ? { confidencePercent: document.aiConfidencePercent }
+              : {})}
             numeric
             readOnly={isAlreadyPosted || !canWrite}
           />
@@ -325,7 +336,10 @@ export function DocumentVerificationClient({
             value={counterpartyName}
             onChange={setCounterpartyName}
             confidence={document.aiConfidence}
-            confidencePercent={document.aiConfidencePercent}
+            {...(document.aiConfidencePercent !== null &&
+            document.aiConfidencePercent !== undefined
+              ? { confidencePercent: document.aiConfidencePercent }
+              : {})}
             readOnly={isAlreadyPosted || !canWrite}
           />
 
@@ -336,7 +350,10 @@ export function DocumentVerificationClient({
             value={counterpartyNip}
             onChange={setCounterpartyNip}
             confidence={document.aiConfidence}
-            confidencePercent={document.aiConfidencePercent}
+            {...(document.aiConfidencePercent !== null &&
+            document.aiConfidencePercent !== undefined
+              ? { confidencePercent: document.aiConfidencePercent }
+              : {})}
             numeric
             fieldHelp={helpMap.nip}
             readOnly={isAlreadyPosted || !canWrite}

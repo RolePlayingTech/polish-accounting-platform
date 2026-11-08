@@ -33,10 +33,13 @@ export default async function FullLedgerPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => ({
-    dash: getDashboardSnapshot(session),
-    ledger: getFullLedgerSnapshot(session),
-  }));
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const [dash, ledger] = await Promise.all([
+      getDashboardSnapshot(session),
+      getFullLedgerSnapshot(session),
+    ]);
+    return { dash, ledger };
+  });
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell

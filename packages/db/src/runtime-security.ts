@@ -40,6 +40,8 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     NOT has_column_privilege('tenant_membership', 'valid_from', 'UPDATE') AND
     NOT has_column_privilege('tenant_membership', 'valid_until', 'UPDATE') AND
     has_function_privilege('pap_execute_access()', 'EXECUTE') AND
+    has_function_privilege('pap_provision_company()', 'EXECUTE') AND
+    has_function_privilege('pap_list_actor_accessible_entities()', 'EXECUTE') AND
     (SELECT count(*) = 27 AND bool_and(
         c.relrowsecurity
         AND c.relforcerowsecurity

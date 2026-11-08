@@ -992,10 +992,9 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     openApps.delete(appA);
   });
 
-  it('odkrywa nowo utworzone firmy (POST /companies) na żywej równoległej instancji oraz po zimnym restarcie z 0 syntetycznych wpisów audytu i odrzuca zbyt duże kwoty PLN kodem 400 (NEW-P1-1, P3)', async () => {
+  it('odkrywa nowo utworzone firmy (POST /companies BEZ PAP_MIGRATOR_DATABASE_URL na roli runtime) na żywej równoległej instancji oraz po zimnym restarcie z utrwaleniem adresu i challenge MCP (#58, #60, #70, #71)', async () => {
     const runtimeEnv: NodeJS.ProcessEnv = {
       DATABASE_URL: runtimeUrl,
-      PAP_MIGRATOR_DATABASE_URL: migratorUrl,
       PAP_DATABASE_ENV: 'test',
       PAP_DB_SCHEMA: dataSchema,
       PAP_DB_CONTEXT_SECRET: `${keyId}:${keyHex}`,
@@ -1014,8 +1013,37 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
       authorization: `Bearer ${janToken1}`,
       'content-type': 'application/json',
     };
+    const martaHeaders1 = await issuePersonaHeaders(baseUrl1, 'marta-ksiegowa');
+    const piotrHeaders1 = await issuePersonaHeaders(baseUrl1, 'piotr-izolacyjny');
 
-    // 1. Utworzenie nowej firmy przez POST /api/v1/tenants/:tenantId/companies na Instancji #1
+    // #58: Odmowa utworzenia firmy przez użytkownika bez roli admina (Marta - 403) i z innego tenanta (Piotr - 403)
+    const martaCreateRes = await fetch(`${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+      method: 'POST',
+      headers: martaHeaders1,
+      body: JSON.stringify({
+        displayName: 'Próba Marty Sp. z o.o.',
+        nip: '5270009002',
+        legalForm: 'jdg',
+        taxRegime: 'kpir_liniowy',
+        vatStatus: 'czynny',
+      }),
+    });
+    expect(martaCreateRes.status).toBe(403);
+
+    const piotrCreateRes = await fetch(`${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+      method: 'POST',
+      headers: piotrHeaders1,
+      body: JSON.stringify({
+        displayName: 'Próba Piotra Sp. z o.o.',
+        nip: '5270009002',
+        legalForm: 'jdg',
+        taxRegime: 'kpir_liniowy',
+        vatStatus: 'czynny',
+      }),
+    });
+    expect(piotrCreateRes.status).toBe(403);
+
+    // 1. Utworzenie nowej firmy przez POST /api/v1/tenants/:tenantId/companies na Instancji #1 BEZ PAP_MIGRATOR_DATABASE_URL
     const createCompanyRes = await fetch(`${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies`, {
       method: 'POST',
       headers: janHeaders1,
@@ -1026,11 +1054,77 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
         taxRegime: 'kpir_liniowy',
         vatStatus: 'czynny',
         zusStage: 'duzy_zus',
+        street: 'ul. Marszałkowska',
+        buildingNumber: '10',
+        unitNumber: '4',
+        postalCode: '00-590',
+        city: 'Warszawa',
+        voivodeship: 'mazowieckie',
+        taxOfficeName: 'Pierwszy Urząd Skarbowy Warszawa-Śródmieście',
+        smallTaxpayer: true,
+        ksefEnabled: true,
       }),
     });
     expect(createCompanyRes.status).toBe(201);
     const createdCompany = CreateCompanyResponseSchema.parse(await createCompanyRes.json());
     const newLegalEntityId = createdCompany.company.legalEntityId;
+    expect(createdCompany.company.street).toBe('ul. Marszałkowska');
+    expect(createdCompany.company.postalCode).toBe('00-590');
+    expect(createdCompany.company.taxOfficeName).toBe(
+      'Pierwszy Urząd Skarbowy Warszawa-Śródmieście',
+    );
+
+    // #58: Duplikat NIP w tym samym tenancie zwraca 409 Conflict (duplicate_company_nip)
+    const dupCompanyRes = await fetch(`${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+      method: 'POST',
+      headers: janHeaders1,
+      body: JSON.stringify({
+        displayName: 'Duplikat NIP Architektura',
+        nip: '5270009002',
+        legalForm: 'jdg',
+        taxRegime: 'kpir_skala',
+        vatStatus: 'czynny',
+      }),
+    });
+    expect(dupCompanyRes.status).toBe(409);
+
+    // #60 + #71: Przygotowanie propozycji MCP przez endpoint REST i wystawienie challenge PRZED zimnym restartem
+    const coldMcpPrepRes = await fetch(
+      `${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/mcp/proposals`,
+      {
+        method: 'POST',
+        headers: janHeaders1,
+        body: JSON.stringify({
+          invoiceNumber: 'FV/COLD-CHALLENGE/2026/03/01',
+          counterpartyName: 'Dostawca Cold Restart Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+          issueDate: '2026-03-30',
+          dueDate: '2026-04-14',
+          netAmountPln: '500.00',
+          vatAmountPln: '115.00',
+          grossAmountPln: '615.00',
+          expenseDescription: 'Test utrwalenia challenge MCP przez zimny restart PG18',
+          suggestedCategory: 'uslugi_obce',
+        }),
+      },
+    );
+    expect(coldMcpPrepRes.status).toBe(201);
+    const coldPreparedProposal = PrepareInvoiceAndPostingProposalOutputSchema.parse(
+      await coldMcpPrepRes.json(),
+    );
+
+    const coldChallengeBeforeRestartRes = await fetch(
+      `${baseUrl1}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/mcp/proposals/${coldPreparedProposal.proposalId}/challenge`,
+      {
+        method: 'POST',
+        headers: janHeaders1,
+        body: JSON.stringify({}),
+      },
+    );
+    expect(coldChallengeBeforeRestartRes.status).toBe(200);
+    const coldChallenge = IssueMcpChallengeResponseSchema.parse(
+      await coldChallengeBeforeRestartRes.json(),
+    );
 
     // 2. Dodanie dokumentu w nowo utworzonej firmie na Instancji #1
     const newDocNumber = 'FV-NEW-COMPANY/2026/03/01';
@@ -1131,7 +1225,7 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     );
     expect(docsOnPeer.documents.some((d) => d.document.documentNumber === newDocNumber)).toBe(true);
 
-    // 5. NEW-P1-1 (zimny restart): 0 syntetycznych wpisów w security_decision_event przy starcie oraz pełna widoczność nowej firmy i dokumentu
+    // 5. NEW-P1-1 (zimny restart): 0 syntetycznych wpisów w security_decision_event przy starcie oraz pełna widoczność nowej firmy, adresu i challenge MCP
     await appPeer.close();
     openApps.delete(appPeer);
     await app1.close();
@@ -1161,9 +1255,34 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     const myCompaniesOnCold = GetMyCompaniesResponseSchema.parse(
       await (await fetch(`${baseUrlCold}/api/v1/me/companies`, { headers: janHeadersCold })).json(),
     );
-    expect(myCompaniesOnCold.companies.some((c) => c.legalEntityId === newLegalEntityId)).toBe(
-      true,
+    const hydratedNewCompanyItem = myCompaniesOnCold.companies.find(
+      (c) => c.legalEntityId === newLegalEntityId,
     );
+    expect(hydratedNewCompanyItem).toBeDefined();
+    expect(hydratedNewCompanyItem?.street).toBe('ul. Marszałkowska');
+    expect(hydratedNewCompanyItem?.postalCode).toBe('00-590');
+    expect(hydratedNewCompanyItem?.city).toBe('Warszawa');
+    expect(hydratedNewCompanyItem?.taxOfficeName).toBe(
+      'Pierwszy Urząd Skarbowy Warszawa-Śródmieście',
+    );
+
+    // #60 + #71: Zatwierdzenie propozycji MCP PO ZIMNYM RESTARCIE przy użyciu challenge wydanego PRZED restartem!
+    const confirmAfterColdRes = await fetch(
+      `${baseUrlCold}/api/v1/tenants/${TENANT_1_ID}/companies/${newLegalEntityId}/mcp/proposals/${coldPreparedProposal.proposalId}/confirm`,
+      {
+        method: 'POST',
+        headers: janHeadersCold,
+        body: JSON.stringify({
+          confirmationCode: coldChallenge.confirmationCode,
+          expectedPayloadHash: coldChallenge.payloadHash,
+        }),
+      },
+    );
+    expect(confirmAfterColdRes.status).toBe(200);
+    const confirmedAfterCold = ConfirmMcpProposalResponseSchema.parse(
+      await confirmAfterColdRes.json(),
+    );
+    expect(confirmedAfterCold.confirmation.status).toBe('confirmed');
 
     const tenantCompaniesOnCold = GetMyCompaniesResponseSchema.parse(
       await (
@@ -1194,6 +1313,11 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
       ).json(),
     );
     expect(docsOnCold.documents.some((d) => d.document.documentNumber === newDocNumber)).toBe(true);
+    expect(
+      docsOnCold.documents.some(
+        (d) => d.document.documentNumber === 'FV/COLD-CHALLENGE/2026/03/01' && d.status === 'posted',
+      ),
+    ).toBe(true);
 
     // Izolacja międzytenantowa: Piotr z TENANT_2 nie widzi nowej firmy z TENANT_1 ani jej dokumentów
     const piotrHeadersCold = await issuePersonaHeaders(baseUrlCold, 'piotr-izolacyjny');

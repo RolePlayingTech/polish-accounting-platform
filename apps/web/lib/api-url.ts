@@ -28,6 +28,10 @@ export interface ResolveApiBaseUrlOptions {
   readonly isProduction?: boolean | undefined;
 }
 
+export function isOfflineDemoModeEnabled(): boolean {
+  return process.env.PAP_WEB_OFFLINE_DEMO_MODE === 'true';
+}
+
 export function resolveValidatedApiBaseUrl(
   options: ResolveApiBaseUrlOptions = {},
 ): URL | undefined {
@@ -92,6 +96,12 @@ export type BffFetchResult<T> =
     }
   | {
       readonly kind: 'validation_error';
+      readonly status: number;
+      readonly message: string;
+      readonly reasonCode?: string | undefined;
+    }
+  | {
+      readonly kind: 'server_error';
       readonly status: number;
       readonly message: string;
       readonly reasonCode?: string | undefined;
@@ -266,6 +276,18 @@ export async function papBffFetch<T>(
       };
     }
 
+    if (response.status >= 500) {
+      return {
+        kind: 'server_error',
+        status: response.status,
+        reasonCode: extractReasonCode(parsedJson),
+        message: extractErrorMessage(
+          parsedJson,
+          `Błąd wewnętrzny serwera API (HTTP ${response.status}). Operacja została zablokowana w trybie fail-closed.`,
+        ),
+      };
+    }
+
     if (!response.ok) {
       return { kind: 'unavailable' };
     }
@@ -274,6 +296,183 @@ export async function papBffFetch<T>(
       kind: 'ok',
       status: response.status,
       data: parsedJson as T,
+    };
+  } catch {
+    return { kind: 'unavailable' };
+  }
+}
+
+export async function papBffMcpCallTool<T>(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  options: Omit<BffFetchOptions, 'method' | 'body'> = {},
+): Promise<BffFetchResult<T>> {
+  const baseUrl = resolveValidatedApiBaseUrl({ apiBaseUrl: options.apiBaseUrl });
+  if (!baseUrl) {
+    return { kind: 'unavailable' };
+  }
+
+  let targetUrl: URL;
+  try {
+    targetUrl = new URL('/api/v1/mcp', baseUrl);
+  } catch {
+    return { kind: 'unavailable' };
+  }
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json, text/event-stream',
+    'Content-Type': 'application/json',
+  };
+
+  if (options.bearerToken && options.bearerToken.trim().length > 0) {
+    headers['Authorization'] = `Bearer ${options.bearerToken.trim()}`;
+  }
+
+  const rpcPayload = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: {
+      name: toolName,
+      arguments: toolArgs,
+    },
+  };
+
+  try {
+    const response = await (options.fetcher ?? fetch)(targetUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(rpcPayload),
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(options.timeoutMs ?? 5_000),
+    });
+
+    if (response.status === 401) {
+      return { kind: 'unauthorized' };
+    }
+
+    const rawText = await response.text();
+    let parsedJson: unknown = null;
+    const contentType = response.headers.get('content-type') ?? '';
+
+    if (contentType.includes('text/event-stream')) {
+      for (const line of rawText.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('data:')) {
+          const dataPart = trimmed.slice(5).trim();
+          if (dataPart.length > 0) {
+            try {
+              parsedJson = JSON.parse(dataPart);
+            } catch {
+              // ignore non-JSON SSE line
+            }
+          }
+        }
+      }
+    } else if (rawText.trim().length > 0) {
+      try {
+        parsedJson = JSON.parse(rawText);
+      } catch {
+        parsedJson = null;
+      }
+    }
+
+    if (response.status === 403) {
+      return {
+        kind: 'forbidden',
+        reasonCode: extractReasonCode(parsedJson),
+        message: extractErrorMessage(
+          parsedJson,
+          'Brak uprawnień OIDC lub zakresu MCP do wywołania narzędzia.',
+        ),
+      };
+    }
+
+    if (response.status >= 400 && response.status < 500) {
+      return {
+        kind: 'validation_error',
+        status: response.status,
+        reasonCode: extractReasonCode(parsedJson),
+        message: extractErrorMessage(parsedJson, 'Błąd walidacji wywołania MCP.'),
+      };
+    }
+
+    if (response.status >= 500) {
+      return {
+        kind: 'server_error',
+        status: response.status,
+        reasonCode: extractReasonCode(parsedJson),
+        message: extractErrorMessage(
+          parsedJson,
+          `Błąd serwera MCP (HTTP ${response.status}).`,
+        ),
+      };
+    }
+
+    if (!response.ok || typeof parsedJson !== 'object' || parsedJson === null) {
+      return { kind: 'unavailable' };
+    }
+
+    const rpcEnvelope = parsedJson as Record<string, unknown>;
+    if (rpcEnvelope['error'] && typeof rpcEnvelope['error'] === 'object') {
+      const rpcErr = rpcEnvelope['error'] as Record<string, unknown>;
+      return {
+        kind: 'validation_error',
+        status: 400,
+        message:
+          typeof rpcErr['message'] === 'string'
+            ? rpcErr['message']
+            : 'Błąd protokołu JSON-RPC MCP.',
+      };
+    }
+
+    const rpcResult = rpcEnvelope['result'];
+    if (typeof rpcResult !== 'object' || rpcResult === null) {
+      return { kind: 'unavailable' };
+    }
+
+    const callResult = rpcResult as Record<string, unknown>;
+    let structured: unknown = callResult['structuredContent'];
+    if (structured === undefined && Array.isArray(callResult['content'])) {
+      const firstItem = callResult['content'][0] as Record<string, unknown> | undefined;
+      if (firstItem && typeof firstItem['text'] === 'string') {
+        try {
+          structured = JSON.parse(firstItem['text']);
+        } catch {
+          structured = null;
+        }
+      }
+    }
+
+    if (callResult['isError'] === true) {
+      const errObj =
+        typeof structured === 'object' && structured !== null
+          ? (structured as Record<string, unknown>)
+          : {};
+      const errCode = typeof errObj['errorCode'] === 'string' ? errObj['errorCode'] : undefined;
+      const errMsg =
+        typeof errObj['messagePl'] === 'string'
+          ? errObj['messagePl']
+          : 'Narzędzie MCP zwróciło błąd wykonania.';
+      if (errCode === 'forbidden' || errCode === 'insufficient_scope') {
+        return { kind: 'forbidden', reasonCode: errCode, message: errMsg };
+      }
+      if (errCode === 'unauthenticated') {
+        return { kind: 'unauthorized' };
+      }
+      return {
+        kind: 'validation_error',
+        status: 422,
+        reasonCode: errCode,
+        message: errMsg,
+      };
+    }
+
+    return {
+      kind: 'ok',
+      status: response.status,
+      data: structured as T,
     };
   } catch {
     return { kind: 'unavailable' };

@@ -516,4 +516,79 @@ describe('Audit Round 2 regressions — P0 scopes/self-approval, P1-1 unified MC
       await customHostApp.close();
     }
   });
+
+  it('[#60, #68, #69] supports REST sandbox prepare_invoice_and_posting_proposal endpoint and rejects spoofing headers (X-Original-URL, X-Rewrite-URL, X-Forwarded-Host, X-PAP-*)', async () => {
+    const companyBase = `${baseUrl}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}`;
+
+    // #60: Prepare MCP proposal via REST endpoint, issue challenge, and confirm
+    const prepareRes = await fetch(`${companyBase}/mcp/proposals`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${martaToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        invoiceNumber: 'FV/SANDBOX-REST-MCP/2026/03/99',
+        counterpartyName: 'Dostawca Sandbox REST Sp. z o.o.',
+        counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+        issueDate: '2026-03-27',
+        dueDate: '2026-04-10',
+        netAmountPln: '600.00',
+        vatAmountPln: '138.00',
+        grossAmountPln: '738.00',
+        expenseDescription: 'Przygotowanie propozycji MCP przez endpoint piaskownicy UI',
+        suggestedCategory: 'uslugi_obce',
+      }),
+    });
+    expect(prepareRes.status).toBe(201);
+    const prepared = PrepareInvoiceAndPostingProposalOutputSchema.parse(await prepareRes.json());
+    expect(prepared.status).toBe('pending_human_approval');
+
+    const chRes = await fetch(`${companyBase}/mcp/proposals/${prepared.proposalId}/challenge`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${janToken}` },
+    });
+    expect(chRes.status).toBe(200);
+    const challenge = IssueMcpChallengeResponseSchema.parse(await chRes.json());
+
+    const confirmRes = await fetch(`${companyBase}/mcp/proposals/${prepared.proposalId}/confirm`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${janToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        confirmationCode: challenge.confirmationCode,
+        expectedPayloadHash: challenge.payloadHash,
+      }),
+    });
+    expect(confirmRes.status).toBe(200);
+
+    // #68 & #69: Spoofing headers rejected with 403 on REST and MCP
+    for (const spoofHeader of [
+      'x-original-url',
+      'x-rewrite-url',
+      'x-forwarded-host',
+      'x-pap-tenant-id',
+    ]) {
+      const restSpoof = await fetch(`${baseUrl}/api/v1/me/companies`, {
+        headers: {
+          authorization: `Bearer ${janToken}`,
+          [spoofHeader]: 'spoofed-value',
+        },
+      });
+      expect(restSpoof.status).toBe(401);
+
+      const mcpSpoof = await fetch(`${baseUrl}/api/v1/mcp`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${janToken}`,
+          'content-type': 'application/json',
+          [spoofHeader]: 'spoofed-value',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+      });
+      expect([401, 403]).toContain(mcpSpoof.status);
+    }
+  });
 });

@@ -13,10 +13,10 @@ export default async function PlatformConsolePage() {
   ]);
   const rulesCount = getLegalRulesCatalog().length;
 
-  let activeSnap: ReturnType<typeof getDashboardSnapshot> | null = null;
+  let activeSnap: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
   if (session) {
     try {
-      activeSnap = getDashboardSnapshot(session);
+      activeSnap = await getDashboardSnapshot(session);
     } catch {
       activeSnap = null;
     }

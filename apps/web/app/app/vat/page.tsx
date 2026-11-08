@@ -37,12 +37,14 @@ export default async function VatAndJpkPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => {
-    const dash = getDashboardSnapshot(session);
-    const vat = buildVatRegistersForCompany(dash.activeCompany, session.context.period);
-    const docs = getDocumentsForActiveCompany(session);
-    const compSnap = getCompaniesManagementSnapshot(session);
-    const ledgerSnap = getFullLedgerSnapshot(session);
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const dash = await getDashboardSnapshot(session);
+    const [vat, docs, compSnap, ledgerSnap] = await Promise.all([
+      buildVatRegistersForCompany(dash.activeCompany, session.context.period, session),
+      getDocumentsForActiveCompany(session),
+      getCompaniesManagementSnapshot(session),
+      getFullLedgerSnapshot(session),
+    ]);
     return { dash, vat, docs, compSnap, ledgerSnap };
   });
   if (!loaded.ok) {

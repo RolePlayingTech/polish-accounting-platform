@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { tenantId as parseTenantId, userId as parseUserId } from '@pap/domain';
-import { and, asc, desc, eq, gt, gte, inArray } from 'drizzle-orm';
+import {
+  legalEntityId as parseLegalEntityId,
+  tenantId as parseTenantId,
+  userId as parseUserId,
+} from '@pap/domain';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, sql } from 'drizzle-orm';
 import type { connectDatabase } from './client.js';
 import {
   accountingDocument,
@@ -25,12 +29,20 @@ import {
   type PostgresCompanyActionScope,
   type PostgresCompanyActionScopeDriver,
 } from './company-operation-probe.js';
-import { companyAccessGrant, legalEntity, tenantMembership } from './core-schema.js';
+import {
+  companyAccessGrant,
+  entityProfileVersion,
+  legalEntity,
+  tenantMembership,
+} from './core-schema.js';
+import { appendSecurityDecision } from './security-audit.js';
 import type { PostgresContextSigner } from './signed-context.js';
+import { readTransactionClockNow, runManagedTransaction } from './transaction-primitives.js';
 
 export type GroszeInput = number | bigint;
 
 export type LegalEntityDirectoryRecord = typeof legalEntity.$inferSelect;
+export type EntityProfileVersionRecord = typeof entityProfileVersion.$inferSelect;
 export type CompanyAccessGrantRecord = typeof companyAccessGrant.$inferSelect;
 
 export type CompanyTaxSettingsRecord = typeof companyTaxSettings.$inferSelect;
@@ -70,6 +82,13 @@ export interface UpsertCompanyTaxSettingsInput {
   readonly smallTaxpayer?: boolean;
   readonly voluntarySicknessInsurance?: boolean;
   readonly updatedAt?: Date;
+}
+
+export interface UpsertEntityProfileVersionInput {
+  readonly id?: string;
+  readonly profileCode: string;
+  readonly profileJson: Readonly<Record<string, unknown>>;
+  readonly validFrom?: Date;
 }
 
 export interface ListAccountingDocumentsFilter {
@@ -315,6 +334,12 @@ export interface ConfirmMcpPreparedProposalInput {
   readonly confirmedAt?: Date;
 }
 
+export interface UpdateMcpPreparedProposalChallengeInput {
+  readonly proposalId: string;
+  readonly confirmationChallengeHash: string;
+  readonly invoiceJson: Readonly<Record<string, unknown>>;
+}
+
 export interface UpsertNotificationPreferenceInput {
   readonly id?: string;
   readonly userId?: string;
@@ -370,6 +395,10 @@ export interface AppendSandboxMailboxMessageInput {
  */
 export interface PostgresAccountingScope extends PostgresCompanyActionScope {
   getLegalEntitySummary(): Promise<LegalEntityDirectoryRecord | null>;
+  getLatestEntityProfileVersion(): Promise<EntityProfileVersionRecord | null>;
+  upsertEntityProfileVersion(
+    input: UpsertEntityProfileVersionInput,
+  ): Promise<EntityProfileVersionRecord>;
   getCompanyTaxSettings(): Promise<CompanyTaxSettingsRecord | null>;
   upsertCompanyTaxSettings(input: UpsertCompanyTaxSettingsInput): Promise<CompanyTaxSettingsRecord>;
 
@@ -435,10 +464,14 @@ export interface PostgresAccountingScope extends PostgresCompanyActionScope {
   ): Promise<TaxObligationItemRecord>;
 
   getMcpPreparedProposal(proposalId: string): Promise<McpPreparedProposalRecord | null>;
+  listMcpPreparedProposals(): Promise<readonly McpPreparedProposalRecord[]>;
   saveMcpPreparedProposal(input: SaveMcpPreparedProposalInput): Promise<{
     readonly proposal: McpPreparedProposalRecord;
     readonly deduplicated: boolean;
   }>;
+  updateMcpPreparedProposalChallenge(
+    input: UpdateMcpPreparedProposalChallengeInput,
+  ): Promise<McpPreparedProposalRecord>;
   confirmMcpPreparedProposal(
     input: ConfirmMcpPreparedProposalInput,
   ): Promise<McpPreparedProposalRecord>;
@@ -540,6 +573,62 @@ export function createPostgresAccountingScope(
         );
       assertActive();
       return deepFreeze(row ?? null);
+    },
+
+    async getLatestEntityProfileVersion() {
+      assertActive();
+      const [row] = await tx
+        .select()
+        .from(entityProfileVersion)
+        .where(
+          and(
+            eq(entityProfileVersion.tenantId, context.tenantId),
+            eq(entityProfileVersion.legalEntityId, context.legalEntityId),
+            isNull(entityProfileVersion.validUntil),
+          ),
+        )
+        .orderBy(desc(entityProfileVersion.validFrom));
+      assertActive();
+      return deepFreeze(row ?? null);
+    },
+
+    async upsertEntityProfileVersion(input) {
+      await ensureWriteOperationProbe();
+      const [current] = await tx
+        .select()
+        .from(entityProfileVersion)
+        .where(
+          and(
+            eq(entityProfileVersion.tenantId, context.tenantId),
+            eq(entityProfileVersion.legalEntityId, context.legalEntityId),
+            isNull(entityProfileVersion.validUntil),
+          ),
+        )
+        .orderBy(desc(entityProfileVersion.validFrom))
+        .for('update');
+      assertActive();
+      if (!current) {
+        throw new Error('Nie znaleziono aktywnej wersji profilu podmiotu.');
+      }
+      const [updated] = await tx
+        .update(entityProfileVersion)
+        .set({
+          profileCode: input.profileCode,
+          profileJson: input.profileJson,
+        })
+        .where(
+          and(
+            eq(entityProfileVersion.tenantId, context.tenantId),
+            eq(entityProfileVersion.legalEntityId, context.legalEntityId),
+            eq(entityProfileVersion.id, current.id),
+          ),
+        )
+        .returning();
+      assertActive();
+      if (!updated) {
+        throw new Error('Nie udało się zaktualizować wersji profilu podmiotu.');
+      }
+      return deepFreeze(updated);
     },
 
     async getCompanyTaxSettings() {
@@ -1929,6 +2018,22 @@ export function createPostgresAccountingScope(
       return deepFreeze(row ?? null);
     },
 
+    async listMcpPreparedProposals() {
+      assertActive();
+      const rows = await tx
+        .select()
+        .from(mcpPreparedProposal)
+        .where(
+          and(
+            eq(mcpPreparedProposal.tenantId, context.tenantId),
+            eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
+          ),
+        )
+        .orderBy(desc(mcpPreparedProposal.createdAt));
+      assertActive();
+      return deepFreeze(rows);
+    },
+
     async saveMcpPreparedProposal(input) {
       const probe = await ensureWriteOperationProbe();
       if (!probe.inserted) {
@@ -2005,6 +2110,51 @@ export function createPostgresAccountingScope(
         throw new Error('Konflikt klucza idempotencji MCP dla innego ładunku propozycji.');
       }
       return deepFreeze({ proposal: existing, deduplicated: true });
+    },
+
+    async updateMcpPreparedProposalChallenge(input) {
+      const probe = await ensureWriteOperationProbe();
+      const [current] = await tx
+        .select()
+        .from(mcpPreparedProposal)
+        .where(
+          and(
+            eq(mcpPreparedProposal.tenantId, context.tenantId),
+            eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
+            eq(mcpPreparedProposal.proposalId, input.proposalId),
+          ),
+        )
+        .for('update');
+      assertActive();
+      if (!current) {
+        throw new Error('Nie znaleziono propozycji MCP do wydania wyzwania zatwierdzającego.');
+      }
+      if (!probe.inserted) {
+        return deepFreeze(current);
+      }
+      if (current.status !== 'pending_human_approval') {
+        throw new Error('Propozycja MCP nie oczekuje na zatwierdzenie człowieka.');
+      }
+      const [updated] = await tx
+        .update(mcpPreparedProposal)
+        .set({
+          confirmationChallengeHash: input.confirmationChallengeHash,
+          invoiceJson: input.invoiceJson,
+        })
+        .where(
+          and(
+            eq(mcpPreparedProposal.tenantId, context.tenantId),
+            eq(mcpPreparedProposal.legalEntityId, context.legalEntityId),
+            eq(mcpPreparedProposal.proposalId, input.proposalId),
+            eq(mcpPreparedProposal.status, 'pending_human_approval'),
+          ),
+        )
+        .returning();
+      assertActive();
+      if (!updated) {
+        throw new Error('Nie udało się zapisać wyzwania zatwierdzającego dla propozycji MCP.');
+      }
+      return deepFreeze(updated);
     },
 
     async confirmMcpPreparedProposal(input) {
@@ -2571,6 +2721,274 @@ export async function listTenantCompanyGrantsForAdminFacts(
     return deepFreeze({
       memberships,
       grants: Array.from(grantsByGrantId.values()),
+    });
+  });
+}
+
+export interface ProvisionCompanyInPostgresInput {
+  readonly operationId?: string;
+  readonly requestId?: string;
+  readonly actorUserId: string;
+  readonly tenantId: string;
+  readonly legalEntityId: string;
+  readonly displayName: string;
+  readonly profileCode: string;
+  readonly profileJson?: Readonly<Record<string, unknown>>;
+  readonly nip: string;
+  readonly decisionAt?: Date;
+}
+
+export type ProvisionCompanyDeniedReason =
+  | 'invalid_command'
+  | 'membership_unavailable'
+  | 'active_membership_required'
+  | 'access_management_denied'
+  | 'operation_conflict'
+  | 'duplicate_company_nip';
+
+export type ProvisionCompanyInPostgresResult =
+  | {
+      readonly ok: true;
+      readonly operationId: string;
+      readonly deduplicated: boolean;
+      readonly legalEntityId: string;
+      readonly tenantId: string;
+      readonly grantId: string | null;
+      readonly occurredAt: string;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: ProvisionCompanyDeniedReason;
+    };
+
+/**
+ * Bezpieczne utworzenie firmy (`legal_entity`), początkowego profilu (`entity_profile_version`)
+ * oraz nadanie uprawnień `read`/`write` dla aktywnych właścicieli i administratorów tenanta
+ * przez rolę runtime (`NOSUPERUSER`, `NOBYPASSRLS`) bez użycia `PAP_MIGRATOR_DATABASE_URL` (#58).
+ * Operacja wymaga kontekstu `purpose = 'provision_company'`, aktywnej roli `tenant_owner`/`tenant_admin`
+ * w `pap_admin_allowed(tenant_id)` oraz powiązanego rekordu audytu w `access_management_event`
+ * i `security_decision_event`.
+ */
+export async function provisionCompanyInPostgres(
+  db: Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>,
+  signer: PostgresContextSigner,
+  input: ProvisionCompanyInPostgresInput,
+): Promise<ProvisionCompanyInPostgresResult> {
+  const canonicalTenantId = parseTenantId(input.tenantId);
+  const canonicalActorId = parseUserId(input.actorUserId);
+  const canonicalLegalEntityId = parseLegalEntityId(input.legalEntityId);
+  const operationId = input.operationId ?? randomUUID();
+  const requestId = input.requestId ?? operationId;
+
+  return runManagedTransaction(
+    db,
+    async (tx) => {
+      const decisionTime = input.decisionAt ?? (await readTransactionClockNow(tx));
+      const decisionAtIso = decisionTime.toISOString();
+      await signer.apply(tx, {
+        purpose: 'provision_company',
+        actorUserId: canonicalActorId,
+        targetUserId: canonicalActorId,
+        tenantId: canonicalTenantId,
+        legalEntityId: canonicalLegalEntityId,
+        operationId,
+        decisionAt: decisionAtIso,
+        command: {
+          kind: 'provision_company',
+          operationId,
+          tenantId: canonicalTenantId,
+          userId: canonicalActorId,
+          legalEntityId: canonicalLegalEntityId,
+          displayName: input.displayName,
+          profileCode: input.profileCode,
+          profileJson: input.profileJson ?? {},
+          nip: input.nip,
+        },
+      });
+
+      const [row] = await tx.execute<{
+        result:
+          | {
+              readonly ok: true;
+              readonly receipt: {
+                readonly operationId: string;
+                readonly occurredAt: string;
+                readonly changed: boolean;
+                readonly grantId: string | null;
+                readonly legalEntityId: string;
+              };
+            }
+          | {
+              readonly ok: false;
+              readonly reason: ProvisionCompanyDeniedReason;
+            };
+      }>(sql`SELECT pap_provision_company() AS result`);
+
+      const payload = row?.result;
+      if (!payload) {
+        throw new Error('Brak wyniku z funkcji pap_provision_company().');
+      }
+
+      if (!payload.ok) {
+        return deepFreeze({
+          ok: false as const,
+          reason: payload.reason,
+        });
+      }
+
+      const occurredAtDate = new Date(payload.receipt.occurredAt);
+      const deduplicated = occurredAtDate.getTime() !== decisionTime.getTime();
+
+      if (!deduplicated) {
+        await appendSecurityDecision(
+          tx,
+          {
+            requestId,
+            operationId,
+            accessManagementOperationId: operationId,
+            actorId: canonicalActorId,
+            targetUserId: canonicalActorId,
+            tenantId: canonicalTenantId,
+            legalEntityId: canonicalLegalEntityId,
+            action: 'provision_company',
+            kind: 'access',
+            decision: 'allow',
+            outcome: 'committed',
+            reason: 'authorized_tenant_administration',
+            decidedAt: decisionAtIso,
+          },
+          signer,
+        );
+      }
+
+      return deepFreeze({
+        ok: true as const,
+        operationId: payload.receipt.operationId,
+        deduplicated,
+        legalEntityId: payload.receipt.legalEntityId,
+        tenantId: canonicalTenantId,
+        grantId: payload.receipt.grantId ?? null,
+        occurredAt: payload.receipt.occurredAt,
+      });
+    },
+    (result) => result.ok,
+  );
+}
+
+export interface DiscoveredAccessibleEntityRecord {
+  readonly tenantId: string;
+  readonly legalEntityId: string;
+  readonly displayName: string;
+  readonly createdAt: Date;
+}
+
+export interface ActorAccessibleEntitiesDiscoveryResult {
+  readonly memberships: readonly (typeof tenantMembership.$inferSelect)[];
+  readonly grants: readonly CompanyAccessGrantRecord[];
+  readonly entities: readonly DiscoveredAccessibleEntityRecord[];
+}
+
+/**
+ * Odczytowe odkrywanie wszystkich podmiotów (`legal_entity`), członkostw (`tenant_membership`)
+ * oraz grantów (`company_access_grant`), do których wskazani aktorzy mają aktywny dostęp w PostgreSQL
+ * (w jednej transakcji, bez zahardkodowanych identyfikatorów demo #70/#71).
+ */
+export async function discoverActorAccessibleEntities(
+  db: Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>,
+  signer: PostgresContextSigner,
+  candidateActorUserIds: readonly string[],
+  tenantIdFilter?: string,
+): Promise<ActorAccessibleEntitiesDiscoveryResult> {
+  const actorIds = Array.from(new Set(candidateActorUserIds.map((raw) => parseUserId(raw))));
+  const canonicalTenantFilter =
+    tenantIdFilter === undefined ? undefined : parseTenantId(tenantIdFilter);
+  if (actorIds.length === 0) {
+    return Object.freeze({ memberships: [], grants: [], entities: [] });
+  }
+
+  return db.transaction(async (tx) => {
+    const membershipsByKey = new Map<string, typeof tenantMembership.$inferSelect>();
+    const grantsById = new Map<string, CompanyAccessGrantRecord>();
+    const entitiesByKey = new Map<string, DiscoveredAccessibleEntityRecord>();
+
+    for (const actorUserId of actorIds) {
+      await signer.apply(tx, {
+        purpose: 'actor',
+        actorUserId,
+        ...(canonicalTenantFilter ? { tenantId: canonicalTenantFilter } : {}),
+      });
+      const [row] = await tx.execute<{
+        result: {
+          readonly memberships?: readonly {
+            readonly tenant_id: string;
+            readonly user_id: string;
+            readonly role: 'tenant_owner' | 'tenant_admin' | 'tenant_member';
+            readonly status: 'active' | 'revoked';
+            readonly valid_from: string;
+            readonly valid_until: string | null;
+          }[];
+          readonly grants?: readonly {
+            readonly grant_id: string;
+            readonly tenant_id: string;
+            readonly user_id: string;
+            readonly legal_entity_id: string;
+            readonly action: 'read' | 'write';
+            readonly valid_from: string;
+            readonly valid_until: string | null;
+            readonly revoked_at: string | null;
+          }[];
+          readonly entities?: readonly {
+            readonly id: string;
+            readonly tenant_id: string;
+            readonly display_name: string;
+            readonly created_at: string;
+          }[];
+        };
+      }>(sql`SELECT pap_list_actor_accessible_entities() AS result`);
+
+      const payload = row?.result;
+      if (!payload) {
+        continue;
+      }
+
+      for (const m of payload.memberships ?? []) {
+        membershipsByKey.set(`${m.tenant_id}:${m.user_id}`, {
+          tenantId: m.tenant_id,
+          userId: m.user_id,
+          role: m.role,
+          status: m.status,
+          validFrom: new Date(m.valid_from),
+          validUntil: m.valid_until ? new Date(m.valid_until) : null,
+        });
+      }
+
+      for (const g of payload.grants ?? []) {
+        grantsById.set(g.grant_id, {
+          grantId: g.grant_id,
+          tenantId: g.tenant_id,
+          userId: g.user_id,
+          legalEntityId: g.legal_entity_id,
+          action: g.action,
+          validFrom: new Date(g.valid_from),
+          validUntil: g.valid_until ? new Date(g.valid_until) : null,
+          revokedAt: g.revoked_at ? new Date(g.revoked_at) : null,
+        });
+      }
+
+      for (const e of payload.entities ?? []) {
+        entitiesByKey.set(`${e.tenant_id}:${e.id}`, {
+          tenantId: e.tenant_id,
+          legalEntityId: e.id,
+          displayName: e.display_name,
+          createdAt: new Date(e.created_at),
+        });
+      }
+    }
+
+    return deepFreeze({
+      memberships: Array.from(membershipsByKey.values()),
+      grants: Array.from(grantsById.values()),
+      entities: Array.from(entitiesByKey.values()),
     });
   });
 }

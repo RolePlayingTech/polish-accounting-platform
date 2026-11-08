@@ -1,0 +1,3952 @@
+{
+  "phase": "before",
+  "generatedAt": "2026-11-07T09:38:12.313Z",
+  "apiProbe": {
+    "personasStatus": 200,
+    "personaDefaultPeriods": [
+      {
+        "id": "jan-testowy",
+        "email": "jan.testowy@example.test"
+      },
+      {
+        "id": "marta-ksiegowa",
+        "email": "marta.ksiegowa@example.test"
+      },
+      {
+        "id": "piotr-izolacyjny",
+        "email": "piotr.izolacyjny@example.test"
+      }
+    ],
+    "companiesCount": 3,
+    "firstCompany": {
+      "tenantId": "11111111-1111-4111-8111-111111111100",
+      "legalEntityId": "11111111-1111-4111-8111-111111111101",
+      "displayName": "Pracownia Projektowa Jan Testowy",
+      "nip": "5250001003",
+      "legalForm": "jdg",
+      "taxRegime": "kpir_skala",
+      "vatStatus": "czynny",
+      "zusStage": "duzy_zus",
+      "role": "tenant_owner",
+      "canRead": true,
+      "canWrite": true
+    },
+    "dash2026_10_revenue": {
+      "company": {
+        "tenantId": "11111111-1111-4111-8111-111111111100",
+        "legalEntityId": "11111111-1111-4111-8111-111111111101",
+        "displayName": "Pracownia Projektowa Jan Testowy",
+        "nip": "5250001003",
+        "legalForm": "jdg",
+        "taxRegime": "kpir_skala",
+        "vatStatus": "czynny",
+        "zusStage": "duzy_zus",
+        "role": "tenant_owner",
+        "canRead": true,
+        "canWrite": true
+      },
+      "taxProfile": {
+        "profileCode": "jdg_kpir_skala",
+        "supportLevel": "supported",
+        "nip": "5250001003",
+        "regon": "140001003",
+        "companyName": "Pracownia Projektowa Jan Testowy",
+        "activityStartDate": "2021-03-01",
+        "vatStatus": "czynny",
+        "vatSettlementPeriod": "monthly",
+        "zusScheme": "duzy_zus",
+        "voluntarySicknessInsurance": true,
+        "accidentRateBps": 167,
+        "insuredPersonsCount": 1,
+        "smallTaxpayer": true,
+        "ksefSales2024Above200M": false,
+        "ceidgRegisteredBefore2025": true
+      },
+      "period": "2026-10",
+      "kpis": {
+        "revenueGrosze": 0,
+        "revenueFormatted": "0,00 zł",
+        "expensesKupGrosze": 0,
+        "expensesKupFormatted": "0,00 zł",
+        "incomeOrProfitGrosze": 0,
+        "incomeOrProfitFormatted": "0,00 zł",
+        "unpaidReceivablesGrosze": 2460000,
+        "unpaidReceivablesFormatted": "24 600,00 zł",
+        "unpaidPayablesGrosze": 196800,
+        "unpaidPayablesFormatted": "1 968,00 zł",
+        "overdueInvoicesCount": 3
+      },
+      "taxSummary": {
+        "incomeTaxLabelPl": "Zaliczka PIT-36 (skala 12%/32%)",
+        "incomeTaxGrosze": 0,
+        "incomeTaxFormatted": "0,00 zł",
+        "vatLabelPl": "VAT JPK_V7M(3)",
+        "vatPayableGrosze": 0,
+        "vatCarryForwardGrosze": 0,
+        "vatFormatted": "0,00 zł",
+        "zusTotalGrosze": 235930,
+        "zusTotalFormatted": "2 359,30 zł",
+        "regimeComparison": {
+          "currentRegime": "kpir_skala",
+          "alternativeRegime": "kpir_liniowy",
+          "currentTaxPlusHealthGrosze": 166190,
+          "currentTaxPlusHealthFormatted": "1 661,90 zł",
+          "alternativeTaxPlusHealthGrosze": 390181,
+          "alternativeTaxPlusHealthFormatted": "3 901,81 zł",
+          "differenceGrosze": 223991,
+          "differenceFormatted": "2 239,91 zł",
+          "summaryPl": "Obecna forma (kpir_skala) jest korzystniejsza szacunkowo o 2 239,91 zł w tym okresie."
+        }
+      },
+      "upcomingDeadlines": [
+        {
+          "obligationId": "07b354f1-7e43-4617-a769-a0fd40da3170",
+          "code": "ZUS_DRA_PAYMENT",
+          "title": "Deklaracja ZUS DRA i opłacenie składek przedsiębiorcy (do 20. dnia)",
+          "category": "zus",
+          "period": "2026-10",
+          "statutoryDueDate": "2026-11-20",
+          "effectiveDueDate": "2026-11-20",
+          "shiftedFromNonWorkingDays": [],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "upcoming",
+          "estimatedAmountGrosze": 235930,
+          "estimatedAmountFormatted": "2 359,30 zł",
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "ZUS DRA za 2026-10: termin przypada w dzień roboczy 2026-11-20.",
+            "eventDate": "2026-10-01",
+            "appliedRules": [
+              {
+                "id": "zus-dra-deadline-art-47-2025",
+                "ruleCode": "ZUS_DRA_DEADLINE_ART_47",
+                "version": "2025.1",
+                "title": "Terminy przekazywania deklaracji ZUS DRA i opłacania składek (15. vs 20. dzień miesiąca)",
+                "actTitle": "Ustawa z dnia 13 października 1998 r. o systemie ubezpieczeń społecznych",
+                "journalReference": "Dz.U. z 2025 r. poz. 350",
+                "article": "art. 47 ust. 1 pkt 2 i pkt 3",
+                "sourceUrl": "https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/terminy-oplacania-skladek",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": null
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-10",
+                  "statutoryDueDate": "2026-11-20"
+                },
+                "resultFormatted": "2026-11-20"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": false,
+                  "skippedDaysCount": 0
+                },
+                "resultFormatted": "2026-11-20"
+              }
+            ],
+            "inputs": {
+              "period": "2026-10",
+              "obligationCode": "ZUS_DRA_PAYMENT"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-11-20",
+              "effectiveDueDate": "2026-11-20",
+              "wasShifted": false
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        },
+        {
+          "obligationId": "fed0c634-e370-4316-b749-84a79774a761",
+          "code": "PIT_MONTHLY_ADVANCE",
+          "title": "Wpłata miesięcznej zaliczki PIT (skala podatkowa — PIT-36)",
+          "category": "pit",
+          "period": "2026-10",
+          "statutoryDueDate": "2026-11-20",
+          "effectiveDueDate": "2026-11-20",
+          "shiftedFromNonWorkingDays": [],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "upcoming",
+          "estimatedAmountGrosze": 0,
+          "estimatedAmountFormatted": "0,00 zł",
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "Zaliczka PIT za 2026-10: termin przypada w dzień roboczy 2026-11-20.",
+            "eventDate": "2026-10-01",
+            "appliedRules": [
+              {
+                "id": "pit-advance-deadline-art-44-2025",
+                "ruleCode": "PIT_ADVANCE_DEADLINE_ART_44",
+                "version": "2025.1",
+                "title": "Termin wpłaty zaliczek miesięcznych i kwartalnych na podatek dochodowy PIT",
+                "actTitle": "Ustawa z dnia 26 lipca 1991 r. o podatku dochodowym od osób fizycznych",
+                "journalReference": "Dz.U. z 2025 r. poz. 163",
+                "article": "art. 44 ust. 6",
+                "sourceUrl": "https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000163",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": null
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-10",
+                  "statutoryDueDate": "2026-11-20"
+                },
+                "resultFormatted": "2026-11-20"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": false,
+                  "skippedDaysCount": 0
+                },
+                "resultFormatted": "2026-11-20"
+              }
+            ],
+            "inputs": {
+              "period": "2026-10",
+              "obligationCode": "PIT_MONTHLY_ADVANCE"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-11-20",
+              "effectiveDueDate": "2026-11-20",
+              "wasShifted": false
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        },
+        {
+          "obligationId": "ceca05ef-1e8f-4fc3-ba7b-580dbab86ae0",
+          "code": "VAT_JPK_V7M",
+          "title": "Wysyłka pliku JPK_V7M(3) i zapłata podatku VAT",
+          "category": "vat",
+          "period": "2026-10",
+          "statutoryDueDate": "2026-11-25",
+          "effectiveDueDate": "2026-11-25",
+          "shiftedFromNonWorkingDays": [],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "upcoming",
+          "estimatedAmountGrosze": 0,
+          "estimatedAmountFormatted": "0,00 zł",
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "JPK_V7M(3) za 2026-10: termin przypada w dzień roboczy 2026-11-25.",
+            "eventDate": "2026-10-01",
+            "appliedRules": [
+              {
+                "id": "vat-jpk-v7-schema-v3-2026",
+                "ruleCode": "VAT_JPK_V7_DEADLINE_AND_SCHEMA",
+                "version": "2026.1",
+                "title": "Termin składania i nowa struktura JPK_V7M(3) / JPK_V7K(3) od lutego 2026 r.",
+                "actTitle": "Rozporządzenie Ministra Finansów i Gospodarki z dnia 12 grudnia 2025 r. zmieniające rozporządzenie w sprawie JPK_VAT z deklaracją",
+                "journalReference": "Dz.U. z 2025 r. poz. 1800",
+                "article": "§ 1 oraz art. 99 ust. 11c i art. 109 ust. 3b ustawy o VAT",
+                "sourceUrl": "https://www.podatki.gov.pl/jednolity-plik-kontrolny/jpk-vat-z-deklaracja/",
+                "sourceType": "regulation",
+                "verificationStatus": "verified",
+                "validFrom": "2026-02-01",
+                "validTo": null
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-10",
+                  "statutoryDueDate": "2026-11-25"
+                },
+                "resultFormatted": "2026-11-25"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": false,
+                  "skippedDaysCount": 0
+                },
+                "resultFormatted": "2026-11-25"
+              }
+            ],
+            "inputs": {
+              "period": "2026-10",
+              "obligationCode": "VAT_JPK_V7M"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-11-25",
+              "effectiveDueDate": "2026-11-25",
+              "wasShifted": false
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        },
+        {
+          "obligationId": "0c10d59d-d949-4ede-b4ed-7148131d2897",
+          "code": "KSEF_COMPLIANCE_2026",
+          "title": "Obowiązek wystawiania i odbioru faktur ustrukturyzowanych w KSeF 2.0",
+          "category": "ksef",
+          "period": "2026-10",
+          "statutoryDueDate": "2026-10-01",
+          "effectiveDueDate": "2026-10-01",
+          "shiftedFromNonWorkingDays": [],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "overdue",
+          "estimatedAmountGrosze": null,
+          "estimatedAmountFormatted": null,
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "Status KSeF 2.0 w okresie 2026-10: termin przypada w dzień roboczy 2026-10-01.",
+            "eventDate": "2026-10-01",
+            "appliedRules": [
+              {
+                "id": "ksef-mandatory-schedule-2026",
+                "ruleCode": "KSEF_MANDATORY_SCHEDULE_2026",
+                "version": "2025.2",
+                "title": "Harmonogram obowiązkowego Krajowego Systemu e-Faktur (KSeF 2.0) w 2026 r.",
+                "actTitle": "Ustawa z dnia 5 sierpnia 2025 r. o zmianie ustawy o podatku od towarów i usług oraz ustawy o zmianie ustawy o podatku od towarów i usług oraz niektórych innych ustaw",
+                "journalReference": "Dz.U. z 2025 r. poz. 1203",
+                "article": "art. 106ga ust. 1–2 ustawy o VAT oraz przepisy przejściowe",
+                "sourceUrl": "https://ksef.podatki.gov.pl/ksef-news/zasady-obowiazywania-ksef-i-przepisy-prawne/",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": "2026-12-31"
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-10",
+                  "statutoryDueDate": "2026-10-01"
+                },
+                "resultFormatted": "2026-10-01"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": false,
+                  "skippedDaysCount": 0
+                },
+                "resultFormatted": "2026-10-01"
+              }
+            ],
+            "inputs": {
+              "period": "2026-10",
+              "obligationCode": "KSEF_COMPLIANCE_2026"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-10-01",
+              "effectiveDueDate": "2026-10-01",
+              "wasShifted": false
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        },
+        {
+          "obligationId": "7257d34f-63e8-4e06-af34-79b9da045108",
+          "code": "EDORECZENIA_CEIDG_MANDATORY",
+          "title": "Powszechny obowiązek posiadania aktywnego adresu do e-Doręczeń w CEIDG",
+          "category": "edoreczenia",
+          "period": "2026-10",
+          "statutoryDueDate": "2026-10-01",
+          "effectiveDueDate": "2026-10-01",
+          "shiftedFromNonWorkingDays": [],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "overdue",
+          "estimatedAmountGrosze": null,
+          "estimatedAmountFormatted": null,
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "Wejście w życie powszechnego obowiązku e-Doręczeń dla CEIDG: termin przypada w dzień roboczy 2026-10-01.",
+            "eventDate": "2026-10-01",
+            "appliedRules": [
+              {
+                "id": "edoreczenia-schedule-2025-2026",
+                "ruleCode": "EDORECZENIA_SCHEDULE",
+                "version": "2025.1",
+                "title": "Harmonogram obowiązku posiadania adresu do e-Doręczeń (KRS i CEIDG)",
+                "actTitle": "Ustawa z dnia 18 listopada 2020 r. o doręczeniach elektronicznych (ze zm. z dnia 21 listopada 2024 r.)",
+                "journalReference": "Dz.U. z 2024 r. poz. 1045 oraz Dz.U. z 2024 r. poz. 1841",
+                "article": "art. 9 oraz art. 151–152",
+                "sourceUrl": "https://www.gov.pl/web/e-doreczenia/harmonogram",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": null
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-10",
+                  "statutoryDueDate": "2026-10-01"
+                },
+                "resultFormatted": "2026-10-01"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": false,
+                  "skippedDaysCount": 0
+                },
+                "resultFormatted": "2026-10-01"
+              }
+            ],
+            "inputs": {
+              "period": "2026-10",
+              "obligationCode": "EDORECZENIA_CEIDG_MANDATORY"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-10-01",
+              "effectiveDueDate": "2026-10-01",
+              "wasShifted": false
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        }
+      ],
+      "unpaidInvoices": [
+        {
+          "settlementId": "d736eabe-08d1-4637-bbf0-7844a6bd4a4e",
+          "documentId": "51658301-1723-44bf-b47d-a2a29944045e",
+          "documentNumber": "FV-PALIWO/2026/03/12",
+          "direction": "payable",
+          "counterpartyName": "Flota Paliwa Syntetyczne Sp. z o.o.",
+          "counterpartyNip": "5250005001",
+          "issueDate": "2026-03-12",
+          "dueDate": "2026-03-26",
+          "grossGrosze": 49200,
+          "settledGrosze": 0,
+          "remainingGrosze": 49200,
+          "remainingFormatted": "492,00 zł",
+          "status": "overdue",
+          "daysOverdue": 226,
+          "ksefReferenceNumber": null
+        },
+        {
+          "settlementId": "f0002203-b589-4582-8e28-0f7c542bf9a1",
+          "documentId": "c6a74f0a-fc10-47e8-8b88-c88cac28db34",
+          "documentNumber": "FV-CHMURA/03/2026",
+          "direction": "payable",
+          "counterpartyName": "Chmura Polska Infrastruktur Test S.A.",
+          "counterpartyNip": "5250004007",
+          "issueDate": "2026-03-08",
+          "dueDate": "2026-03-22",
+          "grossGrosze": 147600,
+          "settledGrosze": 0,
+          "remainingGrosze": 147600,
+          "remainingFormatted": "1 476,00 zł",
+          "status": "overdue",
+          "daysOverdue": 230,
+          "ksefReferenceNumber": null
+        },
+        {
+          "settlementId": "e8cacfc5-6d9c-4de9-8e8e-e8bddf5a700a",
+          "documentId": "8adf93a8-609d-48dd-89a0-8db9277edf15",
+          "documentNumber": "FV/2026/03/001",
+          "direction": "receivable",
+          "counterpartyName": "Syntetyczny Software House Sp. z o.o.",
+          "counterpartyNip": "5250002008",
+          "issueDate": "2026-03-05",
+          "dueDate": "2026-03-19",
+          "grossGrosze": 2460000,
+          "settledGrosze": 0,
+          "remainingGrosze": 2460000,
+          "remainingFormatted": "24 600,00 zł",
+          "status": "overdue",
+          "daysOverdue": 233,
+          "ksefReferenceNumber": "5250001003-20260305-AA11BB22-CC33DD44"
+        }
+      ],
+      "pendingApprovals": {
+        "aiDocumentProposalsCount": 1,
+        "mcpProposalsCount": 1,
+        "totalPendingCount": 2
+      },
+      "recentAuditEvents": [
+        {
+          "auditEventId": "99a0d932-17c2-45ab-a1ec-86261fc97812",
+          "occurredAt": "2026-11-07T09:38:12.341Z",
+          "channel": "security",
+          "action": "get_company_overview",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację get_company_overview (read) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "d4cd98e7-8ef6-4dcf-b735-1a2369a8ae74",
+          "occurredAt": "2026-11-07T09:38:08.270Z",
+          "channel": "mcp",
+          "action": "prepare_invoice_draft",
+          "actorDisplayLabel": "Jan Testowy (j***@example.test)",
+          "outcome": "allow",
+          "reasonCode": "proposal_prepared_pending_human_approval",
+          "summaryPl": "Utworzono niezatwierdzoną propozycję MCP 00000000-0000-4000-8000-000000009101 (FV-MCP/2026/03/77) — bez zapisu w księgach."
+        },
+        {
+          "auditEventId": "64f8a79a-0895-4c10-8a58-b5cdbdeff6aa",
+          "occurredAt": "2026-11-07T09:38:08.269Z",
+          "channel": "accounting",
+          "action": "mcp_prepare_invoice_proposal",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację mcp_prepare_invoice_proposal (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "e1c35f46-cbe8-40cd-95ed-5dee4efee7f3",
+          "occurredAt": "2026-11-07T09:38:08.263Z",
+          "channel": "accounting",
+          "action": "create_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację create_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "a46bc38d-e51e-4f3f-8857-fe8b0a9fe755",
+          "occurredAt": "2026-11-07T09:38:08.263Z",
+          "channel": "accounting",
+          "action": "document_approved_and_posted_by_human",
+          "actorDisplayLabel": "Jan Testowy (j***@example.test)",
+          "outcome": "allow",
+          "reasonCode": "human_approved_posting",
+          "summaryPl": "Człowiek zatwierdził i zaksięgował dokument FV-PALIWO/2026/03/12 (492,00 zł)."
+        },
+        {
+          "auditEventId": "23ae8c45-8c6c-4e49-9436-6be0422639b1",
+          "occurredAt": "2026-11-07T09:38:08.262Z",
+          "channel": "accounting",
+          "action": "approve_and_post_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację approve_and_post_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "fa171640-8d3a-411e-a028-a009a44cdbd9",
+          "occurredAt": "2026-11-07T09:38:08.262Z",
+          "channel": "accounting",
+          "action": "create_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację create_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "35652137-7e26-4081-8fae-3003870e34df",
+          "occurredAt": "2026-11-07T09:38:08.262Z",
+          "channel": "accounting",
+          "action": "document_approved_and_posted_by_human",
+          "actorDisplayLabel": "Jan Testowy (j***@example.test)",
+          "outcome": "allow",
+          "reasonCode": "human_approved_posting",
+          "summaryPl": "Człowiek zatwierdził i zaksięgował dokument FV-CHMURA/03/2026 (1 476,00 zł)."
+        },
+        {
+          "auditEventId": "e2929d51-0f98-4578-93c6-68d231951a61",
+          "occurredAt": "2026-11-07T09:38:08.260Z",
+          "channel": "accounting",
+          "action": "approve_and_post_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację approve_and_post_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "67654321-7508-4205-ac81-562e4fc82c2f",
+          "occurredAt": "2026-11-07T09:38:08.259Z",
+          "channel": "accounting",
+          "action": "create_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację create_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        }
+      ]
+    },
+    "dash2026_03_revenue": {
+      "company": {
+        "tenantId": "11111111-1111-4111-8111-111111111100",
+        "legalEntityId": "11111111-1111-4111-8111-111111111101",
+        "displayName": "Pracownia Projektowa Jan Testowy",
+        "nip": "5250001003",
+        "legalForm": "jdg",
+        "taxRegime": "kpir_skala",
+        "vatStatus": "czynny",
+        "zusStage": "duzy_zus",
+        "role": "tenant_owner",
+        "canRead": true,
+        "canWrite": true
+      },
+      "taxProfile": {
+        "profileCode": "jdg_kpir_skala",
+        "supportLevel": "supported",
+        "nip": "5250001003",
+        "regon": "140001003",
+        "companyName": "Pracownia Projektowa Jan Testowy",
+        "activityStartDate": "2021-03-01",
+        "vatStatus": "czynny",
+        "vatSettlementPeriod": "monthly",
+        "zusScheme": "duzy_zus",
+        "voluntarySicknessInsurance": true,
+        "accidentRateBps": 167,
+        "insuredPersonsCount": 1,
+        "smallTaxpayer": true,
+        "ksefSales2024Above200M": false,
+        "ceidgRegisteredBefore2025": true
+      },
+      "period": "2026-03",
+      "kpis": {
+        "revenueGrosze": 2000000,
+        "revenueFormatted": "20 000,00 zł",
+        "expensesKupGrosze": 153450,
+        "expensesKupFormatted": "1 534,50 zł",
+        "incomeOrProfitGrosze": 1846550,
+        "incomeOrProfitFormatted": "18 465,50 zł",
+        "unpaidReceivablesGrosze": 2460000,
+        "unpaidReceivablesFormatted": "24 600,00 zł",
+        "unpaidPayablesGrosze": 196800,
+        "unpaidPayablesFormatted": "1 968,00 zł",
+        "overdueInvoicesCount": 3
+      },
+      "taxSummary": {
+        "incomeTaxLabelPl": "Zaliczka PIT-36 (skala 12%/32%)",
+        "incomeTaxGrosze": 0,
+        "incomeTaxFormatted": "0,00 zł",
+        "vatLabelPl": "VAT JPK_V7M(3)",
+        "vatPayableGrosze": 427800,
+        "vatCarryForwardGrosze": 0,
+        "vatFormatted": "4 278,00 zł",
+        "zusTotalGrosze": 358866,
+        "zusTotalFormatted": "3 588,66 zł",
+        "regimeComparison": {
+          "currentRegime": "kpir_skala",
+          "alternativeRegime": "kpir_liniowy",
+          "currentTaxPlusHealthGrosze": 166190,
+          "currentTaxPlusHealthFormatted": "1 661,90 zł",
+          "alternativeTaxPlusHealthGrosze": 390181,
+          "alternativeTaxPlusHealthFormatted": "3 901,81 zł",
+          "differenceGrosze": 223991,
+          "differenceFormatted": "2 239,91 zł",
+          "summaryPl": "Obecna forma (kpir_skala) jest korzystniejsza szacunkowo o 2 239,91 zł w tym okresie."
+        }
+      },
+      "upcomingDeadlines": [
+        {
+          "obligationId": "bbf96c16-42d0-46e2-94e8-5951a9d603cc",
+          "code": "ZUS_DRA_PAYMENT",
+          "title": "Deklaracja ZUS DRA i opłacenie składek przedsiębiorcy (do 20. dnia)",
+          "category": "zus",
+          "period": "2026-03",
+          "statutoryDueDate": "2026-04-20",
+          "effectiveDueDate": "2026-04-20",
+          "shiftedFromNonWorkingDays": [],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "overdue",
+          "estimatedAmountGrosze": 358866,
+          "estimatedAmountFormatted": "3 588,66 zł",
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "ZUS DRA za 2026-03: termin przypada w dzień roboczy 2026-04-20.",
+            "eventDate": "2026-03-01",
+            "appliedRules": [
+              {
+                "id": "zus-dra-deadline-art-47-2025",
+                "ruleCode": "ZUS_DRA_DEADLINE_ART_47",
+                "version": "2025.1",
+                "title": "Terminy przekazywania deklaracji ZUS DRA i opłacania składek (15. vs 20. dzień miesiąca)",
+                "actTitle": "Ustawa z dnia 13 października 1998 r. o systemie ubezpieczeń społecznych",
+                "journalReference": "Dz.U. z 2025 r. poz. 350",
+                "article": "art. 47 ust. 1 pkt 2 i pkt 3",
+                "sourceUrl": "https://www.zus.pl/baza-wiedzy/skladki-wskazniki-odsetki/terminy-oplacania-skladek",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": null
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-03",
+                  "statutoryDueDate": "2026-04-20"
+                },
+                "resultFormatted": "2026-04-20"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": false,
+                  "skippedDaysCount": 0
+                },
+                "resultFormatted": "2026-04-20"
+              }
+            ],
+            "inputs": {
+              "period": "2026-03",
+              "obligationCode": "ZUS_DRA_PAYMENT"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-04-20",
+              "effectiveDueDate": "2026-04-20",
+              "wasShifted": false
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        },
+        {
+          "obligationId": "0a276946-381b-4d1e-ad5c-6f07972fa4bb",
+          "code": "PIT_MONTHLY_ADVANCE",
+          "title": "Wpłata miesięcznej zaliczki PIT (skala podatkowa — PIT-36)",
+          "category": "pit",
+          "period": "2026-03",
+          "statutoryDueDate": "2026-04-20",
+          "effectiveDueDate": "2026-04-20",
+          "shiftedFromNonWorkingDays": [],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "overdue",
+          "estimatedAmountGrosze": 0,
+          "estimatedAmountFormatted": "0,00 zł",
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "Zaliczka PIT za 2026-03: termin przypada w dzień roboczy 2026-04-20.",
+            "eventDate": "2026-03-01",
+            "appliedRules": [
+              {
+                "id": "pit-advance-deadline-art-44-2025",
+                "ruleCode": "PIT_ADVANCE_DEADLINE_ART_44",
+                "version": "2025.1",
+                "title": "Termin wpłaty zaliczek miesięcznych i kwartalnych na podatek dochodowy PIT",
+                "actTitle": "Ustawa z dnia 26 lipca 1991 r. o podatku dochodowym od osób fizycznych",
+                "journalReference": "Dz.U. z 2025 r. poz. 163",
+                "article": "art. 44 ust. 6",
+                "sourceUrl": "https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000163",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": null
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-03",
+                  "statutoryDueDate": "2026-04-20"
+                },
+                "resultFormatted": "2026-04-20"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": false,
+                  "skippedDaysCount": 0
+                },
+                "resultFormatted": "2026-04-20"
+              }
+            ],
+            "inputs": {
+              "period": "2026-03",
+              "obligationCode": "PIT_MONTHLY_ADVANCE"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-04-20",
+              "effectiveDueDate": "2026-04-20",
+              "wasShifted": false
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        },
+        {
+          "obligationId": "cbcd4e18-5555-4208-85fe-a1692ac2f41c",
+          "code": "VAT_JPK_V7M",
+          "title": "Wysyłka pliku JPK_V7M(3) i zapłata podatku VAT",
+          "category": "vat",
+          "period": "2026-03",
+          "statutoryDueDate": "2026-04-25",
+          "effectiveDueDate": "2026-04-27",
+          "shiftedFromNonWorkingDays": [
+            {
+              "date": "2026-04-25",
+              "reason": "Sobota"
+            },
+            {
+              "date": "2026-04-26",
+              "reason": "Niedziela"
+            }
+          ],
+          "applicabilityStatus": "applicable",
+          "workflowStatus": "overdue",
+          "estimatedAmountGrosze": 427800,
+          "estimatedAmountFormatted": "4 278,00 zł",
+          "paidAt": null,
+          "explanation": {
+            "calculationType": "tax_calendar_deadline",
+            "summary": "JPK_V7M(3) za 2026-03: termin ustawowy 2026-04-25 przesunięty na 2026-04-27 (art. 12 § 5 OP).",
+            "eventDate": "2026-03-01",
+            "appliedRules": [
+              {
+                "id": "vat-jpk-v7-schema-v3-2026",
+                "ruleCode": "VAT_JPK_V7_DEADLINE_AND_SCHEMA",
+                "version": "2026.1",
+                "title": "Termin składania i nowa struktura JPK_V7M(3) / JPK_V7K(3) od lutego 2026 r.",
+                "actTitle": "Rozporządzenie Ministra Finansów i Gospodarki z dnia 12 grudnia 2025 r. zmieniające rozporządzenie w sprawie JPK_VAT z deklaracją",
+                "journalReference": "Dz.U. z 2025 r. poz. 1800",
+                "article": "§ 1 oraz art. 99 ust. 11c i art. 109 ust. 3b ustawy o VAT",
+                "sourceUrl": "https://www.podatki.gov.pl/jednolity-plik-kontrolny/jpk-vat-z-deklaracja/",
+                "sourceType": "regulation",
+                "verificationStatus": "verified",
+                "validFrom": "2026-02-01",
+                "validTo": null
+              },
+              {
+                "id": "ordynacja-art-12-deadline-shift-2025",
+                "ruleCode": "ORDYNACJA_ART_12_DEADLINE_SHIFT",
+                "version": "2025.1",
+                "title": "Przesunięcie terminu przypadającego na sobotę lub dzień ustawowo wolny od pracy",
+                "actTitle": "Ustawa z dnia 29 sierpnia 1997 r. — Ordynacja podatkowa",
+                "journalReference": "Dz.U. z 2025 r. poz. 111",
+                "article": "art. 12 § 5",
+                "sourceUrl": "https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20250000111",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": null
+              },
+              {
+                "id": "statutory-holidays-pl-2025",
+                "ruleCode": "STATUTORY_HOLIDAYS_POLAND",
+                "version": "2025.2",
+                "title": "Katalog dni ustawowo wolnych od pracy w Polsce (w tym Wigilia 24 grudnia od 2025 r.)",
+                "actTitle": "Ustawa z dnia 18 stycznia 1951 r. o dniach wolnych od pracy (ze zm. z dnia 6 grudnia 2024 r.)",
+                "journalReference": "Dz.U. z 2024 r. poz. 1965",
+                "article": "art. 1 pkt 1",
+                "sourceUrl": "https://isap.sejm.gov.pl/isap.nsf/DocDetails.xsp?id=WDU20240001965",
+                "sourceType": "statute",
+                "verificationStatus": "verified",
+                "validFrom": "2025-01-01",
+                "validTo": null
+              }
+            ],
+            "steps": [
+              {
+                "stepNumber": 1,
+                "label": "Wyznaczenie ustawowego dnia terminu dla okresu sprawozdawczego",
+                "formula": "statutoryDueDate wg przepisu materialnego",
+                "inputs": {
+                  "period": "2026-03",
+                  "statutoryDueDate": "2026-04-25"
+                },
+                "resultFormatted": "2026-04-25"
+              },
+              {
+                "stepNumber": 2,
+                "label": "Kontrola sobót, niedziel i świąt ustawowych wg art. 12 § 5 Ordynacji podatkowej",
+                "formula": "effectiveDueDate = pierwszy dzień roboczy >= statutoryDueDate",
+                "inputs": {
+                  "wasShifted": true,
+                  "skippedDaysCount": 2
+                },
+                "resultFormatted": "2026-04-27"
+              }
+            ],
+            "inputs": {
+              "period": "2026-03",
+              "obligationCode": "VAT_JPK_V7M"
+            },
+            "outputs": {
+              "statutoryDueDate": "2026-04-25",
+              "effectiveDueDate": "2026-04-27",
+              "wasShifted": true
+            },
+            "warnings": [],
+            "requiresHumanApproval": false
+          }
+        }
+      ],
+      "unpaidInvoices": [
+        {
+          "settlementId": "d736eabe-08d1-4637-bbf0-7844a6bd4a4e",
+          "documentId": "51658301-1723-44bf-b47d-a2a29944045e",
+          "documentNumber": "FV-PALIWO/2026/03/12",
+          "direction": "payable",
+          "counterpartyName": "Flota Paliwa Syntetyczne Sp. z o.o.",
+          "counterpartyNip": "5250005001",
+          "issueDate": "2026-03-12",
+          "dueDate": "2026-03-26",
+          "grossGrosze": 49200,
+          "settledGrosze": 0,
+          "remainingGrosze": 49200,
+          "remainingFormatted": "492,00 zł",
+          "status": "overdue",
+          "daysOverdue": 226,
+          "ksefReferenceNumber": null
+        },
+        {
+          "settlementId": "f0002203-b589-4582-8e28-0f7c542bf9a1",
+          "documentId": "c6a74f0a-fc10-47e8-8b88-c88cac28db34",
+          "documentNumber": "FV-CHMURA/03/2026",
+          "direction": "payable",
+          "counterpartyName": "Chmura Polska Infrastruktur Test S.A.",
+          "counterpartyNip": "5250004007",
+          "issueDate": "2026-03-08",
+          "dueDate": "2026-03-22",
+          "grossGrosze": 147600,
+          "settledGrosze": 0,
+          "remainingGrosze": 147600,
+          "remainingFormatted": "1 476,00 zł",
+          "status": "overdue",
+          "daysOverdue": 230,
+          "ksefReferenceNumber": null
+        },
+        {
+          "settlementId": "e8cacfc5-6d9c-4de9-8e8e-e8bddf5a700a",
+          "documentId": "8adf93a8-609d-48dd-89a0-8db9277edf15",
+          "documentNumber": "FV/2026/03/001",
+          "direction": "receivable",
+          "counterpartyName": "Syntetyczny Software House Sp. z o.o.",
+          "counterpartyNip": "5250002008",
+          "issueDate": "2026-03-05",
+          "dueDate": "2026-03-19",
+          "grossGrosze": 2460000,
+          "settledGrosze": 0,
+          "remainingGrosze": 2460000,
+          "remainingFormatted": "24 600,00 zł",
+          "status": "overdue",
+          "daysOverdue": 233,
+          "ksefReferenceNumber": "5250001003-20260305-AA11BB22-CC33DD44"
+        }
+      ],
+      "pendingApprovals": {
+        "aiDocumentProposalsCount": 1,
+        "mcpProposalsCount": 1,
+        "totalPendingCount": 2
+      },
+      "recentAuditEvents": [
+        {
+          "auditEventId": "d641c2a6-bd3d-4b2c-a718-037dc1708559",
+          "occurredAt": "2026-11-07T09:38:12.359Z",
+          "channel": "security",
+          "action": "get_company_overview",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację get_company_overview (read) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "99a0d932-17c2-45ab-a1ec-86261fc97812",
+          "occurredAt": "2026-11-07T09:38:12.341Z",
+          "channel": "security",
+          "action": "get_company_overview",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację get_company_overview (read) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "d4cd98e7-8ef6-4dcf-b735-1a2369a8ae74",
+          "occurredAt": "2026-11-07T09:38:08.270Z",
+          "channel": "mcp",
+          "action": "prepare_invoice_draft",
+          "actorDisplayLabel": "Jan Testowy (j***@example.test)",
+          "outcome": "allow",
+          "reasonCode": "proposal_prepared_pending_human_approval",
+          "summaryPl": "Utworzono niezatwierdzoną propozycję MCP 00000000-0000-4000-8000-000000009101 (FV-MCP/2026/03/77) — bez zapisu w księgach."
+        },
+        {
+          "auditEventId": "64f8a79a-0895-4c10-8a58-b5cdbdeff6aa",
+          "occurredAt": "2026-11-07T09:38:08.269Z",
+          "channel": "accounting",
+          "action": "mcp_prepare_invoice_proposal",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację mcp_prepare_invoice_proposal (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "e1c35f46-cbe8-40cd-95ed-5dee4efee7f3",
+          "occurredAt": "2026-11-07T09:38:08.263Z",
+          "channel": "accounting",
+          "action": "create_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację create_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "a46bc38d-e51e-4f3f-8857-fe8b0a9fe755",
+          "occurredAt": "2026-11-07T09:38:08.263Z",
+          "channel": "accounting",
+          "action": "document_approved_and_posted_by_human",
+          "actorDisplayLabel": "Jan Testowy (j***@example.test)",
+          "outcome": "allow",
+          "reasonCode": "human_approved_posting",
+          "summaryPl": "Człowiek zatwierdził i zaksięgował dokument FV-PALIWO/2026/03/12 (492,00 zł)."
+        },
+        {
+          "auditEventId": "23ae8c45-8c6c-4e49-9436-6be0422639b1",
+          "occurredAt": "2026-11-07T09:38:08.262Z",
+          "channel": "accounting",
+          "action": "approve_and_post_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację approve_and_post_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "fa171640-8d3a-411e-a028-a009a44cdbd9",
+          "occurredAt": "2026-11-07T09:38:08.262Z",
+          "channel": "accounting",
+          "action": "create_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację create_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        },
+        {
+          "auditEventId": "35652137-7e26-4081-8fae-3003870e34df",
+          "occurredAt": "2026-11-07T09:38:08.262Z",
+          "channel": "accounting",
+          "action": "document_approved_and_posted_by_human",
+          "actorDisplayLabel": "Jan Testowy (j***@example.test)",
+          "outcome": "allow",
+          "reasonCode": "human_approved_posting",
+          "summaryPl": "Człowiek zatwierdził i zaksięgował dokument FV-CHMURA/03/2026 (1 476,00 zł)."
+        },
+        {
+          "auditEventId": "e2929d51-0f98-4578-93c6-68d231951a61",
+          "occurredAt": "2026-11-07T09:38:08.260Z",
+          "channel": "accounting",
+          "action": "approve_and_post_document",
+          "actorDisplayLabel": "Jan Testowy",
+          "outcome": "allow",
+          "reasonCode": "explicit_company_grant",
+          "summaryPl": "Autoryzowano operację approve_and_post_document (write) na firmie Pracownia Projektowa Jan Testowy."
+        }
+      ]
+    },
+    "grantsShapeKeys": [
+      "tenantId",
+      "legalEntityId",
+      "members",
+      "grants"
+    ],
+    "grantsMembersCount": 2,
+    "mcpProposalsCount": 1
+  },
+  "publicChecks": [
+    {
+      "route": "/",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [],
+      "undersizedCount": 0,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [],
+      "undersizedCount": 0,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [],
+      "undersizedCount": 0,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [],
+      "undersizedCount": 0,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/login",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "a",
+          "text": "← Polish Accounting Platform („Księga Współczesna”",
+          "width": 341.7,
+          "height": 20
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/login",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "a",
+          "text": "← Polish Accounting Platform („Księga Współczesna”",
+          "width": 341.7,
+          "height": 20
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/login",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "a",
+          "text": "← Polish Accounting Platform („Księga Współczesna”",
+          "width": 341.7,
+          "height": 20
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/login",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "a",
+          "text": "← Polish Accounting Platform („Księga Współczesna”",
+          "width": 341.7,
+          "height": 20
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/academy",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: po-co-prowadzi-sie-ksiegowosc-pr",
+          "width": 440.5,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: koszty-uzyskania-przychodu-kup-v",
+          "width": 339.3,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: opodatkowanie-spolek-cit-klasycz",
+          "width": 365.8,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: mechanizm-zaliczek-pit-i-cit-w-t",
+          "width": 348.3,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: kalendarz-podatkowy-i-zasada-prz",
+          "width": 408.5,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: ksef-2-0-harmonogram-2026-fa3-of",
+          "width": 415.5,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: zwolnienie-z-vat-limit-240000-me",
+          "width": 403.5,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: uzgadnianie-wyciagow-bankowych-c",
+          "width": 485,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: zasady-prowadzenia-pkpir-i-uklad",
+          "width": 343.3,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: plan-kont-zespoly-0-8-i-zasada-p",
+          "width": 394.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: dekretacja-faktur-i-wyciagu-bank",
+          "width": 395.1,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: skladka-zdrowotna-na-skali-linio",
+          "width": 375.3,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: terminy-zus-dra-roczne-rozliczen",
+          "width": 419,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: ulga-na-zle-dlugi-90-dni-vat-pit",
+          "width": 303.3,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "Powiązana lekcja: biala-lista-podatnikow-vat-sankc",
+          "width": 423.1,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 20,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/academy",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [],
+      "undersizedCount": 0,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/academy",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [],
+      "undersizedCount": 0,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/academy",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [],
+      "undersizedCount": 0,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    }
+  ],
+  "authenticatedChecks": [
+    {
+      "route": "/app",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/companies",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 14.3,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 6.5,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 7,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 6.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 6.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/companies",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 10,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.8,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/companies",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.7,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.6,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 15.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 13.6,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/companies",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.1,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.7,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 14.6,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 12.9,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/documents",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "FV/2026/10/001",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/042",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/051",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 5,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/documents",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "FV/2026/10/001",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/042",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/051",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 5,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/documents",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "FV/2026/10/001",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/042",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/051",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 10,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 5,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/documents",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "FV/2026/10/001",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/042",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "a",
+          "text": "FZ/2026/10/051",
+          "width": 92.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.4,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 5,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/documents/doc-kpir-sales-001",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "← Powrót do listy dokumentów",
+          "width": 170.7,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "KAS-WL-"
+      ]
+    },
+    {
+      "route": "/app/documents/doc-kpir-sales-001",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "← Powrót do listy dokumentów",
+          "width": 170.7,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/documents/doc-kpir-sales-001",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "← Powrót do listy dokumentów",
+          "width": 170.7,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/documents/doc-kpir-sales-001",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "← Powrót do listy dokumentów",
+          "width": 170.7,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/kpir",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/kpir",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 823,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/kpir",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/kpir",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/ryczalt",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/ryczalt",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/ryczalt",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 414,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/ryczalt",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 414,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/vat",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/vat",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/vat",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/vat",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "GTU_12"
+      ]
+    },
+    {
+      "route": "/app/ledger",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/ledger",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/ledger",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/ledger",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/finance",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "IBAN w Wykazie KAS"
+      ]
+    },
+    {
+      "route": "/app/finance",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 15.7,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "IBAN w Wykazie KAS"
+      ]
+    },
+    {
+      "route": "/app/finance",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 14.9,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "IBAN w Wykazie KAS"
+      ]
+    },
+    {
+      "route": "/app/finance",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 14.1,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": [
+        "IBAN w Wykazie KAS"
+      ]
+    },
+    {
+      "route": "/app/calendar",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/calendar",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/calendar",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 456,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłaconeUkryj podstawę",
+          "left": 37,
+          "right": 456,
+          "width": 419
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłaconeUkryj podstawę",
+          "left": 37,
+          "right": 456,
+          "width": 419
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "Ukryj podstawę",
+          "left": 345,
+          "right": 456,
+          "width": 111
+        },
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "§ Dlaczego?",
+          "left": 345,
+          "right": 436,
+          "width": 90
+        },
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "§ Dlaczego?",
+          "left": 345,
+          "right": 436,
+          "width": 90
+        },
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "§ Dlaczego?",
+          "left": 345,
+          "right": 436,
+          "width": 90
+        }
+      ],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/calendar",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 456,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłaconeUkryj podstawę",
+          "left": 37,
+          "right": 456,
+          "width": 419
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłaconeUkryj podstawę",
+          "left": 37,
+          "right": 456,
+          "width": 419
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "Ukryj podstawę",
+          "left": 345,
+          "right": 456,
+          "width": 111
+        },
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "§ Dlaczego?",
+          "left": 345,
+          "right": 436,
+          "width": 90
+        },
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "§ Dlaczego?",
+          "left": 345,
+          "right": 436,
+          "width": 90
+        },
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "div",
+          "className": "flex flex-wrap items-center gap-2",
+          "text": "Oczekuje na realizacjęOznacz jako opłacone§ Dlaczego?",
+          "left": 37,
+          "right": 436,
+          "width": 399
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "§ Dlaczego?",
+          "left": 345,
+          "right": 436,
+          "width": 90
+        }
+      ],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/rules",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/rules",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/rules",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 391,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/rules",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 391,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/notifications",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 13.1,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 6,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/notifications",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 6,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/notifications",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 6,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/notifications",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 382,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 6,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/mcp",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/mcp",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/mcp",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 424,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "?+ Symuluj wywołanie prepare_invoice_and_posting_proposal",
+          "left": 37,
+          "right": 424,
+          "width": 387
+        },
+        {
+          "tag": "div",
+          "className": "flex items-center gap-2",
+          "text": "?+ Symuluj wywołanie prepare_invoice_and_posting_proposal",
+          "left": 37,
+          "right": 424,
+          "width": 387
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "+ Symuluj wywołanie prepare_invoice_and_posting_proposal",
+          "left": 69,
+          "right": 424,
+          "width": 355
+        }
+      ],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/mcp",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 424,
+      "hasHorizontalOverflow": true,
+      "overflowingElements": [
+        {
+          "tag": "div",
+          "className": "flex shrink-0 items-center gap-2",
+          "text": "?+ Symuluj wywołanie prepare_invoice_and_posting_proposal",
+          "left": 37,
+          "right": 424,
+          "width": 387
+        },
+        {
+          "tag": "div",
+          "className": "flex items-center gap-2",
+          "text": "?+ Symuluj wywołanie prepare_invoice_and_posting_proposal",
+          "left": 37,
+          "right": 424,
+          "width": 387
+        },
+        {
+          "tag": "button",
+          "className": "inline-flex max-w-full items-center justify-center gap-2 rounded-md font-medium transition-colors mo",
+          "text": "+ Symuluj wywołanie prepare_invoice_and_posting_proposal",
+          "left": 69,
+          "right": 424,
+          "width": 355
+        }
+      ],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/settings",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 14.3,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 6.5,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 7,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 6.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 6.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/settings",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 10,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.8,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 16,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/settings",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.7,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.6,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 9.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 15.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 13.6,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/settings",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.1,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.7,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 14.6,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 12.9,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 8,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/platform",
+      "viewportWidth": 1440,
+      "innerWidth": 1440,
+      "scrollWidth": 1440,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/platform",
+      "viewportWidth": 768,
+      "innerWidth": 768,
+      "scrollWidth": 768,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/platform",
+      "viewportWidth": 390,
+      "innerWidth": 390,
+      "scrollWidth": 390,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/platform",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    }
+  ],
+  "modalChecks": [
+    {
+      "route": "/app (mobile-drawer)",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        }
+      ],
+      "undersizedCount": 1,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/documents/doc-kpir-sales-001 (confirm-dialog)",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "a",
+          "text": "← Powrót do listy dokumentów",
+          "width": 170.7,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 2,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    },
+    {
+      "route": "/app/companies (field-help)",
+      "viewportWidth": 375,
+      "innerWidth": 375,
+      "scrollWidth": 375,
+      "hasHorizontalOverflow": false,
+      "overflowingElements": [],
+      "undersizedTargets": [
+        {
+          "tag": "select",
+          "text": "Okres rozliczeniowy (RRRR-MM)",
+          "width": 65,
+          "height": 18
+        },
+        {
+          "tag": "button",
+          "text": "Zamknij pomoc kontekstową",
+          "width": 57.9,
+          "height": 20.7
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.4,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.2,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.9,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.1,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 8.7,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 14.6,
+          "height": 16
+        },
+        {
+          "tag": "input",
+          "text": "",
+          "width": 12.9,
+          "height": 16
+        }
+      ],
+      "undersizedCount": 9,
+      "unlabelledControls": [],
+      "brokenImages": [],
+      "misleadingClaims": []
+    }
+  ],
+  "academyChecks": {
+    "totalLessons": 37,
+    "failures": [
+      {
+        "href": "/academy/podstawy-ksiegowosci-dla-przedsiebiorcy/po-co-prowadzi-sie-ksiegowosc-przychod-dochod-przeplyw",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podstawy-ksiegowosci-dla-przedsiebiorcy/koszty-uzyskania-przychodu-kup-vs-nkup",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podstawy-ksiegowosci-dla-przedsiebiorcy/dowod-ksiegowy-i-odpowiedzialnosc-przedsiebiorcy",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/formy-prowadzenia-dzialalnosci-i-rodzaje-ewidencji/jdg-spolka-cywilna-spolka-z-oo-porownanie",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/formy-prowadzenia-dzialalnosci-i-rodzaje-ewidencji/wybor-formy-opodatkowania-jdg-skala-liniowy-ryczalt",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/formy-prowadzenia-dzialalnosci-i-rodzaje-ewidencji/opodatkowanie-spolek-cit-klasyczny-i-estonski",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podatki-w-praktyce-pit-cit-i-vat/mechanizm-zaliczek-pit-i-cit-w-trakcie-roku",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podatki-w-praktyce-pit-cit-i-vat/podatek-vat-nalezny-naliczony-i-stawki",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podatki-w-praktyce-pit-cit-i-vat/zwolnienie-z-vat-limit-240000-metoda-kasowa-i-mpp",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/faktury-korekty-archiwizacja-i-ksef-2-0/elementy-obowiazkowe-faktury-i-faktury-zaliczkowe",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/faktury-korekty-archiwizacja-i-ksef-2-0/faktury-korygujace-in-minus-in-plus-noty-duplikaty",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/faktury-korekty-archiwizacja-i-ksef-2-0/ksef-2-0-harmonogram-2026-fa3-offline24-archiwizacja",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podatkowa-ksiega-przychodow-i-rozchodow-kpir/zasady-prowadzenia-pkpir-i-uklad-kolumn",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podatkowa-ksiega-przychodow-i-rozchodow-kpir/ksiegowanie-sprzedazy-towarow-wydatkow-i-samochodu-w-kpir",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/podatkowa-ksiega-przychodow-i-rozchodow-kpir/remanent-poczatkowy-koncowy-i-typowe-bledy-w-kpir",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/ryczalt-od-przychodow-ewidencjonowanych/zasady-ewidencji-przychodow-i-stawki-ryczaltu",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/ryczalt-od-przychodow-ewidencjonowanych/wylaczenia-z-ryczaltu-i-odliczenie-skladki-zdrowotnej",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/ryczalt-od-przychodow-ewidencjonowanych/kiedy-ryczalt-sie-oplaca-a-kiedy-szkodzi",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/pelna-ksiegowosc-ksiegi-rachunkowe-wg-uor/plan-kont-zespoly-0-8-i-zasada-podwojnego-zapisu",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/pelna-ksiegowosc-ksiegi-rachunkowe-wg-uor/dekretacja-faktur-i-wyciagu-bankowego-w-ksiegach",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/pelna-ksiegowosc-ksiegi-rachunkowe-wg-uor/bilans-oraz-rachunek-zyskow-i-strat-jak-czytac",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/zus-i-skladka-zdrowotna-przedsiebiorcy/ulga-na-start-preferencyjny-zus-maly-zus-plus-duzy-zus",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/zus-i-skladka-zdrowotna-przedsiebiorcy/skladka-zdrowotna-na-skali-liniowym-i-ryczalcie",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/zus-i-skladka-zdrowotna-przedsiebiorcy/terminy-zus-dra-roczne-rozliczenie-i-wakacje-skladkowe",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/kalendarz-podatkowy-jpk-biala-lista-i-e-doreczenia/kalendarz-podatkowy-i-zasada-przesuwania-terminow",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/kalendarz-podatkowy-jpk-biala-lista-i-e-doreczenia/jpk-v7m-v7k-oznaczenia-ksef-oraz-nowe-jpk-dochodowe",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/kalendarz-podatkowy-jpk-biala-lista-i-e-doreczenia/biala-lista-podatnikow-vat-sankcje-zaw-nr-i-e-doreczenia",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/rozrachunki-zatory-platnicze-bank-i-plynnosc/naleznosci-zobowiazania-wiek-rozrachunkow-i-monity",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/rozrachunki-zatory-platnicze-bank-i-plynnosc/ulga-na-zle-dlugi-90-dni-vat-pit-cit",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/rozrachunki-zatory-platnicze-bank-i-plynnosc/uzgadnianie-wyciagow-bankowych-csv-mt940-i-rezerwa-podatkowa",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/automatyzacja-ai-ocr-i-bezpieczny-mcp/ocr-i-ai-jako-propozycja-czlowiek-zatwierdza",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/automatyzacja-ai-ocr-i-bezpieczny-mcp/zdalny-serwer-mcp-streamable-http-oidc-prepare-confirm",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/automatyzacja-ai-ocr-i-bezpieczny-mcp/obrona-przed-prompt-injection-i-ochrona-tajemnicy-skarbowej",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/praktyczny-samouczek-krok-po-kroku-w-aplikacji/konfiguracja-profilu-podatkowego-firmy-demo-na-2026-rok",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/praktyczny-samouczek-krok-po-kroku-w-aplikacji/obieg-faktury-sprzedazy-i-kosztowej-w-widoku-dzielonym",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/praktyczny-samouczek-krok-po-kroku-w-aplikacji/ksiegowanie-kpir-vat-jpk-v7m-i-szuflada-dlaczego",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      },
+      {
+        "href": "/academy/praktyczny-samouczek-krok-po-kroku-w-aplikacji/kalendarz-podatkowy-powiadomienia-email-i-praca-przez-mcp",
+        "status": 200,
+        "imgCount": 1,
+        "broken": [],
+        "hasFallbackText": false,
+        "hasDisclaimer": false
+      }
+    ],
+    "sampleLessonCheck": [
+      {
+        "route": "/academy/podstawy-ksiegowosci-dla-przedsiebiorcy/po-co-prowadzi-sie-ksiegowosc-przychod-dochod-przeplyw",
+        "viewportWidth": 1440,
+        "innerWidth": 1440,
+        "scrollWidth": 1440,
+        "hasHorizontalOverflow": false,
+        "overflowingElements": [],
+        "undersizedTargets": [
+          {
+            "tag": "a",
+            "text": "← Powrót do katalogu Akademii",
+            "width": 175.5,
+            "height": 16
+          },
+          {
+            "tag": "a",
+            "text": "Następna: Koszty uzyskania przychodu (KUP) a wydat",
+            "width": 473.3,
+            "height": 16
+          }
+        ],
+        "undersizedCount": 2,
+        "unlabelledControls": [],
+        "brokenImages": [],
+        "misleadingClaims": []
+      },
+      {
+        "route": "/academy/podstawy-ksiegowosci-dla-przedsiebiorcy/po-co-prowadzi-sie-ksiegowosc-przychod-dochod-przeplyw",
+        "viewportWidth": 768,
+        "innerWidth": 768,
+        "scrollWidth": 768,
+        "hasHorizontalOverflow": false,
+        "overflowingElements": [],
+        "undersizedTargets": [
+          {
+            "tag": "a",
+            "text": "← Powrót do katalogu Akademii",
+            "width": 175.5,
+            "height": 16
+          },
+          {
+            "tag": "a",
+            "text": "Następna: Koszty uzyskania przychodu (KUP) a wydat",
+            "width": 473.3,
+            "height": 16
+          }
+        ],
+        "undersizedCount": 2,
+        "unlabelledControls": [],
+        "brokenImages": [],
+        "misleadingClaims": []
+      },
+      {
+        "route": "/academy/podstawy-ksiegowosci-dla-przedsiebiorcy/po-co-prowadzi-sie-ksiegowosc-przychod-dochod-przeplyw",
+        "viewportWidth": 390,
+        "innerWidth": 390,
+        "scrollWidth": 390,
+        "hasHorizontalOverflow": false,
+        "overflowingElements": [],
+        "undersizedTargets": [
+          {
+            "tag": "a",
+            "text": "← Powrót do katalogu Akademii",
+            "width": 175.5,
+            "height": 16
+          }
+        ],
+        "undersizedCount": 1,
+        "unlabelledControls": [],
+        "brokenImages": [],
+        "misleadingClaims": []
+      },
+      {
+        "route": "/academy/podstawy-ksiegowosci-dla-przedsiebiorcy/po-co-prowadzi-sie-ksiegowosc-przychod-dochod-przeplyw",
+        "viewportWidth": 375,
+        "innerWidth": 375,
+        "scrollWidth": 375,
+        "hasHorizontalOverflow": false,
+        "overflowingElements": [],
+        "undersizedTargets": [
+          {
+            "tag": "a",
+            "text": "← Powrót do katalogu Akademii",
+            "width": 175.5,
+            "height": 16
+          }
+        ],
+        "undersizedCount": 1,
+        "unlabelledControls": [],
+        "brokenImages": [],
+        "misleadingClaims": []
+      }
+    ]
+  }
+}

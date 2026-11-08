@@ -75,6 +75,7 @@ export interface WorkspaceShellProps {
   sessionContext: SessionContext | null;
   activeCompany: CompanyProfileRecord | null;
   accessibleCompanies?: readonly CompanyProfileRecord[];
+  offlineDemoMode?: boolean;
   children: ReactNode;
 }
 
@@ -83,6 +84,7 @@ export function WorkspaceShell({
   activeCompany,
   activeHref,
   children,
+  offlineDemoMode,
   pageActions,
   pageEyebrow,
   pageSubtitle,
@@ -93,6 +95,10 @@ export function WorkspaceShell({
   const router = useRouter();
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
+  const isOfflineDemo =
+    offlineDemoMode ??
+    (process.env['PAP_WEB_OFFLINE_DEMO_MODE'] === 'true' ||
+      process.env['NEXT_PUBLIC_PAP_WEB_OFFLINE_DEMO_MODE'] === 'true');
 
   async function handleContextChange(next: {
     tenantId?: string;
@@ -198,6 +204,15 @@ export function WorkspaceShell({
             className="border-b border-[#e6b3b0] bg-[#fceeed] px-4 py-2 text-xs font-medium text-[#9e2a25] sm:px-6"
           >
             {switchError}
+          </div>
+        ) : null}
+        {isOfflineDemo ? (
+          <div
+            role="status"
+            data-testid="offline-demo-mode-banner"
+            className="border-b border-[#e2c691] bg-[#f8eedb] px-4 py-2 text-xs font-semibold text-[#7a4f0a] sm:px-6"
+          >
+            TRYB DEMONSTRACYJNY OFFLINE — DANE NIE SĄ ZAPISYWANE W BAZIE · TRYB DEMO OFFLINE (DANE TYLKO W PAMIĘCI WEB)
           </div>
         ) : null}
       </div>

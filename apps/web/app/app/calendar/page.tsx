@@ -34,7 +34,7 @@ export default async function TaxCalendarPage() {
     );
   }
 
-  const loaded = tryLoadWorkspaceData(() => getDashboardSnapshot(session));
+  const loaded = await tryLoadWorkspaceData(() => getDashboardSnapshot(session));
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell

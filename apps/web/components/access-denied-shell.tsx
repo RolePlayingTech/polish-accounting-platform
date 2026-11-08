@@ -1,4 +1,5 @@
 import type { AppSurface } from '@pap/ui';
+import { isOfflineDemoModeEnabled } from '../lib/api-url';
 import type { ActiveWebSession } from '../lib/session';
 import {
   WorkspaceAccessError,
@@ -11,9 +12,11 @@ import { WorkspaceShell } from './workspace-shell';
 export type WorkspaceDataLoadResult<T> =
   { readonly ok: true; readonly data: T } | { readonly ok: false; readonly error: unknown };
 
-export function tryLoadWorkspaceData<T>(loader: () => T): WorkspaceDataLoadResult<T> {
+export async function tryLoadWorkspaceData<T>(
+  loader: () => T | Promise<T>,
+): Promise<WorkspaceDataLoadResult<T>> {
   try {
-    return { ok: true, data: loader() };
+    return { ok: true, data: await loader() };
   } catch (error) {
     return { ok: false, error };
   }
@@ -28,7 +31,7 @@ export interface WorkspaceAccessErrorShellProps {
   surface?: AppSurface;
 }
 
-export function WorkspaceAccessErrorShell({
+export async function WorkspaceAccessErrorShell({
   activeHref,
   error,
   pageEyebrow,
@@ -36,7 +39,9 @@ export function WorkspaceAccessErrorShell({
   session,
   surface = 'app',
 }: WorkspaceAccessErrorShellProps) {
-  const accessibleResult = tryLoadWorkspaceData(() => listAccessibleCompaniesForSession(session));
+  const accessibleResult = await tryLoadWorkspaceData(() =>
+    listAccessibleCompaniesForSession(session),
+  );
   const accessibleCompanies = accessibleResult.ok ? accessibleResult.data : [];
 
   const statusCode = error instanceof WorkspaceAccessError ? error.statusCode : 403;
@@ -55,6 +60,7 @@ export function WorkspaceAccessErrorShell({
       sessionContext={session.context}
       activeCompany={null}
       accessibleCompanies={accessibleCompanies}
+      offlineDemoMode={isOfflineDemoModeEnabled()}
     >
       <div className="space-y-6">
         <WorkspaceAccessDeniedCard

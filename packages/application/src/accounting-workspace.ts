@@ -35,12 +35,14 @@ import {
   getKpirColumnLayout,
   legalEntityId as parseLegalEntityId,
   listActiveRulesAtDate,
+  multiplyGroszeByBps,
   parseMt940Statement,
   parsePlnToGrosze,
   parsePolishBankCsv,
   qualifyKpirExpense,
   reconcileBankTransactions,
   resolveRuleAtDate,
+  roundSignedTaxAmountPln,
   summarizeKpirPeriod,
   tenantId as parseTenantId,
   userId as parseUserId,
@@ -122,6 +124,7 @@ import {
   type CalendarObligationItemContract,
   type CalendarViewResponse,
   type CompanyAccessResponse,
+  type CompanyAddressContract,
   type CompanyAuditItemContract,
   type CompanyAuditListResponse,
   type CompanyDocumentItemContract,
@@ -144,6 +147,7 @@ import {
   type DocumentPostingResultContract,
   type DocumentSourceFormatContract,
   type DocumentStatusContract,
+  type DocumentVerificationSourceContract,
   type DocumentsListResponse,
   type ExplainLegalRuleRequest,
   type ExplainLegalRuleResponse,
@@ -154,9 +158,11 @@ import {
   type GradeAcademyLessonRequest,
   type GradeAcademyLessonResponse,
   type GrantCompanyAccessRequest,
+  type GtuReviewStatusContract,
   type ImportBankStatementRequest,
   type ImportBankStatementResponse,
   type IssueMcpChallengeResponse,
+  type KasWhiteListVerificationStatusContract,
   type KpirViewResponse,
   type LedgerViewResponse,
   type ListLegalRulesResponse,
@@ -231,8 +237,15 @@ import {
   resolveDemoPersonaSeed,
 } from './demo-seed.js';
 import {
+  parseSafeDocumentCsv as parseStrictDocumentCsv,
+  parseSafeDocumentJson as parseStrictDocumentJson,
+  parseSafeKsefXml as parseStrictKsefXml,
+  type ParsedDocumentImportResult,
+} from './document-import-parsers.js';
+import {
   PapMcpGateway,
   VERIFIED_POLISH_LEGAL_BASIS_CATALOG,
+  computeCanonicalMcpInvoicePayloadHash,
   computeProposedAccountingPreview,
   sanitizeUntrustedDocumentTextForMcp,
   type AccountingItemExplanationRecord,
@@ -389,6 +402,7 @@ export interface WorkspaceCompanyState {
   taxRegime: CompanyTaxRegimeContract;
   vatStatusSimple: CompanyVatStatusSimpleContract;
   taxProfile: TaxProfileConfigContract;
+  address?: CompanyAddressContract | undefined;
   settingsHistory: CompanySettingsHistoryItem[];
   documents: CompanyDocumentItemContract[];
   kpirEntries: KpirEntry[];
@@ -424,7 +438,7 @@ export interface WorkspaceStoredMcpProposal {
   proposedPosting: ProposedAccountingPreview;
 }
 
-interface WorkspaceHumanChallenge {
+export interface WorkspaceHumanChallenge {
   readonly proposalId: string;
   readonly tenantId: TenantId;
   readonly legalEntityId: LegalEntityId;
@@ -605,223 +619,17 @@ function addDaysIso(isoDate: string, days: number): string {
   return dt.toISOString().slice(0, 10);
 }
 
-function decodeBasicXmlEntities(raw: string): string {
-  return raw
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, '&')
-    .trim();
-}
-
-function extractXmlTag(xml: string, tagName: string): string | null {
-  const pattern = new RegExp(
-    `<(?:[A-Za-z0-9_-]+:)?${tagName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:[A-Za-z0-9_-]+:)?${tagName}>`,
-    'i',
-  );
-  const match = pattern.exec(xml);
-  return match?.[1] !== undefined ? decodeBasicXmlEntities(match[1]) : null;
-}
-
-function extractAllXmlBlocks(xml: string, tagName: string): string[] {
-  const pattern = new RegExp(
-    `<(?:[A-Za-z0-9_-]+:)?${tagName}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/(?:[A-Za-z0-9_-]+:)?${tagName}>`,
-    'gi',
-  );
-  const results: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(xml)) !== null) {
-    if (match[1] !== undefined) {
-      results.push(match[1]);
-    }
+function previousMonthPeriod(period: string): string {
+  const [yearStr, monthStr] = period.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    return period;
   }
-  return results;
-}
-
-interface ParsedRawDocumentDraft {
-  readonly documentNumber: string;
-  readonly direction: 'sales' | 'purchase';
-  readonly issueDate: string;
-  readonly eventDate: string;
-  readonly dueDate: string;
-  readonly counterpartyName: string;
-  readonly counterpartyNip: string | undefined;
-  readonly ksefReferenceNumber: string | undefined;
-  readonly ksefMarker: KsefInvoiceMarkerContract;
-  readonly lines: readonly {
-    readonly description: string;
-    readonly quantity: string;
-    readonly unit: string;
-    readonly netGrosze: number;
-    readonly vatRate: VatRateCode;
-    readonly vatGrosze?: number | undefined;
-    readonly annex15Item: boolean;
-  }[];
-}
-
-function normalizeVatRateCode(raw: string | null | undefined): VatRateCode {
-  const cleaned = (raw ?? '23').trim().toLowerCase().replace('%', '');
-  if (cleaned === '23' || cleaned === '22') return '23';
-  if (cleaned === '8' || cleaned === '7') return '8';
-  if (cleaned === '5') return '5';
-  if (cleaned === '0') return '0';
-  if (cleaned === 'zw') return 'zw';
-  if (cleaned === 'np' || cleaned === 'oo') return 'np';
-  return '23';
-}
-
-function parseSafeKsefXml(
-  rawXml: string,
-  companyNip: string,
-  explicitDirection?: 'sales' | 'purchase',
-): ParsedRawDocumentDraft {
-  if (/<!DOCTYPE|<!ENTITY/i.test(rawXml)) {
-    throw new AccountingWorkspaceValidationError(
-      400,
-      'xml_xxe_forbidden',
-      'Odrzucono dokument XML zawierający deklaracje DOCTYPE/ENTITY (ochrona przed XXE).',
-    );
+  if (month === 1) {
+    return `${year - 1}-12`;
   }
-  if (!/<(?:[A-Za-z0-9_-]+:)?Faktura[\s>]/i.test(rawXml)) {
-    throw new AccountingWorkspaceValidationError(
-      400,
-      'invalid_ksef_xml',
-      'Przesłany plik XML nie zawiera głównego elementu <Faktura> schemy KSeF FA(2)/FA(3).',
-    );
-  }
-
-  const documentNumber = extractXmlTag(rawXml, 'P_2') ?? `FV-KSEF/${DEMO_DEFAULT_PERIOD}/01`;
-  const issueDate = extractXmlTag(rawXml, 'P_1') ?? `${DEMO_DEFAULT_PERIOD}-15`;
-  const eventDate = extractXmlTag(rawXml, 'P_6') ?? issueDate;
-  const dueDate =
-    extractXmlTag(rawXml, 'Termin') ??
-    extractXmlTag(rawXml, 'DataZaplaty') ??
-    addDaysIso(issueDate, 14);
-
-  const podmiot1 = extractXmlTag(rawXml, 'Podmiot1') ?? '';
-  const podmiot2 = extractXmlTag(rawXml, 'Podmiot2') ?? '';
-  const sellerNip = extractXmlTag(podmiot1, 'NIP')?.replace(/\D/g, '');
-  const sellerName = extractXmlTag(podmiot1, 'Nazwa') ?? 'Kontrahent KSeF Sprzedawca';
-  const buyerNip = extractXmlTag(podmiot2, 'NIP')?.replace(/\D/g, '');
-  const buyerName = extractXmlTag(podmiot2, 'Nazwa') ?? 'Kontrahent KSeF Nabywca';
-
-  const inferredDirection: 'sales' | 'purchase' =
-    explicitDirection ?? (sellerNip && sellerNip === companyNip ? 'sales' : 'purchase');
-  const counterpartyName = inferredDirection === 'sales' ? buyerName : sellerName;
-  const counterpartyNip = inferredDirection === 'sales' ? buyerNip : sellerNip;
-
-  const rawKsefRef =
-    extractXmlTag(rawXml, 'NrKSeF') ?? extractXmlTag(rawXml, 'KSeFReferenceNumber');
-  const validKsefRef =
-    rawKsefRef && KsefReferenceNumberSchema.safeParse(rawKsefRef).success ? rawKsefRef : undefined;
-  const ksefMarker: KsefInvoiceMarkerContract = validKsefRef ? 'NrKSeF' : 'OFF';
-
-  const p18a = extractXmlTag(rawXml, 'P_18A');
-  const mppFlag = p18a === '1' || p18a?.toLowerCase() === 'true';
-
-  const rowBlocks = extractAllXmlBlocks(rawXml, 'FaWiersz');
-  const parsedLines = rowBlocks.map((block, index) => {
-    const desc = extractXmlTag(block, 'P_7') ?? `Pozycja faktury KSeF #${index + 1}`;
-    const unit = extractXmlTag(block, 'P_8A') ?? 'szt.';
-    const qty = extractXmlTag(block, 'P_8B') ?? '1';
-    const netStr = extractXmlTag(block, 'P_11') ?? extractXmlTag(block, 'P_9A') ?? '0.00';
-    const vatRate = normalizeVatRateCode(extractXmlTag(block, 'P_12'));
-    const vatStr = extractXmlTag(block, 'P_11Vat');
-    const annex15 = mppFlag || extractXmlTag(block, 'Zalacznik15') === '1';
-    return {
-      description: desc,
-      quantity: qty,
-      unit,
-      netGrosze: parsePlnToGrosze(netStr),
-      vatRate,
-      vatGrosze: vatStr ? parsePlnToGrosze(vatStr) : undefined,
-      annex15Item: annex15,
-    };
-  });
-
-  if (parsedLines.length === 0) {
-    const netFallback =
-      extractXmlTag(rawXml, 'P_13_1') ?? extractXmlTag(rawXml, 'P_15') ?? '100.00';
-    const vatFallback = extractXmlTag(rawXml, 'P_14_1');
-    parsedLines.push({
-      description: `Import KSeF ${documentNumber}`,
-      quantity: '1',
-      unit: 'usł.',
-      netGrosze: parsePlnToGrosze(netFallback),
-      vatRate: vatFallback ? '23' : 'zw',
-      vatGrosze: vatFallback ? parsePlnToGrosze(vatFallback) : 0,
-      annex15Item: mppFlag,
-    });
-  }
-
-  return {
-    documentNumber,
-    direction: inferredDirection,
-    issueDate,
-    eventDate,
-    dueDate,
-    counterpartyName,
-    counterpartyNip:
-      counterpartyNip && /^\d{8,12}$/.test(counterpartyNip) ? counterpartyNip : undefined,
-    ksefReferenceNumber: validKsefRef,
-    ksefMarker,
-    lines: parsedLines,
-  };
-}
-
-function parseSafeDocumentCsv(
-  rawCsv: string,
-  explicitDirection?: 'sales' | 'purchase',
-): ParsedRawDocumentDraft {
-  const nonEmptyLines = rawCsv
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  if (nonEmptyLines.length === 0) {
-    throw new AccountingWorkspaceValidationError(400, 'empty_csv', 'Plik CSV jest pusty.');
-  }
-  const delimiter = (nonEmptyLines[0] ?? '').includes(';') ? ';' : ',';
-  const rows = nonEmptyLines.map((line) => line.split(delimiter).map((cell) => cell.trim()));
-  const firstRow = rows[0] ?? [];
-  const hasHeader = /numer|document|data|kontrahent|netto/i.test(firstRow.join(' '));
-  const dataRows = hasHeader ? rows.slice(1) : rows;
-  const first = dataRows[0];
-  if (!first || first.length < 4) {
-    throw new AccountingWorkspaceValidationError(
-      400,
-      'invalid_csv_columns',
-      'CSV wymaga co najmniej kolumn: Numer;Data wystawienia;Kontrahent;Kwota netto;[Stawka VAT];[NIP];[Opis].',
-    );
-  }
-
-  const documentNumber = first[0] || `FV-CSV/${DEMO_DEFAULT_PERIOD}/01`;
-  const issueDate = /^\d{4}-\d{2}-\d{2}$/.test(first[1] ?? '')
-    ? (first[1] as string)
-    : `${DEMO_DEFAULT_PERIOD}-15`;
-  const counterpartyName = first[2] || 'Kontrahent CSV';
-  const nipCandidate = (first[5] ?? '').replace(/\D/g, '');
-  const lines = dataRows.map((cols, idx) => ({
-    description: cols[6] || `Pozycja CSV #${idx + 1}`,
-    quantity: '1',
-    unit: 'usł.',
-    netGrosze: parsePlnToGrosze(cols[3] ?? '0'),
-    vatRate: normalizeVatRateCode(cols[4] ?? '23'),
-    annex15Item: false,
-  }));
-
-  return {
-    documentNumber,
-    direction: explicitDirection ?? 'purchase',
-    issueDate,
-    eventDate: issueDate,
-    dueDate: addDaysIso(issueDate, 14),
-    counterpartyName,
-    counterpartyNip: /^\d{10}$/.test(nipCandidate) ? nipCandidate : undefined,
-    ksefReferenceNumber: undefined,
-    ksefMarker: 'BFK',
-    lines,
-  };
+  return `${year}-${String(month - 1).padStart(2, '0')}`;
 }
 
 export function explainRuleApplication(
@@ -965,29 +773,6 @@ function mapLedgerNatureToContract(nature: AccountNature): {
     case 'tax_expense':
       return { kind: 'financial_result', normalBalanceSide: 'Wn' };
   }
-}
-
-function computeCanonicalMcpInvoicePayloadHash(
-  tenantIdVal: string,
-  legalEntityIdVal: string,
-  invoice: PrepareInvoiceAndPostingProposalInput['invoice'],
-): string {
-  const canonical = JSON.stringify({
-    tenantId: tenantIdVal.toLowerCase(),
-    legalEntityId: legalEntityIdVal.toLowerCase(),
-    direction: invoice.direction,
-    invoiceNumber: invoice.invoiceNumber.trim(),
-    issueDate: invoice.issueDate,
-    dueDate: invoice.dueDate,
-    counterpartyNip: invoice.counterpartyNip,
-    counterpartyName: invoice.counterpartyName.trim(),
-    netAmountPln: invoice.netAmountPln,
-    vatAmountPln: invoice.vatAmountPln,
-    grossAmountPln: invoice.grossAmountPln,
-    expenseDescription: invoice.expenseDescription.trim(),
-    suggestedCategory: invoice.suggestedCategory,
-  });
-  return sha256Hex(canonical);
 }
 
 function deriveSettlementStatus(
@@ -1521,6 +1306,24 @@ export class AccountingWorkspaceService {
       role: membership.role,
       canRead: readDecision.allowed,
       canWrite: writeDecision.allowed,
+      ...(company.address !== undefined ? { address: company.address } : {}),
+      ...(company.taxProfile.street !== undefined ? { street: company.taxProfile.street } : {}),
+      ...(company.taxProfile.buildingNumber !== undefined
+        ? { buildingNumber: company.taxProfile.buildingNumber }
+        : {}),
+      ...(company.taxProfile.unitNumber !== undefined
+        ? { unitNumber: company.taxProfile.unitNumber }
+        : {}),
+      ...(company.taxProfile.postalCode !== undefined
+        ? { postalCode: company.taxProfile.postalCode }
+        : {}),
+      ...(company.taxProfile.city !== undefined ? { city: company.taxProfile.city } : {}),
+      ...(company.taxProfile.voivodeship !== undefined
+        ? { voivodeship: company.taxProfile.voivodeship }
+        : {}),
+      ...(company.taxProfile.taxOfficeName !== undefined
+        ? { taxOfficeName: company.taxProfile.taxOfficeName }
+        : {}),
     };
   }
 
@@ -1732,6 +1535,28 @@ export class AccountingWorkspaceService {
       );
     }
 
+    const normalizedNip = nipValidation.normalizedNip ?? req.nip.replace(/\D/g, '');
+    const duplicateCompany = this.store
+      .listCompaniesForTenant(tId)
+      .find((c) => c.nip.replace(/\D/g, '') === normalizedNip);
+    if (duplicateCompany) {
+      this.recordAudit({
+        channel: 'accounting',
+        action: 'create_company_duplicate_nip_rejected',
+        actorUserId: uId,
+        actorDisplayLabel: this.resolveDisplayLabel(uId),
+        tenantId: tId,
+        legalEntityId: duplicateCompany.legalEntityId,
+        outcome: 'deny',
+        reasonCode: 'duplicate_company_nip',
+        summaryPl: `Odrzucono próbę utworzenia duplikatu firmy o NIP ${maskPolishNip(normalizedNip)} w tenancie ${tId}.`,
+      });
+      throw new AccountingWorkspaceConflictError(
+        'duplicate_company_nip',
+        `Firma o numerze NIP ${normalizedNip} już istnieje w tej organizacji (${duplicateCompany.displayName}).`,
+      );
+    }
+
     const name = (req.displayName ?? req.companyName ?? 'Nowa Firma').trim();
     const profileCode: TaxProfileCode =
       req.profileCode ??
@@ -1753,12 +1578,52 @@ export class AccountingWorkspaceService {
             ? 'cit_klasyczny'
             : 'kpir_skala');
 
+    const effectiveVatStatus: TaxProfileConfigContract['vatStatus'] =
+      req.vatStatus === 'zwolniony'
+        ? 'zwolniony_art_113'
+        : (req.vatStatus ??
+          (req.vatPayer === true
+            ? 'czynny'
+            : req.vatPayer === false
+              ? 'zwolniony_art_113'
+              : 'czynny'));
     const vatStatusSimple: CompanyVatStatusSimpleContract =
-      req.vatStatus === 'czynny' ? 'czynny' : 'zwolniony';
+      effectiveVatStatus === 'czynny' ? 'czynny' : 'zwolniony';
+    const effectiveVatSettlementPeriod =
+      req.vatSettlementPeriod ??
+      req.vatPeriod ??
+      (effectiveVatStatus === 'czynny' ? 'monthly' : 'not_applicable');
     const zusScheme =
       req.zusScheme ??
       req.zusStage ??
       (req.legalForm === 'sp_z_o_o' ? 'not_applicable' : 'duzy_zus');
+
+    const structuredAddrObj =
+      typeof req.address === 'object' && req.address !== null ? req.address : undefined;
+    const streetVal = req.street ?? structuredAddrObj?.street;
+    const buildingNoVal = req.buildingNumber ?? structuredAddrObj?.buildingNumber;
+    const unitNoVal =
+      req.unitNumber !== undefined ? req.unitNumber : structuredAddrObj?.unitNumber;
+    const postalCodeVal = req.postalCode ?? structuredAddrObj?.postalCode;
+    const cityVal = req.city ?? structuredAddrObj?.city;
+    const voivodeshipVal = req.voivodeship ?? structuredAddrObj?.voivodeship;
+    const taxOfficeNameVal = req.taxOfficeName ?? structuredAddrObj?.taxOfficeName;
+
+    const resolvedAddress: CompanyAddressContract | undefined =
+      typeof req.address === 'string'
+        ? req.address.trim()
+        : streetVal && buildingNoVal && postalCodeVal && cityVal
+          ? {
+              street: streetVal,
+              buildingNumber: buildingNoVal,
+              ...(unitNoVal !== undefined ? { unitNumber: unitNoVal } : {}),
+              postalCode: postalCodeVal,
+              city: cityVal,
+              countryCode: structuredAddrObj?.countryCode ?? 'PL',
+              ...(voivodeshipVal ? { voivodeship: voivodeshipVal } : {}),
+              ...(taxOfficeNameVal ? { taxOfficeName: taxOfficeNameVal } : {}),
+            }
+          : req.address;
 
     const newLeId = parseLegalEntityId(randomUUID());
     const now = this.clock.now();
@@ -1767,19 +1632,34 @@ export class AccountingWorkspaceService {
     const taxProfile: TaxProfileConfigContract = {
       profileCode,
       supportLevel: 'supported',
-      nip: req.nip,
+      nip: normalizedNip,
       ...(req.regon ? { regon: req.regon } : {}),
       ...(req.krs ? { krs: req.krs } : {}),
       companyName: name,
       activityStartDate: req.activityStartDate ?? '2026-01-01',
-      vatStatus: req.vatStatus,
-      vatSettlementPeriod:
-        req.vatSettlementPeriod ?? (req.vatStatus === 'czynny' ? 'monthly' : 'not_applicable'),
+      vatStatus: effectiveVatStatus,
+      vatSettlementPeriod: effectiveVatSettlementPeriod,
+      vatPayer: req.vatPayer ?? effectiveVatStatus === 'czynny',
+      vatPeriod: effectiveVatSettlementPeriod,
       zusScheme,
       voluntarySicknessInsurance: req.voluntarySicknessInsurance ?? zusScheme !== 'not_applicable',
       accidentRateBps: 167,
       insuredPersonsCount: req.legalForm === 'sp_z_o_o' ? 2 : 1,
       smallTaxpayer: req.smallTaxpayer ?? true,
+      ...(req.ksefEnabled !== undefined ? { ksefEnabled: req.ksefEnabled } : {}),
+      ...(req.ryczaltDefaultRate !== undefined
+        ? { ryczaltDefaultRate: req.ryczaltDefaultRate }
+        : {}),
+      ...(req.healthContributionTier !== undefined
+        ? { healthContributionTier: req.healthContributionTier }
+        : {}),
+      ...(streetVal ? { street: streetVal } : {}),
+      ...(buildingNoVal ? { buildingNumber: buildingNoVal } : {}),
+      ...(unitNoVal !== undefined ? { unitNumber: unitNoVal } : {}),
+      ...(postalCodeVal ? { postalCode: postalCodeVal } : {}),
+      ...(cityVal ? { city: cityVal } : {}),
+      ...(voivodeshipVal ? { voivodeship: voivodeshipVal } : {}),
+      ...(taxOfficeNameVal ? { taxOfficeName: taxOfficeNameVal } : {}),
       ksefSales2024Above200M: false,
       ...(req.legalForm === 'sp_z_o_o'
         ? { krsRegisteredBefore2025: false }
@@ -1790,11 +1670,12 @@ export class AccountingWorkspaceService {
       tenantId: tId,
       legalEntityId: newLeId,
       displayName: name,
-      nip: req.nip,
+      nip: normalizedNip,
       legalForm: req.legalForm,
       taxRegime,
       vatStatusSimple,
       taxProfile,
+      ...(resolvedAddress !== undefined ? { address: resolvedAddress } : {}),
       settingsHistory: [
         {
           version: 1,
@@ -1819,17 +1700,25 @@ export class AccountingWorkspaceService {
 
     this.store.saveCompany(state);
     const validFromDate = new Date('2025-01-01T00:00:00.000Z');
-    for (const action of ['read', 'write'] as const) {
-      this.store.upsertGrant({
-        grantId: randomUUID(),
-        tenantId: tId,
-        legalEntityId: newLeId,
-        userId: uId,
-        action,
-        validFrom: validFromDate,
-        validUntil: null,
-        revokedAt: null,
-      });
+    const granteeUserIds = new Set<UserId>([uId]);
+    for (const member of this.store.listTenantMemberships(tId)) {
+      if (member.status === 'active' && member.role === 'tenant_owner') {
+        granteeUserIds.add(member.userId);
+      }
+    }
+    for (const granteeUserId of granteeUserIds) {
+      for (const action of ['read', 'write'] as const) {
+        this.store.upsertGrant({
+          grantId: randomUUID(),
+          tenantId: tId,
+          legalEntityId: newLeId,
+          userId: granteeUserId,
+          action,
+          validFrom: validFromDate,
+          validUntil: null,
+          revokedAt: null,
+        });
+      }
     }
 
     this.recordAudit({
@@ -1841,13 +1730,14 @@ export class AccountingWorkspaceService {
       legalEntityId: newLeId,
       outcome: 'allow',
       reasonCode: 'authorized_tenant_administration',
-      summaryPl: `Utworzono firmę ${name} (${maskPolishNip(req.nip)}) w profilu ${profileCode}.`,
+      summaryPl: `Utworzono firmę ${name} (${maskPolishNip(normalizedNip)}) w profilu ${profileCode}.`,
     });
 
     const item = this.toAccessibleCompanyItem(state, uId, now)!;
     return CreateCompanyResponseSchema.parse({
       company: item,
       taxProfile,
+      ...(resolvedAddress !== undefined ? { address: resolvedAddress } : {}),
     });
   }
 
@@ -1975,21 +1865,86 @@ export class AccountingWorkspaceService {
     const req = UpdateCompanySettingsRequestSchema.parse(rawRequest);
     const updatedName = req.displayName ?? req.companyName ?? company.displayName;
     const updatedProfileCode = req.profileCode ?? company.taxProfile.profileCode;
-    const updatedVatStatus = req.vatStatus ?? company.taxProfile.vatStatus;
+    const updatedVatStatus: TaxProfileConfigContract['vatStatus'] =
+      req.vatStatus === 'zwolniony'
+        ? 'zwolniony_art_113'
+        : (req.vatStatus ??
+          (req.vatPayer === true
+            ? 'czynny'
+            : req.vatPayer === false
+              ? 'zwolniony_art_113'
+              : company.taxProfile.vatStatus));
+    const updatedVatPeriod =
+      req.vatSettlementPeriod ??
+      req.vatPeriod ??
+      (updatedVatStatus === 'czynny' ? 'monthly' : 'not_applicable');
+
+    const structuredAddrObj =
+      typeof req.address === 'object' && req.address !== null ? req.address : undefined;
+    const streetVal = req.street ?? structuredAddrObj?.street ?? company.taxProfile.street;
+    const buildingNoVal =
+      req.buildingNumber ??
+      structuredAddrObj?.buildingNumber ??
+      company.taxProfile.buildingNumber;
+    const unitNoVal =
+      req.unitNumber !== undefined
+        ? req.unitNumber
+        : structuredAddrObj?.unitNumber !== undefined
+          ? structuredAddrObj.unitNumber
+          : company.taxProfile.unitNumber;
+    const postalCodeVal =
+      req.postalCode ?? structuredAddrObj?.postalCode ?? company.taxProfile.postalCode;
+    const cityVal = req.city ?? structuredAddrObj?.city ?? company.taxProfile.city;
+    const voivodeshipVal =
+      req.voivodeship ?? structuredAddrObj?.voivodeship ?? company.taxProfile.voivodeship;
+    const taxOfficeNameVal =
+      req.taxOfficeName ??
+      structuredAddrObj?.taxOfficeName ??
+      company.taxProfile.taxOfficeName;
+
+    if (typeof req.address === 'string') {
+      company.address = req.address.trim();
+    } else if (streetVal && buildingNoVal && postalCodeVal && cityVal) {
+      company.address = {
+        street: streetVal,
+        buildingNumber: buildingNoVal,
+        ...(unitNoVal !== undefined ? { unitNumber: unitNoVal } : {}),
+        postalCode: postalCodeVal,
+        city: cityVal,
+        countryCode: structuredAddrObj?.countryCode ?? 'PL',
+        ...(voivodeshipVal ? { voivodeship: voivodeshipVal } : {}),
+        ...(taxOfficeNameVal ? { taxOfficeName: taxOfficeNameVal } : {}),
+      };
+    }
 
     const updatedProfile: TaxProfileConfigContract = {
       ...company.taxProfile,
       companyName: updatedName,
       profileCode: updatedProfileCode,
       vatStatus: updatedVatStatus,
-      vatSettlementPeriod:
-        req.vatSettlementPeriod ?? (updatedVatStatus === 'czynny' ? 'monthly' : 'not_applicable'),
+      vatSettlementPeriod: updatedVatPeriod,
+      vatPayer: req.vatPayer ?? updatedVatStatus === 'czynny',
+      vatPeriod: updatedVatPeriod,
       zusScheme: req.zusScheme ?? company.taxProfile.zusScheme,
       voluntarySicknessInsurance:
         req.voluntarySicknessInsurance ?? company.taxProfile.voluntarySicknessInsurance,
       accidentRateBps: req.accidentRateBps ?? company.taxProfile.accidentRateBps,
       insuredPersonsCount: req.insuredPersonsCount ?? company.taxProfile.insuredPersonsCount,
       smallTaxpayer: req.smallTaxpayer ?? company.taxProfile.smallTaxpayer,
+      ...(req.ksefEnabled !== undefined ? { ksefEnabled: req.ksefEnabled } : {}),
+      ...(req.ryczaltDefaultRate !== undefined
+        ? { ryczaltDefaultRate: req.ryczaltDefaultRate }
+        : {}),
+      ...(req.healthContributionTier !== undefined
+        ? { healthContributionTier: req.healthContributionTier }
+        : {}),
+      ...(streetVal !== undefined ? { street: streetVal } : {}),
+      ...(buildingNoVal !== undefined ? { buildingNumber: buildingNoVal } : {}),
+      ...(unitNoVal !== undefined ? { unitNumber: unitNoVal } : {}),
+      ...(postalCodeVal !== undefined ? { postalCode: postalCodeVal } : {}),
+      ...(cityVal !== undefined ? { city: cityVal } : {}),
+      ...(voivodeshipVal !== undefined ? { voivodeship: voivodeshipVal } : {}),
+      ...(taxOfficeNameVal !== undefined ? { taxOfficeName: taxOfficeNameVal } : {}),
     };
 
     company.displayName = updatedName;
@@ -2381,6 +2336,11 @@ export class AccountingWorkspaceService {
     readonly isCorrection?: boolean | undefined;
     readonly correctedDocumentNumber?: string | undefined;
     readonly correctionReason?: string | undefined;
+    readonly verificationSource?: DocumentVerificationSourceContract | undefined;
+    readonly kasWhiteListStatus?: KasWhiteListVerificationStatusContract | undefined;
+    readonly gtuReviewStatus?: GtuReviewStatusContract | undefined;
+    readonly confidenceScoreBps?: number | undefined;
+    readonly extractedSummaryPl?: string | undefined;
     readonly lines: readonly {
       readonly description: string;
       readonly quantity?: string | undefined;
@@ -2467,9 +2427,22 @@ export class AccountingWorkspaceService {
       totalGrossFormatted: formatPlnFromGrosze(totalGrossGrosze),
     };
 
+    const resolvedVerificationSource: DocumentVerificationSourceContract =
+      params.verificationSource ??
+      (params.sourceFormat === 'manual'
+        ? 'manual_entry'
+        : params.sourceFormat === 'mcp_confirmed'
+          ? 'mcp_proposal'
+          : 'deterministic_parser');
+    const resolvedKasWhiteListStatus: KasWhiteListVerificationStatusContract =
+      params.kasWhiteListStatus ?? 'not_checked';
+    const resolvedGtuReviewStatus: GtuReviewStatusContract =
+      params.gtuReviewStatus ?? 'requires_human_review';
+
     const aiProposal: DocumentAiProposalContract = {
       status: params.sourceFormat === 'manual' ? 'not_applicable' : 'ai_proposed',
-      confidenceScoreBps: promptInjectionSuspected ? 4500 : 9400,
+      confidenceScoreBps:
+        params.confidenceScoreBps ?? (promptInjectionSuspected ? 4500 : 9400),
       suggestedCategory: defaultCategory,
       vatDeductionMode: defaultVatDeduction,
       kpirQualification: defaultKpirQual,
@@ -2482,8 +2455,13 @@ export class AccountingWorkspaceService {
               ? '330'
               : '402'
           : null,
-      extractedSummaryPl: `Propozycja ujęcia dokumentu ${params.documentNumber} (${formatPlnFromGrosze(totalGrossGrosze)}) — wymaga zatwierdzenia przez uprawnionego człowieka.`,
+      extractedSummaryPl:
+        params.extractedSummaryPl ??
+        `Deterministyczna propozycja ujęcia dokumentu ${params.documentNumber} (${formatPlnFromGrosze(totalGrossGrosze)}) [źródło: ${resolvedVerificationSource}; wykaz KAS: niezweryfikowano; GTU: wymaga decyzji człowieka] — wymaga zatwierdzenia przez uprawnionego człowieka.`,
       promptInjectionSuspected,
+      verificationSource: resolvedVerificationSource,
+      kasWhiteListStatus: resolvedKasWhiteListStatus,
+      gtuReviewStatus: resolvedGtuReviewStatus,
       untrustedCounterpartyName: untrustedCounterparty,
       untrustedDescription,
     };
@@ -2526,10 +2504,16 @@ export class AccountingWorkspaceService {
     let sha256HashValue: string;
     let record: CompanyDocumentItemContract;
 
-    if ('rawPayload' in req) {
-      sha256HashValue = sha256Hex(req.rawPayload.trim());
+    if ('rawPayload' in req && typeof req.rawPayload === 'string' && req.rawPayload.trim().length > 0) {
+      const payloadSha = sha256Hex(req.rawPayload.trim());
+      sha256HashValue =
+        'sha256' in req && typeof req.sha256 === 'string' ? req.sha256 : payloadSha;
       if (
-        company.documents.some((d) => d.sha256Hash === sha256HashValue && d.status !== 'archived')
+        company.documents.some(
+          (d) =>
+            (d.sha256Hash === sha256HashValue || d.sha256Hash === payloadSha) &&
+            d.status !== 'archived',
+        )
       ) {
         this.recordAudit({
           channel: 'accounting',
@@ -2548,191 +2532,58 @@ export class AccountingWorkspaceService {
         );
       }
 
-      let parsedDraft: ParsedRawDocumentDraft;
-      if (req.sourceFormat === 'ksef_xml') {
-        parsedDraft = parseSafeKsefXml(req.rawPayload, company.nip, req.direction);
-      } else if (req.sourceFormat === 'csv') {
-        parsedDraft = parseSafeDocumentCsv(req.rawPayload, req.direction);
-      } else {
-        let rawParsed: unknown;
-        try {
-          rawParsed = JSON.parse(req.rawPayload);
-        } catch {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_payload',
-            'Nieprawidłowy format JSON dokumentu.',
-          );
-        }
-        if (typeof rawParsed !== 'object' || rawParsed === null || Array.isArray(rawParsed)) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_payload',
-            'Ładunek JSON dokumentu musi być obiektem JSON (nie może być null ani tablicą).',
-          );
-        }
-        const parsedJson = rawParsed as Record<string, unknown>;
-        const rawDocNo = parsedJson['documentNumber'];
-        if (
-          rawDocNo !== undefined &&
-          (typeof rawDocNo !== 'string' || rawDocNo.trim().length === 0 || rawDocNo.length > 128)
-        ) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole documentNumber w imporcie JSON musi być niepustym ciągiem znaków (maks. 128).',
-          );
-        }
-        const docNo =
-          typeof rawDocNo === 'string' ? rawDocNo.trim() : `FV-JSON/${DEMO_DEFAULT_PERIOD}/01`;
+      const trimmedPayload = req.rawPayload.trim();
+      const effectiveSourceFormat: 'ksef_xml' | 'csv' | 'json' =
+        req.sourceFormat && req.sourceFormat !== 'manual'
+          ? req.sourceFormat
+          : trimmedPayload.startsWith('<')
+            ? 'ksef_xml'
+            : trimmedPayload.startsWith('{') || trimmedPayload.startsWith('[')
+              ? 'json'
+              : 'csv';
 
-        const rawIssueDate = parsedJson['issueDate'];
-        if (rawIssueDate !== undefined && !isStrictIsoCalendarDate(rawIssueDate)) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole issueDate w imporcie JSON musi być poprawną datą kalendarzową RRRR-MM-DD.',
-          );
-        }
-        const issueDt = rawIssueDate ?? `${DEMO_DEFAULT_PERIOD}-15`;
-
-        const rawEventDate = parsedJson['eventDate'];
-        if (rawEventDate !== undefined && !isStrictIsoCalendarDate(rawEventDate)) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole eventDate w imporcie JSON musi być poprawną datą kalendarzową RRRR-MM-DD.',
-          );
-        }
-        const eventDt = rawEventDate ?? issueDt;
-
-        const rawDueDate = parsedJson['dueDate'];
-        if (rawDueDate !== undefined && !isStrictIsoCalendarDate(rawDueDate)) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole dueDate w imporcie JSON musi być poprawną datą kalendarzową RRRR-MM-DD.',
-          );
-        }
-        const dueDt = rawDueDate ?? addDaysIso(issueDt, 14);
-        if (dueDt < issueDt) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Termin płatności (dueDate) nie może być wcześniejszy niż data wystawienia (issueDate).',
-          );
-        }
-
-        const rawCpName = parsedJson['counterpartyName'];
-        if (
-          rawCpName !== undefined &&
-          (typeof rawCpName !== 'string' || rawCpName.trim().length === 0 || rawCpName.length > 512)
-        ) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole counterpartyName w imporcie JSON musi być niepustym ciągiem znaków.',
-          );
-        }
-
-        let normalizedCpNip: string | undefined;
-        if (parsedJson['counterpartyNip'] !== undefined && parsedJson['counterpartyNip'] !== null) {
-          if (typeof parsedJson['counterpartyNip'] !== 'string') {
-            throw new AccountingWorkspaceValidationError(
-              400,
-              'invalid_json_document_fields',
-              'Pole counterpartyNip w imporcie JSON musi być ciągiem znaków.',
-            );
-          }
-          const nipRes = validatePolishNip(parsedJson['counterpartyNip']);
-          if (!nipRes.valid || !nipRes.normalizedNip) {
-            throw new AccountingWorkspaceValidationError(
-              400,
-              'invalid_nip',
-              nipRes.reason ?? 'Nieprawidłowy NIP kontrahenta w imporcie JSON.',
-            );
-          }
-          normalizedCpNip = nipRes.normalizedNip;
-        }
-
-        const rawNet = parsedJson['netGrosze'];
-        if (
-          rawNet !== undefined &&
-          (typeof rawNet !== 'number' || !Number.isSafeInteger(rawNet) || rawNet < 0)
-        ) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole netGrosze w imporcie JSON musi być nieujemną liczbą całkowitą w groszach.',
-          );
-        }
-        const netGroszeVal = typeof rawNet === 'number' ? rawNet : 100_00;
-
-        const rawDesc = parsedJson['description'];
-        if (
-          rawDesc !== undefined &&
-          (typeof rawDesc !== 'string' || rawDesc.trim().length === 0 || rawDesc.length > 1000)
-        ) {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole description w imporcie JSON musi być niepustym ciągiem znaków.',
-          );
-        }
-
-        const rawDirection = parsedJson['direction'];
-        if (rawDirection !== undefined && rawDirection !== 'sales' && rawDirection !== 'purchase') {
-          throw new AccountingWorkspaceValidationError(
-            400,
-            'invalid_json_document_fields',
-            'Pole direction w imporcie JSON musi przyjmować wartość sales lub purchase.',
-          );
-        }
-
-        parsedDraft = {
-          documentNumber: docNo,
-          direction: req.direction ?? (rawDirection === 'sales' ? 'sales' : 'purchase'),
-          issueDate: issueDt,
-          eventDate: eventDt,
-          dueDate: dueDt,
-          counterpartyName: typeof rawCpName === 'string' ? rawCpName.trim() : 'Kontrahent JSON',
-          counterpartyNip: normalizedCpNip,
-          ksefReferenceNumber: undefined,
-          ksefMarker: 'BFK',
-          lines: [
-            {
-              description: typeof rawDesc === 'string' ? rawDesc.trim() : `Pozycja ${docNo}`,
-              quantity: '1',
-              unit: 'szt.',
-              netGrosze: netGroszeVal,
-              vatRate: normalizeVatRateCode(String(parsedJson['vatRate'] ?? '23')),
-              annex15Item: false,
-            },
-          ],
-        };
-      }
+      const parsedDraft: ParsedDocumentImportResult =
+        effectiveSourceFormat === 'ksef_xml'
+          ? parseStrictKsefXml(req.rawPayload, {
+              companyNip: company.nip,
+              ...(req.direction ? { fallbackDirection: req.direction } : {}),
+            })
+          : effectiveSourceFormat === 'csv'
+            ? parseStrictDocumentCsv(
+                req.rawPayload,
+                req.direction ? { fallbackDirection: req.direction } : undefined,
+              )
+            : parseStrictDocumentJson(
+                req.rawPayload,
+                req.direction ? { fallbackDirection: req.direction } : undefined,
+              );
 
       record = this.buildDocumentRecordInternal({
         company,
-        sourceFormat: req.sourceFormat,
+        sourceFormat: effectiveSourceFormat,
         status: 'needs_verification',
         sha256Hash: sha256HashValue,
         documentNumber: parsedDraft.documentNumber,
         direction: parsedDraft.direction,
         issueDate: parsedDraft.issueDate,
-        eventDate: parsedDraft.eventDate,
-        dueDate: parsedDraft.dueDate,
+        eventDate: parsedDraft.saleDate,
+        dueDate: parsedDraft.dueDate ?? addDaysIso(parsedDraft.issueDate, 14),
         counterpartyName: parsedDraft.counterpartyName,
         counterpartyNip: parsedDraft.counterpartyNip,
+        counterpartyAddress: parsedDraft.counterpartyAddress,
         ksefReferenceNumber: parsedDraft.ksefReferenceNumber,
         ksefMarker: parsedDraft.ksefMarker,
-        suggestedCategory: req.suggestedCategory,
-        vatDeductionMode: req.vatDeductionMode,
-        ryczaltRate: req.ryczaltRate,
+        suggestedCategory: 'suggestedCategory' in req ? req.suggestedCategory : undefined,
+        vatDeductionMode: 'vatDeductionMode' in req ? req.vatDeductionMode : undefined,
+        ryczaltRate: 'ryczaltRate' in req ? req.ryczaltRate : undefined,
+        verificationSource: 'deterministic_parser',
+        kasWhiteListStatus: 'not_checked',
+        gtuReviewStatus: 'requires_human_review',
         lines: parsedDraft.lines,
       });
-    } else if ('sha256' in req) {
-      sha256HashValue = req.sha256;
+    } else if ('sha256' in req && typeof req.sha256 === 'string' && !('rawPayload' in req && req.rawPayload)) {
+      const bffReq = req as Extract<CreateDocumentRequest, { sha256: string; documentNumber: string }>;
+      sha256HashValue = bffReq.sha256;
       if (
         company.documents.some((d) => d.sha256Hash === sha256HashValue && d.status !== 'archived')
       ) {
@@ -2752,34 +2603,111 @@ export class AccountingWorkspaceService {
           `Dokument o identycznym skrócie SHA-256 (${sha256HashValue}) już istnieje.`,
         );
       }
-      const issueDt = req.issueDate ?? `${DEMO_DEFAULT_PERIOD}-15`;
+
+      let normalizedBffNip: string | undefined;
+      if (bffReq.counterpartyNip !== undefined) {
+        const nipCheck = validatePolishNip(bffReq.counterpartyNip);
+        if (!nipCheck.valid || !nipCheck.normalizedNip) {
+          throw new AccountingWorkspaceValidationError(
+            422,
+            'invalid_counterparty_nip',
+            nipCheck.reason ?? 'Nieprawidłowa suma kontrolna numeru NIP kontrahenta.',
+          );
+        }
+        normalizedBffNip = nipCheck.normalizedNip;
+      }
+
+      if (
+        bffReq.netGrosze !== undefined &&
+        bffReq.vatGrosze !== undefined &&
+        bffReq.grossGrosze !== undefined &&
+        bffReq.netGrosze + bffReq.vatGrosze !== bffReq.grossGrosze
+      ) {
+        throw new AccountingWorkspaceValidationError(
+          422,
+          'invalid_document_amounts',
+          `Niezgodność kwot dokumentu ${bffReq.documentNumber}: netto (${bffReq.netGrosze} gr) + VAT (${bffReq.vatGrosze} gr) !== brutto (${bffReq.grossGrosze} gr).`,
+        );
+      }
+
+      const issueDt = bffReq.issueDate ?? `${DEMO_DEFAULT_PERIOD}-15`;
+      const eventDt = bffReq.eventDate ?? issueDt;
+      const dueDt = bffReq.dueDate ?? addDaysIso(issueDt, 14);
+      if (dueDt < issueDt) {
+        throw new AccountingWorkspaceValidationError(
+          400,
+          'invalid_due_date',
+          'Termin płatności (dueDate) nie może być wcześniejszy niż data wystawienia (issueDate).',
+        );
+      }
+
+      const bffLines =
+        bffReq.lines && bffReq.lines.length > 0
+          ? bffReq.lines
+          : [
+              {
+                description: bffReq.description ?? `Dokument ${bffReq.documentNumber}`,
+                netGrosze: bffReq.netGrosze ?? 100_00,
+                vatRate: bffReq.vatRate ?? '23',
+                ...(bffReq.vatGrosze !== undefined ? { vatGrosze: bffReq.vatGrosze } : {}),
+                ...(bffReq.grossGrosze !== undefined ? { grossGrosze: bffReq.grossGrosze } : {}),
+              },
+            ];
+
       record = this.buildDocumentRecordInternal({
         company,
-        sourceFormat: 'manual',
+        sourceFormat: bffReq.sourceFormat ?? 'manual',
         status: 'needs_verification',
         sha256Hash: sha256HashValue,
-        documentNumber: req.documentNumber,
-        direction: req.direction ?? 'purchase',
+        documentNumber: bffReq.documentNumber,
+        direction: bffReq.direction ?? 'purchase',
         issueDate: issueDt,
-        eventDate: issueDt,
-        dueDate: req.dueDate ?? addDaysIso(issueDt, 14),
-        counterpartyName: req.counterpartyName ?? 'Kontrahent Testowy',
-        counterpartyNip: req.counterpartyNip,
-        lines: [
-          {
-            description: req.description ?? `Dokument ${req.documentNumber}`,
-            netGrosze: req.netGrosze ?? 100_00,
-            vatRate: req.vatRate ?? '23',
-          },
-        ],
+        eventDate: eventDt,
+        dueDate: dueDt,
+        counterpartyName: bffReq.counterpartyName ?? 'Kontrahent Testowy',
+        counterpartyNip: normalizedBffNip,
+        ksefReferenceNumber: bffReq.ksefReferenceNumber,
+        ksefMarker: bffReq.ksefMarker,
+        suggestedCategory: bffReq.suggestedCategory,
+        vatDeductionMode: bffReq.vatDeductionMode,
+        ryczaltRate: bffReq.ryczaltRate,
+        lines: bffLines,
       });
     } else {
+      const manualReq = req as Extract<CreateDocumentRequest, { issueDate: string; counterpartyName: string }>;
+      let normalizedManualNip: string | undefined;
+      if (manualReq.counterpartyNip !== undefined) {
+        const nipCheck = validatePolishNip(manualReq.counterpartyNip);
+        if (!nipCheck.valid || !nipCheck.normalizedNip) {
+          throw new AccountingWorkspaceValidationError(
+            422,
+            'invalid_counterparty_nip',
+            nipCheck.reason ?? 'Nieprawidłowa suma kontrolna numeru NIP kontrahenta.',
+          );
+        }
+        normalizedManualNip = nipCheck.normalizedNip;
+      }
+
+      for (const line of manualReq.lines) {
+        if (
+          line.vatGrosze !== undefined &&
+          line.grossGrosze !== undefined &&
+          line.netGrosze + line.vatGrosze !== line.grossGrosze
+        ) {
+          throw new AccountingWorkspaceValidationError(
+            422,
+            'invalid_document_amounts',
+            `Niezgodność kwot pozycji (${line.description}): netto + VAT !== brutto.`,
+          );
+        }
+      }
+
       const canonicalManual = JSON.stringify({
-        documentNumber: req.documentNumber,
-        direction: req.direction,
-        issueDate: req.issueDate,
-        counterpartyNip: req.counterpartyNip ?? '',
-        lines: req.lines,
+        documentNumber: manualReq.documentNumber,
+        direction: manualReq.direction,
+        issueDate: manualReq.issueDate,
+        counterpartyNip: normalizedManualNip ?? '',
+        lines: manualReq.lines,
       });
       sha256HashValue = sha256Hex(canonicalManual);
       if (
@@ -2807,24 +2735,24 @@ export class AccountingWorkspaceService {
         sourceFormat: 'manual',
         status: 'needs_verification',
         sha256Hash: sha256HashValue,
-        documentNumber: req.documentNumber,
-        direction: req.direction,
-        issueDate: req.issueDate,
-        eventDate: req.eventDate ?? req.issueDate,
-        dueDate: req.dueDate ?? addDaysIso(req.issueDate, 14),
-        counterpartyName: req.counterpartyName,
-        counterpartyNip: req.counterpartyNip,
-        counterpartyAddress: req.counterpartyAddress,
-        counterpartyIban: req.counterpartyIban,
-        ksefReferenceNumber: req.ksefReferenceNumber,
-        ksefMarker: req.ksefMarker,
-        suggestedCategory: req.suggestedCategory,
-        vatDeductionMode: req.vatDeductionMode,
-        ryczaltRate: req.ryczaltRate,
-        isCorrection: req.isCorrection,
-        correctedDocumentNumber: req.correctedDocumentNumber,
-        correctionReason: req.correctionReason,
-        lines: req.lines,
+        documentNumber: manualReq.documentNumber,
+        direction: manualReq.direction,
+        issueDate: manualReq.issueDate,
+        eventDate: manualReq.eventDate ?? manualReq.issueDate,
+        dueDate: manualReq.dueDate ?? addDaysIso(manualReq.issueDate, 14),
+        counterpartyName: manualReq.counterpartyName,
+        counterpartyNip: normalizedManualNip,
+        counterpartyAddress: manualReq.counterpartyAddress,
+        counterpartyIban: manualReq.counterpartyIban,
+        ksefReferenceNumber: manualReq.ksefReferenceNumber,
+        ksefMarker: manualReq.ksefMarker,
+        suggestedCategory: manualReq.suggestedCategory,
+        vatDeductionMode: manualReq.vatDeductionMode,
+        ryczaltRate: manualReq.ryczaltRate,
+        isCorrection: manualReq.isCorrection,
+        correctedDocumentNumber: manualReq.correctedDocumentNumber,
+        correctionReason: manualReq.correctionReason,
+        lines: manualReq.lines,
       });
     }
 
@@ -2988,31 +2916,54 @@ export class AccountingWorkspaceService {
     let totalNonDeductibleVatGrosze = 0;
 
     if (vatActive) {
-      const hasAnnex15 = doc.lines.some((l) => l.annex15Item);
-      const dominantRate = doc.lines[0]?.vatRate ?? '23';
-      const vatEntryId = randomUUID();
-      const vatEntry = createVatRegisterEntry({
-        id: vatEntryId,
-        registerType: doc.direction === 'sales' ? 'sales' : 'purchase',
-        period,
-        taxPointDate: doc.eventDate,
-        issueDate: doc.issueDate,
-        documentNumber: doc.documentNumber,
-        counterpartyName: doc.counterpartyName,
-        ...(doc.counterpartyNip ? { counterpartyNip: doc.counterpartyNip } : {}),
-        vatRate: dominantRate,
-        netGrosze: doc.totalNetGrosze,
-        vatTotalGrosze: doc.totalVatGrosze,
-        deductionMode: doc.direction === 'sales' ? 'full_100' : vatDeductionMode,
-        annex15Item: hasAnnex15,
-        ...(doc.ksefReferenceNumber ? { ksefReferenceNumber: doc.ksefReferenceNumber } : {}),
-        ...(doc.ksefMarker ? { ksefMarker: doc.ksefMarker } : {}),
-      });
-      company.vatEntries.push(vatEntry);
-      vatEntryIds.push(vatEntry.id);
-      if (doc.direction === 'purchase') {
-        totalDeductibleVatGrosze = vatEntry.deductibleVatGrosze;
-        totalNonDeductibleVatGrosze = vatEntry.nonDeductibleVatGrosze;
+      const groupedByRate = new Map<
+        VatRateCode,
+        { netGrosze: number; vatTotalGrosze: number; hasAnnex15: boolean }
+      >();
+      for (const line of doc.lines) {
+        const current = groupedByRate.get(line.vatRate) ?? {
+          netGrosze: 0,
+          vatTotalGrosze: 0,
+          hasAnnex15: false,
+        };
+        current.netGrosze += line.netGrosze;
+        current.vatTotalGrosze += line.vatGrosze;
+        current.hasAnnex15 = current.hasAnnex15 || Boolean(line.annex15Item);
+        groupedByRate.set(line.vatRate, current);
+      }
+      if (groupedByRate.size === 0) {
+        groupedByRate.set('23', {
+          netGrosze: doc.totalNetGrosze,
+          vatTotalGrosze: doc.totalVatGrosze,
+          hasAnnex15: false,
+        });
+      }
+
+      for (const [vatRate, group] of groupedByRate.entries()) {
+        const vatEntryId = randomUUID();
+        const vatEntry = createVatRegisterEntry({
+          id: vatEntryId,
+          registerType: doc.direction === 'sales' ? 'sales' : 'purchase',
+          period,
+          taxPointDate: doc.eventDate,
+          issueDate: doc.issueDate,
+          documentNumber: doc.documentNumber,
+          counterpartyName: doc.counterpartyName,
+          ...(doc.counterpartyNip ? { counterpartyNip: doc.counterpartyNip } : {}),
+          vatRate,
+          netGrosze: group.netGrosze,
+          vatTotalGrosze: group.vatTotalGrosze,
+          deductionMode: doc.direction === 'sales' ? 'full_100' : vatDeductionMode,
+          annex15Item: group.hasAnnex15,
+          ...(doc.ksefReferenceNumber ? { ksefReferenceNumber: doc.ksefReferenceNumber } : {}),
+          ...(doc.ksefMarker ? { ksefMarker: doc.ksefMarker } : {}),
+        });
+        company.vatEntries.push(vatEntry);
+        vatEntryIds.push(vatEntry.id);
+        if (doc.direction === 'purchase') {
+          totalDeductibleVatGrosze += vatEntry.deductibleVatGrosze;
+          totalNonDeductibleVatGrosze += vatEntry.nonDeductibleVatGrosze;
+        }
       }
     } else if (doc.direction === 'purchase') {
       totalDeductibleVatGrosze = 0;
@@ -3199,7 +3150,7 @@ export class AccountingWorkspaceService {
         const costAccount =
           overrides?.ledgerAccountCode ?? (category === 'towary_i_materialy' ? '330' : '402');
         const costBase = doc.totalNetGrosze + totalNonDeductibleVatGrosze;
-        kupGrosze = isCarMixed ? Math.round((costBase * 75) / 100) : costBase;
+        kupGrosze = isCarMixed ? multiplyGroszeByBps(costBase, 7500, 'half_up') : costBase;
         nkupGrosze = costBase - kupGrosze;
         lines.push({
           accountCode: costAccount,
@@ -3492,7 +3443,8 @@ export class AccountingWorkspaceService {
           ? 'ryczalt'
           : 'skala';
 
-    const kpirSummary = summarizeKpirPeriod(company.kpirEntries, period);
+    const prevPeriod = previousMonthPeriod(period);
+    const prevKpirSummary = summarizeKpirPeriod(company.kpirEntries, prevPeriod);
     const ytdRyczaltRev = company.ryczaltEntries
       .filter((e) => e.period.slice(0, 4) === period.slice(0, 4) && e.period <= period)
       .reduce((acc, e) => acc + e.revenueGrosze, 0);
@@ -3502,11 +3454,95 @@ export class AccountingWorkspaceService {
       zusScheme: company.taxProfile.zusScheme,
       taxForm,
       voluntarySicknessInsurance: company.taxProfile.voluntarySicknessInsurance,
-      previousMonthIncomeGrosze: kpirSummary.monthTotals.accountingIncomeGrosze,
+      previousMonthIncomeGrosze: prevKpirSummary.monthTotals.accountingIncomeGrosze,
       ytdRyczaltRevenueGrosze: ytdRyczaltRev,
       insuredPersonsCount: company.taxProfile.insuredPersonsCount,
       customAccidentRateBps: company.taxProfile.accidentRateBps,
     });
+  }
+
+  private computeYtdKpirZusAndPriorPitInternal(
+    company: WorkspaceCompanyState,
+    period: string,
+    taxForm: 'skala' | 'liniowy',
+  ): {
+    readonly paidSocialZusYtdGrosze: number;
+    readonly paidHealthInsuranceYtdGrosze: number;
+    readonly previousAdvancesPaidYtdGrosze: number;
+  } {
+    const yearPrefix = period.slice(0, 4);
+    const activePriorPeriods = Array.from(
+      new Set(
+        company.kpirEntries
+          .filter((e) => e.period.startsWith(yearPrefix) && e.period < period)
+          .map((e) => e.period),
+      ),
+    ).sort();
+
+    let paidSocialZusYtdGrosze = 0;
+    let paidHealthInsuranceYtdGrosze = 0;
+    let previousAdvancesPaidYtdGrosze = 0;
+
+    for (const priorPeriod of activePriorPeriods) {
+      const priorZus = this.computeCompanyZusInternal(company, priorPeriod);
+      paidSocialZusYtdGrosze += priorZus?.socialContributionsTotalGrosze ?? 0;
+      paidHealthInsuranceYtdGrosze += priorZus?.healthContributionGrosze ?? 0;
+      const priorSummary = summarizeKpirPeriod(company.kpirEntries, priorPeriod);
+      const priorPit = calculateKpirPitAdvance({
+        period: priorPeriod,
+        taxForm,
+        ytdRevenueGrosze: priorSummary.yearToDateTotals.col9TotalRevenueGrosze,
+        ytdCostsGrosze: priorSummary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
+        paidSocialZusYtdGrosze,
+        paidHealthInsuranceYtdGrosze,
+        previousAdvancesPaidYtdGrosze,
+      });
+      previousAdvancesPaidYtdGrosze += priorPit.advanceDueGrosze;
+    }
+
+    const currentZus = this.computeCompanyZusInternal(company, period);
+    paidSocialZusYtdGrosze += currentZus?.socialContributionsTotalGrosze ?? 0;
+    paidHealthInsuranceYtdGrosze += currentZus?.healthContributionGrosze ?? 0;
+
+    return {
+      paidSocialZusYtdGrosze,
+      paidHealthInsuranceYtdGrosze,
+      previousAdvancesPaidYtdGrosze,
+    };
+  }
+
+  private computeYtdCitNkupGroszeInternal(company: WorkspaceCompanyState, period: string): number {
+    const yearPrefix = period.slice(0, 4);
+    let totalNkupGrosze = 0;
+    for (const docItem of company.documents) {
+      if (
+        docItem.status !== 'posted' ||
+        docItem.document.direction !== 'purchase' ||
+        !docItem.document.eventDate.startsWith(yearPrefix) ||
+        docItem.document.eventDate.slice(0, 7) > period
+      ) {
+        continue;
+      }
+      const explanation = company.explanationsById.get(docItem.documentId);
+      if (explanation) {
+        const parsedNkup = parsePlnToGrosze(explanation.nkupAmountPln);
+        if (parsedNkup > 0) {
+          totalNkupGrosze += parsedNkup;
+          continue;
+        }
+      }
+      if (docItem.aiProposal?.suggestedCategory === 'eksploatacja_samochodu_mieszana') {
+        const vatActive = company.taxProfile.vatStatus === 'czynny';
+        const nonDeductibleVat = vatActive
+          ? docItem.document.totalVatGrosze -
+            multiplyGroszeByBps(docItem.document.totalVatGrosze, 5000, 'half_up')
+          : docItem.document.totalVatGrosze;
+        const costBase = docItem.document.totalNetGrosze + nonDeductibleVat;
+        const kup = multiplyGroszeByBps(costBase, 7500, 'half_up');
+        totalNkupGrosze += Math.max(0, costBase - kup);
+      }
+    }
+    return totalNkupGrosze;
   }
 
   calculateCompanyZus(
@@ -3630,17 +3666,18 @@ export class AccountingWorkspaceService {
     }));
 
     const summary = summarizeKpirPeriod(company.kpirEntries, period);
-    const zus = this.computeCompanyZusInternal(company, period);
     const taxForm: 'skala' | 'liniowy' =
       company.taxProfile.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala';
+    const ytdZusAndPit = this.computeYtdKpirZusAndPriorPitInternal(company, period, taxForm);
 
     const pitAdvance = calculateKpirPitAdvance({
       period,
       taxForm,
       ytdRevenueGrosze: summary.yearToDateTotals.col9TotalRevenueGrosze,
       ytdCostsGrosze: summary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-      paidSocialZusYtdGrosze: zus?.socialContributionsTotalGrosze ?? 0,
-      paidHealthInsuranceYtdGrosze: zus?.healthContributionGrosze ?? 0,
+      paidSocialZusYtdGrosze: ytdZusAndPit.paidSocialZusYtdGrosze,
+      paidHealthInsuranceYtdGrosze: ytdZusAndPit.paidHealthInsuranceYtdGrosze,
+      previousAdvancesPaidYtdGrosze: ytdZusAndPit.previousAdvancesPaidYtdGrosze,
     });
 
     const periodEntries = company.kpirEntries.filter((e) => e.period === period);
@@ -3649,7 +3686,7 @@ export class AccountingWorkspaceService {
       period,
       summary.yearToDateTotals.col9TotalRevenueGrosze,
       summary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-      zus?.socialContributionsTotalGrosze ?? 0,
+      ytdZusAndPit.paidSocialZusYtdGrosze,
     );
 
     return KpirViewResponseSchema.parse({
@@ -3745,7 +3782,7 @@ export class AccountingWorkspaceService {
       const deductibleVat = !vatActive
         ? 0
         : entryKind === 'vehicle_mixed_75_col13'
-          ? Math.round(vatGrosze / 2)
+          ? multiplyGroszeByBps(vatGrosze, 5000, 'half_up')
           : vatGrosze;
       const qual = qualifyKpirExpense({
         eventDate,
@@ -3956,15 +3993,23 @@ export class AccountingWorkspaceService {
       entries: periodVat,
     });
 
-    const p19 = Math.round(
-      salesEntries.filter((e) => e.vatRate === '23').reduce((a, e) => a + e.netGrosze, 0) / 100,
-    );
-    const p20 = Math.round(
-      salesEntries.filter((e) => e.vatRate === '23').reduce((a, e) => a + e.vatTotalGrosze, 0) /
-        100,
-    );
-    const p42 = Math.round(purchaseEntries.reduce((a, e) => a + e.netGrosze, 0) / 100);
-    const p43 = Math.round(purchaseEntries.reduce((a, e) => a + e.deductibleVatGrosze, 0) / 100);
+    const roundPln = (grosze: number): number => roundSignedTaxAmountPln(grosze).roundedFullPln;
+    const sumSalesNetByRate = (rate: VatRateCode): number =>
+      salesEntries.filter((e) => e.vatRate === rate).reduce((a, e) => a + e.netGrosze, 0);
+    const sumSalesVatByRate = (rate: VatRateCode): number =>
+      salesEntries.filter((e) => e.vatRate === rate).reduce((a, e) => a + e.vatTotalGrosze, 0);
+    const p10 = roundPln(sumSalesNetByRate('zw'));
+    const p11 = roundPln(sumSalesNetByRate('np'));
+    const p13 = roundPln(sumSalesNetByRate('0'));
+    const p15 = roundPln(sumSalesNetByRate('5'));
+    const p16 = roundPln(sumSalesVatByRate('5'));
+    const p17 = roundPln(sumSalesNetByRate('8'));
+    const p18 = roundPln(sumSalesVatByRate('8'));
+    const p19 = roundPln(sumSalesNetByRate('23'));
+    const p20 = roundPln(sumSalesVatByRate('23'));
+    const deductiblePurchases = purchaseEntries.filter((e) => e.deductionMode !== 'none_0');
+    const p42 = roundPln(deductiblePurchases.reduce((a, e) => a + e.netGrosze, 0));
+    const p43 = roundPln(deductiblePurchases.reduce((a, e) => a + e.deductibleVatGrosze, 0));
 
     const ksefMarkersSummary = {
       NrKSeF: periodVat.filter((e) => e.ksefMarker === 'NrKSeF').length,
@@ -3985,16 +4030,21 @@ export class AccountingWorkspaceService {
         schemaCode,
         period,
         fields: {
+          ...(p10 !== 0 ? { P_10: p10 } : {}),
+          ...(p11 !== 0 ? { P_11: p11 } : {}),
+          ...(p13 !== 0 ? { P_13: p13 } : {}),
+          ...(p15 !== 0 || p16 !== 0 ? { P_15: p15, P_16: p16 } : {}),
+          ...(p17 !== 0 || p18 !== 0 ? { P_17: p17, P_18: p18 } : {}),
           P_19: p19,
           P_20: p20,
-          P_37: Math.round(jpk.salesNetTotalGrosze / 100),
-          P_38: Math.round(jpk.outputVatRoundedPlnGrosze / 100),
+          P_37: roundPln(jpk.salesNetTotalGrosze),
+          P_38: roundPln(jpk.outputVatRoundedPlnGrosze),
           P_42: p42,
           P_43: p43,
-          P_48: Math.round(jpk.totalInputVatPlnGrosze / 100),
-          P_51: Math.round(jpk.taxDueToPayP51Grosze / 100),
-          P_53: Math.round(jpk.excessInputVatToCarryOverP53Grosze / 100),
-          P_62: Math.round(jpk.excessInputVatToCarryOverP53Grosze / 100),
+          P_48: roundPln(jpk.totalInputVatPlnGrosze),
+          P_51: roundPln(jpk.taxDueToPayP51Grosze),
+          P_53: roundPln(jpk.excessInputVatToCarryOverP53Grosze),
+          P_62: roundPln(jpk.excessInputVatToCarryOverP53Grosze),
         },
         outputVatRoundedPlnGrosze: jpk.outputVatRoundedPlnGrosze,
         inputVatDeductibleRoundedPlnGrosze: jpk.totalInputVatPlnGrosze,
@@ -4040,10 +4090,14 @@ export class AccountingWorkspaceService {
     const bs = generateBalanceSheet(entriesUpToPeriod);
     const pnl = generateProfitAndLoss(entriesUpToPeriod);
 
+    const ytdCitNkupGrosze = this.computeYtdCitNkupGroszeInternal(company, period);
     const cit = calculateCitAdvance({
       period,
       ytdTaxableRevenuesGrosze: pnl.totalRevenuesGrosze,
-      ytdTaxDeductibleCostsGrosze: pnl.totalOperatingAndFinancialExpensesGrosze,
+      ytdTaxDeductibleCostsGrosze: Math.max(
+        0,
+        pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
+      ),
       smallTaxpayerStatus: company.taxProfile.smallTaxpayer,
     });
 
@@ -4395,7 +4449,9 @@ export class AccountingWorkspaceService {
         supportLevel: company.taxProfile.supportLevel,
         vatStatus: company.taxProfile.vatStatus,
         vatSettlementPeriod: company.taxProfile.vatSettlementPeriod,
-        zusApplicable: company.taxProfile.zusScheme !== 'not_applicable',
+        zusApplicable:
+          company.taxProfile.zusScheme !== 'not_applicable' ||
+          (company.legalForm === 'sp_z_o_o' && company.taxProfile.insuredPersonsCount > 0),
         ksefSales2024Above200M: company.taxProfile.ksefSales2024Above200M,
         ...(company.taxProfile.ceidgRegisteredBefore2025 !== undefined
           ? { ceidgRegisteredBefore2025: company.taxProfile.ceidgRegisteredBefore2025 }
@@ -4420,13 +4476,16 @@ export class AccountingWorkspaceService {
       company.taxProfile.profileCode === 'jdg_kpir_liniowy'
     ) {
       const sum = summarizeKpirPeriod(company.kpirEntries, period);
+      const taxForm = company.taxProfile.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala';
+      const ytdZusAndPit = this.computeYtdKpirZusAndPriorPitInternal(company, period, taxForm);
       const pit = calculateKpirPitAdvance({
         period,
-        taxForm: company.taxProfile.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala',
+        taxForm,
         ytdRevenueGrosze: sum.yearToDateTotals.col9TotalRevenueGrosze,
         ytdCostsGrosze: sum.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-        paidSocialZusYtdGrosze: zus?.socialContributionsTotalGrosze ?? 0,
-        paidHealthInsuranceYtdGrosze: zus?.healthContributionGrosze ?? 0,
+        paidSocialZusYtdGrosze: ytdZusAndPit.paidSocialZusYtdGrosze,
+        paidHealthInsuranceYtdGrosze: ytdZusAndPit.paidHealthInsuranceYtdGrosze,
+        previousAdvancesPaidYtdGrosze: ytdZusAndPit.previousAdvancesPaidYtdGrosze,
       });
       estimatedIncomeTaxGrosze = pit.advanceDueGrosze;
     } else if (company.taxProfile.profileCode === 'jdg_ryczalt') {
@@ -4439,10 +4498,14 @@ export class AccountingWorkspaceService {
       estimatedIncomeTaxGrosze = r.taxDueGrosze;
     } else {
       const pnl = generateProfitAndLoss(company.journalEntries.filter((je) => je.period <= period));
+      const ytdCitNkupGrosze = this.computeYtdCitNkupGroszeInternal(company, period);
       const cit = calculateCitAdvance({
         period,
         ytdTaxableRevenuesGrosze: pnl.totalRevenuesGrosze,
-        ytdTaxDeductibleCostsGrosze: pnl.totalOperatingAndFinancialExpensesGrosze,
+        ytdTaxDeductibleCostsGrosze: Math.max(
+          0,
+          pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
+        ),
         smallTaxpayerStatus: company.taxProfile.smallTaxpayer,
       });
       estimatedIncomeTaxGrosze = cit.advanceDueGrosze;
@@ -4626,13 +4689,15 @@ export class AccountingWorkspaceService {
       const taxForm = company.taxProfile.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala';
       incomeTaxLabelPl =
         taxForm === 'liniowy' ? 'Zaliczka PIT-36L (19%)' : 'Zaliczka PIT-36 (skala 12%/32%)';
+      const ytdZusAndPit = this.computeYtdKpirZusAndPriorPitInternal(company, period, taxForm);
       const pit = calculateKpirPitAdvance({
         period,
         taxForm,
         ytdRevenueGrosze: kpirSummary.yearToDateTotals.col9TotalRevenueGrosze,
         ytdCostsGrosze: kpirSummary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-        paidSocialZusYtdGrosze: zus?.socialContributionsTotalGrosze ?? 0,
-        paidHealthInsuranceYtdGrosze: zus?.healthContributionGrosze ?? 0,
+        paidSocialZusYtdGrosze: ytdZusAndPit.paidSocialZusYtdGrosze,
+        paidHealthInsuranceYtdGrosze: ytdZusAndPit.paidHealthInsuranceYtdGrosze,
+        previousAdvancesPaidYtdGrosze: ytdZusAndPit.previousAdvancesPaidYtdGrosze,
       });
       incomeTaxGrosze = pit.advanceDueGrosze;
       regimeComparison = this.computeRegimeComparisonInternal(
@@ -4640,7 +4705,7 @@ export class AccountingWorkspaceService {
         period,
         kpirSummary.yearToDateTotals.col9TotalRevenueGrosze,
         kpirSummary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-        zus?.socialContributionsTotalGrosze ?? 0,
+        ytdZusAndPit.paidSocialZusYtdGrosze,
       );
     } else if (company.taxProfile.profileCode === 'jdg_ryczalt') {
       const rycz = calculateMonthlyRyczalt({
@@ -4657,13 +4722,20 @@ export class AccountingWorkspaceService {
     } else {
       const entriesUpTo = company.journalEntries.filter((je) => je.period <= period);
       const pnl = generateProfitAndLoss(entriesUpTo);
+      const ytdCitNkupGrosze = this.computeYtdCitNkupGroszeInternal(company, period);
       revenueGrosze = pnl.totalRevenuesGrosze;
-      expensesKupGrosze = pnl.totalOperatingAndFinancialExpensesGrosze;
+      expensesKupGrosze = Math.max(
+        0,
+        pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
+      );
       incomeOrProfitGrosze = pnl.netProfitOrLossGrosze;
       const cit = calculateCitAdvance({
         period,
         ytdTaxableRevenuesGrosze: pnl.totalRevenuesGrosze,
-        ytdTaxDeductibleCostsGrosze: pnl.totalOperatingAndFinancialExpensesGrosze,
+        ytdTaxDeductibleCostsGrosze: Math.max(
+          0,
+          pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
+        ),
         smallTaxpayerStatus: company.taxProfile.smallTaxpayer,
       });
       incomeTaxLabelPl = `Zaliczka CIT-8 (${cit.appliedRatePct}%)`;
@@ -5102,11 +5174,6 @@ export class AccountingWorkspaceService {
       );
     }
 
-    const payloadHash = computeCanonicalMcpInvoicePayloadHash(tId, leId, input.invoice);
-    const existingByIdem = this.store
-      .listMcpProposals(tId, leId)
-      .find((p) => p.idempotencyKey === input.idempotencyKey && p.createdByUserId === uId);
-
     const invNumEnv = sanitizeUntrustedDocumentTextForMcp(input.invoice.invoiceNumber, {
       field: 'invoiceNumber',
     });
@@ -5120,6 +5187,18 @@ export class AccountingWorkspaceService {
       invNumEnv.promptInjectionSuspected ||
       cpEnv.promptInjectionSuspected ||
       descEnv.promptInjectionSuspected;
+
+    const sanitizedInvoice: PrepareInvoiceAndPostingProposalInput['invoice'] = {
+      ...input.invoice,
+      invoiceNumber: invNumEnv.sanitizedText || input.invoice.invoiceNumber,
+      counterpartyName: cpEnv.sanitizedText || input.invoice.counterpartyName,
+      expenseDescription: descEnv.sanitizedText || input.invoice.expenseDescription,
+    };
+
+    const payloadHash = computeCanonicalMcpInvoicePayloadHash(tId, leId, sanitizedInvoice);
+    const existingByIdem = this.store
+      .listMcpProposals(tId, leId)
+      .find((p) => p.idempotencyKey === input.idempotencyKey && p.createdByUserId === uId);
 
     if (existingByIdem) {
       if (existingByIdem.payloadHash !== payloadHash) {
@@ -5164,7 +5243,7 @@ export class AccountingWorkspaceService {
       };
     }
 
-    const proposedPosting = computeProposedAccountingPreview(input.invoice, {
+    const proposedPosting = computeProposedAccountingPreview(sanitizedInvoice, {
       taxRegime: company.taxRegime,
       vatStatus: company.vatStatusSimple,
     });
@@ -5173,13 +5252,6 @@ export class AccountingWorkspaceService {
     const expiresAtMs = now.getTime() + 24 * 60 * 60 * 1000;
     const expiresAtIso = new Date(expiresAtMs).toISOString();
     const proposalId = fixedProposalId ?? randomUUID();
-
-    const sanitizedInvoice: PrepareInvoiceAndPostingProposalInput['invoice'] = {
-      ...input.invoice,
-      invoiceNumber: invNumEnv.sanitizedText || input.invoice.invoiceNumber,
-      counterpartyName: cpEnv.sanitizedText || input.invoice.counterpartyName,
-      expenseDescription: descEnv.sanitizedText || input.invoice.expenseDescription,
-    };
 
     const storedProposal: WorkspaceStoredMcpProposal = {
       proposalId,
@@ -5923,6 +5995,51 @@ export class AccountingWorkspaceService {
     return port;
   }
 
+  syncStoreMcpProposalsToBoundGateways(tenantId?: TenantId, legalEntityId?: LegalEntityId): void {
+    const companies =
+      tenantId && legalEntityId
+        ? ([this.store.getCompany(tenantId, legalEntityId)].filter(
+            Boolean,
+          ) as WorkspaceCompanyState[])
+        : this.store.listAllCompanies();
+    for (const comp of companies) {
+      for (const existing of this.store.listMcpProposals(comp.tenantId, comp.legalEntityId)) {
+        for (const gateway of this.boundMcpGateways) {
+          gateway.syncProposalFromWorkspace({
+            proposalId: existing.proposalId,
+            tenantId: existing.tenantId,
+            legalEntityId: existing.legalEntityId,
+            createdByUserId: existing.createdByUserId,
+            idempotencyKey: existing.idempotencyKey,
+            payloadHash: existing.payloadHash,
+            createdAtIso: existing.createdAtIso,
+            expiresAtMs: existing.expiresAtMs,
+            expiresAtIso: existing.expiresAtIso,
+            status: existing.status,
+            ledgerEntryId: existing.ledgerEntryId,
+            confirmedAtIso: existing.confirmedAtIso,
+            confirmedByUserId: existing.confirmedByUserId ?? null,
+            invoice: existing.invoice,
+            proposedPosting: existing.proposedPosting,
+          });
+          const existingChallenge = this.store.getHumanChallenge(existing.proposalId);
+          if (existingChallenge) {
+            gateway.syncHumanChallengeFromWorkspace({
+              proposalId: existingChallenge.proposalId,
+              tenantId: existingChallenge.tenantId,
+              legalEntityId: existingChallenge.legalEntityId,
+              authorizedHumanUserId: existingChallenge.humanUserId,
+              expectedPayloadHash: existingChallenge.expectedPayloadHash,
+              codeSha256Hex: existingChallenge.codeSha256Hex,
+              expiresAtMs: existingChallenge.expiresAtMs,
+              consumedAtIso: existingChallenge.consumedAtIso,
+            });
+          }
+        }
+      }
+    }
+  }
+
   createBoundMcpGateway(
     verifier: OidcAccessTokenVerifier,
     options?: {
@@ -5943,41 +6060,8 @@ export class AccountingWorkspaceService {
       humanConfirmationTtlMs: options?.humanConfirmationTtlMs,
     });
 
-    for (const comp of this.store.listAllCompanies()) {
-      for (const existing of this.store.listMcpProposals(comp.tenantId, comp.legalEntityId)) {
-        gateway.syncProposalFromWorkspace({
-          proposalId: existing.proposalId,
-          tenantId: existing.tenantId,
-          legalEntityId: existing.legalEntityId,
-          createdByUserId: existing.createdByUserId,
-          idempotencyKey: existing.idempotencyKey,
-          payloadHash: existing.payloadHash,
-          createdAtIso: existing.createdAtIso,
-          expiresAtMs: existing.expiresAtMs,
-          expiresAtIso: existing.expiresAtIso,
-          status: existing.status,
-          ledgerEntryId: existing.ledgerEntryId,
-          confirmedAtIso: existing.confirmedAtIso,
-          confirmedByUserId: existing.confirmedByUserId ?? null,
-          invoice: existing.invoice,
-          proposedPosting: existing.proposedPosting,
-        });
-        const existingChallenge = this.store.getHumanChallenge(existing.proposalId);
-        if (existingChallenge) {
-          gateway.syncHumanChallengeFromWorkspace({
-            proposalId: existingChallenge.proposalId,
-            tenantId: existingChallenge.tenantId,
-            legalEntityId: existingChallenge.legalEntityId,
-            authorizedHumanUserId: existingChallenge.humanUserId,
-            expectedPayloadHash: existingChallenge.expectedPayloadHash,
-            codeSha256Hex: existingChallenge.codeSha256Hex,
-            expiresAtMs: existingChallenge.expiresAtMs,
-            consumedAtIso: existingChallenge.consumedAtIso,
-          });
-        }
-      }
-    }
     this.boundMcpGateways.add(gateway);
+    this.syncStoreMcpProposalsToBoundGateways();
 
     const origIssueChallenge = gateway.issueHumanConfirmationChallenge.bind(gateway);
     gateway.issueHumanConfirmationChallenge = async (input) => {

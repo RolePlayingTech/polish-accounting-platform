@@ -299,7 +299,7 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
     });
     expect(badOriginRes.status).toBe(403);
 
-    // 5. Disallowed Host header via Web Standard handler -> 403
+    // 5. Disallowed Host header OR mismatched absolute-form URL authority via Web Standard handler -> 403 (#69)
     const badHostRes = await handlePapMcpHttpRequest(
       new Request('http://evil.example/api/v1/mcp', {
         method: 'POST',
@@ -317,6 +317,24 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       },
     );
     expect(badHostRes.status).toBe(403);
+
+    const absoluteFormBypassRes = await handlePapMcpHttpRequest(
+      new Request('http://evil.example/api/v1/mcp', {
+        method: 'POST',
+        headers: {
+          host: '127.0.0.1',
+          'content-type': 'application/json',
+          authorization: `Bearer ${SECRET_ACCOUNTANT_TOKEN}`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 55, method: 'ping' }),
+      }),
+      {
+        gateway: stack.gateway,
+        verifier: stack.verifier,
+        identityResolver: stack.identityResolver,
+      },
+    );
+    expect(absoluteFormBypassRes.status).toBe(403);
 
     // 6. Token without pap:mcp:read scope -> 403 insufficient_scope
     const missingScopeRes = await fetch(runningServer.mcpUrl, {
