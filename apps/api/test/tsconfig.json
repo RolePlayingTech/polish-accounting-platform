@@ -3,5 +3,10 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["./**/*.ts", "../src/**/*.ts", "../vitest.integration.config.ts"]
+  "include": [
+    "./**/*.ts",
+    "../src/**/*.ts",
+    "../vitest.integration.config.ts",
+    "../vitest.adversarial.config.ts"
+  ]
 }
