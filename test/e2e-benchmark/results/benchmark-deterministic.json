@@ -1,0 +1,249 @@
+{
+  "generatedAt": "2026-11-08T09:41:40.873Z",
+  "nodeVersion": "v24.22.2",
+  "ports": {
+    "apiPort": 41801,
+    "webPort": 31801
+  },
+  "locComparison": {
+    "playwrightSuite": {
+      "totalLines": 235,
+      "nonBlankNonCommentLoc": 200
+    },
+    "e2eDeterministicSuite": {
+      "totalLines": 247,
+      "nonBlankNonCommentLoc": 212
+    },
+    "e2eAgentSuite": {
+      "totalLines": 30,
+      "nonBlankNonCommentLoc": 25
+    }
+  },
+  "playwrightDeterministic": {
+    "runs": [
+      {
+        "iteration": 1,
+        "exitCode": 0,
+        "wallClockMs": 7559,
+        "runnerDurationMs": 7173,
+        "expected": 5,
+        "unexpected": 0
+      },
+      {
+        "iteration": 2,
+        "exitCode": 0,
+        "wallClockMs": 7193,
+        "runnerDurationMs": 6800,
+        "expected": 5,
+        "unexpected": 0
+      },
+      {
+        "iteration": 3,
+        "exitCode": 0,
+        "wallClockMs": 6839,
+        "runnerDurationMs": 6453,
+        "expected": 5,
+        "unexpected": 0
+      },
+      {
+        "iteration": 4,
+        "exitCode": 0,
+        "wallClockMs": 7089,
+        "runnerDurationMs": 6707,
+        "expected": 5,
+        "unexpected": 0
+      },
+      {
+        "iteration": 5,
+        "exitCode": 0,
+        "wallClockMs": 7250,
+        "runnerDurationMs": 6871,
+        "expected": 5,
+        "unexpected": 0
+      }
+    ],
+    "wallClockStats": {
+      "count": 5,
+      "medianMs": 7193,
+      "minMs": 6839,
+      "maxMs": 7559,
+      "meanMs": 7186,
+      "samplesMs": [7559, 7193, 6839, 7089, 7250]
+    },
+    "runnerDurationStats": {
+      "count": 5,
+      "medianMs": 6800,
+      "minMs": 6453,
+      "maxMs": 7173,
+      "meanMs": 6801,
+      "samplesMs": [7173, 6800, 6453, 6707, 6871]
+    }
+  },
+  "e2eDeterministic": {
+    "runs": [
+      {
+        "iteration": 1,
+        "exitCode": 0,
+        "wallClockMs": 9949,
+        "runnerDurationMs": 9284,
+        "testsSumDurationMs": 8862,
+        "summary": {
+          "discovered": 7,
+          "selected": 5,
+          "executed": 5,
+          "passed": 5,
+          "failed": 0,
+          "interrupted": 0,
+          "flaky": 0,
+          "skipped": 0
+        },
+        "usage": {
+          "discoveredResults": 7,
+          "maxAgentContextBytes": 0,
+          "maxLedgerBytes": 0,
+          "maxObservationBytes": 0,
+          "artifactBytes": 0,
+          "downloads": 0,
+          "events": 109,
+          "modelTokens": 0,
+          "maxModelCallsInStep": 0,
+          "maxActionStepsInStep": 0
+        }
+      },
+      {
+        "iteration": 2,
+        "exitCode": 0,
+        "wallClockMs": 10082,
+        "runnerDurationMs": 9386,
+        "testsSumDurationMs": 8962,
+        "summary": {
+          "discovered": 7,
+          "selected": 5,
+          "executed": 5,
+          "passed": 5,
+          "failed": 0,
+          "interrupted": 0,
+          "flaky": 0,
+          "skipped": 0
+        },
+        "usage": {
+          "discoveredResults": 7,
+          "maxAgentContextBytes": 0,
+          "maxLedgerBytes": 0,
+          "maxObservationBytes": 0,
+          "artifactBytes": 0,
+          "downloads": 0,
+          "events": 109,
+          "modelTokens": 0,
+          "maxModelCallsInStep": 0,
+          "maxActionStepsInStep": 0
+        }
+      },
+      {
+        "iteration": 3,
+        "exitCode": 0,
+        "wallClockMs": 10119,
+        "runnerDurationMs": 9450,
+        "testsSumDurationMs": 9018,
+        "summary": {
+          "discovered": 7,
+          "selected": 5,
+          "executed": 5,
+          "passed": 5,
+          "failed": 0,
+          "interrupted": 0,
+          "flaky": 0,
+          "skipped": 0
+        },
+        "usage": {
+          "discoveredResults": 7,
+          "maxAgentContextBytes": 0,
+          "maxLedgerBytes": 0,
+          "maxObservationBytes": 0,
+          "artifactBytes": 0,
+          "downloads": 0,
+          "events": 109,
+          "modelTokens": 0,
+          "maxModelCallsInStep": 0,
+          "maxActionStepsInStep": 0
+        }
+      },
+      {
+        "iteration": 4,
+        "exitCode": 0,
+        "wallClockMs": 10245,
+        "runnerDurationMs": 9592,
+        "testsSumDurationMs": 9158,
+        "summary": {
+          "discovered": 7,
+          "selected": 5,
+          "executed": 5,
+          "passed": 5,
+          "failed": 0,
+          "interrupted": 0,
+          "flaky": 0,
+          "skipped": 0
+        },
+        "usage": {
+          "discoveredResults": 7,
+          "maxAgentContextBytes": 0,
+          "maxLedgerBytes": 0,
+          "maxObservationBytes": 0,
+          "artifactBytes": 0,
+          "downloads": 0,
+          "events": 109,
+          "modelTokens": 0,
+          "maxModelCallsInStep": 0,
+          "maxActionStepsInStep": 0
+        }
+      },
+      {
+        "iteration": 5,
+        "exitCode": 0,
+        "wallClockMs": 10474,
+        "runnerDurationMs": 9785,
+        "testsSumDurationMs": 9358,
+        "summary": {
+          "discovered": 7,
+          "selected": 5,
+          "executed": 5,
+          "passed": 5,
+          "failed": 0,
+          "interrupted": 0,
+          "flaky": 0,
+          "skipped": 0
+        },
+        "usage": {
+          "discoveredResults": 7,
+          "maxAgentContextBytes": 0,
+          "maxLedgerBytes": 0,
+          "maxObservationBytes": 0,
+          "artifactBytes": 0,
+          "downloads": 0,
+          "events": 109,
+          "modelTokens": 0,
+          "maxModelCallsInStep": 0,
+          "maxActionStepsInStep": 0
+        }
+      }
+    ],
+    "wallClockStats": {
+      "count": 5,
+      "medianMs": 10119,
+      "minMs": 9949,
+      "maxMs": 10474,
+      "meanMs": 10174,
+      "samplesMs": [9949, 10082, 10119, 10245, 10474]
+    },
+    "runnerDurationStats": {
+      "count": 5,
+      "medianMs": 9450,
+      "minMs": 9284,
+      "maxMs": 9785,
+      "meanMs": 9499,
+      "samplesMs": [9284, 9386, 9450, 9592, 9785]
+    }
+  },
+  "e2eAgent": null,
+  "splitBrainDiagnostics": null
+}

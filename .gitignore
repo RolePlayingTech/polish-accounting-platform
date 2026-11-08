@@ -36,3 +36,11 @@ private/
 .vscode/
 .pytest_cache/
 __pycache__/
+
+# e2e & playwright runtime artifacts
+.e2e/
+test/e2e-benchmark/.e2e-out/
+test/e2e-benchmark/playwright-results/
+playwright-report/
+test-results/
+
