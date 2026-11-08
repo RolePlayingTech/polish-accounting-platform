@@ -680,7 +680,8 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
           counterpartyName: 'Dowód Wewnętrzny A',
           counterpartyAddress: 'Warszawa',
           eventDescription: 'Równoczesny wpis KPiR z Instancji A',
-          col13OtherExpensesGrosze: 10_000,
+          netGrosze: 10_000,
+          entryKind: 'other_expenses_100_col13',
         }),
       }),
       fetch(`${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`, {
@@ -692,7 +693,8 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
           counterpartyName: 'Dowód Wewnętrzny B',
           counterpartyAddress: 'Kraków',
           eventDescription: 'Równoczesny wpis KPiR z Instancji B',
-          col13OtherExpensesGrosze: 20_000,
+          netGrosze: 20_000,
+          entryKind: 'other_expenses_100_col13',
         }),
       }),
     ]);
@@ -801,7 +803,8 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       counterpartyName: 'Dowód Po Utracie Potwierdzenia Commit',
       counterpartyAddress: 'Gdańsk',
       eventDescription: 'Wpis zatwierdzony w DB przed utratą potwierdzenia COMMIT',
-      col13OtherExpensesGrosze: 33_300,
+      netGrosze: 33_300,
+      entryKind: 'other_expenses_100_col13',
     };
 
     let faultInjected = false;
@@ -873,7 +876,8 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       counterpartyName: 'Wpis Marty Przed Cofnięciem Grantu',
       counterpartyAddress: 'Poznań',
       eventDescription: 'Autoryzowany zapis Marty',
-      col13OtherExpensesGrosze: 12_000,
+      netGrosze: 12_000,
+      entryKind: 'other_expenses_100_col13',
     };
 
     const martaWriteRes = await fetch(
