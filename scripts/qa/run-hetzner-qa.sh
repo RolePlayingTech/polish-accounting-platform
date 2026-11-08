@@ -18,7 +18,7 @@ readonly -a HOST_SCOPE_LIMIT_ARGS=(
   -p MemoryMax=768M
   -p MemorySwapMax=0
   -p CPUQuota=50%
-  -p TasksMax=128
+  -p TasksMax=512
 )
 
 PREFLIGHT_ONLY=0
@@ -122,6 +122,9 @@ fi
 export CI="1"
 export NEXT_TELEMETRY_DISABLED="1"
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=512}"
+export TURBO_CONCURRENCY="${TURBO_CONCURRENCY:-2}"
+export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-2}"
+export TOKIO_WORKER_THREADS="${TOKIO_WORKER_THREADS:-2}"
 
 run_bounded_host_cmd() {
   local unit_name="pap-qa-host-$(openssl rand -hex 6)"
