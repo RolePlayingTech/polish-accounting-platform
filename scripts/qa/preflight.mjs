@@ -77,19 +77,22 @@ export function runPreflight(options = {}, repoRoot = process.cwd()) {
   const headRes = runGit(['rev-parse', 'HEAD'], repoRoot);
   const headSha = headRes.status === 0 ? headRes.stdout : 'unknown';
 
-  const branchRes = runGit([' symbolic-ref', '--short', '-q', 'HEAD'], repoRoot);
+  const branchRes = runGit(['symbolic-ref', '--short', '-q', 'HEAD'], repoRoot);
   const currentBranch =
     branchRes.status === 0
       ? branchRes.stdout
       : runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot).stdout;
 
-  if (!options.allowMainInspect && FORBIDDEN_BRANCH_NAMES.includes(currentBranch)) {
+  if (
+    !options.allowMainInspect &&
+    (!currentBranch || FORBIDDEN_BRANCH_NAMES.includes(currentBranch))
+  ) {
     errors.push(
-      `Niedozwolona gałąź robocza '${currentBranch}'. Utwórz świeżą gałąź zadaniową z aktualnego origin/main.`,
+      `Niedozwolona gałąź robocza '${currentBranch || 'detached-HEAD'}'. Utwórz świeżą gałąź zadaniową z aktualnego origin/main.`,
     );
   }
 
-  const baseRes = runGit(['rev-parse', baseRef], repoRoot);
+  const baseRes = runGit(['rev-parse', '--verify', '-q', baseRef], repoRoot);
   const baseSha = baseRes.status === 0 ? baseRes.stdout : null;
   let mergeBaseSha = null;
 

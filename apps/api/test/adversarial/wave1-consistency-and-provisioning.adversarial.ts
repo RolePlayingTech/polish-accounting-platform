@@ -7,6 +7,7 @@ import { COMPANY_JDG_KPIR_ID, SYNTHETIC_COUNTERPARTY_NIPS, TENANT_1_ID } from '@
 import {
   CompanyDocumentItemSchema,
   DocumentsListResponseSchema,
+  GetMyCompaniesResponseSchema,
   IssueSandboxTokenResponseSchema,
   KpirViewResponseSchema,
   VatViewResponseSchema,
@@ -90,6 +91,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
   const keyId = 'pap-adv-wave1-ctx';
   const keyHex = randomBytes(32).toString('hex');
   let dataSchema = '';
+  let migratorUrl = '';
   let runtimeUrl = '';
   let owner: ReturnType<typeof connectDatabase> | undefined;
   let schemaCreated = false;
@@ -101,6 +103,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
         'Zestaw adversarial wymaga PAP_DATABASE_ENV=test, DATABASE_URL oraz PAP_EPHEMERAL_RUNTIME_DATABASE_URL.',
       );
     }
+    migratorUrl = process.env.DATABASE_URL.trim();
     runtimeUrl = (process.env.PAP_EPHEMERAL_RUNTIME_DATABASE_URL ?? '').trim();
     if (!runtimeUrl) {
       throw new DatabaseConfigError(
@@ -108,7 +111,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       );
     }
 
-    dataSchema = `pap_adv_${randomUUID().replaceAll('-', '')}`;
+    dataSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
     owner = connectDatabase(process.env, dataSchema, { roleScope: 'migrator' });
     await owner.client`CREATE SCHEMA ${owner.client(dataSchema)}`;
     schemaCreated = true;
@@ -120,6 +123,24 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       runtimeRole: 'pap_test_app',
     });
     await configureRuntimePrivileges(owner.db, 'pap_test_app');
+
+    // Jednorazowe zasianie danych startowych (tenant, tożsamości i firmy demo) w beforeAll,
+    // tak aby docelowe instancje testowe A i B działały wyłącznie na nieuprzywilejowanej roli
+    // pap_test_app bez PAP_MIGRATOR_DATABASE_URL i mogły być uruchamiane w dowolnej kolejności.
+    const { app: seedApp } = await bootApiInstance({
+      NODE_ENV: 'test',
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: runtimeUrl,
+      PAP_MIGRATOR_DATABASE_URL: migratorUrl,
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_KEY_ID: keyId,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
+      PAP_SEED_SYNTHETIC_DEMO: 'true',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
+    });
+    await seedApp.close();
   });
 
   afterAll(async () => {
@@ -140,27 +161,23 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
   });
 
   it('ADV-79-01: dwie instancje API ładują tę samą firmę F, a następnie naprzemiennie zapisują i czytają dokumenty, KPiR i VAT bez restartu', async () => {
-    const baseEnv = {
+    const runtimeEnv = {
       NODE_ENV: 'test',
       PAP_DATABASE_ENV: 'test',
       DATABASE_URL: runtimeUrl,
       PAP_DB_SCHEMA: dataSchema,
       PAP_DB_CONTEXT_KEY_ID: keyId,
       PAP_DB_CONTEXT_KEY_HEX: keyHex,
-      PAP_ALLOW_SANDBOX_OIDC: 'true',
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
       PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
     };
 
-    const { app: appA, baseUrl: urlA } = await bootApiInstance({
-      ...baseEnv,
-      PAP_SEED_SYNTHETIC_DEMO: 'true',
-    });
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
     openApps.add(appA);
 
-    const { app: appB, baseUrl: urlB } = await bootApiInstance({
-      ...baseEnv,
-      PAP_SEED_SYNTHETIC_DEMO: 'false',
-    });
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
     openApps.add(appB);
 
     const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
@@ -345,21 +362,22 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
   });
 
   it('ADV-80-01: 20 równoczesnych prób utworzenia firmy o tym samym NIP na dwóch instancjach tworzy dokładnie 1 kompletną firmę, a pozostałe kończą się 409 bez sierot w DB', async () => {
-    const baseEnv = {
+    const runtimeEnv = {
       NODE_ENV: 'test',
       PAP_DATABASE_ENV: 'test',
       DATABASE_URL: runtimeUrl,
       PAP_DB_SCHEMA: dataSchema,
       PAP_DB_CONTEXT_KEY_ID: keyId,
       PAP_DB_CONTEXT_KEY_HEX: keyHex,
-      PAP_ALLOW_SANDBOX_OIDC: 'true',
-      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
       PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
     };
 
-    const { app: appA, baseUrl: urlA } = await bootApiInstance(baseEnv);
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
     openApps.add(appA);
-    const { app: appB, baseUrl: urlB } = await bootApiInstance(baseEnv);
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
     openApps.add(appB);
 
     const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
@@ -393,15 +411,52 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
     expect(createdCount).toBe(1);
     expect(conflictCount).toBe(19);
 
-    // Weryfikacja bezpośrednio w PostgreSQL: dokładnie 1 encja o tym NIP i kompletne company_tax_settings
-    const dbEntities = await owner!.client<{ id: string }[]>`
+    // 1. Dokładnie 1 wiersz w company_tax_settings dla tego NIP
+    const taxSettingsRows = await owner!.client<{ legal_entity_id: string }[]>`
+      SELECT legal_entity_id
+      FROM ${owner!.client(dataSchema)}.company_tax_settings
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND nip = ${contestedNip}
+    `;
+    expect(taxSettingsRows).toHaveLength(1);
+    const winnerEntityId = taxSettingsRows[0]!.legal_entity_id;
+
+    // 2. Dokładnie 1 wiersz w entity_profile_version dla tego NIP, wskazujący tę samą firmę
+    const profileRows = await owner!.client<{ legal_entity_id: string }[]>`
+      SELECT legal_entity_id
+      FROM ${owner!.client(dataSchema)}.entity_profile_version
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND profile_json->>'nip' = ${contestedNip}
+    `;
+    expect(profileRows).toHaveLength(1);
+    expect(profileRows[0]!.legal_entity_id).toBe(winnerEntityId);
+
+    // 3. Zero osieroconych rekordów w legal_entity bez company_tax_settings (wykrywa częściowy provisioning)
+    const orphanEntities = await owner!.client<{ id: string }[]>`
       SELECT le.id
       FROM ${owner!.client(dataSchema)}.legal_entity le
-      JOIN ${owner!.client(dataSchema)}.company_tax_settings cts
+      LEFT JOIN ${owner!.client(dataSchema)}.company_tax_settings cts
         ON cts.tenant_id = le.tenant_id AND cts.legal_entity_id = le.id
       WHERE le.tenant_id = ${TENANT_1_ID}::uuid
-        AND cts.nip = ${contestedNip}
+        AND cts.legal_entity_id IS NULL
     `;
-    expect(dbEntities).toHaveLength(1);
+    expect(orphanEntities).toHaveLength(0);
+
+    // 4. Obie instancje API zwracają tę samą pojedynczą firmę dla tego NIP
+    const companiesOnA = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${urlA}/api/v1/tenants/${TENANT_1_ID}/companies`, { headers: headersA })
+      ).json(),
+    );
+    const companiesOnB = GetMyCompaniesResponseSchema.parse(
+      await (
+        await fetch(`${urlB}/api/v1/tenants/${TENANT_1_ID}/companies`, { headers: headersB })
+      ).json(),
+    );
+    expect(companiesOnA.companies.filter((c) => c.nip === contestedNip)).toHaveLength(1);
+    expect(companiesOnB.companies.filter((c) => c.nip === contestedNip)).toHaveLength(1);
+    expect(companiesOnB.companies.find((c) => c.nip === contestedNip)?.legalEntityId).toBe(
+      winnerEntityId,
+    );
   });
 });

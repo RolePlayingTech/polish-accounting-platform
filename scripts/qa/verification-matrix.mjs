@@ -5,6 +5,7 @@
 export const VERIFICATION_MATRIX_VERSION = '2026-11-08.1';
 
 export const FORBIDDEN_BRANCH_NAMES = Object.freeze([
+  'HEAD',
   'main',
   'master',
   'codex/astra-critical-review-gemini-plan',
@@ -140,31 +141,35 @@ export function classifyFilePath(rawPath) {
     matched.add('governance_infra_alert');
   }
 
+  const isQaHarnessFile =
+    path.startsWith('scripts/qa/') ||
+    path === 'test/qa-gate.test.ts' ||
+    path === 'apps/api/vitest.adversarial.config.ts' ||
+    path.startsWith('apps/api/test/adversarial/') ||
+    path === 'apps/api/test/tsconfig.json' ||
+    path === 'apps/api/package.json' ||
+    path === 'package.json';
+
   // Dokumentacja i narzędzia QA (powierzchnia e)
   if (
     path === 'README.md' ||
     path === 'SECURITY.md' ||
     path === 'CONTRIBUTING.md' ||
     path.startsWith('docs/') ||
-    path.startsWith('scripts/qa/') ||
-    path === 'test/qa-gate.test.ts' ||
-    path === 'apps/api/vitest.adversarial.config.ts' ||
-    path.startsWith('apps/api/test/adversarial/')
+    isQaHarnessFile
   ) {
     matched.add('docs_dormant');
   }
 
-  // (a) DB / Transakcje / Provisioning / Persystencja Runtime
+  // (a) DB / Transakcje / Provisioning / Persystencja Runtime (wszystkie aktywne ścieżki DB, application i API)
   if (
     path.startsWith('packages/db/') ||
-    path === 'packages/application/src/transactional-unit-of-work.ts' ||
-    path === 'packages/application/src/accounting-workspace.ts' ||
-    path.startsWith('packages/application/test/transactional-unit-of-work') ||
-    path.startsWith('packages/application/test/accounting-workspace') ||
-    path.startsWith('apps/api/src/runtime/') ||
-    path.startsWith('apps/api/src/controllers/') ||
-    path === 'apps/api/src/app.module.ts' ||
-    path === 'apps/api/test/postgres-persistence-e2e.integration.ts'
+    path.startsWith('packages/application/src/') ||
+    path.startsWith('packages/application/test/') ||
+    path.startsWith('apps/api/src/') ||
+    (path.startsWith('apps/api/test/') &&
+      !path.startsWith('apps/api/test/adversarial/') &&
+      path !== 'apps/api/test/tsconfig.json')
   ) {
     matched.add('db_transaction_provisioning');
   }
@@ -207,7 +212,7 @@ export function classifyFilePath(rawPath) {
     matched.add('mcp_import');
   }
 
-  // Pozostałe pliki wykonywalne (np. apps/web, packages/ui, root package.json)
+  // Pozostałe pliki wykonywalne (np. apps/web, packages/ui)
   if (matched.size === 0) {
     if (path.endsWith('.md')) {
       matched.add('docs_dormant');
@@ -254,15 +259,19 @@ export function classifyChangedFiles(rawPaths) {
     (f) => f.startsWith('packages/db/drizzle/') || f.startsWith('packages/db/sql/'),
   );
   const touchesGovernanceOrInfra = surfaceIds.has('governance_infra_alert');
+  const touchesQaHarness = normalizedFiles.some(
+    (f) =>
+      f.startsWith('scripts/qa/') ||
+      f.startsWith('apps/api/test/adversarial/') ||
+      f === 'apps/api/vitest.adversarial.config.ts' ||
+      f === 'test/qa-gate.test.ts',
+  );
 
-  const requiresHetznerPgIntegration =
-    surfaces.some((s) => s.requiresHetznerPgIntegration) ||
-    normalizedFiles.some((f) => f.startsWith('apps/api/src/')) ||
-    normalizedFiles.some((f) => f.startsWith('packages/application/src/'));
-
+  const requiresHetznerPgIntegration = surfaces.some((s) => s.requiresHetznerPgIntegration);
   const requiresBothDbAndApiIntegration = requiresHetznerPgIntegration;
   const requiresAdversarialSuite = surfaces.some((s) => s.requiresAdversarialSuite);
-  const requiresIndependentReview = surfaces.some((s) => s.requiresIndependentReview);
+  const requiresIndependentReview =
+    surfaces.some((s) => s.requiresIndependentReview) || touchesQaHarness;
   const requiresOwnerApproval = touchesMigrations || touchesGovernanceOrInfra;
 
   let riskLevel = 'low';
@@ -454,17 +463,29 @@ export function validateCiWorkflowRemainsDisabled(ciYamlContent) {
  * Zasada: żaden niewykonany test (NOT RUN) dla obowiązkowej bramki nie jest równoważny PASS.
  */
 export function validateEvidenceReport(report, expectedHeadSha) {
-  const errors = [];
+  const technicalErrors = [];
+  const approvalErrors = [];
 
   if (!report || typeof report !== 'object') {
-    return { valid: false, mergeVerdict: 'NO-GO (DRAFT)', errors: ['Brak obiektu raportu QA.'] };
+    return {
+      valid: false,
+      technicalChecksValid: false,
+      mergeVerdict: 'NO-GO (DRAFT)',
+      errors: ['Brak obiektu raportu QA.'],
+    };
   }
 
   if (!report.headSha || typeof report.headSha !== 'string') {
-    errors.push('Brak dokładnego commit SHA (headSha) w raporcie.');
+    technicalErrors.push('Brak dokładnego commit SHA (headSha) w raporcie.');
   } else if (expectedHeadSha && report.headSha !== expectedHeadSha) {
-    errors.push(
+    technicalErrors.push(
       `Niezgodność SHA dowodów: raport dotyczy ${report.headSha}, a bieżący HEAD to ${expectedHeadSha}.`,
+    );
+  }
+
+  if (!Array.isArray(report.changedFiles) || report.changedFiles.length === 0) {
+    technicalErrors.push(
+      'Lista zmienionych plików (changedFiles) w raporcie QA nie może być pusta.',
     );
   }
 
@@ -477,31 +498,41 @@ export function validateEvidenceReport(report, expectedHeadSha) {
     }
     const recorded = checkMap.get(reqCheck.id);
     if (!recorded) {
-      errors.push(`Brak wymaganego sprawdzenia '${reqCheck.id}' (${reqCheck.command}).`);
+      technicalErrors.push(`Brak wymaganego sprawdzenia '${reqCheck.id}' (${reqCheck.command}).`);
       continue;
     }
     if (recorded.status !== 'PASS') {
-      errors.push(
+      technicalErrors.push(
         `Wymagane sprawdzenie '${reqCheck.id}' ma status '${recorded.status}' (wymagane PASS na wskazanym SHA).`,
       );
     }
   }
 
   if (classification.requiresHetznerPgIntegration && report.cleanupVerified !== true) {
-    errors.push(
+    technicalErrors.push(
       'Brak potwierdzenia sprzątania zasobów tymczasowych Hetzner (cleanupVerified !== true).',
     );
   }
 
   if (classification.requiresIndependentReview && report.independentReviewStatus !== 'APPROVED') {
-    errors.push(
+    approvalErrors.push(
       `Zmiana wysokiego ryzyka wymaga niezależnego review (aktualny status: ${report.independentReviewStatus ?? 'PENDING'}).`,
     );
   }
 
+  if (classification.requiresOwnerApproval && report.ownerApprovalStatus !== 'APPROVED') {
+    approvalErrors.push(
+      `Zmiana migracji DB lub polityki/infrastruktury wymaga osobnej zgody właściciela (aktualny status: ${report.ownerApprovalStatus ?? 'PENDING'}).`,
+    );
+  }
+
+  const errors = [...technicalErrors, ...approvalErrors];
+  const technicalChecksValid = technicalErrors.length === 0;
   const valid = errors.length === 0;
+
   return {
     valid,
+    technicalChecksValid,
     mergeVerdict: valid ? 'READY FOR MERGE' : 'NO-GO (KEEP DRAFT)',
     classification,
     errors,
@@ -524,6 +555,9 @@ export function formatEvidenceReportMarkdown(report) {
     `- **Środowisko wykonawcze:** \`${report.environment ?? 'lokalne / Hetzner'}\``,
     `- **Sprzątanie zasobów efemerycznych:** \`${report.cleanupVerified === true ? 'VERIFIED (0 pozostałości)' : report.cleanupVerified === false ? 'FAILED' : 'NOT APPLICABLE'}\``,
     `- **Niezależny review:** \`${report.independentReviewStatus ?? 'PENDING'}\``,
+    ...(classification.requiresOwnerApproval
+      ? [`- **Zgoda właściciela (migracja/infra):** \`${report.ownerApprovalStatus ?? 'PENDING'}\``]
+      : []),
     `- **Werdykt bramki Merge-to-Main:** **\`${validation.mergeVerdict}\`** _(nie stanowi zgody na deploy produkcyjny/stagingowy)_`,
     '',
     '| ID sprawdzenia | Polecenie | Środowisko | Status | Czas |',

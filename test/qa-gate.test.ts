@@ -52,7 +52,7 @@ describe('Permanent QA Gate & Risk-Based Verification Matrix (#85)', () => {
     ]);
   });
 
-  it('requires BOTH @pap/db and @pap/api integration tests plus adversarial suite when runtime or DB transaction files change', () => {
+  it('requires BOTH @pap/db and @pap/api integration tests plus adversarial suite when any runtime, API, application, or DB files change', () => {
     const result = classifyChangedFiles([
       'apps/api/src/runtime/postgres-workspace-persistence.ts',
       'packages/db/src/transaction-primitives.ts',
@@ -70,6 +70,13 @@ describe('Permanent QA Gate & Risk-Based Verification Matrix (#85)', () => {
     expect(commands).toContain('pnpm --filter @pap/db test:integration');
     expect(commands).toContain('pnpm --filter @pap/api test:integration');
     expect(commands).toContain('pnpm --filter @pap/api test:adversarial');
+
+    // Weryfikacja P1-3: dowolny plik w apps/api/src/** lub packages/application/src/** również wpada w high-risk
+    const apiMainResult = classifyChangedFiles(['apps/api/src/main.ts']);
+    expect(apiMainResult.riskLevel).toBe('high');
+    expect(apiMainResult.requiresBothDbAndApiIntegration).toBe(true);
+    expect(apiMainResult.requiresAdversarialSuite).toBe(true);
+    expect(apiMainResult.requiresIndependentReview).toBe(true);
   });
 
   it('flags SQL migrations and governance files as critical_governance requiring owner approval', () => {
@@ -87,9 +94,25 @@ describe('Permanent QA Gate & Risk-Based Verification Matrix (#85)', () => {
     expect(govResult.requiresOwnerApproval).toBe(true);
   });
 
-  it('rejects NOT RUN, FAIL, missing cleanup, missing independent review, or stale SHA for high-risk PRs', () => {
+  it('rejects NOT RUN, FAIL, empty changedFiles, missing cleanup, missing independent/owner review, or stale SHA', () => {
     const shaA = '755d33471e993640ead855d7ccb706a842ecfecb';
     const shaB = '1111111111111111111111111111111111111111';
+
+    const emptyFilesReport = {
+      headSha: shaA,
+      baseSha: shaA,
+      changedFiles: [],
+      cleanupVerified: null,
+      independentReviewStatus: 'APPROVED',
+      checks: [
+        { id: 'git_preflight_and_secret_scan', status: 'PASS' },
+        { id: 'architecture_boundaries', status: 'PASS' },
+      ],
+    };
+    const emptyValidation = validateEvidenceReport(emptyFilesReport, shaA);
+    expect(emptyValidation.valid).toBe(false);
+    expect(emptyValidation.technicalChecksValid).toBe(false);
+    expect(emptyValidation.errors.join(' ')).toContain('changedFiles');
 
     const incompleteReport = {
       headSha: shaA,
@@ -110,6 +133,7 @@ describe('Permanent QA Gate & Risk-Based Verification Matrix (#85)', () => {
 
     const notRunValidation = validateEvidenceReport(incompleteReport, shaA);
     expect(notRunValidation.valid).toBe(false);
+    expect(notRunValidation.technicalChecksValid).toBe(false);
     expect(notRunValidation.mergeVerdict).toBe('NO-GO (KEEP DRAFT)');
     expect(notRunValidation.errors.join(' ')).toContain('hetzner_pg18_api_integration');
 
@@ -120,10 +144,22 @@ describe('Permanent QA Gate & Risk-Based Verification Matrix (#85)', () => {
 
     const passValidation = validateEvidenceReport(completeReport, shaA);
     expect(passValidation.valid).toBe(true);
+    expect(passValidation.technicalChecksValid).toBe(true);
     expect(passValidation.mergeVerdict).toBe('READY FOR MERGE');
+
+    const migrationReportWithoutOwner = {
+      ...completeReport,
+      changedFiles: ['packages/db/drizzle/0009_company-nip-unique.sql'],
+      ownerApprovalStatus: 'PENDING',
+    };
+    const ownerValidation = validateEvidenceReport(migrationReportWithoutOwner, shaA);
+    expect(ownerValidation.valid).toBe(false);
+    expect(ownerValidation.technicalChecksValid).toBe(true);
+    expect(ownerValidation.errors.join(' ')).toContain('zgody właściciela');
 
     const staleValidation = validateEvidenceReport(completeReport, shaB);
     expect(staleValidation.valid).toBe(false);
+    expect(staleValidation.technicalChecksValid).toBe(false);
     expect(staleValidation.errors.join(' ')).toContain('Niezgodność SHA');
 
     const md = formatEvidenceReportMarkdown(completeReport);
@@ -166,13 +202,15 @@ describe('Permanent QA Gate & Risk-Based Verification Matrix (#85)', () => {
     expect(check.reason).toContain('push:');
   });
 
-  it('enforces LF line endings and strict bash syntax on scripts/qa/run-hetzner-qa.sh', () => {
+  it('enforces LF line endings, cgroup limits, and strict bash syntax on scripts/qa/run-hetzner-qa.sh', () => {
     const content = readFileSync(qaRunnerPath, 'utf8');
     expect(content.includes('\r\n')).toBe(false);
     expect(content.startsWith('#!/usr/bin/env bash\n')).toBe(true);
     expect(content).toContain('set -euo pipefail');
     expect(content).toContain('set +x');
     expect(content).toContain('umask 077');
+    expect(content).toContain('run_bounded_host_cmd');
+    expect(content).toContain('-p MemoryMax=768M');
     expect(content).toContain('pnpm --filter @pap/db test:integration');
     expect(content).toContain('pnpm --filter @pap/api test:integration');
     expect(content).toContain('pnpm --filter @pap/api test:adversarial');
