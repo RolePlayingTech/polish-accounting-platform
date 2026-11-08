@@ -220,7 +220,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       return {
         ...base,
         listCandidateCompaniesForUser: async (uId) => {
-          const syncedBatch = await this.syncActorAccessibleGrantsBatch([uId]);
+          const syncedBatch = await this.syncActorAccessibleGrantsBatch([uId], undefined, true);
           if (!syncedBatch) {
             await discoverAndHydrateMissingCompaniesForTenants(
               this.runtime,
@@ -725,7 +725,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       [tId],
       [actor.userId],
     );
-    const syncedBatch = await this.syncActorAccessibleGrantsBatch([actor.userId], tId);
+    const syncedBatch = await this.syncActorAccessibleGrantsBatch([actor.userId], tId, true);
     if (!syncedBatch) {
       for (const comp of this.store.listCompaniesForTenant(tId)) {
         await this.syncCompanyGrantsIntoMemory(actor.userId, tId, comp.legalEntityId);
@@ -1004,7 +1004,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   ): Promise<CompanyAccessResponse> {
     return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', async () => {
       const allUserIds = this.store.listUsers().map((u) => u.userId);
-      const syncedBatch = await this.syncActorAccessibleGrantsBatch(allUserIds, tenantId);
+      const syncedBatch = await this.syncActorAccessibleGrantsBatch(allUserIds, tenantId, true);
       if (!syncedBatch) {
         for (const user of this.store.listUsers()) {
           await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
