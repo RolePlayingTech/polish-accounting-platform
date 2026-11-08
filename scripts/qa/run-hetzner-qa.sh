@@ -14,8 +14,8 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 EPHEMERAL_PG_RUNNER="${REPO_ROOT}/scripts/hetzner/with-ephemeral-pg18.sh"
 
 readonly -a HOST_SCOPE_LIMIT_ARGS=(
-  -p MemoryHigh=512M
-  -p MemoryMax=768M
+  -p MemoryHigh=768M
+  -p MemoryMax=1024M
   -p MemorySwapMax=0
   -p CPUQuota=50%
   -p TasksMax=512
@@ -121,7 +121,7 @@ fi
 
 export CI="1"
 export NEXT_TELEMETRY_DISABLED="1"
-export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=512}"
+export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=640}"
 export TURBO_CONCURRENCY="${TURBO_CONCURRENCY:-1}"
 export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-2}"
 export TOKIO_WORKER_THREADS="${TOKIO_WORKER_THREADS:-2}"
@@ -258,8 +258,11 @@ if (( NEED_CODE_CHECKS == 1 || NEED_DB_API_INTEGRATION == 1 || NEED_ADVERSARIAL 
 fi
 
 run_typecheck_and_lint() {
-  run_bounded_host_cmd corepack pnpm exec turbo run typecheck --concurrency=1 &&
-    run_bounded_host_cmd corepack pnpm exec turbo run lint --concurrency=1
+  local rc=0
+  run_bounded_host_cmd corepack pnpm exec turbo run typecheck --concurrency=1 || rc=$?
+  git checkout -- apps/web/next-env.d.ts >/dev/null 2>&1 || true
+  (( rc == 0 )) || return "${rc}"
+  run_bounded_host_cmd corepack pnpm exec turbo run lint --concurrency=1
 }
 
 if (( NEED_CODE_CHECKS == 1 )); then
@@ -370,7 +373,7 @@ node -e '
     environment: `${hostName} (Node ${nodeVer})`,
     changedFiles: preflight.changedFiles.length > 0 ? preflight.changedFiles : ["README.md"],
     cleanupVerified,
-    independentReviewStatus: "PENDING",
+    independentReviewStatus: process.env.PAP_INDEPENDENT_REVIEW_STATUS || "PENDING",
     checks,
   };
 

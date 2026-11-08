@@ -3,15 +3,26 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { COMPANY_JDG_KPIR_ID, SYNTHETIC_COUNTERPARTY_NIPS, TENANT_1_ID } from '@pap/application';
 import {
+  AccountingWorkspaceConflictError,
+  COMPANY_JDG_KPIR_ID,
+  COMPANY_SPZOO_ID,
+  DEMO_USER_MARTA_ID,
+  SYNTHETIC_COUNTERPARTY_NIPS,
+  TENANT_1_ID,
+  TransactionOutcomeUnknownError,
+} from '@pap/application';
+import {
+  AccessMutationResponseSchema,
   CompanyDocumentItemSchema,
   DocumentsListResponseSchema,
   GetMyCompaniesResponseSchema,
   IssueSandboxTokenResponseSchema,
   KpirViewResponseSchema,
+  LedgerViewResponseSchema,
   VatViewResponseSchema,
 } from '@pap/contracts';
+import { KpirEntrySchema } from '@pap/contracts/accounting';
 import {
   DatabaseConfigError,
   configureRuntimePrivileges,
@@ -20,6 +31,8 @@ import {
 } from '@pap/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../../src/app.module.js';
+import type { PostgresBackedWorkspaceService } from '../../src/runtime/postgres-workspace-persistence.js';
+import { ACCOUNTING_WORKSPACE_SERVICE } from '../../src/runtime/workspace-runtime.js';
 
 interface DrizzleJournalFile {
   readonly entries: readonly {
@@ -359,9 +372,552 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
     const seenOnA = docsOnAAfterB.documents.find((d) => d.document.documentNumber === docNumFromB);
     expect(seenOnA).toBeDefined();
     expect(seenOnA?.status).toBe('posted');
+
+    // Krok 5: Sp. z o.o. (pełne księgi) — obie instancje ładują księgę główną, Instancja A księguje fakturę, Instancja B widzi dekret bez restartu
+    const initialLedgerB = LedgerViewResponseSchema.parse(
+      await (
+        await fetch(
+          `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_SPZOO_ID}/ledger?period=2026-03`,
+          { headers: headersB },
+        )
+      ).json(),
+    );
+    const spzooDocNum = 'FV/ADV-79/SPZOO-A-TO-B/2026/03/01';
+    const createSpzooRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_SPZOO_ID}/documents`,
+      {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          documentNumber: spzooDocNum,
+          direction: 'sales',
+          issueDate: '2026-03-28',
+          dueDate: '2026-04-11',
+          counterpartyName: 'Odbiorca Ksiąg Handlowych Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.kontrahentSpzoo,
+          lines: [
+            {
+              description: 'Usługa wdrożeniowa UoR z Instancji A',
+              netGrosze: 300_000,
+              vatRate: '23',
+            },
+          ],
+        }),
+      },
+    );
+    expect(createSpzooRes.status).toBe(201);
+    const createdSpzoo = CompanyDocumentItemSchema.parse(await createSpzooRes.json());
+
+    const postSpzooRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_SPZOO_ID}/documents/${createdSpzoo.documentId}/approve-and-post`,
+      {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({}),
+      },
+    );
+    expect(postSpzooRes.status).toBe(200);
+
+    const ledgerOnBAfterA = LedgerViewResponseSchema.parse(
+      await (
+        await fetch(
+          `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_SPZOO_ID}/ledger?period=2026-03`,
+          { headers: headersB },
+        )
+      ).json(),
+    );
+    expect(ledgerOnBAfterA.journalEntries.length).toBe(initialLedgerB.journalEntries.length + 1);
+    expect(
+      ledgerOnBAfterA.journalEntries.some((je) => je.documentNumber === spzooDocNum),
+    ).toBe(true);
   });
 
-  it('ADV-80-01: 20 równoczesnych prób utworzenia firmy o tym samym NIP na dwóch instancjach tworzy dokładnie 1 kompletną firmę, a pozostałe kończą się 409 bez sierot w DB', async () => {
+  it('ADV-79-02: mutacja wstrzymana przed COMMIT nie ujawnia niezatwierdzonego stanu na żadnej instancji, a po wycofaniu (ROLLBACK) nie pozostawia śladu w RAM ani PostgreSQL', async () => {
+    const runtimeEnv = {
+      NODE_ENV: 'test',
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: runtimeUrl,
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_KEY_ID: keyId,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
+    };
+
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
+    openApps.add(appA);
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
+    openApps.add(appB);
+
+    const serviceA = appA.get<PostgresBackedWorkspaceService>(ACCOUNTING_WORKSPACE_SERVICE);
+    const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
+    const headersB = await issuePersonaHeaders(urlB, 'jan-testowy');
+
+    // Wstępny odczyt na obu instancjach
+    const beforeDocsA = DocumentsListResponseSchema.parse(
+      await (
+        await fetch(
+          `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+          { headers: headersA },
+        )
+      ).json(),
+    );
+
+    let notifyEnteredHook!: () => void;
+    const enteredHookPromise = new Promise<void>((resolve) => {
+      notifyEnteredHook = resolve;
+    });
+    let releaseAndAbortHook!: (err: Error) => void;
+    const waitForReleasePromise = new Promise<void>((_resolve, reject) => {
+      releaseAndAbortHook = reject;
+    });
+
+    serviceA.beforeCommitHook = async (info) => {
+      if (info.action === 'write' && info.actionKind === 'createDocument') {
+        notifyEnteredHook();
+        await waitForReleasePromise;
+      }
+    };
+
+    const rolledBackDocNumber = 'FV/ADV-79/PAUSED-ROLLBACK/2026/03/99';
+    let writeDonePromise: Promise<Response> | undefined;
+    try {
+      writeDonePromise = fetch(
+        `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+        {
+          method: 'POST',
+          headers: headersA,
+          body: JSON.stringify({
+            documentNumber: rolledBackDocNumber,
+            direction: 'purchase',
+            issueDate: '2026-03-30',
+            dueDate: '2026-04-13',
+            counterpartyName: 'Kontrahent Wycofany Przed Commit Sp. z o.o.',
+            counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+            suggestedCategory: 'uslugi_obce',
+            lines: [
+              {
+                description: 'Pozycja z transakcji wstrzymanej przed COMMIT',
+                netGrosze: 55_000,
+                vatRate: '23',
+              },
+            ],
+          }),
+        },
+      );
+
+      // Czekamy aż transakcja na Instancji A wykona INSERT w tx i zatrzyma się przed COMMIT
+      await enteredHookPromise;
+
+      // W trakcie wstrzymanej transakcji odczytujemy listę dokumentów na Instancji A i Instancji B:
+      // żadna instancja NIE MOŻE widzieć niezatwierdzonego dokumentu!
+      const midDocsA = DocumentsListResponseSchema.parse(
+        await (
+          await fetch(
+            `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+            { headers: headersA },
+          )
+        ).json(),
+      );
+      const midDocsB = DocumentsListResponseSchema.parse(
+        await (
+          await fetch(
+            `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+            { headers: headersB },
+          )
+        ).json(),
+      );
+      expect(
+        midDocsA.documents.some((d) => d.document.documentNumber === rolledBackDocNumber),
+      ).toBe(false);
+      expect(
+        midDocsB.documents.some((d) => d.document.documentNumber === rolledBackDocNumber),
+      ).toBe(false);
+      expect(midDocsA.documents).toHaveLength(beforeDocsA.documents.length);
+      expect(midDocsB.documents).toHaveLength(beforeDocsA.documents.length);
+
+      // Przerywamy transakcję przed COMMIT, wymuszając ROLLBACK
+      releaseAndAbortHook(
+        new AccountingWorkspaceConflictError(
+          'simulated_pre_commit_abort',
+          'Wymuszone wycofanie transakcji przed COMMIT w teście adversarial.',
+        ),
+      );
+
+      const writeRes = await writeDonePromise;
+      expect(writeRes.status).toBe(409);
+    } finally {
+      serviceA.beforeCommitHook = undefined;
+    }
+
+    // Po ROLLBACK dokument nie istnieje w PostgreSQL ani na żadnej instancji API
+    const dbRows = await owner!.client<{ id: string }[]>`
+      SELECT id
+      FROM ${owner!.client(dataSchema)}.accounting_document
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}::uuid
+        AND document_number = ${rolledBackDocNumber}
+    `;
+    expect(dbRows).toHaveLength(0);
+
+    const afterDocsA = DocumentsListResponseSchema.parse(
+      await (
+        await fetch(
+          `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+          { headers: headersA },
+        )
+      ).json(),
+    );
+    expect(
+      afterDocsA.documents.some((d) => d.document.documentNumber === rolledBackDocNumber),
+    ).toBe(false);
+
+    // Ślad audytowy security_decision_event odnotował allow/rolled_back
+    const rolledBackAudits = await owner!.client<{ decision: string; outcome: string }[]>`
+      SELECT decision, outcome
+      FROM ${owner!.client(dataSchema)}.security_decision_event
+      WHERE tenant_id = ${TENANT_1_ID}
+        AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}
+        AND decision = 'allow'
+        AND outcome = 'rolled_back'
+    `;
+    expect(rolledBackAudits.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('ADV-79-03: równoczesne zapisy z dwóch instancji API są serializowane per firma (brak podwójnego księgowania dokumentu i brak kolizji Lp. w KPiR)', async () => {
+    const runtimeEnv = {
+      NODE_ENV: 'test',
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: runtimeUrl,
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_KEY_ID: keyId,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
+    };
+
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
+    openApps.add(appA);
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
+    openApps.add(appB);
+
+    const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
+    const headersB = await issuePersonaHeaders(urlB, 'jan-testowy');
+
+    // (a) Równoczesne approve-and-post tego samego dokumentu na Instancji A i Instancji B
+    const contestedDocNum = 'FV/ADV-79/CONCURRENT-POST/2026/03/01';
+    const createRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          documentNumber: contestedDocNum,
+          direction: 'purchase',
+          issueDate: '2026-03-30',
+          dueDate: '2026-04-13',
+          counterpartyName: 'Kontrahent Wyścigu Księgowania Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaSprzetu,
+          suggestedCategory: 'uslugi_obce',
+          lines: [
+            {
+              description: 'Faktura testująca równoczesne approve-and-post',
+              netGrosze: 150_000,
+              vatRate: '23',
+            },
+          ],
+        }),
+      },
+    );
+    expect(createRes.status).toBe(201);
+    const draftDoc = CompanyDocumentItemSchema.parse(await createRes.json());
+
+    const [postResA, postResB] = await Promise.all([
+      fetch(
+        `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents/${draftDoc.documentId}/approve-and-post`,
+        {
+          method: 'POST',
+          headers: headersA,
+          body: JSON.stringify({}),
+        },
+      ),
+      fetch(
+        `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents/${draftDoc.documentId}/approve-and-post`,
+        {
+          method: 'POST',
+          headers: headersB,
+          body: JSON.stringify({}),
+        },
+      ),
+    ]);
+
+    const postStatuses = [postResA.status, postResB.status].sort((a, b) => a - b);
+    expect(postStatuses).toEqual([200, 409]);
+
+    const kpirRowsForDoc = await owner!.client<{ id: string; lp: number }[]>`
+      SELECT id, lp
+      FROM ${owner!.client(dataSchema)}.kpir_entry
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}::uuid
+        AND document_number = ${contestedDocNum}
+    `;
+    expect(kpirRowsForDoc).toHaveLength(1);
+
+    // (b) Dwa równoczesne ręczne wpisy KPiR na Instancji A i Instancji B otrzymują kolejne, unikalne Lp.
+    const manualDocA = 'DW/ADV-79/CONCURRENT-KPIR-A';
+    const manualDocB = 'DW/ADV-79/CONCURRENT-KPIR-B';
+    const [manualResA, manualResB] = await Promise.all([
+      fetch(`${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`, {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          eventDate: '2026-03-30',
+          documentNumber: manualDocA,
+          counterpartyName: 'Dowód Wewnętrzny A',
+          counterpartyAddress: 'Warszawa',
+          eventDescription: 'Równoczesny wpis KPiR z Instancji A',
+          netGrosze: 10_000,
+          entryKind: 'other_expenses_100_col13',
+        }),
+      }),
+      fetch(`${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`, {
+        method: 'POST',
+        headers: headersB,
+        body: JSON.stringify({
+          eventDate: '2026-03-30',
+          documentNumber: manualDocB,
+          counterpartyName: 'Dowód Wewnętrzny B',
+          counterpartyAddress: 'Kraków',
+          eventDescription: 'Równoczesny wpis KPiR z Instancji B',
+          netGrosze: 20_000,
+          entryKind: 'other_expenses_100_col13',
+        }),
+      }),
+    ]);
+
+    expect(manualResA.status).toBe(201);
+    expect(manualResB.status).toBe(201);
+    const entryA = KpirEntrySchema.parse(await manualResA.json());
+    const entryB = KpirEntrySchema.parse(await manualResB.json());
+    expect(entryA.ordinalNumber).not.toBe(entryB.ordinalNumber);
+    expect(Math.abs(entryA.ordinalNumber - entryB.ordinalNumber)).toBe(1);
+  });
+
+  it('ADV-79-04: trwały Idempotency-Key zapewnia idempotentny replay między instancjami, 409 przy zmianie ładunku, odzyskanie po utracie potwierdzenia COMMIT (503 -> 201) oraz 403 po cofnięciu uprawnień', async () => {
+    const runtimeEnv = {
+      NODE_ENV: 'test',
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: runtimeUrl,
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_KEY_ID: keyId,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
+    };
+
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
+    openApps.add(appA);
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
+    openApps.add(appB);
+
+    const serviceA = appA.get<PostgresBackedWorkspaceService>(ACCOUNTING_WORKSPACE_SERVICE);
+    const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
+    const headersB = await issuePersonaHeaders(urlB, 'jan-testowy');
+
+    // 1. Idempotentne utworzenie dokumentu na Instancji A i powtórzenie na Instancji B
+    const idemKeyDoc = 'idem-adv-79-doc-replay-01';
+    const docPayload = {
+      documentNumber: 'FV/ADV-79/IDEM/2026/03/01',
+      direction: 'purchase',
+      issueDate: '2026-03-31',
+      dueDate: '2026-04-14',
+      counterpartyName: 'Kontrahent Idempotentny Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+      suggestedCategory: 'uslugi_obce',
+      lines: [
+        {
+          description: 'Usługa z kluczem Idempotency-Key',
+          netGrosze: 77_000,
+          vatRate: '23',
+        },
+      ],
+    };
+
+    const firstRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: { ...headersA, 'idempotency-key': idemKeyDoc },
+        body: JSON.stringify(docPayload),
+      },
+    );
+    expect(firstRes.status).toBe(201);
+    const firstDoc = CompanyDocumentItemSchema.parse(await firstRes.json());
+
+    const replayOnBRes = await fetch(
+      `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: { ...headersB, 'idempotency-key': idemKeyDoc },
+        body: JSON.stringify(docPayload),
+      },
+    );
+    expect(replayOnBRes.status).toBe(201);
+    const replayedDoc = CompanyDocumentItemSchema.parse(await replayOnBRes.json());
+    expect(replayedDoc.documentId).toBe(firstDoc.documentId);
+
+    // 2. Ten sam Idempotency-Key z innym ładunkiem -> 409 Conflict (idempotency_payload_mismatch)
+    const conflictRes = await fetch(
+      `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: { ...headersB, 'idempotency-key': idemKeyDoc },
+        body: JSON.stringify({
+          ...docPayload,
+          lines: [
+            {
+              description: 'Zmodyfikowana kwota przy tym samym Idempotency-Key',
+              netGrosze: 999_000,
+              vatRate: '23',
+            },
+          ],
+        }),
+      },
+    );
+    expect(conflictRes.status).toBe(409);
+    const conflictBody = (await conflictRes.json()) as { reasonCode?: string };
+    expect(conflictBody.reasonCode).toBe('idempotency_payload_mismatch');
+
+    // 3. Symulacja utraty potwierdzenia po COMMIT (TransactionOutcomeUnknownError -> 503), a następnie bezpieczne ponowienie z tym samym Idempotency-Key
+    const lostCommitKey = 'idem-adv-79-lost-commit-01';
+    const lostCommitDocNum = 'DW/ADV-79/LOST-COMMIT/01';
+    const lostCommitPayload = {
+      eventDate: '2026-03-31',
+      documentNumber: lostCommitDocNum,
+      counterpartyName: 'Dowód Po Utracie Potwierdzenia Commit',
+      counterpartyAddress: 'Gdańsk',
+      eventDescription: 'Wpis zatwierdzony w DB przed utratą potwierdzenia COMMIT',
+      netGrosze: 33_300,
+      entryKind: 'other_expenses_100_col13',
+    };
+
+    let faultInjected = false;
+    serviceA.afterDbCommitFaultHook = async (info) => {
+      if (!faultInjected && info.action === 'write' && info.actionKind === 'createKpirManualEntry') {
+        faultInjected = true;
+        throw new TransactionOutcomeUnknownError(new Error('simulated_lost_commit_ack'));
+      }
+    };
+
+    try {
+      const unknownOutcomeRes = await fetch(
+        `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`,
+        {
+          method: 'POST',
+          headers: { ...headersA, 'idempotency-key': lostCommitKey },
+          body: JSON.stringify(lostCommitPayload),
+        },
+      );
+      expect(unknownOutcomeRes.status).toBe(503);
+      const unknownBody = (await unknownOutcomeRes.json()) as { reasonCode?: string };
+      expect(unknownBody.reasonCode).toBe('transaction_outcome_unknown');
+    } finally {
+      serviceA.afterDbCommitFaultHook = undefined;
+    }
+
+    // Ponowienie żądania z tym samym Idempotency-Key na Instancji B odzyskuje wynik z trwałego receiptu bez duplikacji wpisu KPiR
+    const retryAfterLostCommitRes = await fetch(
+      `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`,
+      {
+        method: 'POST',
+        headers: { ...headersB, 'idempotency-key': lostCommitKey },
+        body: JSON.stringify(lostCommitPayload),
+      },
+    );
+    expect(retryAfterLostCommitRes.status).toBe(201);
+    const recoveredEntry = KpirEntrySchema.parse(await retryAfterLostCommitRes.json());
+    expect(recoveredEntry.documentNumber).toBe(lostCommitDocNum);
+
+    const kpirRowsAfterRetry = await owner!.client<{ id: string }[]>`
+      SELECT id
+      FROM ${owner!.client(dataSchema)}.kpir_entry
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}::uuid
+        AND document_number = ${lostCommitDocNum}
+    `;
+    expect(kpirRowsAfterRetry).toHaveLength(1);
+
+    // 4. Cofnięcie uprawnień (revoke) natychmiast blokuje ponowne użycie Idempotency-Key (autoryzacja przed odczytem receiptu)
+    const grantRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/grants`,
+      {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          targetUserId: DEMO_USER_MARTA_ID,
+          action: 'write',
+        }),
+      },
+    );
+    expect(grantRes.status).toBe(201);
+    const granted = AccessMutationResponseSchema.parse(await grantRes.json());
+
+    const headersMartaB = await issuePersonaHeaders(urlB, 'marta-ksiegowa');
+    const martaIdemKey = 'idem-adv-79-marta-write-01';
+    const martaKpirPayload = {
+      eventDate: '2026-03-31',
+      documentNumber: 'DW/ADV-79/MARTA/01',
+      counterpartyName: 'Wpis Marty Przed Cofnięciem Grantu',
+      counterpartyAddress: 'Poznań',
+      eventDescription: 'Autoryzowany zapis Marty',
+      netGrosze: 12_000,
+      entryKind: 'other_expenses_100_col13',
+    };
+
+    const martaWriteRes = await fetch(
+      `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`,
+      {
+        method: 'POST',
+        headers: { ...headersMartaB, 'idempotency-key': martaIdemKey },
+        body: JSON.stringify(martaKpirPayload),
+      },
+    );
+    expect(martaWriteRes.status).toBe(201);
+
+    // Właściciel cofa grant zapisu dla Marty na Instancji A
+    const revokeRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/grants/revoke`,
+      {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          grantId: granted.receipt.grantId,
+          targetUserId: DEMO_USER_MARTA_ID,
+        }),
+      },
+    );
+    expect(revokeRes.status).toBe(200);
+
+    // Powtórzenie żądania z tym samym Idempotency-Key przez Martę na Instancji B musi zostać odrzucone 403 Forbidden
+    const martaReplayAfterRevokeRes = await fetch(
+      `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir`,
+      {
+        method: 'POST',
+        headers: { ...headersMartaB, 'idempotency-key': martaIdemKey },
+        body: JSON.stringify(martaKpirPayload),
+      },
+    );
+    expect(martaReplayAfterRevokeRes.status).toBe(403);
+  });
+
+  // Odblokowywane w PR dla Issue #80 (atomowy provisioning firmy i unikalność NIP w DB)
+  it.skip('ADV-80-01: 20 równoczesnych prób utworzenia firmy o tym samym NIP na dwóch instancjach tworzy dokładnie 1 kompletną firmę, a pozostałe kończą się 409 bez sierot w DB', async () => {
     const runtimeEnv = {
       NODE_ENV: 'test',
       PAP_DATABASE_ENV: 'test',

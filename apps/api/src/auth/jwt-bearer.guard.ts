@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Inject,
   Injectable,
@@ -338,6 +339,26 @@ export class JwtBearerAuthGuard implements CanActivate {
       }
     }
 
+    const rawIdempotencyHeader = request.headers['idempotency-key'];
+    let idempotencyKey: string | undefined;
+    if (rawIdempotencyHeader !== undefined) {
+      if (
+        typeof rawIdempotencyHeader !== 'string' ||
+        rawIdempotencyHeader.trim().length === 0 ||
+        rawIdempotencyHeader.trim().length > 128 ||
+        /[\r\n\0]/.test(rawIdempotencyHeader)
+      ) {
+        throw new BadRequestException({
+          statusCode: 400,
+          error: 'bad_request',
+          reasonCode: 'invalid_idempotency_key',
+          message:
+            'Niepoprawny format nagłówka Idempotency-Key (wymagany niepusty ciąg do 128 znaków).',
+        });
+      }
+      idempotencyKey = rawIdempotencyHeader.trim();
+    }
+
     request.papActor = {
       userId: resolvedUser.userId,
       issuer: identity.issuer,
@@ -347,6 +368,7 @@ export class JwtBearerAuthGuard implements CanActivate {
       scopes: identity.scopes,
       rawBearerToken: bearer.token,
       requestId,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     };
 
     return true;

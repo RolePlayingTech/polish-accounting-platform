@@ -11,6 +11,7 @@ import {
   TENANT_1_ID,
   TENANT_2_ID,
   type AuditLogEntry,
+  type WorkspaceActorContext,
   type WorkspaceCompanyState,
   type WorkspaceHumanChallenge,
   type WorkspaceStoredMcpProposal,
@@ -24,6 +25,7 @@ import type {
   PrepareInvoiceAndPostingProposalInput,
   ProposedAccountingPreview,
 } from '@pap/contracts/mcp-tools';
+import type { NotificationOutboxEntry } from '@pap/contracts/notifications';
 import {
   createPostgresAccountingScope,
   discoverActorAccessibleEntities,
@@ -544,11 +546,7 @@ function resolvePersonaDisplayLabel(actorUserId: string | null): string {
   return persona?.displayName ?? `Użytkownik ${actorUserId.slice(0, 8)}`;
 }
 
-async function hydrateSingleCompanyFromScope(
-  scope: PostgresAccountingScope,
-  rawTenantId: string,
-  rawLegalEntityId: string,
-): Promise<{
+export interface HydratedCompanyFromScopeResult {
   readonly company: WorkspaceCompanyState;
   readonly mcpProposals: readonly WorkspaceStoredMcpProposal[];
   readonly mcpChallenges: readonly WorkspaceHumanChallenge[];
@@ -560,7 +558,15 @@ async function hydrateSingleCompanyFromScope(
     readonly optOut: boolean;
     readonly disabledStages: readonly string[];
   }[];
-} | null> {
+  readonly outboxEntries: readonly NotificationOutboxEntry[];
+}
+
+export async function hydrateSingleCompanyFromScope(
+  scope: PostgresAccountingScope,
+  rawTenantId: string,
+  rawLegalEntityId: string,
+  extraUserIds: readonly string[] = [],
+): Promise<HydratedCompanyFromScopeResult | null> {
   const settings = await scope.getCompanyTaxSettings();
   if (!settings) {
     return null;
@@ -678,11 +684,45 @@ async function hydrateSingleCompanyFromScope(
     .map((r) => hydrateKpirFromRecord(r, explanationsById))
     .filter((e): e is KpirEntry => e !== null)
     .sort((a, b) => a.ordinalNumber - b.ordinalNumber);
+  for (const r of kpirRows) {
+    if (r.documentId === null) {
+      auditEvents.push({
+        auditEventId: `pg-kpir-manual-${r.id}`,
+        occurredAt: r.createdAt.toISOString(),
+        channel: 'accounting',
+        action: 'kpir_manual_entry_created',
+        actorUserId: r.createdBy,
+        actorDisplayLabel: resolvePersonaDisplayLabel(r.createdBy),
+        tenantId: rawTenantId,
+        legalEntityId: rawLegalEntityId,
+        outcome: 'allow',
+        reasonCode: 'manual_kpir_entry',
+        summaryPl: `Dodano ręczny wpis KPiR Lp. ${r.lp} (${r.documentNumber}).`,
+      });
+    }
+  }
 
   const ryczaltRows = await scope.listRyczaltEntries();
   const ryczaltEntries = ryczaltRows
     .map((r) => hydrateRyczaltFromRecord(r, explanationsById))
     .sort((a, b) => a.ordinalNumber - b.ordinalNumber);
+  for (const r of ryczaltRows) {
+    if (r.documentId === null) {
+      auditEvents.push({
+        auditEventId: `pg-ryczalt-manual-${r.id}`,
+        occurredAt: r.createdAt.toISOString(),
+        channel: 'accounting',
+        action: 'ryczalt_manual_entry_created',
+        actorUserId: r.createdBy,
+        actorDisplayLabel: resolvePersonaDisplayLabel(r.createdBy),
+        tenantId: rawTenantId,
+        legalEntityId: rawLegalEntityId,
+        outcome: 'allow',
+        reasonCode: 'manual_ryczalt_entry',
+        summaryPl: `Dodano ręczny wpis ryczałtu Lp. ${r.lp} (${r.documentNumber}).`,
+      });
+    }
+  }
 
   const vatRows = await scope.listVatRegisterEntries();
   const vatEntries = vatRows
@@ -691,6 +731,23 @@ async function hydrateSingleCompanyFromScope(
 
   const journalRows = await scope.listJournalEntries();
   const journalEntries = journalRows.map((r) => hydrateJournalFromRecord(r, explanationsById));
+  for (const r of journalRows) {
+    if (r.entry.documentId === null) {
+      auditEvents.push({
+        auditEventId: `pg-journal-manual-${r.entry.id}`,
+        occurredAt: r.entry.createdAt.toISOString(),
+        channel: 'accounting',
+        action: 'journal_entry_posted',
+        actorUserId: r.entry.createdBy,
+        actorDisplayLabel: resolvePersonaDisplayLabel(r.entry.createdBy),
+        tenantId: rawTenantId,
+        legalEntityId: rawLegalEntityId,
+        outcome: 'allow',
+        reasonCode: 'double_entry_balanced',
+        summaryPl: `Zaksięgowano dekret ${r.entry.entryNumber} (${r.entry.description}).`,
+      });
+    }
+  }
 
   const settlementRows = await scope.listSettlementItems();
   const settlements = settlementRows.map((r) => hydrateSettlementFromRecord(r, docById));
@@ -704,6 +761,7 @@ async function hydrateSingleCompanyFromScope(
     if (ob.status === 'paid') {
       const paidIso = (ob.paidAt ?? ob.updatedAt).toISOString();
       paidObligationsByKey.set(`${ob.period}:${ob.obligationCode}`, paidIso);
+      paidObligationsByKey.set(`${ob.period}::${ob.obligationCode}`, paidIso);
       paidObligationsByKey.set(ob.id, paidIso);
     }
   }
@@ -779,17 +837,50 @@ async function hydrateSingleCompanyFromScope(
     readonly optOut: boolean;
     readonly disabledStages: readonly string[];
   }[] = [];
+  const candidatePrefUserIds = new Set<string>();
   for (const persona of DEMO_PERSONAS_SEED) {
-    if (persona.tenantId !== rawTenantId) continue;
-    const pref = await scope.getNotificationPreference(persona.userId);
+    if (persona.tenantId === rawTenantId) {
+      candidatePrefUserIds.add(persona.userId);
+    }
+  }
+  for (const extraUserId of extraUserIds) {
+    candidatePrefUserIds.add(extraUserId);
+  }
+  for (const candidateUserId of candidatePrefUserIds) {
+    const pref = await scope.getNotificationPreference(candidateUserId);
     if (pref) {
       notificationPrefs.push({
-        userId: persona.userId,
+        userId: candidateUserId,
         recipientEmail: pref.recipientEmail,
         frequency: pref.frequency,
         optOut: pref.optOut,
         disabledStages: pref.disabledStages,
       });
+    }
+  }
+
+  const outboxEntries: NotificationOutboxEntry[] = [];
+  if (typeof scope.listNotificationOutbox === 'function') {
+    const dbOutbox = await scope.listNotificationOutbox();
+    for (const row of dbOutbox) {
+      const payload = row.payloadJson;
+      if (typeof payload !== 'object' || payload === null) {
+        continue;
+      }
+      const savedOutbox = (payload as { _papOutboxEntry?: unknown })._papOutboxEntry;
+      if (
+        typeof savedOutbox === 'object' &&
+        savedOutbox !== null &&
+        typeof (savedOutbox as { outboxId?: unknown }).outboxId === 'string' &&
+        typeof (savedOutbox as { deduplicationKey?: unknown }).deduplicationKey === 'string'
+      ) {
+        const typed = savedOutbox as NotificationOutboxEntry;
+        outboxEntries.push({
+          ...typed,
+          status: row.status,
+          retryCount: row.attemptCount,
+        });
+      }
     }
   }
 
@@ -824,7 +915,208 @@ async function hydrateSingleCompanyFromScope(
     mcpChallenges,
     auditEvents,
     notificationPrefs,
+    outboxEntries,
   };
+}
+
+export async function applyHydratedCompanyToWorkspace(
+  workspace: AccountingWorkspaceService,
+  hydrated: HydratedCompanyFromScopeResult,
+  rawTenantId: string,
+  rawLegalEntityId: string,
+): Promise<void> {
+  const store = workspace.store;
+  const tId = parseTenantId(rawTenantId);
+  const leId = parseLegalEntityId(rawLegalEntityId);
+
+  store.saveCompany(hydrated.company);
+  for (const proposal of hydrated.mcpProposals) {
+    store.upsertMcpProposal(proposal);
+  }
+  for (const challenge of hydrated.mcpChallenges) {
+    store.saveHumanChallenge(challenge);
+  }
+  workspace.syncStoreMcpProposalsToBoundGateways(tId, leId);
+
+  const existingAuditIds = new Set(
+    store.listAuditEvents({ tenantId: tId, legalEntityId: leId }).map((e) => e.auditEventId),
+  );
+  const newAudits = hydrated.auditEvents
+    .filter((e) => !existingAuditIds.has(e.auditEventId))
+    .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+  for (const auditEvent of newAudits) {
+    store.appendAuditEvent(auditEvent);
+  }
+
+  for (const pref of hydrated.notificationPrefs) {
+    await workspace.notificationsEngine.configurePreferences({
+      tenantId: tId,
+      legalEntityId: leId,
+      userId: pref.userId,
+      recipientEmail: pref.recipientEmail,
+      frequency: pref.frequency,
+      optionalRemindersOptedOut: pref.optOut,
+      explicitDisabledStages: pref.disabledStages as never[],
+    });
+  }
+
+  for (const outboxEntry of hydrated.outboxEntries) {
+    workspace.notificationsEngine.seedPersistedOutboxEntry(outboxEntry);
+  }
+}
+
+export async function createTransactionIsolatedWorkspaceFromScope(params: {
+  readonly scope: PostgresAccountingScope;
+  readonly baseWorkspace: AccountingWorkspaceService;
+  readonly actor: WorkspaceActorContext;
+  readonly rawTenantId: string;
+  readonly rawLegalEntityId: string;
+  readonly action: 'read' | 'write';
+}): Promise<{
+  readonly txWorkspace: AccountingWorkspaceService;
+  readonly hydrated: HydratedCompanyFromScopeResult | null;
+}> {
+  const tId = parseTenantId(params.rawTenantId);
+  const leId = parseLegalEntityId(params.rawLegalEntityId);
+  const uId = parseUserId(params.actor.userId);
+
+  const hydrated = await hydrateSingleCompanyFromScope(params.scope, tId, leId, [uId]);
+  const txStore = new InMemoryAccountingWorkspaceStore();
+  const txWorkspace = new AccountingWorkspaceService({
+    store: txStore,
+    clock: params.baseWorkspace.clock,
+    seedDemoData: false,
+    sandboxMailboxTransport: params.baseWorkspace.sandboxMailboxTransport,
+  });
+
+  for (const u of params.baseWorkspace.store.listUsers()) {
+    txStore.upsertUser(u);
+  }
+  if (!txStore.getUserById(uId)) {
+    txStore.upsertUser({
+      userId: uId,
+      subject: params.actor.subject ?? uId,
+      displayName: params.actor.displayName ?? `Użytkownik ${uId.slice(0, 8)}`,
+      email: params.actor.email ?? 'uzytkownik@pap.example',
+      active: true,
+    });
+  }
+
+  for (const m of params.baseWorkspace.store.listTenantMemberships(tId)) {
+    txStore.upsertMembership(m);
+  }
+  const existingMembership = txStore.getMembership(tId, uId);
+  if (!existingMembership || existingMembership.status !== 'active') {
+    txStore.upsertMembership({
+      tenantId: tId,
+      userId: uId,
+      role: existingMembership?.role ?? 'tenant_owner',
+      status: 'active',
+      validFrom: new Date(0),
+      validUntil: null,
+    });
+  }
+
+  for (const g of params.baseWorkspace.store.listGrantsForCompany(tId, leId)) {
+    txStore.upsertGrant(g);
+  }
+  const requiredActions: readonly ('read' | 'write')[] =
+    params.action === 'write' ? ['read', 'write'] : ['read'];
+  for (const reqAction of requiredActions) {
+    const hasActiveGrant = txStore
+      .listGrantsForCompany(tId, leId)
+      .some((g) => g.userId === uId && g.action === reqAction && g.revokedAt === null);
+    if (!hasActiveGrant) {
+      txStore.upsertGrant({
+        grantId: randomUUID(),
+        tenantId: tId,
+        legalEntityId: leId,
+        userId: uId,
+        action: reqAction,
+        validFrom: new Date(0),
+        validUntil: null,
+        revokedAt: null,
+      });
+    }
+  }
+
+  const baseAudits = params.baseWorkspace.store
+    .listAuditEvents({ tenantId: tId, legalEntityId: leId })
+    .slice()
+    .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+  for (const ev of baseAudits) {
+    txStore.appendAuditEvent(ev);
+  }
+
+  if (hydrated) {
+    await applyHydratedCompanyToWorkspace(txWorkspace, hydrated, tId, leId);
+  }
+
+  return { txWorkspace, hydrated };
+}
+
+export async function syncCommittedTxWorkspaceToInner(params: {
+  readonly txWorkspace: AccountingWorkspaceService;
+  readonly innerWorkspace: AccountingWorkspaceService;
+  readonly rawTenantId: string;
+  readonly rawLegalEntityId: string;
+  readonly actorUserId: string;
+}): Promise<void> {
+  const tId = parseTenantId(params.rawTenantId);
+  const leId = parseLegalEntityId(params.rawLegalEntityId);
+  const uId = parseUserId(params.actorUserId);
+
+  const committedCompany = params.txWorkspace.store.getCompany(tId, leId);
+  if (committedCompany) {
+    params.innerWorkspace.store.saveCompany(committedCompany);
+  }
+
+  for (const proposal of params.txWorkspace.store.listMcpProposals(tId, leId)) {
+    params.innerWorkspace.store.upsertMcpProposal(proposal);
+    const challenge = params.txWorkspace.store.getHumanChallenge(proposal.proposalId);
+    if (challenge) {
+      params.innerWorkspace.store.saveHumanChallenge(challenge);
+    }
+  }
+  params.innerWorkspace.syncStoreMcpProposalsToBoundGateways(tId, leId);
+
+  const existingAuditIds = new Set(
+    params.innerWorkspace.store
+      .listAuditEvents({ tenantId: tId, legalEntityId: leId })
+      .map((e) => e.auditEventId),
+  );
+  const newAudits = params.txWorkspace.store
+    .listAuditEvents({ tenantId: tId, legalEntityId: leId })
+    .filter((e) => !existingAuditIds.has(e.auditEventId))
+    .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
+  for (const ev of newAudits) {
+    params.innerWorkspace.store.appendAuditEvent(ev);
+  }
+
+  const userRecord = params.txWorkspace.store.getUserById(uId);
+  const defaultRecipient = userRecord?.email ?? 'powiadomienia@syntetyczny.example';
+  const txPrefs = params.txWorkspace.notificationsEngine.getOrDefaultPreferences({
+    tenantId: tId,
+    legalEntityId: leId,
+    userId: uId,
+    recipientEmail: defaultRecipient,
+  });
+  await params.innerWorkspace.notificationsEngine.configurePreferences({
+    tenantId: tId,
+    legalEntityId: leId,
+    userId: uId,
+    recipientEmail: txPrefs.recipientEmail,
+    frequency: txPrefs.frequency,
+    optionalRemindersOptedOut: txPrefs.optionalRemindersOptedOut,
+    explicitDisabledStages: txPrefs.disabledStages,
+  });
+
+  for (const outboxEntry of params.txWorkspace.notificationsEngine.listOutboxEntries({
+    tenantId: tId,
+    legalEntityId: leId,
+  })) {
+    params.innerWorkspace.notificationsEngine.seedPersistedOutboxEntry(outboxEntry);
+  }
 }
 
 async function readCompanyReadOnlyWithSignedContext<T>(
@@ -878,12 +1170,13 @@ export async function hydrateCompanyIntoWorkspaceIfMissing(
   rawTenantId: string,
   rawLegalEntityId: string,
   preferredActorUserId?: string,
+  options?: { readonly forceFresh?: boolean },
 ): Promise<boolean> {
   const store = workspace.store;
   const tId = parseTenantId(rawTenantId);
   const leId = parseLegalEntityId(rawLegalEntityId);
 
-  if (store.getCompany(tId, leId) !== null) {
+  if (!options?.forceFresh && store.getCompany(tId, leId) !== null) {
     return true;
   }
 
@@ -976,44 +1269,14 @@ export async function hydrateCompanyIntoWorkspaceIfMissing(
       tenantId: tId,
       legalEntityId: leId,
     },
-    (scope) => hydrateSingleCompanyFromScope(scope, tId, leId),
+    (scope) => hydrateSingleCompanyFromScope(scope, tId, leId, Array.from(candidateUsers)),
   );
 
   if (!hydrated) {
     return false;
   }
 
-  store.saveCompany(hydrated.company);
-  for (const proposal of hydrated.mcpProposals) {
-    store.upsertMcpProposal(proposal);
-  }
-  for (const challenge of hydrated.mcpChallenges) {
-    store.saveHumanChallenge(challenge);
-  }
-  workspace.syncStoreMcpProposalsToBoundGateways(tId, leId);
-
-  const existingAuditIds = new Set(
-    store.listAuditEvents({ tenantId: tId, legalEntityId: leId }).map((e) => e.auditEventId),
-  );
-  const newAudits = hydrated.auditEvents
-    .filter((e) => !existingAuditIds.has(e.auditEventId))
-    .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt));
-  for (const auditEvent of newAudits) {
-    store.appendAuditEvent(auditEvent);
-  }
-
-  for (const pref of hydrated.notificationPrefs) {
-    await workspace.notificationsEngine.configurePreferences({
-      tenantId: tId,
-      legalEntityId: leId,
-      userId: pref.userId,
-      recipientEmail: pref.recipientEmail,
-      frequency: pref.frequency,
-      optionalRemindersOptedOut: pref.optOut,
-      explicitDisabledStages: pref.disabledStages as never[],
-    });
-  }
-
+  await applyHydratedCompanyToWorkspace(workspace, hydrated, tId, leId);
   return true;
 }
 
