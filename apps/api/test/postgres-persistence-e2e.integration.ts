@@ -914,13 +914,6 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     expect(kpirAprilOnA.entries.some((e) => e.documentNumber === 'DW-PEER/2026/04/01')).toBe(true);
     expect(kpirAprilOnA.entries).toHaveLength(1);
 
-    await owner!.client`
-      DELETE FROM ${owner!.client(dataSchema)}.kpir_entry
-      WHERE tenant_id = ${TENANT_1_ID}
-        AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}
-        AND document_number = 'DW-RAW-COLLISION/2026/04/99'
-    `;
-
     // === 4. P1-3 (MCP): confirm_prepared_proposal na propozycji odrzuconej równolegle w DB wycofuje stan RAM Instancji A ===
     const docsBeforeMcp = DocumentsListResponseSchema.parse(
       await (
