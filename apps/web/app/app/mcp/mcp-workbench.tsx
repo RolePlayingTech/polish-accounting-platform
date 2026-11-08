@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Card,
   CriticalConfirmDialog,
@@ -47,6 +47,8 @@ export function McpWorkbench({
 }: McpWorkbenchProps) {
   const router = useRouter();
   const [clientTab, setClientTab] = useState<McpClientTab>('claude');
+  const [currentProposals, setCurrentProposals] =
+    useState<readonly McpPendingProposalRecord[]>(proposals);
   const [issuedCodesByProposal, setIssuedCodesByProposal] = useState<Record<string, string>>({});
   const [typedCodesByProposal, setTypedCodesByProposal] = useState<Record<string, string>>({});
   const [proposalToConfirm, setProposalToConfirm] = useState<{
@@ -59,6 +61,10 @@ export function McpWorkbench({
     title: string;
     detail: string;
   } | null>(null);
+
+  useEffect(() => {
+    setCurrentProposals(proposals);
+  }, [proposals]);
 
   const endpointUrl = 'http://127.0.0.1:4000/api/v1/mcp';
 
@@ -160,6 +166,9 @@ export function McpWorkbench({
         ok?: boolean;
         error?: string;
         confirmationCode?: string;
+        confirmedProposalId?: string;
+        confirmedBy?: string;
+        rejectedProposalId?: string;
       };
       if (!res.ok || !data.ok) {
         setFeedback({
@@ -168,6 +177,28 @@ export function McpWorkbench({
           detail: data.error ?? 'Operacja nie powiodła się.',
         });
       } else {
+        if (data.confirmedProposalId) {
+          const targetId = data.confirmedProposalId.toLowerCase();
+          setCurrentProposals((prev) =>
+            prev.map((p) =>
+              p.proposalId.toLowerCase() === targetId
+                ? {
+                    ...p,
+                    status: 'confirmed',
+                    confirmedBy: data.confirmedBy ?? personaDisplayName,
+                  }
+                : p,
+            ),
+          );
+        }
+        if (data.rejectedProposalId) {
+          const targetId = data.rejectedProposalId.toLowerCase();
+          setCurrentProposals((prev) =>
+            prev.map((p) =>
+              p.proposalId.toLowerCase() === targetId ? { ...p, status: 'rejected' } : p,
+            ),
+          );
+        }
         onSuccessData?.(data);
         setFeedback({
           tone: 'success',
@@ -176,7 +207,9 @@ export function McpWorkbench({
             ? `${okDetail} Jednorazowy kod wyzwania człowieka: ${data.confirmationCode}`
             : okDetail,
         });
-        router.refresh();
+        if (body.action !== 'mcp_issue_code') {
+          router.refresh();
+        }
       }
     } finally {
       setBusy(false);
@@ -258,7 +291,7 @@ export function McpWorkbench({
         }
       >
         <div className="space-y-4">
-          {proposals.map((prop) => {
+          {currentProposals.map((prop) => {
             const challengeCode =
               issuedCodesByProposal[prop.proposalId] ?? prop.issuedConfirmationCode;
             const typedCode = typedCodesByProposal[prop.proposalId] ?? '';
@@ -526,6 +559,7 @@ export function McpWorkbench({
         onConfirm={() => {
           if (!proposalToConfirm) return;
           const id = proposalToConfirm.proposal.proposalId;
+          const payloadHash = proposalToConfirm.proposal.payloadHash;
           const code = proposalToConfirm.confirmationCode;
           setProposalToConfirm(null);
           void runMcpAction(
@@ -533,6 +567,7 @@ export function McpWorkbench({
               action: 'mcp_confirm_proposal',
               proposalId: id,
               confirmationCode: code,
+              payloadHash,
             },
             'Propozycja MCP została zatwierdzona przez człowieka',
             'Jednorazowy kod wyzwania został zużyty, a zdarzenie zapisano w niezmiennym dzienniku audytu organizacji.',

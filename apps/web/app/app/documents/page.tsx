@@ -8,8 +8,8 @@ import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
 import {
-  getDashboardSnapshot,
   getDocumentsForActiveCompany,
+  getWorkspaceShellContext,
 } from '../../../lib/synthetic-workspace';
 import { DocumentsWorkbench } from './documents-workbench';
 
@@ -38,7 +38,7 @@ export default async function DocumentsPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const [dash, documents] = await Promise.all([
-      getDashboardSnapshot(session),
+      getWorkspaceShellContext(session),
       getDocumentsForActiveCompany(session),
     ]);
     return { dash, documents };

@@ -10,10 +10,8 @@ import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../.
 import { readServerSession } from '../../../lib/session';
 import {
   buildVatRegistersForCompany,
-  getCompaniesManagementSnapshot,
   getDashboardSnapshot,
   getDocumentsForActiveCompany,
-  getFullLedgerSnapshot,
 } from '../../../lib/synthetic-workspace';
 import { VatRegistersWorkbench, type VatDocumentMarkers } from './vat-workbench';
 
@@ -39,13 +37,11 @@ export default async function VatAndJpkPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const dash = await getDashboardSnapshot(session);
-    const [vat, docs, compSnap, ledgerSnap] = await Promise.all([
+    const [vat, docs] = await Promise.all([
       buildVatRegistersForCompany(dash.activeCompany, session.context.period, session),
       getDocumentsForActiveCompany(session),
-      getCompaniesManagementSnapshot(session),
-      getFullLedgerSnapshot(session),
     ]);
-    return { dash, vat, docs, compSnap, ledgerSnap };
+    return { dash, vat, docs };
   });
   if (!loaded.ok) {
     return (
@@ -59,7 +55,7 @@ export default async function VatAndJpkPage() {
     );
   }
 
-  const { dash, vat, docs, compSnap, ledgerSnap } = loaded.data;
+  const { dash, vat, docs } = loaded.data;
 
   const markersByDocNumber: Record<string, VatDocumentMarkers> = {};
   for (const d of docs) {
@@ -238,12 +234,7 @@ export default async function VatAndJpkPage() {
                 <p>Schemat aktywnej firmy: {dash.activeCompany.zusScheme}</p>
                 <p>
                   Razem ZUS DRA:{' '}
-                  <MoneyAmount
-                    amount={compSnap.zusPreview?.totalZusToPayGrosze ?? 0}
-                    inGrosze
-                    size="sm"
-                    variant="tax"
-                  />
+                  <MoneyAmount amount={dash.estimatedZusGrosze} inGrosze size="sm" variant="tax" />
                 </p>
               </div>
             </Card>
@@ -258,11 +249,7 @@ export default async function VatAndJpkPage() {
               <p className="text-xs text-[#464c48]">
                 {dash.incomeTaxLabelPl}:{' '}
                 <MoneyAmount
-                  amount={
-                    dash.activeCompany.profileCode === 'spzoo_pelne_ksiegi'
-                      ? ledgerSnap.cit9.advanceDueGrosze
-                      : dash.estimatedIncomeTaxGrosze
-                  }
+                  amount={dash.estimatedIncomeTaxGrosze}
                   inGrosze
                   size="sm"
                   variant="tax"

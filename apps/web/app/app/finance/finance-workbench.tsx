@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { BankReconciliationMatch, BankStatementTransaction } from '@pap/domain';
 import {
   Card,
@@ -53,13 +53,25 @@ export function FinanceWorkbench({
   const [content, setContent] = useState(SAMPLE_BANK_CSV);
   const [applySettlements, setApplySettlements] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [currentBankTransactions, setCurrentBankTransactions] =
+    useState<readonly BankStatementTransaction[]>(bankTransactions);
+  const [currentReconciliationMatches, setCurrentReconciliationMatches] =
+    useState<readonly BankReconciliationMatch[]>(reconciliationMatches);
   const [feedback, setFeedback] = useState<{
     tone: 'success' | 'danger';
     title: string;
     detail: string;
   } | null>(null);
 
-  const matchByTxId = new Map(reconciliationMatches.map((m) => [m.transactionId, m]));
+  useEffect(() => {
+    setCurrentBankTransactions(bankTransactions);
+  }, [bankTransactions]);
+
+  useEffect(() => {
+    setCurrentReconciliationMatches(reconciliationMatches);
+  }, [reconciliationMatches]);
+
+  const matchByTxId = new Map(currentReconciliationMatches.map((m) => [m.transactionId, m]));
   const unverifiedIbanDocs = openDocuments.filter(
     (d) => d.whiteListStatus === 'mismatch_alert' || (d.annex15Item && d.grossGrosze > 1_500_000),
   );
@@ -83,6 +95,8 @@ export function FinanceWorkbench({
         error?: string;
         importedCount?: number;
         matchedCount?: number;
+        bankTransactions?: readonly BankStatementTransaction[];
+        reconciliationMatches?: readonly BankReconciliationMatch[];
       };
       if (!res.ok || !data.ok) {
         setFeedback({
@@ -91,6 +105,12 @@ export function FinanceWorkbench({
           detail: data.error ?? 'Sprawdź strukturę pliku CSV / MT940.',
         });
       } else {
+        if (Array.isArray(data.bankTransactions)) {
+          setCurrentBankTransactions(data.bankTransactions);
+        }
+        if (Array.isArray(data.reconciliationMatches)) {
+          setCurrentReconciliationMatches(data.reconciliationMatches);
+        }
         setFeedback({
           tone: 'success',
           title: 'Zaimportowano wyciąg bankowy i wykonano parowanie deterministyczne',
@@ -432,7 +452,7 @@ export function FinanceWorkbench({
           caption="Operacje wyciągu bankowego uzgodnione z otwartymi rozrachunkami"
           title="Transakcje bankowe i status parowania"
           columns={txColumns}
-          rows={bankTransactions}
+          rows={currentBankTransactions}
           getRowKey={(tx) => tx.transactionId}
         />
       </div>

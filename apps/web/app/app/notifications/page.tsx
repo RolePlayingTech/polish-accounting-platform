@@ -7,8 +7,8 @@ import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { readServerSession } from '../../../lib/session';
 import {
-  getDashboardSnapshot,
   getNotificationsAndMcpSnapshot,
+  getWorkspaceShellContext,
 } from '../../../lib/synthetic-workspace';
 import { NotificationsWorkbench } from './notifications-workbench';
 
@@ -37,7 +37,7 @@ export default async function NotificationsPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const [dash, snap] = await Promise.all([
-      getDashboardSnapshot(session),
+      getWorkspaceShellContext(session),
       getNotificationsAndMcpSnapshot(session),
     ]);
     return {

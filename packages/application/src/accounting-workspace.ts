@@ -571,18 +571,6 @@ function constantTimeHexEquals(leftHex: string, rightHex: string): boolean {
   return timingSafeEqual(leftBuf, rightBuf);
 }
 
-function isStrictIsoCalendarDate(value: unknown): value is string {
-  if (typeof value !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(value)) {
-    return false;
-  }
-  const [y, m, d] = value.split('-').map(Number);
-  if (!y || !m || !d) {
-    return false;
-  }
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
-}
-
 const HUMAN_APPROVAL_OIDC_SCOPES = new Set([
   'pap:ui:full',
   'pap:ui:accounting',
@@ -1602,8 +1590,7 @@ export class AccountingWorkspaceService {
       typeof req.address === 'object' && req.address !== null ? req.address : undefined;
     const streetVal = req.street ?? structuredAddrObj?.street;
     const buildingNoVal = req.buildingNumber ?? structuredAddrObj?.buildingNumber;
-    const unitNoVal =
-      req.unitNumber !== undefined ? req.unitNumber : structuredAddrObj?.unitNumber;
+    const unitNoVal = req.unitNumber !== undefined ? req.unitNumber : structuredAddrObj?.unitNumber;
     const postalCodeVal = req.postalCode ?? structuredAddrObj?.postalCode;
     const cityVal = req.city ?? structuredAddrObj?.city;
     const voivodeshipVal = req.voivodeship ?? structuredAddrObj?.voivodeship;
@@ -1883,9 +1870,7 @@ export class AccountingWorkspaceService {
       typeof req.address === 'object' && req.address !== null ? req.address : undefined;
     const streetVal = req.street ?? structuredAddrObj?.street ?? company.taxProfile.street;
     const buildingNoVal =
-      req.buildingNumber ??
-      structuredAddrObj?.buildingNumber ??
-      company.taxProfile.buildingNumber;
+      req.buildingNumber ?? structuredAddrObj?.buildingNumber ?? company.taxProfile.buildingNumber;
     const unitNoVal =
       req.unitNumber !== undefined
         ? req.unitNumber
@@ -1898,9 +1883,7 @@ export class AccountingWorkspaceService {
     const voivodeshipVal =
       req.voivodeship ?? structuredAddrObj?.voivodeship ?? company.taxProfile.voivodeship;
     const taxOfficeNameVal =
-      req.taxOfficeName ??
-      structuredAddrObj?.taxOfficeName ??
-      company.taxProfile.taxOfficeName;
+      req.taxOfficeName ?? structuredAddrObj?.taxOfficeName ?? company.taxProfile.taxOfficeName;
 
     if (typeof req.address === 'string') {
       company.address = req.address.trim();
@@ -2441,8 +2424,7 @@ export class AccountingWorkspaceService {
 
     const aiProposal: DocumentAiProposalContract = {
       status: params.sourceFormat === 'manual' ? 'not_applicable' : 'ai_proposed',
-      confidenceScoreBps:
-        params.confidenceScoreBps ?? (promptInjectionSuspected ? 4500 : 9400),
+      confidenceScoreBps: params.confidenceScoreBps ?? (promptInjectionSuspected ? 4500 : 9400),
       suggestedCategory: defaultCategory,
       vatDeductionMode: defaultVatDeduction,
       kpirQualification: defaultKpirQual,
@@ -2504,10 +2486,13 @@ export class AccountingWorkspaceService {
     let sha256HashValue: string;
     let record: CompanyDocumentItemContract;
 
-    if ('rawPayload' in req && typeof req.rawPayload === 'string' && req.rawPayload.trim().length > 0) {
+    if (
+      'rawPayload' in req &&
+      typeof req.rawPayload === 'string' &&
+      req.rawPayload.trim().length > 0
+    ) {
       const payloadSha = sha256Hex(req.rawPayload.trim());
-      sha256HashValue =
-        'sha256' in req && typeof req.sha256 === 'string' ? req.sha256 : payloadSha;
+      sha256HashValue = 'sha256' in req && typeof req.sha256 === 'string' ? req.sha256 : payloadSha;
       if (
         company.documents.some(
           (d) =>
@@ -2581,8 +2566,15 @@ export class AccountingWorkspaceService {
         gtuReviewStatus: 'requires_human_review',
         lines: parsedDraft.lines,
       });
-    } else if ('sha256' in req && typeof req.sha256 === 'string' && !('rawPayload' in req && req.rawPayload)) {
-      const bffReq = req as Extract<CreateDocumentRequest, { sha256: string; documentNumber: string }>;
+    } else if (
+      'sha256' in req &&
+      typeof req.sha256 === 'string' &&
+      !('rawPayload' in req && req.rawPayload)
+    ) {
+      const bffReq = req as Extract<
+        CreateDocumentRequest,
+        { sha256: string; documentNumber: string }
+      >;
       sha256HashValue = bffReq.sha256;
       if (
         company.documents.some((d) => d.sha256Hash === sha256HashValue && d.status !== 'archived')
@@ -2674,7 +2666,10 @@ export class AccountingWorkspaceService {
         lines: bffLines,
       });
     } else {
-      const manualReq = req as Extract<CreateDocumentRequest, { issueDate: string; counterpartyName: string }>;
+      const manualReq = req as Extract<
+        CreateDocumentRequest,
+        { issueDate: string; counterpartyName: string }
+      >;
       let normalizedManualNip: string | undefined;
       if (manualReq.counterpartyNip !== undefined) {
         const nipCheck = validatePolishNip(manualReq.counterpartyNip);
@@ -4971,10 +4966,24 @@ export class AccountingWorkspaceService {
       'dispatch_due_notifications',
     );
     const req = rawRequest ? DispatchDueNotificationsRequestSchema.parse(rawRequest) : undefined;
-    const evaluationDate = req?.evaluationDate ?? DEMO_EVALUATION_DATE;
     const period = req?.period ?? DEMO_DEFAULT_PERIOD;
+    const initialEvalDate = req?.evaluationDate ?? DEMO_EVALUATION_DATE;
+    const preliminaryObligations = this.toNotificationObligationInputs(
+      company,
+      period,
+      initialEvalDate,
+    );
+    const firstUnpaidDue = preliminaryObligations.find((o) => !o.completed)?.dueDate;
+    const evaluationDate =
+      req?.evaluationDate ??
+      (period === DEMO_DEFAULT_PERIOD || !firstUnpaidDue
+        ? DEMO_EVALUATION_DATE
+        : addDaysIso(firstUnpaidDue, -2));
     const prefs = this.buildNotificationsViewInternal(tId, leId, uId).preferences;
-    const obligations = this.toNotificationObligationInputs(company, period, evaluationDate);
+    const obligations =
+      evaluationDate === initialEvalDate
+        ? preliminaryObligations
+        : this.toNotificationObligationInputs(company, period, evaluationDate);
 
     const enqueued = await this.notificationsEngine.enqueueScheduledReminders({
       evaluationDate,

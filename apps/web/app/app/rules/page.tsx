@@ -2,17 +2,17 @@ import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapLegalRuleToBasisInfo } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
-import { getDashboardSnapshot, getLegalRulesCatalog } from '../../../lib/synthetic-workspace';
+import { getLegalRulesCatalog, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
 import { RulesCatalogClient } from './rules-catalog-client';
 
 export default async function LegalRulesPage() {
   const session = await readServerSession();
   const rawRules = getLegalRulesCatalog();
 
-  let dash: Awaited<ReturnType<typeof getDashboardSnapshot>> | null = null;
+  let dash: Awaited<ReturnType<typeof getWorkspaceShellContext>> | null = null;
   if (session) {
     try {
-      dash = await getDashboardSnapshot(session);
+      dash = await getWorkspaceShellContext(session);
     } catch {
       dash = null;
     }

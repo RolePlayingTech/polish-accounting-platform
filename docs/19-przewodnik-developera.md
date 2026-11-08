@@ -111,7 +111,7 @@ pnpm db:migrate
 pnpm db:migrate
 ```
 
-`db:generate` działa bez DB: tworzy SQL i metadane po zmianie schematu Drizzle; dla niezmienionego schematu nie powinien dodać migracji. `db:migrate` zapisuje wykonane wersje w `drizzle.__drizzle_migrations`. Ponowne wykonanie nie powiela migracji. Łańcuch migracji obejmuje `0000` (6A), `0001` (6B: `tenant`, `legal_entity`, `tenant_membership`, `entity_profile_version`, `company_access_grant` oraz rozszerzenie `btree_gist`), `0002` (6D-R: `access_management_event` i guardy SQL cyklu dostępu) oraz `0003` (6D-2: `app_user`, `user_oidc_identity` i guardy SQL niezmienności tożsamości). Reviewuj SQL i metadane w `packages/db/drizzle`, w tym usunięcie kwalifikatora `public` z wygenerowanych FK na potrzeby testowego namespace ([wyjaśnienie](22-schemat-tenantow-6b.md#migracje-i-izolacja-testów)). Migracje uruchamiaj pojedynczo; nie wykonują się przy `pnpm dev`.
+`db:generate` działa bez DB: tworzy SQL i metadane po zmianie schematu Drizzle; dla niezmienionego schematu nie powinien dodać migracji. `db:migrate` zapisuje wykonane wersje w `drizzle.__drizzle_migrations`. Ponowne wykonanie nie powiela migracji. Łańcuch migracji obejmuje `0000` (6A), `0001` (6B: `tenant`, `legal_entity`, `tenant_membership`, `entity_profile_version`, `company_access_grant` oraz rozszerzenie `btree_gist`), `0002` (6D-R: `access_management_event` i guardy SQL cyklu dostępu), `0003` (6D-2: `app_user`, `user_oidc_identity` i guardy SQL niezmienności tożsamości), `0004` (6D-3B: podpisany kontekst sesji i `FORCE RLS`), `0005` (6D-3C: `security_decision_event`), `0006` (tabele księgowe, podatkowe, powiadomienia i MCP z `FORCE RLS`), `0007` (atomowe mutacje księgowe i indeks propozycji MCP) oraz `0008` (bezpieczny runtime provisioning firm przez rolę `pap_*_app` bez `PAP_MIGRATOR_DATABASE_URL`). Reviewuj SQL i metadane w `packages/db/drizzle`, w tym usunięcie kwalifikatora `public` z wygenerowanych FK na potrzeby testowego namespace ([wyjaśnienie](22-schemat-tenantow-6b.md#migracje-i-izolacja-testów)). Migracje uruchamiaj pojedynczo; nie wykonują się przy `pnpm dev`.
 
 Walidator `loadDatabaseConfig` akceptuje wyłącznie: `PAP_DATABASE_ENV=local` z kontem i bazą `pap_local`, `PAP_DATABASE_ENV=test` z kontem i bazą `pap_test` (oba na `127.0.0.1`, `localhost` lub `::1` poza `NODE_ENV=production`) albo jawny profil `PAP_DATABASE_ENV=staging` przy `NODE_ENV=production` na adresie loopback `127.0.0.1`/`::1` dla bazy `pap_staging` z rozdziałem ról konfiguracji klienta `pap_staging_migrator` i `pap_staging_app` (PR #24). Środowisko `production`, zdalny host, inne konto lub baza, niepoprawny URL oraz parametry/fragmenty URL są odrzucane przed utworzeniem klienta PostgreSQL.
 
@@ -136,7 +136,7 @@ W świeżej bazie oczekiwane jest zero wierszy. Jeśli istnieją obiekty, ustal 
 pnpm test:integration
 ```
 
-Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują pełny łańcuch migracji (`0000`–`0006`), ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter autoryzacji 6D-1, transakcyjny cykl dostępu 6D-R, mapowanie i provisioning tożsamości OIDC 6D-2 oraz Security Foundation 6D-3 (transakcyjny `UnitOfWork`, wyścigi TOCTOU, brak zakleszczeń, reużycie połączeń, ograniczoną rolę runtime, podpisany kontekst HMAC, `FORCE RLS` i atomowy audyt `allow/deny`). Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Bez lokalnego PostgreSQL oznacz testy integracyjne jako nieweryfikowane lokalnie; bieżąca walidacja integracyjna odbywa się w odizolowanym środowisku testowym na Hetznerze ([ADR-006](adr/006-tymczasowe-ci-hetzner.md)).
+Testy wymagają `PAP_DATABASE_ENV=test`. Tworzą własny losowy schemat `pap_test_<32 znaki hex>` dla tabel, rozszerzenia i rejestru. `search_path` obejmuje wszystkie połączenia puli; samo `migrationsSchema` nie izoluje tabel. Weryfikują pełny łańcuch migracji (`0000`–`0008`), ponowienie, rollback nieudanej migracji, FK/UNIQUE/CHECK/NOT NULL, zakaz nakładania profili, adapter autoryzacji 6D-1, transakcyjny cykl dostępu 6D-R, mapowanie i provisioning tożsamości OIDC 6D-2, Security Foundation 6D-3 (transakcyjny `UnitOfWork`, wyścigi TOCTOU, brak zakleszczeń, reużycie połączeń, ograniczoną rolę runtime, podpisany kontekst HMAC, `FORCE RLS` na wszystkich 27 tabelach i atomowy audyt `allow/deny`) oraz pełną persystencję E2E w `@pap/api` (`test/postgres-persistence-e2e.integration.ts`). Sprzątają tylko własny schemat i porównują inwentaryzację obiektów sprzed i po teście. Bez lokalnego PostgreSQL oznacz testy integracyjne jako nieweryfikowane lokalnie; bieżąca walidacja integracyjna odbywa się w odizolowanym środowisku testowym na Hetznerze ([ADR-006](adr/006-tymczasowe-ci-hetzner.md)).
 
 ## MCP lokalne STDIO
 
@@ -147,7 +147,7 @@ pnpm build
 pnpm dev:mcp
 ```
 
-Proces używa wyłącznie transportu STDIO i udostępnia read-only narzędzie `system_status`. Nie ma transportu HTTP, autoryzacji klienta, dostępu do tenantów, dokumentów ani zapisów. Serwer oczekuje klienta MCP podłączonego do jego standardowego wejścia/wyjścia; uruchomienie bez klienta pozostaje procesem działającym w terminalu.
+Proces wspiera zarówno lokalny transport STDIO, jak i zdalny transport Streamable HTTP (`/mcp` w `apps/mcp` oraz wbudowany `/api/v1/mcp` w `apps/api`) z obowiązkowym uwierzytelnianiem OIDC `Bearer` (`ES256` JWKS) i zestawem 9 narzędzi MCP opisanych w [34 — architekturze API, OIDC i MCP](34-architektura-api-oidc-i-mcp.md).
 
 ## Codzienne polecenia
 
@@ -164,9 +164,9 @@ Opis scenariuszy i zakresu walidacji znajduje się w [20 — strategii testów](
 
 ## Granice obecnego działania
 
-- `/app` prezentuje stan techniczny szkieletu. Moduły księgowe i autoryzacja tenantów w publicznym statusie pozostają oznaczone jako `not_available`.
-- `/settings` i `/platform` są statycznymi placeholderami bez operacji administracyjnych.
-- Warstwy serwerowe [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md) i [6D-3A](26-transakcyjna-autoryzacja-6d3a.md) weryfikują tokeny dostępu OIDC, rozwiązują wewnętrzne `userId` i egzekwują transakcyjną autoryzację w `UnitOfWork` (`executeAuthorizedCompanyAction` i `manageAccess`), lecz nie wystawiają jeszcze publicznych endpointów księgowych ani mutujących i nie obejmują interaktywnego logowania UI, RLS ani ograniczonej roli runtime DB (6D-3B).
+- `/app` oraz wszystkie widoki operacyjne (`/app/companies`, `/app/documents`, `/app/kpir`, `/app/ryczalt`, `/app/vat`, `/app/ledger`, `/app/finance`, `/app/calendar`, `/app/rules`, `/app/notifications`, `/app/mcp`) działają w trybie **fail-closed** względem REST API (`apps/api`) i zachowują niezmiennik diagnostyczny `Zakres pierwszego etapu` / `API odpowiada` na `/app`.
+- `/settings` i `/platform` przekierowują do panelu zarządzania podmiotami, profilami podatkowymi, grantami dostępu i dziennikiem audytu (`/app/companies`).
+- Warstwy serwerowe [6D-2](25-uwierzytelnianie-oidc-i-tozsamosc-6d2.md), [6D-3A](26-transakcyjna-autoryzacja-6d3a.md), [6D-3B](27-runtime-security-6d3a.md) i [6D-3C](28-security-audit-6d3c.md) weryfikują tokeny OIDC, egzekwują transakcyjną autoryzację w `UnitOfWork`, ograniczoną rolę runtime `pap_*_app` (`NOSUPERUSER`, `NOBYPASSRLS`), `FORCE ROW LEVEL SECURITY` na wszystkich 27 tabelach (migracje `0000`–`0008`) oraz trwałość `PostgresBackedWorkspaceService` w `apps/api`.
 - Przed samodzielnym `pnpm test:integration` po czystej instalacji zbuduj zależności przez `pnpm --filter @pap/application... build` (pełne `pnpm build` również je buduje); CI wykonuje ten krok jawnie.
 - W pakietach i testach używaj wyłącznie danych syntetycznych. Nie dodawaj danych osobowych, faktur, tokenów, certyfikatów ani sekretów.
 

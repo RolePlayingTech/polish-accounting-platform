@@ -7,7 +7,7 @@ import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
-import { getDashboardSnapshot, getFinanceSnapshot } from '../../../lib/synthetic-workspace';
+import { getFinanceSnapshot, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
 import { FinanceWorkbench } from './finance-workbench';
 
 export default async function FinancePage() {
@@ -35,7 +35,7 @@ export default async function FinancePage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const [dash, fin] = await Promise.all([
-      getDashboardSnapshot(session),
+      getWorkspaceShellContext(session),
       getFinanceSnapshot(session),
     ]);
     return { dash, fin };

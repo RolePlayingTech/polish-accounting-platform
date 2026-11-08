@@ -306,8 +306,7 @@ export function DocumentVerificationClient({
             value={docNumber}
             onChange={setDocNumber}
             confidence={document.aiConfidence}
-            {...(document.aiConfidencePercent !== null &&
-            document.aiConfidencePercent !== undefined
+            {...(document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined
               ? { confidencePercent: document.aiConfidencePercent }
               : {})}
             extractionSource={document.extractionMethodLabelPl ?? document.sourceChannel}
@@ -321,8 +320,7 @@ export function DocumentVerificationClient({
             value={issueDate}
             onChange={setIssueDate}
             confidence={document.aiConfidence}
-            {...(document.aiConfidencePercent !== null &&
-            document.aiConfidencePercent !== undefined
+            {...(document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined
               ? { confidencePercent: document.aiConfidencePercent }
               : {})}
             numeric
@@ -336,8 +334,7 @@ export function DocumentVerificationClient({
             value={counterpartyName}
             onChange={setCounterpartyName}
             confidence={document.aiConfidence}
-            {...(document.aiConfidencePercent !== null &&
-            document.aiConfidencePercent !== undefined
+            {...(document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined
               ? { confidencePercent: document.aiConfidencePercent }
               : {})}
             readOnly={isAlreadyPosted || !canWrite}
@@ -350,8 +347,7 @@ export function DocumentVerificationClient({
             value={counterpartyNip}
             onChange={setCounterpartyNip}
             confidence={document.aiConfidence}
-            {...(document.aiConfidencePercent !== null &&
-            document.aiConfidencePercent !== undefined
+            {...(document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined
               ? { confidencePercent: document.aiConfidencePercent }
               : {})}
             numeric

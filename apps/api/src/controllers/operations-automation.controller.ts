@@ -416,7 +416,7 @@ export class OperationsAutomationController {
         ? (rawBody['invoice'] as Record<string, unknown>)
         : rawBody;
     const direction = rawInvoice['direction'] === 'sales' ? 'sales' : 'purchase';
-    const defaultCategory = direction === 'sales' ? 'sales_revenue' : 'other_deductible_expense';
+    const defaultCategory = direction === 'sales' ? 'przychod_sprzedaz' : 'pozostale_wydatki_kpir';
 
     const candidateInput = {
       tenantId,

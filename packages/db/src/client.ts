@@ -39,7 +39,7 @@ export function connectDatabase(
     host: [host],
     // @ts-expect-error Jak wyżej: host i port muszą być przekazane razem jako tablice.
     port: [Number(url.port)],
-    connect_timeout: 5,
+    connect_timeout: 15,
     idle_timeout: 20,
     max: maxConnections,
     connection: { search_path: `${dataSchema},pg_catalog` },

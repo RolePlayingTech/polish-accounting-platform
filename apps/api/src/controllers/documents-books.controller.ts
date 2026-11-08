@@ -119,7 +119,7 @@ export class DocumentsBooksController {
     );
   }
 
-  @Post('/kpir')
+  @Post(['/kpir', '/kpir/entries'])
   @Header('Cache-Control', 'no-store')
   createKpirEntry(
     @Req() request: JwtAuthenticatedRequest,
@@ -186,7 +186,7 @@ export class DocumentsBooksController {
     );
   }
 
-  @Post('/ryczalt')
+  @Post(['/ryczalt', '/ryczalt/entries'])
   @Header('Cache-Control', 'no-store')
   createRyczaltEntry(
     @Req() request: JwtAuthenticatedRequest,
@@ -237,7 +237,7 @@ export class DocumentsBooksController {
     );
   }
 
-  @Post('/ledger')
+  @Post(['/ledger', '/ledger/entries', '/ledger/journal-entries'])
   @Header('Cache-Control', 'no-store')
   createJournalEntry(
     @Req() request: JwtAuthenticatedRequest,

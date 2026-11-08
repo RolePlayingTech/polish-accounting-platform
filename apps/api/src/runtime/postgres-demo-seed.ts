@@ -89,6 +89,7 @@ export async function persistCompanyTaxSettingsToScope(
     vatStatusSimple: company.vatStatusSimple,
     taxProfile: company.taxProfile,
     settingsHistory: company.settingsHistory,
+    ...(company.address !== undefined ? { address: company.address } : {}),
   };
   await scope.upsertCompanyTaxSettings({
     id: deterministicUuidV4(`tax-settings:${company.tenantId}:${company.legalEntityId}`),

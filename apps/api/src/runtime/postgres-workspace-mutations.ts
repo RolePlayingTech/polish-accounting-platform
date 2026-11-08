@@ -328,11 +328,13 @@ export async function persistNotificationsStateMutation(
   const existingById = new Map(existingOutbox.map((o) => [o.id, o]));
   const existingMailbox = await scope.listSandboxMailboxMessages();
   const existingMailboxIds = new Set(existingMailbox.map((m) => m.id));
+  const outboxDbIdByEntryId = new Map<string, string>(existingOutbox.map((o) => [o.id, o.id]));
 
   for (const entry of view.outbox) {
     const dbFound = existingById.get(entry.outboxId);
+    const targetAttemptCount = Math.max(entry.retryCount, entry.attempts.length);
     if (!dbFound) {
-      await scope.enqueueNotificationOutbox({
+      const enqueued = await scope.enqueueNotificationOutbox({
         id: entry.outboxId,
         userId,
         obligationId: null,
@@ -348,19 +350,23 @@ export async function persistNotificationsStateMutation(
         maxAttempts: entry.maxAttempts,
         nextAttemptAt: entry.nextAttemptAt ? new Date(entry.nextAttemptAt) : null,
       });
-      if (entry.retryCount > 0 || entry.status !== 'pending') {
+      outboxDbIdByEntryId.set(entry.outboxId, enqueued.item.id);
+      if (enqueued.item.status !== 'sent' && enqueued.item.status !== entry.status) {
         await scope.updateNotificationOutboxStatus({
-          outboxId: entry.outboxId,
+          outboxId: enqueued.item.id,
           status: entry.status,
-          attemptCount: Math.max(entry.retryCount, entry.attempts.length),
+          attemptCount: Math.max(enqueued.item.attemptCount, targetAttemptCount),
           nextAttemptAt: entry.nextAttemptAt ? new Date(entry.nextAttemptAt) : null,
         });
       }
-    } else if (dbFound.status !== entry.status || dbFound.attemptCount !== entry.retryCount) {
+    } else if (
+      dbFound.status !== 'sent' &&
+      (dbFound.status !== entry.status || dbFound.attemptCount !== targetAttemptCount)
+    ) {
       await scope.updateNotificationOutboxStatus({
-        outboxId: entry.outboxId,
+        outboxId: dbFound.id,
         status: entry.status,
-        attemptCount: Math.max(entry.retryCount, entry.attempts.length),
+        attemptCount: Math.max(dbFound.attemptCount, targetAttemptCount),
         nextAttemptAt: entry.nextAttemptAt ? new Date(entry.nextAttemptAt) : null,
       });
     }
@@ -371,9 +377,10 @@ export async function persistNotificationsStateMutation(
     if (existingMailboxIds.has(msgUuid)) {
       continue;
     }
+    const resolvedOutboxId = outboxDbIdByEntryId.get(msg.outboxId) ?? msg.outboxId;
     await scope.appendSandboxMailboxMessage({
       id: msgUuid,
-      outboxId: msg.outboxId,
+      outboxId: resolvedOutboxId,
       recipientEmail: msg.to,
       subject: msg.subject,
       rawRfc5322Mime: msg.rawRfc822,

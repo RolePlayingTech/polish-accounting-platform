@@ -183,7 +183,7 @@ export async function connectPostgresRuntime(
       PAP_DATABASE_ENV: databaseEnv,
     },
     dataSchema,
-    { roleScope: 'runtime' },
+    { roleScope: 'runtime', maxConnections: 15 },
   );
 
   try {

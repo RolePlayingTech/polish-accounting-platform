@@ -7,7 +7,7 @@ import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
-import { getDashboardSnapshot, getRyczaltSnapshot } from '../../../lib/synthetic-workspace';
+import { getRyczaltSnapshot, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
 import { RyczaltWorkbench } from './ryczalt-workbench';
 
 export default async function RyczaltPage() {
@@ -32,7 +32,7 @@ export default async function RyczaltPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const [dash, ryc] = await Promise.all([
-      getDashboardSnapshot(session),
+      getWorkspaceShellContext(session),
       getRyczaltSnapshot(session),
     ]);
     return { dash, ryc };

@@ -1,6 +1,5 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Card, StatusBadge } from '@pap/ui';
 import { AlertBanner, Button } from '../../components/ui-controls';
@@ -13,7 +12,6 @@ export interface PersonaLoginClientProps {
 }
 
 export function PersonaLoginClient({ personas, redirectTo }: PersonaLoginClientProps) {
-  const router = useRouter();
   const [selectedPeriod, setSelectedPeriod] = useState<string>('2026-10');
   const [submittingPersona, setSubmittingPersona] = useState<PersonaId | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -44,8 +42,7 @@ export function PersonaLoginClient({ personas, redirectTo }: PersonaLoginClientP
         setSubmittingPersona(null);
         return;
       }
-      router.push(data.redirectTo ?? '/app');
-      router.refresh();
+      window.location.assign(data.redirectTo ?? '/app');
     } catch {
       setErrorMessage('Błąd komunikacji z warstwą BFF podczas logowania.');
       setSubmittingPersona(null);

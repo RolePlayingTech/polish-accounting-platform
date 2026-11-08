@@ -62,6 +62,7 @@ export interface PersistedCompanyMeta {
   readonly vatStatusSimple: CompanyVatStatusSimpleContract;
   readonly taxProfile: TaxProfileConfigContract;
   readonly settingsHistory: CompanySettingsResponse['history'];
+  readonly address?: WorkspaceCompanyState['address'];
 }
 
 export function encodeCompanyMetaInAddress(meta: PersistedCompanyMeta): string {

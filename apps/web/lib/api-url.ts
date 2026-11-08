@@ -231,7 +231,7 @@ export async function papBffFetch<T>(
       ...(serializedBody !== undefined ? { body: serializedBody } : {}),
       cache: 'no-store',
       redirect: 'error',
-      signal: AbortSignal.timeout(options.timeoutMs ?? 3_500),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
     });
 
     if (response.status === 401) {
@@ -345,7 +345,7 @@ export async function papBffMcpCallTool<T>(
       body: JSON.stringify(rpcPayload),
       cache: 'no-store',
       redirect: 'error',
-      signal: AbortSignal.timeout(options.timeoutMs ?? 5_000),
+      signal: AbortSignal.timeout(options.timeoutMs ?? 30_000),
     });
 
     if (response.status === 401) {
@@ -403,10 +403,7 @@ export async function papBffMcpCallTool<T>(
         kind: 'server_error',
         status: response.status,
         reasonCode: extractReasonCode(parsedJson),
-        message: extractErrorMessage(
-          parsedJson,
-          `Błąd serwera MCP (HTTP ${response.status}).`,
-        ),
+        message: extractErrorMessage(parsedJson, `Błąd serwera MCP (HTTP ${response.status}).`),
       };
     }
 

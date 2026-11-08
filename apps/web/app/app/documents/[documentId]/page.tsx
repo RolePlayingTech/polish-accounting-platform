@@ -7,8 +7,8 @@ import { mustResolveUiFieldHelp } from '../../../../lib/field-help';
 import { readServerSession } from '../../../../lib/session';
 import {
   WorkspaceAccessError,
-  getDashboardSnapshot,
   getDocumentDetailSnapshot,
+  getWorkspaceShellContext,
 } from '../../../../lib/synthetic-workspace';
 import { DocumentVerificationClient } from './document-verification-client';
 
@@ -40,9 +40,9 @@ export default async function DocumentDetailPage({
     );
   }
 
-  let dash: Awaited<ReturnType<typeof getDashboardSnapshot>>;
+  let dash: Awaited<ReturnType<typeof getWorkspaceShellContext>>;
   try {
-    dash = await getDashboardSnapshot(session);
+    dash = await getWorkspaceShellContext(session);
   } catch (err) {
     return (
       <WorkspaceAccessErrorShell
@@ -62,6 +62,17 @@ export default async function DocumentDetailPage({
     detail = await getDocumentDetailSnapshot(session, documentId);
   } catch (err) {
     if (err instanceof WorkspaceAccessError) {
+      if (err.statusCode !== 404) {
+        return (
+          <WorkspaceAccessErrorShell
+            session={session}
+            error={err}
+            activeHref="/app/documents"
+            pageEyebrow="Warsztat weryfikacji Split-View"
+            pageTitle="Weryfikacja propozycji AI obok oryginału dokumentu"
+          />
+        );
+      }
       errorMessage = err.message;
     }
   }

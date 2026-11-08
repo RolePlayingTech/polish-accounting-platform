@@ -630,7 +630,10 @@ function normalizeCsvHeaderName(rawHeader: string): string {
     .replace(/^_+|_+$/g, '');
 }
 
-function parseDirectionValue(raw: string | undefined, fallback: 'sales' | 'purchase'): 'sales' | 'purchase' {
+function parseDirectionValue(
+  raw: string | undefined,
+  fallback: 'sales' | 'purchase',
+): 'sales' | 'purchase' {
   if (!raw) {
     return fallback;
   }
@@ -757,13 +760,7 @@ export function parseSafeDocumentCsv(
   const vatRateIdx = findColumn(['vat_rate', 'stawka_vat', 'stawka', 'vat_stawka']);
   const netIdx = findColumn(['net_amount_pln', 'net_pln', 'netto', 'kwota_netto', 'net']);
   const vatIdx = findColumn(['vat_amount_pln', 'vat_pln', 'vat', 'kwota_vat']);
-  const grossIdx = findColumn([
-    'gross_amount_pln',
-    'gross_pln',
-    'brutto',
-    'kwota_brutto',
-    'gross',
-  ]);
+  const grossIdx = findColumn(['gross_amount_pln', 'gross_pln', 'brutto', 'kwota_brutto', 'gross']);
   const categoryIdx = findColumn(['expense_category', 'kategoria', 'kategoria_kosztu']);
   const ksefRefIdx = findColumn(['ksef_reference_number', 'nr_ksef', 'ksef_ref']);
 
@@ -1128,8 +1125,18 @@ export function parseSafeDocumentJson(
         );
       }
 
-      const netGrosze = parseJsonMoneyField(lineObj, 'netAmountPln', 'netGrosze', `lines[${i}].net`);
-      const vatGrosze = parseJsonMoneyField(lineObj, 'vatAmountPln', 'vatGrosze', `lines[${i}].vat`);
+      const netGrosze = parseJsonMoneyField(
+        lineObj,
+        'netAmountPln',
+        'netGrosze',
+        `lines[${i}].net`,
+      );
+      const vatGrosze = parseJsonMoneyField(
+        lineObj,
+        'vatAmountPln',
+        'vatGrosze',
+        `lines[${i}].vat`,
+      );
       const grossGrosze = parseJsonMoneyField(
         lineObj,
         'grossAmountPln',

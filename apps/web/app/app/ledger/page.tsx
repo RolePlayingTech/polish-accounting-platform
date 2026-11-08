@@ -7,7 +7,7 @@ import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
-import { getDashboardSnapshot, getFullLedgerSnapshot } from '../../../lib/synthetic-workspace';
+import { getFullLedgerSnapshot, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
 import { LedgerWorkbench } from './ledger-workbench';
 
 export default async function FullLedgerPage() {
@@ -35,7 +35,7 @@ export default async function FullLedgerPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const [dash, ledger] = await Promise.all([
-      getDashboardSnapshot(session),
+      getWorkspaceShellContext(session),
       getFullLedgerSnapshot(session),
     ]);
     return { dash, ledger };

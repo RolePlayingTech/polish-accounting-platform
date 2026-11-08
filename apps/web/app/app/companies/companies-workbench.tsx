@@ -91,7 +91,12 @@ export function CompaniesWorkbench({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = (await response.json()) as { ok?: boolean; error?: string };
+      const data = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        legalEntityId?: string;
+        company?: CompanyProfileRecord;
+      };
       if (!response.ok || !data.ok) {
         setFeedback({
           tone: 'danger',
@@ -99,6 +104,20 @@ export function CompaniesWorkbench({
           detail: data.error ?? 'Operacja nie powiodła się.',
         });
       } else {
+        if (
+          body['action'] === 'create_company' &&
+          body['switchImmediately'] !== false &&
+          data.company
+        ) {
+          window.dispatchEvent(
+            new CustomEvent('pap:company-switched', {
+              detail: {
+                company: data.company,
+                legalEntityId: data.company.legalEntityId,
+              },
+            }),
+          );
+        }
         setFeedback({
           tone: 'success',
           title: 'Zapisano zmianę i zarejestrowano ślad audytowy',
@@ -238,6 +257,7 @@ export function CompaniesWorkbench({
                   </div>
                   <p className="text-sm font-semibold text-[#191c1a]">{comp.companyName}</p>
                   <p className="text-xs text-[#464c48]">{comp.profileLabelPl}</p>
+                  <p className="text-xs text-[#636b66]">{comp.address}</p>
                   <p className="font-mono text-[11px] text-[#636b66]">
                     Uprawnienia: {comp.grantedActions.join(' + ')}
                   </p>

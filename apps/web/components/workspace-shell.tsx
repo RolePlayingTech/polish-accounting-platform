@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import {
   AppShell,
   CompanyPeriodHeader,
@@ -95,10 +95,47 @@ export function WorkspaceShell({
   const router = useRouter();
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
+  const [extraCompanies, setExtraCompanies] = useState<readonly CompanyProfileRecord[]>([]);
+  const [optimisticEntityId, setOptimisticEntityId] = useState<string | null>(null);
   const isOfflineDemo =
     offlineDemoMode ??
     (process.env['PAP_WEB_OFFLINE_DEMO_MODE'] === 'true' ||
       process.env['NEXT_PUBLIC_PAP_WEB_OFFLINE_DEMO_MODE'] === 'true');
+
+  useEffect(() => {
+    setOptimisticEntityId(null);
+  }, [activeCompany?.legalEntityId]);
+
+  useEffect(() => {
+    function onCompanySwitched(event: Event) {
+      const custom = event as CustomEvent<{
+        company?: CompanyProfileRecord;
+        legalEntityId?: string;
+      }>;
+      const comp = custom.detail?.company;
+      if (comp) {
+        setExtraCompanies((prev) =>
+          prev.some((c) => c.legalEntityId === comp.legalEntityId) ? prev : [...prev, comp],
+        );
+      }
+      if (custom.detail?.legalEntityId) {
+        setOptimisticEntityId(custom.detail.legalEntityId);
+      }
+    }
+    window.addEventListener('pap:company-switched', onCompanySwitched);
+    return () => window.removeEventListener('pap:company-switched', onCompanySwitched);
+  }, []);
+
+  const mergedAccessibleCompanies = [
+    ...accessibleCompanies,
+    ...extraCompanies.filter(
+      (ec) => !accessibleCompanies.some((ac) => ac.legalEntityId === ec.legalEntityId),
+    ),
+  ];
+  const effectiveActiveCompany =
+    (optimisticEntityId
+      ? mergedAccessibleCompanies.find((c) => c.legalEntityId === optimisticEntityId)
+      : null) ?? activeCompany;
 
   async function handleContextChange(next: {
     tenantId?: string;
@@ -117,6 +154,9 @@ export function WorkspaceShell({
       if (!response.ok || !data.ok) {
         setSwitchError(data.error ?? 'Nie udało się zmienić aktywnej firmy.');
       } else {
+        if (next.legalEntityId) {
+          setOptimisticEntityId(next.legalEntityId);
+        }
         router.refresh();
       }
     } catch {
@@ -127,12 +167,12 @@ export function WorkspaceShell({
   }
 
   const contextHeader =
-    sessionContext && activeCompany ? (
+    sessionContext && effectiveActiveCompany ? (
       <div className="space-y-0">
         <CompanyPeriodHeader
-          companyName={activeCompany.companyName}
-          nip={activeCompany.nip}
-          taxProfileLabel={activeCompany.profileLabelPl}
+          companyName={effectiveActiveCompany.companyName}
+          nip={effectiveActiveCompany.nip}
+          taxProfileLabel={effectiveActiveCompany.profileLabelPl}
           period={sessionContext.period}
           availablePeriods={AVAILABLE_PERIODS}
           onPeriodChange={(nextPeriod) => {
@@ -155,9 +195,9 @@ export function WorkspaceShell({
                 <select
                   id="pap-active-company-select"
                   disabled={isSwitching}
-                  value={activeCompany.legalEntityId}
+                  value={effectiveActiveCompany.legalEntityId}
                   onChange={(e) => {
-                    const selected = accessibleCompanies.find(
+                    const selected = mergedAccessibleCompanies.find(
                       (c) => c.legalEntityId === e.target.value,
                     );
                     if (selected) {
@@ -169,7 +209,7 @@ export function WorkspaceShell({
                   }}
                   className="min-h-8 min-w-0 max-w-[calc(100vw-6.5rem)] truncate rounded-md border border-[#858177] bg-white px-2.5 py-1 text-xs font-medium text-[#191c1a] sm:max-w-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
                 >
-                  {accessibleCompanies.map((comp) => (
+                  {mergedAccessibleCompanies.map((comp) => (
                     <option key={comp.legalEntityId} value={comp.legalEntityId}>
                       {comp.shortName}
                     </option>
@@ -179,9 +219,9 @@ export function WorkspaceShell({
 
               <StatusBadge
                 size="sm"
-                tone={activeCompany.grantedActions.includes('write') ? 'accent' : 'info'}
+                tone={effectiveActiveCompany.grantedActions.includes('write') ? 'accent' : 'info'}
                 label={
-                  activeCompany.grantedActions.includes('write')
+                  effectiveActiveCompany.grantedActions.includes('write')
                     ? 'Uprawnienia: odczyt + zapis'
                     : 'Uprawnienia: tylko odczyt'
                 }
@@ -212,7 +252,8 @@ export function WorkspaceShell({
             data-testid="offline-demo-mode-banner"
             className="border-b border-[#e2c691] bg-[#f8eedb] px-4 py-2 text-xs font-semibold text-[#7a4f0a] sm:px-6"
           >
-            TRYB DEMONSTRACYJNY OFFLINE — DANE NIE SĄ ZAPISYWANE W BAZIE · TRYB DEMO OFFLINE (DANE TYLKO W PAMIĘCI WEB)
+            TRYB DEMONSTRACYJNY OFFLINE — DANE NIE SĄ ZAPISYWANE W BAZIE · TRYB DEMO OFFLINE (DANE
+            TYLKO W PAMIĘCI WEB)
           </div>
         ) : null}
       </div>

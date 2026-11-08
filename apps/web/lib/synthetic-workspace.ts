@@ -1277,6 +1277,14 @@ function throwWorkspaceErrorFromRemote(
   throw new WorkspaceAccessError(503, 'api_unavailable', fallbackMessagePl);
 }
 
+interface RemoteStructuredAddress {
+  readonly street?: string;
+  readonly buildingNumber?: string;
+  readonly unitNumber?: string | null;
+  readonly postalCode?: string;
+  readonly city?: string;
+}
+
 interface RemoteAccessibleCompany {
   readonly tenantId: string;
   readonly legalEntityId: string;
@@ -1289,6 +1297,12 @@ interface RemoteAccessibleCompany {
   readonly role: 'tenant_owner' | 'tenant_admin' | 'tenant_member';
   readonly canRead: boolean;
   readonly canWrite: boolean;
+  readonly address?: string | RemoteStructuredAddress;
+  readonly street?: string;
+  readonly buildingNumber?: string;
+  readonly unitNumber?: string | null;
+  readonly postalCode?: string;
+  readonly city?: string;
 }
 
 interface RemoteTaxProfileConfig {
@@ -1302,6 +1316,7 @@ interface RemoteTaxProfileConfig {
   readonly zusScheme: 'ulga_na_start' | 'preferencyjny_zus' | 'duzy_zus' | 'not_applicable';
   readonly voluntarySicknessInsurance: boolean;
   readonly smallTaxpayer: boolean;
+  readonly address?: string | RemoteStructuredAddress;
 }
 
 interface CreateCompanyResponse {
@@ -1343,6 +1358,10 @@ type CompanyDocumentItem = RemoteDocumentItem;
 interface ImportBankStatementResponse {
   readonly importedTransactionsCount: number;
   readonly matchedExactCount: number;
+  readonly finance?: {
+    readonly bankTransactions: readonly BankStatementTransaction[];
+    readonly reconciliationMatches: readonly BankReconciliationMatch[];
+  };
 }
 
 interface CalendarObligationItem {
@@ -1352,10 +1371,14 @@ interface CalendarObligationItem {
 
 interface NotificationsViewResponse {
   readonly preferences: unknown;
+  readonly outbox?: readonly NotificationOutboxEntry[];
 }
 
 interface DispatchDueNotificationsResponse {
   readonly sentCount?: number;
+  readonly notifications?: {
+    readonly outbox?: readonly NotificationOutboxEntry[];
+  };
 }
 
 interface IssueMcpChallengeResponse {
@@ -1375,7 +1398,10 @@ interface McpProposalsListResponse {
 }
 
 interface ConfirmMcpProposalResponse {
-  readonly confirmation?: unknown;
+  readonly confirmation?: {
+    readonly confirmedAt?: string;
+  };
+  readonly confirmedAt?: string;
   readonly postedDocument?: RemoteDocumentItem;
 }
 
@@ -1399,6 +1425,30 @@ function mapTaxRegimeToProfileCode(regime: RemoteAccessibleCompany['taxRegime'])
   }
 }
 
+function formatRemoteCompanyAddress(
+  item: RemoteAccessibleCompany,
+  taxProfile?: RemoteTaxProfileConfig,
+): string | undefined {
+  const candidate = taxProfile?.address ?? item.address;
+  if (typeof candidate === 'string' && candidate.trim().length > 0) {
+    return candidate.trim();
+  }
+  if (candidate && typeof candidate === 'object') {
+    const street = candidate.street?.trim();
+    const bldg = candidate.buildingNumber?.trim();
+    const unit = candidate.unitNumber?.trim();
+    const postal = candidate.postalCode?.trim();
+    const city = candidate.city?.trim();
+    if (street && bldg && postal && city) {
+      return `${street} ${bldg}${unit ? `/${unit}` : ''}, ${postal} ${city}`;
+    }
+  }
+  if (item.street && item.buildingNumber && item.postalCode && item.city) {
+    return `${item.street} ${item.buildingNumber}${item.unitNumber ? `/${item.unitNumber}` : ''}, ${item.postalCode} ${item.city}`;
+  }
+  return undefined;
+}
+
 function mapRemoteCompanyToProfileRecord(
   item: RemoteAccessibleCompany,
   taxProfile?: RemoteTaxProfileConfig,
@@ -1406,16 +1456,18 @@ function mapRemoteCompanyToProfileRecord(
 ): CompanyProfileRecord {
   const seedFallback = getStore().companies.find((c) => c.legalEntityId === item.legalEntityId);
   const profileCode = taxProfile?.profileCode ?? mapTaxRegimeToProfileCode(item.taxRegime);
-  const vatStatus: 'czynny' | 'zwolniony_art_113' =
-    (taxProfile ? taxProfile.vatStatus === 'czynny' : item.vatStatus === 'czynny')
-      ? 'czynny'
-      : 'zwolniony_art_113';
+  const vatStatus: 'czynny' | 'zwolniony_art_113' = (
+    taxProfile ? taxProfile.vatStatus === 'czynny' : item.vatStatus === 'czynny'
+  )
+    ? 'czynny'
+    : 'zwolniony_art_113';
   const companyName = taxProfile?.companyName ?? item.displayName;
   const grantedActions: ('read' | 'write')[] = item.canWrite
     ? ['read', 'write']
     : item.canRead
       ? ['read']
       : [];
+  const remoteAddress = formatRemoteCompanyAddress(item, taxProfile);
 
   return {
     tenantId: item.tenantId,
@@ -1427,7 +1479,11 @@ function mapRemoteCompanyToProfileRecord(
     shortName: seedFallback?.shortName ?? companyName.slice(0, 36),
     nip: taxProfile?.nip ?? item.nip,
     regon: taxProfile?.regon ?? seedFallback?.regon ?? '142536475',
-    address: customAddress ?? seedFallback?.address ?? 'ul. Wspólna 40/12, 00-684 Warszawa',
+    address:
+      customAddress ??
+      remoteAddress ??
+      seedFallback?.address ??
+      'ul. Wspólna 40/12, 00-684 Warszawa',
     iban: seedFallback?.iban ?? 'PL61109010140000071219812874',
     legalForm: item.legalForm === 'sp_z_o_o' ? 'sp_z_o_o' : 'jdg',
     profileCode,
@@ -1690,7 +1746,10 @@ interface RemoteMcpProposalItem {
 
 const issuedChallengeCodeCache = new Map<string, string>();
 
-function mapRemoteMcpProposalToRecord(item: RemoteMcpProposalItem): McpPendingProposalRecord {
+function mapRemoteMcpProposalToRecord(
+  item: RemoteMcpProposalItem,
+  actorDisplayName?: string,
+): McpPendingProposalRecord {
   const invoiceNumber = item.invoice.invoiceNumber.sanitizedText ?? 'FV/MCP/01';
   const counterpartyName = item.invoice.counterpartyName.sanitizedText ?? 'Kontrahent MCP';
   const description = item.invoice.expenseDescription.sanitizedText ?? 'Propozycja MCP';
@@ -1725,7 +1784,10 @@ function mapRemoteMcpProposalToRecord(item: RemoteMcpProposalItem): McpPendingPr
       ? { issuedConfirmationCode: cachedCode }
       : {}),
     ...(item.confirmedAt
-      ? { confirmedAt: item.confirmedAt, confirmedBy: 'Zatwierdzono przez człowieka' }
+      ? {
+          confirmedAt: item.confirmedAt,
+          confirmedBy: actorDisplayName ?? 'Zatwierdzono przez człowieka',
+        }
       : {}),
   };
 }
@@ -2061,14 +2123,19 @@ export async function buildVatRegistersForCompany(
   return { salesEntries, purchaseEntries, jpkSummary };
 }
 
+export async function getWorkspaceShellContext(session: ActiveWebSession): Promise<{
+  readonly activeCompany: CompanyProfileRecord;
+  readonly accessibleCompanies: readonly CompanyProfileRecord[];
+}> {
+  const [accessibleCompanies, activeCompany] = await Promise.all([
+    listAccessibleCompaniesForSession(session),
+    verifySessionAccess(session, session.context.tenantId, session.context.legalEntityId, 'read'),
+  ]);
+  return { activeCompany, accessibleCompanies };
+}
+
 export async function getDashboardSnapshot(session: ActiveWebSession): Promise<DashboardSnapshot> {
-  const accessibleCompanies = await listAccessibleCompaniesForSession(session);
-  const activeCompany = await verifySessionAccess(
-    session,
-    session.context.tenantId,
-    session.context.legalEntityId,
-    'read',
-  );
+  const { activeCompany, accessibleCompanies } = await getWorkspaceShellContext(session);
   const period = session.context.period;
 
   if (!isOfflineDemoModeEnabled()) {
@@ -2352,13 +2419,7 @@ export async function getCompaniesManagementSnapshot(session: ActiveWebSession):
   readonly auditLog: readonly AuditLogEntryRecord[];
   readonly zusPreview: MonthlyZusContributionsResult | null;
 }> {
-  const activeCompany = await verifySessionAccess(
-    session,
-    session.context.tenantId,
-    session.context.legalEntityId,
-    'read',
-  );
-  const accessibleCompanies = await listAccessibleCompaniesForSession(session);
+  const { activeCompany, accessibleCompanies } = await getWorkspaceShellContext(session);
 
   if (!isOfflineDemoModeEnabled()) {
     const safeTenantId = assertUuidPathParam(activeCompany.tenantId, 'tenantId');
@@ -3053,7 +3114,9 @@ export async function getNotificationsAndMcpSnapshot(session: ActiveWebSession):
         updatedAt: prefs.updatedAt,
       },
       outbox: notifRes.data.outbox,
-      mcpProposals: mcpRes.data.proposals.map((p) => mapRemoteMcpProposalToRecord(p)),
+      mcpProposals: mcpRes.data.proposals.map((p) =>
+        mapRemoteMcpProposalToRecord(p, session.context.displayName),
+      ),
     };
   }
 
@@ -3381,10 +3444,7 @@ export async function manageCompanyGrantMutation(
       },
     );
     if (revokeRemote.kind !== 'ok') {
-      throwWorkspaceErrorFromRemote(
-        revokeRemote,
-        'Nie udało się cofnąć grantu dostępu w API.',
-      );
+      throwWorkspaceErrorFromRemote(revokeRemote, 'Nie udało się cofnąć grantu dostępu w API.');
     }
     return;
   }
@@ -3562,10 +3622,7 @@ export async function createOrImportDocumentMutation(
       },
     );
     if (remote.kind !== 'ok') {
-      throwWorkspaceErrorFromRemote(
-        remote,
-        'Nie udało się zaimportować dokumentu księgowego.',
-      );
+      throwWorkspaceErrorFromRemote(remote, 'Nie udało się zaimportować dokumentu księgowego.');
     }
     return mapRemoteDocumentToWorkspaceRecord(remote.data);
   }
@@ -3638,7 +3695,8 @@ export async function createOrImportDocumentMutation(
     fileName = `${docNum.replace(/[^A-Za-z0-9_-]/g, '_')}.json`;
     mimeLabel = 'application/json · Formularz';
     sourceChannel = 'Formularz ręczny';
-    extractionMethodLabelPl = 'Wprowadzono ręcznie w formularzu — wymaga weryfikacji przed księgowaniem';
+    extractionMethodLabelPl =
+      'Wprowadzono ręcznie w formularzu — wymaga weryfikacji przed księgowaniem';
   } else {
     assertPayloadSizeWithinLimit(input.rawPayload, 'import dokumentu');
     rawText = input.rawPayload.trim();
@@ -3919,7 +3977,9 @@ export async function approveAndPostDocumentMutation(
       );
     }
     const rawDocItem =
-      'document' in remote.data && 'documentId' in remote.data.document && 'aiProposal' in remote.data.document
+      'document' in remote.data &&
+      'documentId' in remote.data.document &&
+      'aiProposal' in remote.data.document
         ? remote.data.document
         : (remote.data as CompanyDocumentItem);
     return mapRemoteDocumentToWorkspaceRecord(rawDocItem);
@@ -4200,10 +4260,7 @@ export async function addManualKpirEntryMutation(
 
   if (!isOfflineDemoModeEnabled()) {
     if (input.mode === 'storno') {
-      const validatedDate = assertIsoCalendarDateOrThrow(
-        input.correctionDate,
-        'korekty (storno)',
-      );
+      const validatedDate = assertIsoCalendarDateOrThrow(input.correctionDate, 'korekty (storno)');
       const remote = await papBffFetch<KpirEntry>(
         `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/kpir/entries`,
         {
@@ -4588,6 +4645,8 @@ export async function importAndReconcileBankStatementMutation(
 ): Promise<{
   readonly importedCount: number;
   readonly matchedCount: number;
+  readonly bankTransactions: readonly BankStatementTransaction[];
+  readonly reconciliationMatches: readonly BankReconciliationMatch[];
 }> {
   assertValidSessionIdentity(session);
   assertPayloadSizeWithinLimit(input.content, 'wyciąg bankowy');
@@ -4616,6 +4675,8 @@ export async function importAndReconcileBankStatementMutation(
     return {
       importedCount: importRemote.data.importedTransactionsCount,
       matchedCount: importRemote.data.matchedExactCount,
+      bankTransactions: importRemote.data.finance?.bankTransactions ?? [],
+      reconciliationMatches: importRemote.data.finance?.reconciliationMatches ?? [],
     };
   }
 
@@ -4686,7 +4747,12 @@ export async function importAndReconcileBankStatementMutation(
     `Zaimportowano wyciąg ${input.format.toUpperCase()} (${String(parsedTx.length)} poz.) i uzgodniono ${String(matchedCount)} płatności.`,
   );
 
-  return { importedCount: parsedTx.length, matchedCount };
+  return {
+    importedCount: parsedTx.length,
+    matchedCount,
+    bankTransactions: parsedTx,
+    reconciliationMatches: matches,
+  };
 }
 
 export async function toggleObligationPaidMutation(
@@ -4753,7 +4819,7 @@ export async function updateNotificationPrefsAndDispatchMutation(
     | {
         readonly op: 'dispatch_due';
       },
-): Promise<void> {
+): Promise<{ readonly outbox?: readonly NotificationOutboxEntry[] }> {
   assertValidSessionIdentity(session);
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
@@ -4778,7 +4844,7 @@ export async function updateNotificationPrefsAndDispatchMutation(
           'Nie udało się zapisać preferencji powiadomień e-mail w API.',
         );
       }
-      return;
+      return prefsRemote.data.outbox ? { outbox: prefsRemote.data.outbox } : {};
     }
 
     const dispatchRemote = await papBffFetch<DispatchDueNotificationsResponse>(
@@ -4797,7 +4863,9 @@ export async function updateNotificationPrefsAndDispatchMutation(
         'Nie udało się uruchomić wysyłki wiadomości w skrzynce Sandbox Mailbox.',
       );
     }
-    return;
+    return dispatchRemote.data.notifications?.outbox
+      ? { outbox: dispatchRemote.data.notifications.outbox }
+      : {};
   }
 
   const company = await verifySessionAccess(
@@ -4823,7 +4891,7 @@ export async function updateNotificationPrefsAndDispatchMutation(
       'NOTIFICATION_PREFERENCES_UPDATED',
       `Zaktualizowano preferencje przypomnień e-mail (${input.frequency}, opt-out: ${String(input.optionalRemindersOptedOut)}).`,
     );
-    return;
+    return {};
   }
 
   const prefs = store.notificationPrefsByCompany.get(company.legalEntityId);
@@ -4881,23 +4949,35 @@ export async function updateNotificationPrefsAndDispatchMutation(
     ],
   };
 
-  store.outboxByCompany.set(company.legalEntityId, [generated, ...existingOutbox]);
+  const nextOutbox = [generated, ...existingOutbox];
+  store.outboxByCompany.set(company.legalEntityId, nextOutbox);
   appendAudit(
     session,
     company,
     'NOTIFICATIONS_DISPATCHED_SANDBOX',
     `Wygenerowano wiadomość RFC 5322 w skrzynce Sandbox Mailbox (status: ${status}).`,
   );
+  return { outbox: nextOutbox };
 }
 
 export async function manageMcpProposalMutation(
   session: ActiveWebSession,
   input:
     | { readonly op: 'issue_code'; readonly proposalId: string }
-    | { readonly op: 'confirm'; readonly proposalId: string; readonly confirmationCode?: string }
+    | {
+        readonly op: 'confirm';
+        readonly proposalId: string;
+        readonly confirmationCode?: string;
+        readonly payloadHash?: string;
+      }
     | { readonly op: 'reject'; readonly proposalId: string; readonly reason?: string }
     | { readonly op: 'create_demo_proposal' },
-): Promise<{ readonly confirmationCode?: string }> {
+): Promise<{
+  readonly confirmationCode?: string;
+  readonly confirmedProposalId?: string;
+  readonly confirmedBy?: string;
+  readonly rejectedProposalId?: string;
+}> {
   assertValidSessionIdentity(session);
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
@@ -4921,10 +5001,9 @@ export async function manageMcpProposalMutation(
             netAmountPln: '900.00',
             vatAmountPln: '207.00',
             grossAmountPln: '1107.00',
-            currency: 'PLN',
             expenseDescription:
               'Subskrypcja API i środowiska testowego — szkic przygotowany przez klienta MCP',
-            suggestedCategory: 'it_and_cloud_services_100',
+            suggestedCategory: 'pozostale_wydatki_kpir',
           },
         },
         { bearerToken: session.oidcToken },
@@ -4967,19 +5046,15 @@ export async function manageMcpProposalMutation(
           bearerToken: session.oidcToken,
           body: {
             reason:
-              input.reason?.trim() ||
-              'Odrzucono przez człowieka podczas weryfikacji w panelu MCP.',
+              input.reason?.trim() || 'Odrzucono przez człowieka podczas weryfikacji w panelu MCP.',
           },
         },
       );
       if (rejectRemote.kind !== 'ok') {
-        throwWorkspaceErrorFromRemote(
-          rejectRemote,
-          'Nie udało się odrzucić propozycji MCP w API.',
-        );
+        throwWorkspaceErrorFromRemote(rejectRemote, 'Nie udało się odrzucić propozycji MCP w API.');
       }
       issuedChallengeCodeCache.delete(safeProposalId);
-      return {};
+      return { rejectedProposalId: safeProposalId };
     }
 
     const providedCode =
@@ -4992,25 +5067,33 @@ export async function manageMcpProposalMutation(
       );
     }
 
-    const listRemote = await papBffFetch<McpProposalsListResponse>(
-      `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/mcp/proposals`,
-      { bearerToken: session.oidcToken },
-    );
-    if (listRemote.kind !== 'ok') {
-      throwWorkspaceErrorFromRemote(
-        listRemote,
-        'Nie udało się pobrać propozycji MCP przed zatwierdzeniem.',
+    let expectedPayloadHash =
+      typeof input.payloadHash === 'string' && /^[0-9a-f]{64}$/i.test(input.payloadHash.trim())
+        ? input.payloadHash.trim().toLowerCase()
+        : '';
+
+    if (!expectedPayloadHash) {
+      const listRemote = await papBffFetch<McpProposalsListResponse>(
+        `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/mcp/proposals`,
+        { bearerToken: session.oidcToken },
       );
-    }
-    const targetProposal = listRemote.data.proposals.find(
-      (p) => p.proposalId.toLowerCase() === safeProposalId.toLowerCase(),
-    );
-    if (!targetProposal) {
-      throw new WorkspaceAccessError(
-        404,
-        'proposal_not_found',
-        'Nie znaleziono propozycji MCP w bieżącej firmie.',
+      if (listRemote.kind !== 'ok') {
+        throwWorkspaceErrorFromRemote(
+          listRemote,
+          'Nie udało się pobrać propozycji MCP przed zatwierdzeniem.',
+        );
+      }
+      const targetProposal = listRemote.data.proposals.find(
+        (p) => p.proposalId.toLowerCase() === safeProposalId.toLowerCase(),
       );
+      if (!targetProposal) {
+        throw new WorkspaceAccessError(
+          404,
+          'proposal_not_found',
+          'Nie znaleziono propozycji MCP w bieżącej firmie.',
+        );
+      }
+      expectedPayloadHash = targetProposal.payloadHash;
     }
 
     const confirmRemote = await papBffFetch<ConfirmMcpProposalResponse>(
@@ -5020,7 +5103,7 @@ export async function manageMcpProposalMutation(
         bearerToken: session.oidcToken,
         body: {
           confirmationCode: providedCode,
-          expectedPayloadHash: targetProposal.payloadHash,
+          expectedPayloadHash,
           idempotencyKey: randomUUID(),
         },
       },
@@ -5032,7 +5115,10 @@ export async function manageMcpProposalMutation(
       );
     }
     issuedChallengeCodeCache.delete(safeProposalId);
-    return {};
+    return {
+      confirmedProposalId: safeProposalId,
+      confirmedBy: session.context.displayName,
+    };
   }
 
   const company = await verifySessionAccess(

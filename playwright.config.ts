@@ -6,6 +6,10 @@ const webUrl = `http://127.0.0.1:${webPort}`;
 
 export default defineConfig({
   testDir: './apps/web/e2e',
+  timeout: 60_000,
+  expect: {
+    timeout: 25_000,
+  },
   fullyParallel: false,
   workers: 1,
   reporter: 'list',

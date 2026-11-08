@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Card, FormField, StatusBadge } from '@pap/ui';
 import { AlertBanner, Button } from '../../../components/ui-controls';
 import type {
@@ -37,6 +37,7 @@ export function NotificationsWorkbench({
   const [disabledStages, setDisabledStages] = useState<ReminderStage[]>([
     ...preferences.disabledStages,
   ]);
+  const [currentOutbox, setCurrentOutbox] = useState<readonly NotificationOutboxEntry[]>(outbox);
   const [selectedOutboxId, setSelectedOutboxId] = useState<string | null>(
     outbox[0]?.outboxId ?? null,
   );
@@ -47,7 +48,12 @@ export function NotificationsWorkbench({
     detail: string;
   } | null>(null);
 
-  const selectedMessage = outbox.find((m) => m.outboxId === selectedOutboxId) ?? outbox[0] ?? null;
+  useEffect(() => {
+    setCurrentOutbox(outbox);
+  }, [outbox]);
+
+  const selectedMessage =
+    currentOutbox.find((m) => m.outboxId === selectedOutboxId) ?? currentOutbox[0] ?? null;
 
   function toggleStage(stage: ReminderStage) {
     setDisabledStages((prev) =>
@@ -70,7 +76,11 @@ export function NotificationsWorkbench({
           disabledStages,
         }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        outbox?: readonly NotificationOutboxEntry[];
+      };
       if (!res.ok || !data.ok) {
         setFeedback({
           tone: 'danger',
@@ -78,6 +88,9 @@ export function NotificationsWorkbench({
           detail: data.error ?? 'Nie udało się zapisać ustawień.',
         });
       } else {
+        if (Array.isArray(data.outbox)) {
+          setCurrentOutbox(data.outbox);
+        }
         setFeedback({
           tone: 'success',
           title: 'Zaktualizowano preferencje przypomnień e-mail',
@@ -101,7 +114,11 @@ export function NotificationsWorkbench({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'dispatch_due_notifications' }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        outbox?: readonly NotificationOutboxEntry[];
+      };
       if (!res.ok || !data.ok) {
         setFeedback({
           tone: 'danger',
@@ -109,6 +126,12 @@ export function NotificationsWorkbench({
           detail: data.error ?? 'Błąd operacji dispatch-due.',
         });
       } else {
+        if (Array.isArray(data.outbox)) {
+          setCurrentOutbox(data.outbox);
+          if (data.outbox[0]) {
+            setSelectedOutboxId(data.outbox[0].outboxId);
+          }
+        }
         setFeedback({
           tone: 'success',
           title: 'Wygenerowano wiadomość RFC 5322 w Skrzynce Sandbox',
@@ -219,11 +242,11 @@ export function NotificationsWorkbench({
 
           <Card
             as="div"
-            eyebrow={`Kolejka Outbox (${String(outbox.length)})`}
+            eyebrow={`Kolejka Outbox (${String(currentOutbox.length)})`}
             title="Lista wiadomości w Skrzynce Sandbox"
           >
             <ul className="space-y-2">
-              {outbox.map((item) => {
+              {currentOutbox.map((item) => {
                 const isSelected = selectedMessage?.outboxId === item.outboxId;
                 return (
                   <li key={item.outboxId}>

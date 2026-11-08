@@ -793,6 +793,10 @@ async function hydrateSingleCompanyFromScope(
     }
   }
 
+  const hydratedAddress =
+    addressMeta?.address ??
+    (profileJsonObj?.address as WorkspaceCompanyState['address'] | undefined);
+
   return {
     company: {
       tenantId: parseTenantId(rawTenantId),
@@ -803,6 +807,7 @@ async function hydrateSingleCompanyFromScope(
       taxRegime: settings.taxRegime,
       vatStatusSimple,
       taxProfile,
+      ...(hydratedAddress !== undefined ? { address: hydratedAddress } : {}),
       settingsHistory,
       documents,
       kpirEntries,
@@ -894,7 +899,10 @@ export async function hydrateCompanyIntoWorkspaceIfMissing(
     tId,
   ).catch(() => null);
 
-  if (batchDiscovered && (batchDiscovered.memberships.length > 0 || batchDiscovered.grants.length > 0)) {
+  if (
+    batchDiscovered &&
+    (batchDiscovered.memberships.length > 0 || batchDiscovered.grants.length > 0)
+  ) {
     for (const m of batchDiscovered.memberships) {
       store.upsertMembership({
         ...m,
@@ -1049,9 +1057,18 @@ export async function discoverAndHydrateMissingCompaniesForTenants(
     runtime.signer,
     candidateUserIds,
   ).catch(() => null);
-  if (actorDiscovered) {
+  const hasActorDiscovered =
+    actorDiscovered !== null &&
+    (actorDiscovered.memberships.length > 0 ||
+      actorDiscovered.grants.length > 0 ||
+      actorDiscovered.entities.length > 0);
+
+  if (hasActorDiscovered && actorDiscovered) {
+    const seenGrantIds = new Set<string>();
+    const discoveredUserByTenant = new Set<string>();
     for (const mRow of actorDiscovered.memberships) {
       tenantSet.add(mRow.tenantId);
+      discoveredUserByTenant.add(`${mRow.tenantId}:${mRow.userId}`);
       store.upsertMembership({
         ...mRow,
         tenantId: parseTenantId(mRow.tenantId),
@@ -1060,6 +1077,8 @@ export async function discoverAndHydrateMissingCompaniesForTenants(
     }
     for (const gRow of actorDiscovered.grants) {
       tenantSet.add(gRow.tenantId);
+      seenGrantIds.add(gRow.grantId);
+      discoveredUserByTenant.add(`${gRow.tenantId}:${gRow.userId}`);
       store.upsertGrant({
         grantId: gRow.grantId,
         tenantId: parseTenantId(gRow.tenantId),
@@ -1075,58 +1094,73 @@ export async function discoverAndHydrateMissingCompaniesForTenants(
     for (const ent of actorDiscovered.entities) {
       enqueue(ent.tenantId, ent.legalEntityId);
     }
-  }
-
-  for (const rawTenantId of Array.from(tenantSet)) {
-    const tId = parseTenantId(rawTenantId);
-    const discovered = await listTenantCompanyGrantsForAdminFacts(
-      runtime.connection.db,
-      runtime.signer,
-      {
-        tenantId: tId,
-        candidateUserIds,
-      },
-    );
-
-    for (const mRow of discovered.memberships) {
-      store.upsertMembership({
-        ...mRow,
-        tenantId: parseTenantId(mRow.tenantId),
-        userId: parseUserId(mRow.userId),
-      });
+    const now = new Date();
+    for (const comp of store.listAllCompanies()) {
+      for (const cached of store.listGrantsForCompany(comp.tenantId, comp.legalEntityId)) {
+        if (
+          discoveredUserByTenant.has(`${comp.tenantId}:${cached.userId}`) &&
+          cached.revokedAt === null &&
+          !seenGrantIds.has(cached.grantId)
+        ) {
+          store.upsertGrant({
+            ...cached,
+            revokedAt: now,
+          });
+        }
+      }
     }
+  } else {
+    for (const rawTenantId of Array.from(tenantSet)) {
+      const tId = parseTenantId(rawTenantId);
+      const discovered = await listTenantCompanyGrantsForAdminFacts(
+        runtime.connection.db,
+        runtime.signer,
+        {
+          tenantId: tId,
+          candidateUserIds,
+        },
+      );
 
-    const seenGrantIds = new Set<string>();
-    const discoveredUserIds = new Set<string>(discovered.memberships.map((m) => m.userId));
-    for (const gRow of discovered.grants) {
-      seenGrantIds.add(gRow.grantId);
-      discoveredUserIds.add(gRow.userId);
-      store.upsertGrant({
-        grantId: gRow.grantId,
-        tenantId: parseTenantId(gRow.tenantId),
-        userId: parseUserId(gRow.userId),
-        legalEntityId: parseLegalEntityId(gRow.legalEntityId),
-        action: gRow.action,
-        validFrom: gRow.validFrom,
-        validUntil: gRow.validUntil,
-        revokedAt: gRow.revokedAt,
-      });
-      enqueue(gRow.tenantId, gRow.legalEntityId);
-    }
+      for (const mRow of discovered.memberships) {
+        store.upsertMembership({
+          ...mRow,
+          tenantId: parseTenantId(mRow.tenantId),
+          userId: parseUserId(mRow.userId),
+        });
+      }
 
-    if (discovered.grants.length > 0) {
-      const now = new Date();
-      for (const comp of store.listCompaniesForTenant(tId)) {
-        for (const cached of store.listGrantsForCompany(tId, comp.legalEntityId)) {
-          if (
-            discoveredUserIds.has(cached.userId) &&
-            cached.revokedAt === null &&
-            !seenGrantIds.has(cached.grantId)
-          ) {
-            store.upsertGrant({
-              ...cached,
-              revokedAt: now,
-            });
+      const seenGrantIds = new Set<string>();
+      const discoveredUserIds = new Set<string>(discovered.memberships.map((m) => m.userId));
+      for (const gRow of discovered.grants) {
+        seenGrantIds.add(gRow.grantId);
+        discoveredUserIds.add(gRow.userId);
+        store.upsertGrant({
+          grantId: gRow.grantId,
+          tenantId: parseTenantId(gRow.tenantId),
+          userId: parseUserId(gRow.userId),
+          legalEntityId: parseLegalEntityId(gRow.legalEntityId),
+          action: gRow.action,
+          validFrom: gRow.validFrom,
+          validUntil: gRow.validUntil,
+          revokedAt: gRow.revokedAt,
+        });
+        enqueue(gRow.tenantId, gRow.legalEntityId);
+      }
+
+      if (discovered.grants.length > 0) {
+        const now = new Date();
+        for (const comp of store.listCompaniesForTenant(tId)) {
+          for (const cached of store.listGrantsForCompany(tId, comp.legalEntityId)) {
+            if (
+              discoveredUserIds.has(cached.userId) &&
+              cached.revokedAt === null &&
+              !seenGrantIds.has(cached.grantId)
+            ) {
+              store.upsertGrant({
+                ...cached,
+                revokedAt: now,
+              });
+            }
           }
         }
       }

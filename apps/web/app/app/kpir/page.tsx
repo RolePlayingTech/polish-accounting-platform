@@ -7,7 +7,7 @@ import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
-import { getDashboardSnapshot, getKpirSnapshot } from '../../../lib/synthetic-workspace';
+import { getKpirSnapshot, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
 import { KpirWorkbench } from './kpir-workbench';
 
 export default async function KpirPage() {
@@ -35,7 +35,7 @@ export default async function KpirPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const [dash, kpir] = await Promise.all([
-      getDashboardSnapshot(session),
+      getWorkspaceShellContext(session),
       getKpirSnapshot(session),
     ]);
     return { dash, kpir };

@@ -8,8 +8,8 @@ import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
 import {
-  getDashboardSnapshot,
   getNotificationsAndMcpSnapshot,
+  getWorkspaceShellContext,
 } from '../../../lib/synthetic-workspace';
 import { McpWorkbench } from './mcp-workbench';
 
@@ -38,7 +38,7 @@ export default async function McpIntegrationPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const [dash, snap] = await Promise.all([
-      getDashboardSnapshot(session),
+      getWorkspaceShellContext(session),
       getNotificationsAndMcpSnapshot(session),
     ]);
     return {

@@ -69,7 +69,10 @@ const CANONICAL_PERSONA_IDENTITY: Readonly<
   },
   'piotr-izolacyjny': {
     userId: '00000000-0000-4000-8000-000000000201',
-    allowedEmails: ['piotr.izolacyjny@tenant2-syntetyczny.example', 'piotr.izolacyjny@example.test'],
+    allowedEmails: [
+      'piotr.izolacyjny@tenant2-syntetyczny.example',
+      'piotr.izolacyjny@example.test',
+    ],
     expectedSyntheticToken: 'pap_synth_oidc_piotr_izolacyjny_t2_owner_2026',
   },
 };
@@ -119,10 +122,7 @@ function computeSessionHmacDigest(
 
 function isConsistentPersonaIdentity(oidcToken: string, context: SessionContext): boolean {
   const canonical = CANONICAL_PERSONA_IDENTITY[context.personaId];
-  if (
-    context.userId !== canonical.userId ||
-    !canonical.allowedEmails.includes(context.email)
-  ) {
+  if (context.userId !== canonical.userId || !canonical.allowedEmails.includes(context.email)) {
     return false;
   }
 

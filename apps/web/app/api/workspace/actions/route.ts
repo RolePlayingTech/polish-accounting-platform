@@ -117,7 +117,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         });
 
         const switchImmediately = payload['switchImmediately'] !== false;
-        const res = NextResponse.json({ ok: true, company: created });
+        const res = NextResponse.json({
+          ok: true,
+          legalEntityId: created.legalEntityId,
+          company: created,
+        });
         if (switchImmediately) {
           writeSessionToResponse(res, {
             oidcToken: session.oidcToken,
@@ -136,10 +140,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           profileCode: (str(payload['profileCode']) || 'jdg_kpir_skala') as TaxProfileCode,
           vatStatus: payload['vatStatus'] === 'zwolniony_art_113' ? 'zwolniony_art_113' : 'czynny',
           zusScheme: (str(payload['zusScheme']) || 'duzy_zus') as
-            | 'ulga_na_start'
-            | 'preferencyjny_zus'
-            | 'duzy_zus'
-            | 'not_applicable',
+            'ulga_na_start' | 'preferencyjny_zus' | 'duzy_zus' | 'not_applicable',
           smallTaxpayer: Boolean(payload['smallTaxpayer']),
         });
         return NextResponse.json({ ok: true, company: updated });
@@ -248,14 +249,17 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       case 'add_ryczalt_entry': {
         const nip = str(payload['counterpartyNip']).trim();
-        const remarks = str(payload['remarks']).trim();
+        const remarks = str(payload['remarks'] || payload['description']).trim();
         const entry = await addRyczaltEntryMutation(session, {
-          revenueDate: str(payload['revenueDate'], `${session.context.period}-20`),
+          revenueDate: str(
+            payload['revenueDate'] || payload['eventDate'],
+            `${session.context.period}-20`,
+          ),
           documentNumber: str(payload['documentNumber']),
           counterpartyName: str(payload['counterpartyName']),
           ...(nip ? { counterpartyNip: nip } : {}),
-          rate: (str(payload['rate']) || '12') as RyczaltRateCode,
-          revenuePln: str(payload['revenuePln'], '0.00'),
+          rate: (str(payload['rate'] || payload['rateCode']) || '12') as RyczaltRateCode,
+          revenuePln: str(payload['revenuePln'] || payload['netRevenuePln'], '0.00'),
           ...(remarks ? { remarks } : {}),
         });
         return NextResponse.json({ ok: true, entryId: entry.id });
@@ -302,20 +306,20 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         const rawDisabled = Array.isArray(payload['disabledStages'])
           ? payload['disabledStages'].filter((s): s is ReminderStage => typeof s === 'string')
           : [];
-        await updateNotificationPrefsAndDispatchMutation(session, {
+        const res = await updateNotificationPrefsAndDispatchMutation(session, {
           op: 'update_prefs',
           frequency: (str(payload['frequency']) || 'standard') as NotificationFrequency,
           optionalRemindersOptedOut: Boolean(payload['optionalRemindersOptedOut']),
           disabledStages: rawDisabled,
         });
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true, ...res });
       }
 
       case 'dispatch_due_notifications': {
-        await updateNotificationPrefsAndDispatchMutation(session, {
+        const res = await updateNotificationPrefsAndDispatchMutation(session, {
           op: 'dispatch_due',
         });
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true, ...res });
       }
 
       case 'mcp_issue_code': {
@@ -328,22 +332,24 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       case 'mcp_confirm_proposal': {
         const code = str(payload['confirmationCode']).trim();
-        await manageMcpProposalMutation(session, {
+        const payloadHash = str(payload['payloadHash']).trim();
+        const res = await manageMcpProposalMutation(session, {
           op: 'confirm',
           proposalId: str(payload['proposalId']),
           ...(code ? { confirmationCode: code } : {}),
+          ...(payloadHash ? { payloadHash } : {}),
         });
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true, ...res });
       }
 
       case 'mcp_reject_proposal': {
         const reason = str(payload['reason']).trim();
-        await manageMcpProposalMutation(session, {
+        const res = await manageMcpProposalMutation(session, {
           op: 'reject',
           proposalId: str(payload['proposalId']),
           ...(reason ? { reason } : {}),
         });
-        return NextResponse.json({ ok: true });
+        return NextResponse.json({ ok: true, ...res });
       }
 
       case 'mcp_create_demo_proposal': {

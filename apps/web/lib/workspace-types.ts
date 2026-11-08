@@ -238,11 +238,7 @@ export interface WorkspaceDocumentRecord {
   readonly procedureCodes: readonly string[];
   readonly annex15Item: boolean;
   readonly whiteListStatus:
-    | 'unverified'
-    | 'verified_kas'
-    | 'mismatch_alert'
-    | 'not_required'
-    | 'not_checked';
+    'unverified' | 'verified_kas' | 'mismatch_alert' | 'not_required' | 'not_checked';
   readonly whiteListCheckId?: string;
   readonly aiConfidence: AiConfidenceLevel;
   readonly aiConfidencePercent: number | null;

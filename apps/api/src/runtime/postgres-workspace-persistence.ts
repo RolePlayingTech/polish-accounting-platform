@@ -201,6 +201,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   private readonly migratorDatabaseUrl: string | undefined;
   private readonly mutationMutex = new AsyncMutationMutex();
   private readonly boundGateways = new Set<PapMcpGateway>();
+  private readonly inFlightBatchSync = new Map<string, Promise<boolean>>();
+  private readonly lastBatchSyncAtMs = new Map<string, number>();
 
   constructor(options: PostgresBackedWorkspaceServiceOptions) {
     this.runtime = options.runtime;
@@ -218,14 +220,17 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       return {
         ...base,
         listCandidateCompaniesForUser: async (uId) => {
-          await discoverAndHydrateMissingCompaniesForTenants(
-            this.runtime,
-            this.innerWorkspace,
-            this.getKnownTenantIds(),
-            [uId],
-          );
-          for (const comp of this.store.listAllCompanies()) {
-            await this.syncCompanyGrantsIntoMemory(uId, comp.tenantId, comp.legalEntityId);
+          const syncedBatch = await this.syncActorAccessibleGrantsBatch([uId]);
+          if (!syncedBatch) {
+            await discoverAndHydrateMissingCompaniesForTenants(
+              this.runtime,
+              this.innerWorkspace,
+              this.getKnownTenantIds(),
+              [uId],
+            );
+            for (const comp of this.store.listAllCompanies()) {
+              await this.syncCompanyGrantsIntoMemory(uId, comp.tenantId, comp.legalEntityId);
+            }
           }
           return base.listCandidateCompaniesForUser(uId);
         },
@@ -242,12 +247,15 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
 
   private runAtomicMutation<T>(work: () => Promise<T>): Promise<T> {
     return this.mutationMutex.runExclusive(async () => {
+      this.lastBatchSyncAtMs.clear();
       const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
       try {
         return await work();
       } catch (error) {
         restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
         throw error;
+      } finally {
+        this.lastBatchSyncAtMs.clear();
       }
     });
   }
@@ -413,6 +421,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   ): Promise<TOutput> {
     await this.ensureCompanyHydratedIfValid(rawTenantId, rawLegalEntityId, actor.userId);
     if (action === 'write') {
+      this.lastBatchSyncAtMs.clear();
       return this.runAtomicMutation(() =>
         this.executeCompanyOperationUnlocked(actor, rawTenantId, rawLegalEntityId, action, work),
       );
@@ -437,6 +446,11 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         return;
       }
       throw err;
+    }
+
+    const syncedBatch = await this.syncActorAccessibleGrantsBatch([uId], tId);
+    if (syncedBatch) {
+      return;
     }
 
     const [readFacts, writeFacts] = await Promise.all([
@@ -512,7 +526,9 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     return this.innerWorkspace.gradeAcademyLesson(lessonSlug, req);
   }
 
-  private resolveDynamicAnchorEntityId(tId: ReturnType<typeof parseTenantId>): ReturnType<typeof parseLegalEntityId> {
+  private resolveDynamicAnchorEntityId(
+    tId: ReturnType<typeof parseTenantId>,
+  ): ReturnType<typeof parseLegalEntityId> {
     const existing = this.store.listCompaniesForTenant(tId)[0];
     if (existing) {
       return existing.legalEntityId;
@@ -525,71 +541,112 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   private async syncActorAccessibleGrantsBatch(
     actorUserIds: readonly string[],
     tenantIdFilter?: string,
+    forceFresh = false,
   ): Promise<boolean> {
-    const discovered = await discoverActorAccessibleEntities(
-      this.runtime.connection.db,
-      this.runtime.signer,
-      actorUserIds,
-      tenantIdFilter,
-    ).catch(() => null);
-    if (!discovered || (discovered.memberships.length === 0 && discovered.grants.length === 0)) {
-      return false;
+    const cacheKey = `${actorUserIds.join(',')}|${tenantIdFilter ?? '*'}`;
+    const universalKey = `${actorUserIds.join(',')}|*`;
+    const existingInFlight =
+      this.inFlightBatchSync.get(cacheKey) ?? this.inFlightBatchSync.get(universalKey);
+    if (existingInFlight) {
+      return existingInFlight;
     }
-    const seenUsers = new Set<string>();
-    for (const m of discovered.memberships) {
-      seenUsers.add(`${m.tenantId}:${m.userId}`);
-      this.store.upsertMembership({
-        ...m,
-        tenantId: parseTenantId(m.tenantId),
-        userId: parseUserId(m.userId),
-      });
+    const lastMs = Math.max(
+      this.lastBatchSyncAtMs.get(cacheKey) ?? 0,
+      this.lastBatchSyncAtMs.get(universalKey) ?? 0,
+    );
+    if (Date.now() - lastMs < (forceFresh ? 200 : 800)) {
+      return true;
     }
-    const seenGrants = new Set<string>();
-    for (const g of discovered.grants) {
-      seenGrants.add(g.grantId);
-      this.store.upsertGrant({
-        grantId: g.grantId,
-        tenantId: parseTenantId(g.tenantId),
-        userId: parseUserId(g.userId),
-        legalEntityId: parseLegalEntityId(g.legalEntityId),
-        action: g.action,
-        validFrom: g.validFrom,
-        validUntil: g.validUntil,
-        revokedAt: g.revokedAt,
-      });
-    }
-    const now = new Date();
-    const candidateUserSet = new Set(actorUserIds.map((u) => parseUserId(u)));
-    const targetCompanies = tenantIdFilter
-      ? this.store.listCompaniesForTenant(parseTenantId(tenantIdFilter))
-      : this.store.listAllCompanies();
-    for (const comp of targetCompanies) {
-      for (const cached of this.store.listGrantsForCompany(comp.tenantId, comp.legalEntityId)) {
-        if (
-          candidateUserSet.has(cached.userId) &&
-          seenUsers.has(`${comp.tenantId}:${cached.userId}`) &&
-          cached.revokedAt === null &&
-          !seenGrants.has(cached.grantId)
-        ) {
-          this.store.upsertGrant({
-            ...cached,
-            revokedAt: now,
-          });
+
+    const runPromise = (async () => {
+      const discovered = await discoverActorAccessibleEntities(
+        this.runtime.connection.db,
+        this.runtime.signer,
+        actorUserIds,
+        tenantIdFilter,
+      ).catch(() => null);
+      if (!discovered || (discovered.memberships.length === 0 && discovered.grants.length === 0)) {
+        return false;
+      }
+      const seenUsers = new Set<string>();
+      for (const m of discovered.memberships) {
+        seenUsers.add(`${m.tenantId}:${m.userId}`);
+        this.store.upsertMembership({
+          ...m,
+          tenantId: parseTenantId(m.tenantId),
+          userId: parseUserId(m.userId),
+        });
+      }
+      const seenGrants = new Set<string>();
+      for (const g of discovered.grants) {
+        seenGrants.add(g.grantId);
+        this.store.upsertGrant({
+          grantId: g.grantId,
+          tenantId: parseTenantId(g.tenantId),
+          userId: parseUserId(g.userId),
+          legalEntityId: parseLegalEntityId(g.legalEntityId),
+          action: g.action,
+          validFrom: g.validFrom,
+          validUntil: g.validUntil,
+          revokedAt: g.revokedAt,
+        });
+      }
+      for (const ent of discovered.entities) {
+        const tId = parseTenantId(ent.tenantId);
+        const leId = parseLegalEntityId(ent.legalEntityId);
+        if (this.store.getCompany(tId, leId) === null) {
+          await hydrateCompanyIntoWorkspaceIfMissing(
+            this.runtime,
+            this.innerWorkspace,
+            tId,
+            leId,
+            actorUserIds[0],
+          );
         }
       }
+      const now = new Date();
+      const candidateUserSet = new Set(actorUserIds.map((u) => parseUserId(u)));
+      const targetCompanies = tenantIdFilter
+        ? this.store.listCompaniesForTenant(parseTenantId(tenantIdFilter))
+        : this.store.listAllCompanies();
+      for (const comp of targetCompanies) {
+        for (const cached of this.store.listGrantsForCompany(comp.tenantId, comp.legalEntityId)) {
+          if (
+            candidateUserSet.has(cached.userId) &&
+            seenUsers.has(`${comp.tenantId}:${cached.userId}`) &&
+            cached.revokedAt === null &&
+            !seenGrants.has(cached.grantId)
+          ) {
+            this.store.upsertGrant({
+              ...cached,
+              revokedAt: now,
+            });
+          }
+        }
+      }
+      this.lastBatchSyncAtMs.set(cacheKey, Date.now());
+      return true;
+    })();
+
+    this.inFlightBatchSync.set(cacheKey, runPromise);
+    try {
+      return await runPromise;
+    } finally {
+      if (this.inFlightBatchSync.get(cacheKey) === runPromise) {
+        this.inFlightBatchSync.delete(cacheKey);
+      }
     }
-    return true;
   }
 
   async getMyCompanies(actor: WorkspaceActorContext): Promise<GetMyCompaniesResponse> {
-    await discoverAndHydrateMissingCompaniesForTenants(
-      this.runtime,
-      this.innerWorkspace,
-      this.getKnownTenantIds(),
-      [actor.userId],
-    );
-    const syncedBatch = await this.syncActorAccessibleGrantsBatch([actor.userId]);
+    const syncedBatch = await this.syncActorAccessibleGrantsBatch([actor.userId], undefined, true);
     if (!syncedBatch) {
+      await discoverAndHydrateMissingCompaniesForTenants(
+        this.runtime,
+        this.innerWorkspace,
+        this.getKnownTenantIds(),
+        [actor.userId],
+      );
       for (const comp of this.store.listAllCompanies()) {
         await this.syncCompanyGrantsIntoMemory(actor.userId, comp.tenantId, comp.legalEntityId);
       }
@@ -783,9 +840,10 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         vatStatusSimple: created.company.vatStatus,
         taxProfile: created.taxProfile,
         settingsHistory: [],
+        ...(created.address !== undefined ? { address: created.address } : {}),
       };
 
-      let provisionedViaRuntime = false;
+      let provisionedViaRuntime: boolean;
       try {
         const provisionRes = await provisionCompanyInPostgres(
           this.runtime.connection.db,
