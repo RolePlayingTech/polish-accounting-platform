@@ -855,7 +855,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
 
     // 4. Cofnięcie uprawnień (revoke) natychmiast blokuje ponowne użycie Idempotency-Key (autoryzacja przed odczytem receiptu)
     const grantRes = await fetch(
-      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/access/grant`,
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/grants`,
       {
         method: 'POST',
         headers: headersA,
@@ -892,7 +892,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
 
     // Właściciel cofa grant zapisu dla Marty na Instancji A
     const revokeRes = await fetch(
-      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/access/revoke`,
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/grants/revoke`,
       {
         method: 'POST',
         headers: headersA,
