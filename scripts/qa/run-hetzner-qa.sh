@@ -249,16 +249,17 @@ fi
 
 BUILD_OK=1
 if (( NEED_CODE_CHECKS == 1 || NEED_DB_API_INTEGRATION == 1 || NEED_ADVERSARIAL == 1 )); then
-  # Budujemy pakiety zależności wewnątrz limitu cgroups przed uruchomieniem typecheck/test/integracji
+  # Budujemy pakiety zależności wewnątrz limitu cgroups (--concurrency=1 zapobiega dławieniu MemoryHigh=512M)
   if ! run_step "build_integration_dependencies" "pnpm --filter @pap/db... --filter @pap/mcp... build" "local" \
-    run_bounded_host_cmd corepack pnpm --filter @pap/db... --filter @pap/mcp... build; then
+    run_bounded_host_cmd corepack pnpm exec turbo run build --filter=@pap/db... --filter=@pap/mcp... --concurrency=1; then
     OVERALL_RC=1
     BUILD_OK=0
   fi
 fi
 
 run_typecheck_and_lint() {
-  run_bounded_host_cmd corepack pnpm typecheck && run_bounded_host_cmd corepack pnpm lint
+  run_bounded_host_cmd corepack pnpm exec turbo run typecheck --concurrency=1 &&
+    run_bounded_host_cmd corepack pnpm exec turbo run lint --concurrency=1
 }
 
 if (( NEED_CODE_CHECKS == 1 )); then
@@ -267,7 +268,7 @@ if (( NEED_CODE_CHECKS == 1 )); then
     OVERALL_RC=1
   fi
   if ! run_step "unit_tests" "pnpm test" "local" \
-    run_bounded_host_cmd corepack pnpm test; then
+    run_bounded_host_cmd corepack pnpm exec turbo run test --concurrency=1; then
     OVERALL_RC=1
   fi
 else

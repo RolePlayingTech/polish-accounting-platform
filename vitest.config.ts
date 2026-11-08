@@ -7,6 +7,7 @@ export default defineConfig({
     exclude: ['**/node_modules/**', '**/dist/**', '**/.next/**'],
     environment: 'node',
     testTimeout: 15_000,
+    maxWorkers: 2,
     restoreMocks: true,
     clearMocks: true,
   },
