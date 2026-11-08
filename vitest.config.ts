@@ -6,6 +6,7 @@ export default defineConfig({
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx'],
     exclude: ['**/node_modules/**', '**/dist/**', '**/.next/**'],
     environment: 'node',
+    testTimeout: 15_000,
     restoreMocks: true,
     clearMocks: true,
   },

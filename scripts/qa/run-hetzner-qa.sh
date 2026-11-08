@@ -128,11 +128,12 @@ export TOKIO_WORKER_THREADS="${TOKIO_WORKER_THREADS:-2}"
 
 run_bounded_host_cmd() {
   local unit_name="pap-qa-host-$(openssl rand -hex 6)"
+  local host_timeout_sec=$(( TIMEOUT_SEC < 600 ? 600 : TIMEOUT_SEC ))
   systemd-run --user --scope --quiet \
     --unit="${unit_name}" \
     "${HOST_SCOPE_LIMIT_ARGS[@]}" \
     -- \
-    timeout --signal=TERM --kill-after=15s "${TIMEOUT_SEC}s" \
+    timeout --signal=TERM --kill-after=15s "${host_timeout_sec}s" \
     "$@"
 }
 

@@ -144,6 +144,7 @@ export function classifyFilePath(rawPath) {
   const isQaHarnessFile =
     path.startsWith('scripts/qa/') ||
     path === 'test/qa-gate.test.ts' ||
+    path === 'vitest.config.ts' ||
     path === 'apps/api/vitest.adversarial.config.ts' ||
     path.startsWith('apps/api/test/adversarial/') ||
     path === 'apps/api/test/tsconfig.json' ||
