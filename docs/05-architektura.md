@@ -25,16 +25,16 @@ Issue #5 dostarczyło szkielet, a wdrożone na `main` pakiety 6A/6B/6D-1/6D-R/6D
 
 ## Docelowe komponenty i odpowiedzialność
 
-| Komponent | Odpowiedzialność | Dostęp |
-| --- | --- | --- |
-| `apps/web` | UI, przegląd dokumentów i zatwierdzanie | przez API; bez bezpośredniego dostępu DB |
-| `apps/api` | polityki, kontrakty, komendy i REST | wywołanie application services |
-| `apps/mcp` | transport MCP, OAuth, mapowanie tools | przez autoryzowane API, bez DB |
-| `apps/worker` | OCR, import, synchronizacje i raporty | zadania aplikacyjne, kontrolowany dostęp do integracji |
-| `packages/domain` | księgowość, faktury, podatki, dokumenty | czyste funkcje i invariants |
-| `packages/application` | use-cases, role/ABAC, approvals, porty | jedna polityka dla wszystkich kanałów |
-| `packages/db` | Postgres, migracje, RLS, transakcje | tylko aplikacja i infrastruktura |
-| `packages/integrations` | KSeF, JPK, NBP, REGON, banki, OCR | za portami, sandbox first |
+| Komponent               | Odpowiedzialność                        | Dostęp                                                 |
+| ----------------------- | --------------------------------------- | ------------------------------------------------------ |
+| `apps/web`              | UI, przegląd dokumentów i zatwierdzanie | przez API; bez bezpośredniego dostępu DB               |
+| `apps/api`              | polityki, kontrakty, komendy i REST     | wywołanie application services                         |
+| `apps/mcp`              | transport MCP, OAuth, mapowanie tools   | przez autoryzowane API, bez DB                         |
+| `apps/worker`           | OCR, import, synchronizacje i raporty   | zadania aplikacyjne, kontrolowany dostęp do integracji |
+| `packages/domain`       | księgowość, faktury, podatki, dokumenty | czyste funkcje i invariants                            |
+| `packages/application`  | use-cases, role/ABAC, approvals, porty  | jedna polityka dla wszystkich kanałów                  |
+| `packages/db`           | Postgres, migracje, RLS, transakcje     | tylko aplikacja i infrastruktura                       |
+| `packages/integrations` | KSeF, JPK, NBP, REGON, banki, OCR       | za portami, sandbox first                              |
 
 ## Docelowy przepływ
 

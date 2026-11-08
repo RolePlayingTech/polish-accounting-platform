@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Card, FormField, StatusBadge } from '@pap/ui';
 import { AlertBanner, Button } from '../../../components/ui-controls';
 import type {
@@ -37,7 +37,7 @@ export function NotificationsWorkbench({
   const [disabledStages, setDisabledStages] = useState<ReminderStage[]>([
     ...preferences.disabledStages,
   ]);
-  const [currentOutbox, setCurrentOutbox] = useState<readonly NotificationOutboxEntry[]>(outbox);
+  const [localOutbox, setCurrentOutbox] = useState<readonly NotificationOutboxEntry[] | null>(null);
   const [selectedOutboxId, setSelectedOutboxId] = useState<string | null>(
     outbox[0]?.outboxId ?? null,
   );
@@ -48,9 +48,7 @@ export function NotificationsWorkbench({
     detail: string;
   } | null>(null);
 
-  useEffect(() => {
-    setCurrentOutbox(outbox);
-  }, [outbox]);
+  const currentOutbox = localOutbox ?? outbox;
 
   const selectedMessage =
     currentOutbox.find((m) => m.outboxId === selectedOutboxId) ?? currentOutbox[0] ?? null;

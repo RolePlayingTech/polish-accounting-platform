@@ -12,11 +12,11 @@ Nie projektujemy „aplikacji AI” z elementami księgowymi, lecz wiarygodne ś
 
 ## Trzy kierunki do rozważenia (jeszcze nie wybór)
 
-| Koncepcja | Pomysł | Zalety | Ryzyka |
-| --- | --- | --- | --- |
-| **A. Nowoczesny dziennik finansowy** (rekomendacja wyjściowa) | Delikatne nawiązanie do księgi: wyraźna typografia, linie i rytm tabel, ciepłe tła, pojedynczy świadomy akcent. | Rozpoznawalny charakter, wiarygodność, dobrze działa przy liczbach i dokumentach. | Zbyt dosłowne „papierowe” motywy mogą sprawiać wrażenie retro. |
-| **B. Spokojne studio finansów** | Bardziej przestrzenny, współczesny interfejs narzędziowy, większe odstępy, precyzyjne bloki informacji. | Przyjazny początkującym, lekkość, prostota. | Łatwo stać się kopią tysiąca SaaS-owych dashboardów. |
-| **C. Profesjonalny warsztat księgowego** | Większa gęstość informacji, świetne tabele, komendy, filtry, skróty klawiaturowe. | Wysoka wydajność pracy specjalistów. | Może odstraszać właścicieli małych firm, jeśli zastosowany wszędzie. |
+| Koncepcja                                                     | Pomysł                                                                                                          | Zalety                                                                            | Ryzyka                                                               |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| **A. Nowoczesny dziennik finansowy** (rekomendacja wyjściowa) | Delikatne nawiązanie do księgi: wyraźna typografia, linie i rytm tabel, ciepłe tła, pojedynczy świadomy akcent. | Rozpoznawalny charakter, wiarygodność, dobrze działa przy liczbach i dokumentach. | Zbyt dosłowne „papierowe” motywy mogą sprawiać wrażenie retro.       |
+| **B. Spokojne studio finansów**                               | Bardziej przestrzenny, współczesny interfejs narzędziowy, większe odstępy, precyzyjne bloki informacji.         | Przyjazny początkującym, lekkość, prostota.                                       | Łatwo stać się kopią tysiąca SaaS-owych dashboardów.                 |
+| **C. Profesjonalny warsztat księgowego**                      | Większa gęstość informacji, świetne tabele, komendy, filtry, skróty klawiaturowe.                               | Wysoka wydajność pracy specjalistów.                                              | Może odstraszać właścicieli małych firm, jeśli zastosowany wszędzie. |
 
 **Rekomendacja:** zbadać **A jako osobowość marki + C jako ergonomię zaawansowanych obszarów**, zostawiając prostotę B w onboardingu i ekranach podstawowych. Agent może zaproponować lepszy czwarty wariant; wybór wymaga makiet i oceny użyteczności, nie tylko deklaracji stylistycznej.
 

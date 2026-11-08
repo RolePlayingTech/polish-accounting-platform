@@ -6,16 +6,16 @@ SQL/application/ACL. [Decyzje i aktualny handoff](30-security-foundation-integra
 Rzeczywiste OLD/NEW w receipt,
 retry bez DML oraz scenariusze QA **NOT RUN**: [docs/29](29-sec01-sec02-kontrakt-efektow.md).
 
-| Ścieżka | Audyt | Awaria |
-| --- | --- | --- |
-| HTTP preflight allow/deny | Oddzielny INSERT, kind=preflight | 503, brak dostępu |
-| Spoofing nagłówków/brak Bearer | kind=transport, actor=NULL | 503, brak dostępu |
-| Firma allow | Ta sama TX co callback, outcome=committed | Rollback efektu |
-| Firma deny | Oddzielna TX po rollbacku, outcome=denied | Fail-closed, audit_unavailable |
-| Autoryzowana operacja z potwierdzonym rollbackiem | Oddzielna TX po potwierdzonym ROLLBACK, allow/rolled_back | Brak deklaracji trwałego śladu przy awarii DB |
+| Ścieżka                                                            | Audyt                                                                                                                                | Awaria                                                    |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| HTTP preflight allow/deny                                          | Oddzielny INSERT, kind=preflight                                                                                                     | 503, brak dostępu                                         |
+| Spoofing nagłówków/brak Bearer                                     | kind=transport, actor=NULL                                                                                                           | 503, brak dostępu                                         |
+| Firma allow                                                        | Ta sama TX co callback, outcome=committed                                                                                            | Rollback efektu                                           |
+| Firma deny                                                         | Oddzielna TX po rollbacku, outcome=denied                                                                                            | Fail-closed, audit_unavailable                            |
+| Autoryzowana operacja z potwierdzonym rollbackiem                  | Oddzielna TX po potwierdzonym ROLLBACK, allow/rolled_back                                                                            | Brak deklaracji trwałego śladu przy awarii DB             |
 | Niepewny wynik zakończenia TX (np. utrata potwierdzenia po COMMIT) | Best-effort allow/outcome_unknown (`reason=transaction_outcome_unknown`, `access_management_operation_id=NULL`), nigdy `rolled_back` | Fail-closed 503, brak automatycznego ponowienia callbacku |
-| Zmiana dostępu allow | access_management_event + security_decision_event w TX | Rollback obu wpisów i mutacji |
-| Idempotentne powtórzenie | Nowa decyzja z FK do istniejącej operacji | Bez powielenia mutacji |
+| Zmiana dostępu allow                                               | access_management_event + security_decision_event w TX                                                                               | Rollback obu wpisów i mutacji                             |
+| Idempotentne powtórzenie                                           | Nowa decyzja z FK do istniejącej operacji                                                                                            | Bez powielenia mutacji                                    |
 
 SECURITY_AUDIT_RECORDER jest obowiązkowym providerem użytego guarda. Publiczny
 AppModule nadal go nie instancjonuje i nadal nie wystawia endpointów księgowych.
@@ -27,11 +27,11 @@ z identyfikatorów korelacji. Access management używa operation_id jako korelac
 
 Macierz uzupełniająca do docs/27:
 
-| Obiekt | Runtime |
-| --- | --- |
-| security_decision_event | INSERT tylko pod podpisem dokładnych metadanych; brak odczytu/zmiany/usuwania/TRUNCATE |
-| pap_stamp_security_event | Bez bezpośredniego EXECUTE, BEFORE INSERT nadaje czas i txid |
-| pap_require_security_audit | Bez bezpośredniego EXECUTE; mały definer z pinowanym search_path, kontrola przy COMMIT |
+| Obiekt                         | Runtime                                                                                 |
+| ------------------------------ | --------------------------------------------------------------------------------------- |
+| security_decision_event        | INSERT tylko pod podpisem dokładnych metadanych; brak odczytu/zmiany/usuwania/TRUNCATE  |
+| pap_stamp_security_event       | Bez bezpośredniego EXECUTE, BEFORE INSERT nadaje czas i txid                            |
+| pap_require_security_audit     | Bez bezpośredniego EXECUTE; mały definer z pinowanym search_path, kontrola przy COMMIT  |
 | access_management_event INSERT | Wyłącznie executor SQL z podpisanej komendy; runtime nie dostarcza receipt/state_change |
 
 Audyt nie przechowuje FK do tenanta/aktora dla odmów: próba obcej lub nieistniejącej

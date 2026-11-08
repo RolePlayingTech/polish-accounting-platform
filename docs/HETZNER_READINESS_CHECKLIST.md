@@ -32,6 +32,7 @@
 Wdrożenie Etapu A pod adresem `https://ksiegowosc.roleplayingtech.com` może nastąpić **wyłącznie wtedy**, gdy wszystkie poniższe punkty są spełnione:
 
 ### 2.1. Warunki wstępne (Przed startem usług)
+
 - [ ] **Właściciel udzielił jawnej zgody** na uruchomienie Etapu A i zmergował [PR #23](https://github.com/RolePlayingTech/polish-accounting-platform/pull/23).
 - [x] Rekord DNS `A` dla `ksiegowosc.roleplayingtech.com` rozwiązuje się na adres IPv4 serwera Hetzner (`<HETZNER_IPV4>`) **[Potwierdzone na serwerze]**.
 - [x] Katalog `/var/lib/pap-acme/.well-known/acme-challenge` ma uprawnienia `0750 root:www-data` (brak prawa zapisu dla `www-data`), a skrypt `/var/www/pap-staging/bin/pap-preflight-check.sh` zwraca status `INFRASTRUCTURE PREPARED (awaiting PR merge & owner approval for launch)` **[Potwierdzone na serwerze]**.
@@ -40,6 +41,7 @@ Wdrożenie Etapu A pod adresem `https://ksiegowosc.roleplayingtech.com` może na
 - [ ] Wszystkie testy w CI na gałęzi `main` (`lint`, `format:check`, `typecheck`, `test`, `test:arch`, `db-integration`, `test:e2e`, `audit`, `gitleaks`) mają status **PASS**.
 
 ### 2.2. Weryfikacja bezpieczeństwa, TLS i zasobów po uruchomieniu Etapu A
+
 - [ ] Test odczytu pliku kontrolnego HTTP (`curl --fail http://ksiegowosc.roleplayingtech.com/.well-known/acme-challenge/healthcheck.txt`) zakończył się sukcesem przed uruchomieniem Certbota.
 - [ ] Procesy `pap-staging-web` i `pap-staging-api` działają na koncie nieuprzywilejowanym `pap` z aktywnymi flagami `NoNewPrivileges=true`, `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true` oraz twardymi limitami `MemoryHigh=256M`, `MemoryMax=384M`, `MemorySwapMax=64M` i `CPUQuota=50%`.
 - [ ] Polecenie `ss -lntp | grep -E ':(3100|4100|5432)\b'` potwierdza nasłuch **wyłącznie na `127.0.0.1`**, nigdy na `0.0.0.0` ani `[::]`.
@@ -50,6 +52,7 @@ Wdrożenie Etapu A pod adresem `https://ksiegowosc.roleplayingtech.com` może na
 - [ ] Żadna z istniejących usług na serwerze (`durnoty.service`, `mumro-articles.service`, `swiadek-dziejow-articles.service`, `social-media-manager.service`, PM2 `historia-technologii` i `mfc-backend`, kontenery `shorts-api` i `reels-api`) nie została zrestartowana ani nie zmieniła stanu.
 
 ### 2.3. Dodatkowe warunki dla podetapu A.2 (Baza PostgreSQL 18 na stagingu)
+
 - [ ] Scalono i zweryfikowano w CI [PR #24](https://github.com/RolePlayingTech/polish-accounting-platform/pull/24) rozszerzający `packages/db/src/database-config.ts` o jawny tryb `PAP_DATABASE_ENV=staging` z rozdziałem ról `pap_staging_migrator` i `pap_staging_app`.
 - [ ] Rola `pap_staging_app` posiada atrybuty `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS` i nie jest właścicielem bazy ani tabel.
 - [ ] Migracje `0000_technical-baseline.sql`, `0001_tenant-schema.sql` (`btree_gist`) oraz `0002_access-lifecycle.sql` wykonały się bez błędów z konta `pap_staging_migrator`.

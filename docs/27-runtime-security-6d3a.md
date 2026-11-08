@@ -11,24 +11,24 @@ Wykonywalny kontrakt: packages/db/sql/runtime-privileges.sql. Wszystkie tabele m
 ENABLE/FORCE RLS. W tabeli „UPDATE do blokady” oznacza uprawnienie SQL potrzebne do
 FOR SHARE/UPDATE; WITH CHECK false uniemożliwia rzeczywistą zmianę.
 
-| Obiekt | Runtime | Warunek |
-| --- | --- | --- |
-| tenant | SELECT | Podpisany tenant i aktywne członkostwo |
-| legal_entity | SELECT; UPDATE(id) do blokady | Podpisana firma i grant albo autoryzowana administracja; zapis zabroniony |
-| entity_profile_version | SELECT | Faza company, dokładny tenant/firma/akcja i aktywny grant |
-| app_user | SELECT; UPDATE(id) do blokady | Wyłącznie aktor asercji; zapis zabroniony |
-| user_oidc_identity | SELECT; UPDATE(id) do blokady | Wyłącznie aktor asercji; provisioning zabroniony |
-| tenant_membership | SELECT; UPDATE(user_id) do blokady | Aktor/cel; DML runtime zabronione przez RLS/guard; executor SEC-01/02 |
-| company_access_grant | SELECT; UPDATE(grant_id) do blokady | Brak INSERT/UPDATE danych; executor wykonuje dokładną podpisaną komendę |
-| access_management_event | SELECT | Tylko dokładna zatwierdzona operacja i aktor; INSERT wyłącznie z executora |
-| company_operation_probe | SELECT, INSERT | Podpisane operation_id, firma, aktor i decision_at; INSERT tylko write |
-| security_context_key | Brak | Migrator/operator, nigdy runtime |
-| drizzle.__drizzle_migrations | Brak | Wyłącznie migrator |
-| pap_context, pap_admin_allowed, pap_company_allowed, pap_resolve_identity | EXECUTE | Małe definery, jawny scope i zamknięty search_path |
-| pap_execute_access | EXECUTE | Cztery komendy lifecycle z podpisu; receipt i rzeczywiste OLD/NEW, bez parametrów SQL |
-| pap_security_protocol_version | EXECUTE | Marker zgodności 0006 i aplikacji: 60301 |
-| Funkcje triggerów i pgcrypto | Brak bezpośredniego EXECUTE | Triggery wywoływane przez PostgreSQL; kryptografia tylko wewnątrz definerów |
-| Nowe tabele/funkcje/sekwencje | Brak domyślnych grantów | Każdy moduł wymaga własnej migracji/macierzy |
+| Obiekt                                                                    | Runtime                             | Warunek                                                                               |
+| ------------------------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
+| tenant                                                                    | SELECT                              | Podpisany tenant i aktywne członkostwo                                                |
+| legal_entity                                                              | SELECT; UPDATE(id) do blokady       | Podpisana firma i grant albo autoryzowana administracja; zapis zabroniony             |
+| entity_profile_version                                                    | SELECT                              | Faza company, dokładny tenant/firma/akcja i aktywny grant                             |
+| app_user                                                                  | SELECT; UPDATE(id) do blokady       | Wyłącznie aktor asercji; zapis zabroniony                                             |
+| user_oidc_identity                                                        | SELECT; UPDATE(id) do blokady       | Wyłącznie aktor asercji; provisioning zabroniony                                      |
+| tenant_membership                                                         | SELECT; UPDATE(user_id) do blokady  | Aktor/cel; DML runtime zabronione przez RLS/guard; executor SEC-01/02                 |
+| company_access_grant                                                      | SELECT; UPDATE(grant_id) do blokady | Brak INSERT/UPDATE danych; executor wykonuje dokładną podpisaną komendę               |
+| access_management_event                                                   | SELECT                              | Tylko dokładna zatwierdzona operacja i aktor; INSERT wyłącznie z executora            |
+| company_operation_probe                                                   | SELECT, INSERT                      | Podpisane operation_id, firma, aktor i decision_at; INSERT tylko write                |
+| security_context_key                                                      | Brak                                | Migrator/operator, nigdy runtime                                                      |
+| drizzle.__drizzle_migrations                                              | Brak                                | Wyłącznie migrator                                                                    |
+| pap_context, pap_admin_allowed, pap_company_allowed, pap_resolve_identity | EXECUTE                             | Małe definery, jawny scope i zamknięty search_path                                    |
+| pap_execute_access                                                        | EXECUTE                             | Cztery komendy lifecycle z podpisu; receipt i rzeczywiste OLD/NEW, bez parametrów SQL |
+| pap_security_protocol_version                                             | EXECUTE                             | Marker zgodności 0006 i aplikacji: 60301                                              |
+| Funkcje triggerów i pgcrypto                                              | Brak bezpośredniego EXECUTE         | Triggery wywoływane przez PostgreSQL; kryptografia tylko wewnątrz definerów           |
+| Nowe tabele/funkcje/sekwencje                                             | Brak domyślnych grantów             | Każdy moduł wymaga własnej migracji/macierzy                                          |
 
 Macierz uwzględnia rewizję SEC-01/02: [kontrakt i QA](29-sec01-sec02-kontrakt-efektow.md).
 Testy tej rewizji są **NOT RUN**; wyniki wcześniejszego kandydata nie stanowią odbioru.
@@ -60,6 +60,7 @@ jej nie znaleziono. Nie tworzymy jej i nie używamy bazy działającego stagingu
 
    To osobna operacja administracyjna, nigdy start aplikacji. Dla stagingu wymaga
    osobnej zgody. Istniejące usługi i ich ACL są poza zakresem.
+
 4. Operator dostarcza losowy klucz 256 bitów przez chroniony kanał środowiskowy,
    bez parametrów CLI, logów i repo. PAP_DB_CONTEXT_KEY_ID oraz PAP_DB_CONTEXT_KEY_HEX
    są konfiguracją procesu API. provisionDatabaseContextKey zapisuje identyczny

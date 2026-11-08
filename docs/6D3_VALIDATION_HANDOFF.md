@@ -21,13 +21,13 @@ ponownej integracji źródłowych gałęzi. Aktualne migracje, scenariusze i kom
 
 ## Repozytorium i zależności
 
-| Część | PR / gałąź | Stan |
-| --- | --- | --- |
-| Polityka CI, środowiska i handoff | #29 (`00fb64f`), #26 (`566d9ad`), #32 (`9e62b9a`) → `main` (`9e62b9a5881cd38b2e2a9b874d73b44078f16bf3`) | Scalone do `main` |
-| Istniejąca transakcyjna implementacja | #27, `feat/issue-6d3a-transactional-authz`, `1281027a126b09f934894cde5fe43dc01a7b3e3b` (wcześniejszy: `918b6c148cce77b13cb0ee2770f763e4bba42176`) | Baza `main` (`9e62b9a`); konflikty z `main` rozwiązane |
-| B: domknięcie ścieżek transakcyjnych | #28, `codex/6d3b-transactional-authorization`, `5d2a4c5c4d37219988310c787544352f89c794b0` (wcześniejszy: `0d1c54c25504b1dea79e3c6fe51bd6578d94710c`, kod: `db31f508140cce2a9a1549bf54da44943acbebe9`) | Baza #27 (`1281027`) |
-| A: role, podpis i RLS | #30, `codex/6d3a-runtime-rls`, `edad9f7f0d1c67da4a57f47454295a0d459322ec` (wcześniejszy: `8a7d34635dcd8592479065267e3a085d5f213a42`) | Baza #28 (`5d2a4c5`) |
-| C: audyt i hardening | #31, `codex/6d3c-security-audit`, merge `d2bf07824d1f87c2fe6e1c6fc244b412ffb4ad26` (wcześniejszy: `f916385b1b06c29666267182fb70a1a425bc858a`, kod: `23ed1b9f406d0cc14db235e1dbfa7deea07a4d3f`) | Baza #30 (`edad9f7`); końcowy SHA z dokumentacją w opisie PR #31 |
+| Część                                 | PR / gałąź                                                                                                                                                                                            | Stan                                                             |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Polityka CI, środowiska i handoff     | #29 (`00fb64f`), #26 (`566d9ad`), #32 (`9e62b9a`) → `main` (`9e62b9a5881cd38b2e2a9b874d73b44078f16bf3`)                                                                                               | Scalone do `main`                                                |
+| Istniejąca transakcyjna implementacja | #27, `feat/issue-6d3a-transactional-authz`, `1281027a126b09f934894cde5fe43dc01a7b3e3b` (wcześniejszy: `918b6c148cce77b13cb0ee2770f763e4bba42176`)                                                     | Baza `main` (`9e62b9a`); konflikty z `main` rozwiązane           |
+| B: domknięcie ścieżek transakcyjnych  | #28, `codex/6d3b-transactional-authorization`, `5d2a4c5c4d37219988310c787544352f89c794b0` (wcześniejszy: `0d1c54c25504b1dea79e3c6fe51bd6578d94710c`, kod: `db31f508140cce2a9a1549bf54da44943acbebe9`) | Baza #27 (`1281027`)                                             |
+| A: role, podpis i RLS                 | #30, `codex/6d3a-runtime-rls`, `edad9f7f0d1c67da4a57f47454295a0d459322ec` (wcześniejszy: `8a7d34635dcd8592479065267e3a085d5f213a42`)                                                                  | Baza #28 (`5d2a4c5`)                                             |
+| C: audyt i hardening                  | #31, `codex/6d3c-security-audit`, merge `d2bf07824d1f87c2fe6e1c6fc244b412ffb4ad26` (wcześniejszy: `f916385b1b06c29666267182fb70a1a425bc858a`, kod: `23ed1b9f406d0cc14db235e1dbfa7deea07a4d3f`)        | Baza #30 (`edad9f7`); końcowy SHA z dokumentacją w opisie PR #31 |
 
 Numeracja istniejącego #27 jest historyczna: nazywa transakcje 6D-3A. W bieżącym
 poleceniu A oznacza role/RLS, B transakcje, C audyt.
@@ -72,20 +72,20 @@ Publiczny AppModule i MCP nadal nie udostępniają danych/operacji księgowych.
 zależności zainstalowane offline, bez nowych usług systemowych.
 Wyniki dotyczą kodu kandydackiego; kolejne zmiany dokumentacji nie zmieniają kodu.
 
-| Zakres | Wynik |
-| --- | --- |
-| B application (transactional-unit-of-work + access-management) | 25/25 PASS |
-| B DB builder lifecycle, client-options i pipeline HTTP | 5/5, 10/10, 22/22 PASS |
-| A podpis, konfiguracja, pliki migracji, client-options, adapter faktów, resolver | 54/54 PASS |
-| A builder lifecycle po cache zablokowanych faktów | 5/5 PASS |
-| C application (transactional-unit-of-work + access-management) | 26/26 PASS |
-| C oidc-authentication | 7/7 PASS przed końcowymi zmianami dokumentacji |
-| C DB writer audytu | 2/2 PASS |
-| C statyczny kontrakt migracji/metadanych | 4/4 PASS |
-| C pipeline HTTP z awarią audytu i brakiem tokenu w śladzie | 23/23 PASS |
-| TypeScript application/db/api oraz testy db/api | PASS |
-| Lint zmienionych modułów, format, git diff --check | PASS |
-| SQL | Ocena statyczna/metadane; **nie jest to wykonanie migracji** |
+| Zakres                                                                           | Wynik                                                        |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| B application (transactional-unit-of-work + access-management)                   | 25/25 PASS                                                   |
+| B DB builder lifecycle, client-options i pipeline HTTP                           | 5/5, 10/10, 22/22 PASS                                       |
+| A podpis, konfiguracja, pliki migracji, client-options, adapter faktów, resolver | 54/54 PASS                                                   |
+| A builder lifecycle po cache zablokowanych faktów                                | 5/5 PASS                                                     |
+| C application (transactional-unit-of-work + access-management)                   | 26/26 PASS                                                   |
+| C oidc-authentication                                                            | 7/7 PASS przed końcowymi zmianami dokumentacji               |
+| C DB writer audytu                                                               | 2/2 PASS                                                     |
+| C statyczny kontrakt migracji/metadanych                                         | 4/4 PASS                                                     |
+| C pipeline HTTP z awarią audytu i brakiem tokenu w śladzie                       | 23/23 PASS                                                   |
+| TypeScript application/db/api oraz testy db/api                                  | PASS                                                         |
+| Lint zmienionych modułów, format, git diff --check                               | PASS                                                         |
+| SQL                                                                              | Ocena statyczna/metadane; **nie jest to wykonanie migracji** |
 
 Testów nie powtarzano po zmianach, które ich nie dotyczyły. Nie uruchamiano pełnego
 pnpm test, build, E2E, skanowania całej historii/dependency audit ani pełnej kampanii.

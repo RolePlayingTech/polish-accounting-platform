@@ -598,12 +598,7 @@ describe('AccountingWorkspaceService — end-to-end Polish accounting, authz, sa
     expect(zusFeb.healthContributionGrosze).toBeLessThan(zusApr.healthContributionGrosze);
 
     // 3. Mixed vehicle purchase in Sp. z o.o. excludes 25% of (net + non-deductible VAT) from CIT tax-deductible costs
-    const ledgerBefore = ws.getLedgerView(
-      jan,
-      TENANT_1_ID,
-      COMPANY_SPZOO_ID,
-      DEMO_DEFAULT_PERIOD,
-    );
+    const ledgerBefore = ws.getLedgerView(jan, TENANT_1_ID, COMPANY_SPZOO_ID, DEMO_DEFAULT_PERIOD);
     const mixedCarDoc = ws.createDocument(jan, TENANT_1_ID, COMPANY_SPZOO_ID, {
       documentNumber: 'FV/SPZOO-AUTO-MIX/2026/03/01',
       direction: 'purchase',
@@ -624,12 +619,7 @@ describe('AccountingWorkspaceService — end-to-end Polish accounting, authz, sa
       vatDeductionMode: 'vehicle_mixed_50',
       kpirQualification: 'vehicle_mixed_75_col13',
     });
-    const ledgerAfter = ws.getLedgerView(
-      jan,
-      TENANT_1_ID,
-      COMPANY_SPZOO_ID,
-      DEMO_DEFAULT_PERIOD,
-    );
+    const ledgerAfter = ws.getLedgerView(jan, TENANT_1_ID, COMPANY_SPZOO_ID, DEMO_DEFAULT_PERIOD);
     // Accounting cost on 401-409 is 1000.00 net + 115.00 non-deductible VAT = 1115.00 PLN (111_500 gr).
     // 25% NKUP exclusion = round(111_500 * 0.25) = 27_875 gr, so tax-deductible costs increase by 83_625 gr (not 111_500 gr!).
     expect(

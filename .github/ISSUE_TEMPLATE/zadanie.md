@@ -1,7 +1,7 @@
 ---
 name: Zadanie
 about: Implementacja, dokumentacja lub walidacja
-title: ""
+title: ''
 labels: []
 assignees: []
 ---
@@ -17,7 +17,7 @@ assignees: []
 ## Ryzyka i uprawnienia
 
 ## Kryteria akceptacji
+
 - [ ]
 
 ## Oficjalne źródła / testy
-

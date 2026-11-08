@@ -42,14 +42,14 @@ Aby możliwie najszybciej udostępnić właścicielowi działającą wersję apl
 
 ### Porównanie trzech poziomów dojrzałości środowiska
 
-| Cecha | Etap A: Prywatny staging techniczny | Etap B: Funkcjonalny staging (syntetyczny) | Przyszła Produkcja |
-| --- | --- | --- | --- |
-| **Odbiorcy** | Wyłącznie właściciel projektu | Właściciel / testerzy wewnętrzni | Rzeczywiste firmy i księgowi |
-| **Ochrona brzegu** | Bramka Nginx Basic Auth (cały vhost bez wyjątków) / IP allowlist | Bramka Nginx + logowanie OIDC z MFA | Publiczny brzeg z WAF/rate-limit + OIDC z MFA |
-| **Baza danych** | Brak w API (w A.2: pełny łańcuch migracji `0000–0002` na `pap_staging`) | `pap_staging` z rolą `NOBYPASSRLS`, RLS, `SET LOCAL` i audytem | Dedykowany serwer DB w UE/EOG z szyfrowaniem, PITR i KMS |
+| Cecha                       | Etap A: Prywatny staging techniczny                                                                           | Etap B: Funkcjonalny staging (syntetyczny)                                                        | Przyszła Produkcja                                                                                   |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Odbiorcy**                | Wyłącznie właściciel projektu                                                                                 | Właściciel / testerzy wewnętrzni                                                                  | Rzeczywiste firmy i księgowi                                                                         |
+| **Ochrona brzegu**          | Bramka Nginx Basic Auth (cały vhost bez wyjątków) / IP allowlist                                              | Bramka Nginx + logowanie OIDC z MFA                                                               | Publiczny brzeg z WAF/rate-limit + OIDC z MFA                                                        |
+| **Baza danych**             | Brak w API (w A.2: pełny łańcuch migracji `0000–0002` na `pap_staging`)                                       | `pap_staging` z rolą `NOBYPASSRLS`, RLS, `SET LOCAL` i audytem                                    | Dedykowany serwer DB w UE/EOG z szyfrowaniem, PITR i KMS                                             |
 | **Kopie zapasowe (Backup)** | Lokalny `pg_dump` na drugim wolumenie hosta + test restore (wystarczający wyłącznie dla danych syntetycznych) | Lokalny `pg_dump` + szyfrowany backup off-host (przed utrzymywaniem trwałych środowisk testowych) | Szyfrowany backup off-host (append-only w innej lokalizacji UE/EOG) + PITR + cykliczny restore drill |
-| **Dozwolone dane** | Wyłącznie stałe metadane statusu modułów | **Wyłącznie dane syntetyczne** (fikcyjne NIP/firmy/dokumenty) | Dane rzeczywiste (po przeglądzie prawnym, RODO i eksperckim) |
-| **Połączenia z MF / KSeF** | Brak | Brak (lub wyłącznie testowe stuby/sandbox) | Tylko jawnie zatwierdzone adaptery po odbiorze profilu |
+| **Dozwolone dane**          | Wyłącznie stałe metadane statusu modułów                                                                      | **Wyłącznie dane syntetyczne** (fikcyjne NIP/firmy/dokumenty)                                     | Dane rzeczywiste (po przeglądzie prawnym, RODO i eksperckim)                                         |
+| **Połączenia z MF / KSeF**  | Brak                                                                                                          | Brak (lub wyłącznie testowe stuby/sandbox)                                                        | Tylko jawnie zatwierdzone adaptery po odbiorze profilu                                               |
 
 ---
 
@@ -58,6 +58,7 @@ Aby możliwie najszybciej udostępnić właścicielowi działającą wersję apl
 ### Krok 1: Weryfikacja DNS (już skonfigurowany i rozpropagowany)
 
 Rekord `A` dla jedynej docelowej domeny `ksiegowosc.roleplayingtech.com` jest już skonfigurowany w strefie `roleplayingtech.com` i wskazuje na adres IPv4 serwera `hetz-1` (`[Potwierdzone na serwerze]`). Przed startem należy jedynie potwierdzić brak zmian:
+
 ```bash
 dig +short ksiegowosc.roleplayingtech.com A
 /var/www/pap-staging/bin/pap-preflight-check.sh
@@ -66,6 +67,7 @@ dig +short ksiegowosc.roleplayingtech.com A
 ### Krok 2: Izolowane konto, katalogi i runtime Node.js 24 na serwerze (ZREALIZOWANE)
 
 Na serwerze przygotowano (bez modyfikacji `/usr/bin/node` i bez uruchamiania usług):
+
 1. Konto systemowe `pap` (`uid=999(pap) gid=987(pap)`, `/usr/sbin/nologin`, zablokowane hasło).
 2. Strukturę katalogów i plików:
    - `/opt/pap-runtime` (`0755 root:root`, symlink `/opt/pap-runtime/current -> /opt/pap-runtime/node-v24.22.1-linux-x64` z Node.js `v24.22.1` + `/opt/pap-runtime/pnpm/pnpm` z `pnpm 12.15.0` i `/opt/pap-runtime/corepack-home`)
@@ -77,6 +79,7 @@ Na serwerze przygotowano (bez modyfikacji `/usr/bin/node` i bez uruchamiania us�
 ### Krok 3: Wydanie certyfikatu TLS dla `ksiegowosc.roleplayingtech.com` (po zgodzie właściciela)
 
 Aby uniknąć problemów z wtyczką `--nginx` Certbota (która zawodzi przy globalnym `certbot renew` z powodu historycznych domen `app.mumro.io` i `roleplayingtech.com-0001` **[Potwierdzone na serwerze]**):
+
 1. Aktywować przygotowany vhost bootstrap HTTP (`:80`):
    ```bash
    sudo ln -sfn /etc/nginx/sites-available/pap-staging.bootstrap-http.conf /etc/nginx/sites-enabled/pap-staging.conf
@@ -101,7 +104,7 @@ Aby uniknąć problemów z wtyczką `--nginx` Certbota (która zawodzi przy glob
    ```bash
    sudo certbot renew --cert-name ksiegowosc.roleplayingtech.com --dry-run
    ```
-   *Ważne:* samo użycie `--webroot` dla nowej domeny **nie naprawia globalnego stanu `failed` jednostki `certbot.service`**, dopóki w `/etc/letsencrypt/renewal/` znajdują się nieaktualne pliki `app.mumro.io.conf` i `roleplayingtech.com-0001.conf` należące do innych projektów. Dlatego skrypt `/var/www/pap-staging/bin/pap-smoke-test.sh --edge` monitoruje bezpośrednio datę wygaśnięcia certyfikatu prezentowanego na porcie `443` (`openssl s_client -servername ksiegowosc.roleplayingtech.com -connect 127.0.0.1:443 ... -checkend $((21 * 86400))`).
+   _Ważne:_ samo użycie `--webroot` dla nowej domeny **nie naprawia globalnego stanu `failed` jednostki `certbot.service`**, dopóki w `/etc/letsencrypt/renewal/` znajdują się nieaktualne pliki `app.mumro.io.conf` i `roleplayingtech.com-0001.conf` należące do innych projektów. Dlatego skrypt `/var/www/pap-staging/bin/pap-smoke-test.sh --edge` monitoruje bezpośrednio datę wygaśnięcia certyfikatu prezentowanego na porcie `443` (`openssl s_client -servername ksiegowosc.roleplayingtech.com -connect 127.0.0.1:443 ... -checkend $((21 * 86400))`).
 
 ### Krok 4: Aktywacja jednostek `systemd` i docelowego vhosta HTTPS z bramką Basic Auth
 
@@ -187,10 +190,10 @@ flowchart LR
 
 ## 5. Podsumowanie stanu gotowości do pierwszego uruchomienia (Etap A)
 
-| Element | Status | Pozostały czas po zgodzie właściciela |
-| --- | --- | --- |
-| 1. DNS dla `ksiegowosc.roleplayingtech.com` i zamknięcie portu `3001` w `firewall-1` | **GOTOWE (`[Potwierdzone na serwerze]`)** | 0 min |
-| 2. PR #23 (komunikacja Web–API loopback) i PR #24 (`PAP_DATABASE_ENV=staging`) | **GOTOWE (CI 3/3 PASS — oczekują na review i merge)** | ~5 min (merge) |
-| 3. Konto `pap`, `/opt/pap-runtime` (Node 24.22.1 + pnpm 12.15.0), katalogi, nieaktywne jednostki `systemd`, skrypty i szablony Nginx | **GOTOWE (`[Potwierdzone na serwerze]`)** | 0 min |
-| 4. Wydanie certyfikatu Let's Encrypt dla `ksiegowosc.roleplayingtech.com`, utworzenie `htpasswd`, wdrożenie paczki artefaktów i start usług Etapu A | **Oczekuje na zgodę właściciela** | ~15–20 min |
-| 5. Opcjonalny podetap A.2: uruchomienie `postgres:18.6-alpine` na `127.0.0.1:5432`, inicjalizacja ról, migracje `0000–0002` i Restore Drill | **Oczekuje na merge PR #24 i zgodę właściciela** | ~20–30 min |
+| Element                                                                                                                                             | Status                                                | Pozostały czas po zgodzie właściciela |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------- |
+| 1. DNS dla `ksiegowosc.roleplayingtech.com` i zamknięcie portu `3001` w `firewall-1`                                                                | **GOTOWE (`[Potwierdzone na serwerze]`)**             | 0 min                                 |
+| 2. PR #23 (komunikacja Web–API loopback) i PR #24 (`PAP_DATABASE_ENV=staging`)                                                                      | **GOTOWE (CI 3/3 PASS — oczekują na review i merge)** | ~5 min (merge)                        |
+| 3. Konto `pap`, `/opt/pap-runtime` (Node 24.22.1 + pnpm 12.15.0), katalogi, nieaktywne jednostki `systemd`, skrypty i szablony Nginx                | **GOTOWE (`[Potwierdzone na serwerze]`)**             | 0 min                                 |
+| 4. Wydanie certyfikatu Let's Encrypt dla `ksiegowosc.roleplayingtech.com`, utworzenie `htpasswd`, wdrożenie paczki artefaktów i start usług Etapu A | **Oczekuje na zgodę właściciela**                     | ~15–20 min                            |
+| 5. Opcjonalny podetap A.2: uruchomienie `postgres:18.6-alpine` na `127.0.0.1:5432`, inicjalizacja ról, migracje `0000–0002` i Restore Drill         | **Oczekuje na merge PR #24 i zgodę właściciela**      | ~20–30 min                            |

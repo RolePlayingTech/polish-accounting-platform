@@ -6,13 +6,13 @@ To minimalny schemat PostgreSQL/Drizzle i testy integralności relacyjnej. Nie j
 
 ## Tabele i granice
 
-| Tabela | Klucze i reguły |
-| --- | --- |
-| `tenant` | PK `id` UUID, obowiązkowa niepusta `name`, `created_at` |
-| `legal_entity` | PK UUID, FK do tenanta, nazwa wyświetlana, `created_at`; UNIQUE `(tenant_id, id)` jest kluczem kandydującym dla FK |
-| `tenant_membership` | PK `(tenant_id, user_id)`, FK do tenanta, jawna rola i status, okres ważności |
-| `entity_profile_version` | PK UUID, FK `(tenant_id, legal_entity_id)` do firmy, techniczny `profile_code`, okres i EXCLUDE blokujący nakładanie wersji tej samej firmy |
-| `company_access_grant` | PK `grant_id` UUID, FK `(tenant_id, user_id)` do członkostwa oraz `(tenant_id, legal_entity_id)` do firmy, akcja i okres, opcjonalne cofnięcie |
+| Tabela                   | Klucze i reguły                                                                                                                                |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tenant`                 | PK `id` UUID, obowiązkowa niepusta `name`, `created_at`                                                                                        |
+| `legal_entity`           | PK UUID, FK do tenanta, nazwa wyświetlana, `created_at`; UNIQUE `(tenant_id, id)` jest kluczem kandydującym dla FK                             |
+| `tenant_membership`      | PK `(tenant_id, user_id)`, FK do tenanta, jawna rola i status, okres ważności                                                                  |
+| `entity_profile_version` | PK UUID, FK `(tenant_id, legal_entity_id)` do firmy, techniczny `profile_code`, okres i EXCLUDE blokujący nakładanie wersji tej samej firmy    |
+| `company_access_grant`   | PK `grant_id` UUID, FK `(tenant_id, user_id)` do członkostwa oraz `(tenant_id, legal_entity_id)` do firmy, akcja i okres, opcjonalne cofnięcie |
 
 Złożone FK uniemożliwiają zapis grantu tenanta A do firmy B1 z tenanta B, także przy UPDATE. Firma A1 i firma A2 tego samego tenanta mają odrębne granty. Nie ma triggera przyznającego dostęp po utworzeniu członkostwa. Role `tenant_owner`, `tenant_admin`, `tenant_member` są jedynymi rolami członkostwa; statusy to `active` i `revoked`. Grant ma wyłącznie akcję `read` lub `write`. Role platformy nie są częścią tego schematu.
 

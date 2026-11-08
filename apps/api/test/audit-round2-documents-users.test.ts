@@ -339,7 +339,9 @@ describe('Audit Round 2 regressions — P1-3 approve-and-post human corrections,
       },
     });
     expect(badCsvRes.statusCode).toBe(422);
-    expect((badCsvRes.json() as { reasonCode?: string }).reasonCode).toBe('document_amount_mismatch');
+    expect((badCsvRes.json() as { reasonCode?: string }).reasonCode).toBe(
+      'document_amount_mismatch',
+    );
   });
 
   it('[#58] creates a company with full address/profile fields and rejects duplicate NIP in tenant with 409', async () => {

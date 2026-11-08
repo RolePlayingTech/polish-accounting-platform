@@ -44,13 +44,7 @@ export const ZusSchemeSchema = z.enum([
   'not_applicable',
 ]);
 
-export const HealthContributionTierSchema = z.enum([
-  'low',
-  'medium',
-  'middle',
-  'high',
-  'standard',
-]);
+export const HealthContributionTierSchema = z.enum(['low', 'medium', 'middle', 'high', 'standard']);
 export type HealthContributionTierContract = z.infer<typeof HealthContributionTierSchema>;
 
 export const TaxProfileConfigSchema = z

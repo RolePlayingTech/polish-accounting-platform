@@ -1,13 +1,17 @@
 # 07. Specyfikacja Model Context Protocol (MCP)
 
 ## Cel
+
 Użytkownik lub agent może czytać uprawnione zasoby konkretnego podmiotu, importować dokumenty i przygotować działania, lecz nie może obejść zatwierdzeń domenowych.
 
 ## Transport i protokół
+
 Docelowo MCP Streamable HTTP zgodny z aktualnym standardem i audytowanym SDK; dla klienta lokalnego opcjonalny STDIO. OAuth/OIDC, ograniczenia origin/redirect, scoped i krótkożyjące tokeny, rotacja i odwołanie. Dokładne wersje MCP ustalić w ADR.
 
 ## Namespaces (projekt interfejsu, nie gotowe API)
+
 ### Read-only
+
 - entities.list / entities.get_profile / entities.get_permissions
 - documents.list / documents.get / documents.search
 - invoices.list / invoices.get / invoices.validate
@@ -15,6 +19,7 @@ Docelowo MCP Streamable HTTP zgodny z aktualnym standardem i audytowanym SDK; dl
 - rules.list_active / rules.explain_for_period
 
 ### Przygotowanie, bez księgowania
+
 - documents.prepare_upload: nazwa, mime, hash, entity_id → pre-signed upload session, po autoryzacji.
 - documents.prepare_classification: doc_id, proposal → draft, justification.
 - invoices.prepare_invoice: fields, recipient, rules_date → wersja robocza.
@@ -22,11 +27,13 @@ Docelowo MCP Streamable HTTP zgodny z aktualnym standardem i audytowanym SDK; dl
 - reconciliation.prepare_match: bank_tx, invoice → projekt dopasowania.
 
 ### Zatwierdzanie (osobny tor)
+
 - operations.get_draft / operations.list_pending / operations.cancel_draft.
 - Zatwierdzenie wyłącznie przez politykę domenową z uwierzytelnionym człowiekiem w UI.
 - Wysyłka KSeF/JPK, trwałe księgowanie, zamknięcie okresu i płatności — nie są zwykłymi automatycznymi tools.
 
 ## Schemat żądania
+
 Nie wszystkie narzędzia MCP mają ten sam zakres i wymagania uwierzytelnienia:
 
 - **Narzędzia operujące na danych konkretnej firmy:** wymagają wskazania `entity_id` albo jednoznacznej identyfikacji firmy na podstawie uprawnionego zasobu; serwer zawsze wyznacza tenant i ponownie sprawdza aktywny grant dla firmy, zasobu oraz akcji. Selektor przekazany przez klienta nie jest dowodem dostępu.
@@ -43,6 +50,7 @@ Kanoniczny model zagrożeń, role, warunki dostępu oraz wymagane odmowy dla wsz
 Wymagania specyficzne dla MCP: serwer waliduje audience, scopes, termin ważności i odwołanie tokenu; argument `tenant_id`/`entity_id` jest tylko selektorem do sprawdzenia na serwerze; narzędzia są deny-by-default i ograniczone allowlistą; agent nie zatwierdza własnego draftu ani nie wykonuje krytycznego zapisu. Złośliwy tekst w OCR pozostaje danymi. Limity, idempotencja i audyt nie mogą utrwalać pełnego dokumentu ani tokenu. Te zapisy są wymaganiami projektowymi, nie działającym serwerem MCP.
 
 ## Przykładowy flow
+
 1. Client MCP pobiera profile firm dostępne w scope.
 2. Wybiera jedną firmę i dokument.
 3. Wzywa ledger.prepare_entry; serwer zapisuje draft i zwraca ślad obliczeń.
@@ -51,4 +59,5 @@ Wymagania specyficzne dla MCP: serwer waliduje audience, scopes, termin ważnoś
 6. Audyt zapamiętuje klienta MCP, osobę, zatwierdzony hash i rezultat.
 
 ## Kryteria
+
 Testy read/write, odwołania tokenów, cross-tenant, prompt injection, replay, race conditions, rollback i przypadków bez zgody. Zero write krytycznych bez odrębnego zatwierdzenia.

@@ -394,8 +394,18 @@ describe('full-ledger (UoR) & CIT — double-entry invariants, Trial Balance, P&
       documentNumber: 'WB/02/1',
       description: 'Wpłata kapitału zakładowego',
       lines: [
-        { accountCode: '130', side: 'Wn', amountGrosze: 1_000_000, description: 'Rachunek bankowy' },
-        { accountCode: '800', side: 'Ma', amountGrosze: 1_000_000, description: 'Kapitał zakładowy' },
+        {
+          accountCode: '130',
+          side: 'Wn',
+          amountGrosze: 1_000_000,
+          description: 'Rachunek bankowy',
+        },
+        {
+          accountCode: '800',
+          side: 'Ma',
+          amountGrosze: 1_000_000,
+          description: 'Kapitał zakładowy',
+        },
       ],
     });
     const marEntry = createValidatedJournalEntry({
@@ -407,7 +417,12 @@ describe('full-ledger (UoR) & CIT — double-entry invariants, Trial Balance, P&
       description: 'Sprzedaż usług w marcu',
       lines: [
         { accountCode: '130', side: 'Wn', amountGrosze: 200_000, description: 'Wpływ na rachunek' },
-        { accountCode: '700', side: 'Ma', amountGrosze: 200_000, description: 'Przychód ze sprzedaży' },
+        {
+          accountCode: '700',
+          side: 'Ma',
+          amountGrosze: 200_000,
+          description: 'Przychód ze sprzedaży',
+        },
       ],
     });
 

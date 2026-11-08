@@ -96,15 +96,19 @@ export function WorkspaceShell({
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
   const [extraCompanies, setExtraCompanies] = useState<readonly CompanyProfileRecord[]>([]);
-  const [optimisticEntityId, setOptimisticEntityId] = useState<string | null>(null);
+  const [optimisticSwitch, setOptimisticSwitch] = useState<{
+    readonly targetEntityId: string;
+    readonly baseEntityId: string | undefined;
+  } | null>(null);
   const isOfflineDemo =
     offlineDemoMode ??
     (process.env['PAP_WEB_OFFLINE_DEMO_MODE'] === 'true' ||
       process.env['NEXT_PUBLIC_PAP_WEB_OFFLINE_DEMO_MODE'] === 'true');
 
-  useEffect(() => {
-    setOptimisticEntityId(null);
-  }, [activeCompany?.legalEntityId]);
+  const optimisticEntityId =
+    optimisticSwitch && optimisticSwitch.baseEntityId === activeCompany?.legalEntityId
+      ? optimisticSwitch.targetEntityId
+      : null;
 
   useEffect(() => {
     function onCompanySwitched(event: Event) {
@@ -119,12 +123,15 @@ export function WorkspaceShell({
         );
       }
       if (custom.detail?.legalEntityId) {
-        setOptimisticEntityId(custom.detail.legalEntityId);
+        setOptimisticSwitch({
+          targetEntityId: custom.detail.legalEntityId,
+          baseEntityId: activeCompany?.legalEntityId,
+        });
       }
     }
     window.addEventListener('pap:company-switched', onCompanySwitched);
     return () => window.removeEventListener('pap:company-switched', onCompanySwitched);
-  }, []);
+  }, [activeCompany?.legalEntityId]);
 
   const mergedAccessibleCompanies = [
     ...accessibleCompanies,
@@ -155,7 +162,10 @@ export function WorkspaceShell({
         setSwitchError(data.error ?? 'Nie udało się zmienić aktywnej firmy.');
       } else {
         if (next.legalEntityId) {
-          setOptimisticEntityId(next.legalEntityId);
+          setOptimisticSwitch({
+            targetEntityId: next.legalEntityId,
+            baseEntityId: activeCompany?.legalEntityId,
+          });
         }
         router.refresh();
       }

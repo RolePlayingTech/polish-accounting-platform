@@ -70,9 +70,7 @@ describe('Kontrakt plików migracji', () => {
     expect(foundation.prevId).toBe(audit.id);
     expect(accounting.prevId).toBe(foundation.id);
     expect(provisioning.prevId).toBe(accounting.id);
-    expect(
-      provisioning.tables['public.entity_profile_version'].columns.profile_json,
-    ).toBeDefined();
+    expect(provisioning.tables['public.entity_profile_version'].columns.profile_json).toBeDefined();
     expect(
       foundation.tables['public.access_management_event'].columns.transaction_id,
     ).toBeDefined();

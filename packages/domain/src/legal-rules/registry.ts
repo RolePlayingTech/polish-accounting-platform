@@ -1774,8 +1774,7 @@ export const POLISH_LEGAL_RULES_REGISTRY: readonly LegalRule[] = [
     id: 'cit-car-mixed-75-art-16-2025',
     ruleCode: 'CIT_CAR_MIXED_EXPENSE_75_ART_16',
     version: '2025.1',
-    title:
-      'Ograniczenie do 75% KUP (25% NKUP) wydatków eksploatacyjnych samochodu osobowego w CIT',
+    title: 'Ograniczenie do 75% KUP (25% NKUP) wydatków eksploatacyjnych samochodu osobowego w CIT',
     description:
       'Nie uważa się za koszty uzyskania przychodów w CIT 25% poniesionych wydatków z tytułu kosztów używania samochodu osobowego na potrzeby działalności gospodarczej, jeżeli samochód ten nie jest wykorzystywany wyłącznie do działalności gospodarczej (75% stanowi KUP, 25% stanowi trwałe wyłączenie NKUP; kwota obejmuje także nieodliczony 50% podatek VAT wg art. 16 ust. 1 pkt 46 lit. a CIT).',
     scope: ['spzoo_pelne_ksiegi'],

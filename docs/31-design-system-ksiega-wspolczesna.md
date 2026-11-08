@@ -30,7 +30,7 @@ Przed wyborem docelowego systemu przeanalizowano trzy odmienne kierunki artystyc
 2. **Tabela / rejestr dokumentów** (praca z wieloma fakturami, walutami, statusami weryfikacji).
 3. **Split-view weryfikacji faktury** (porównanie niezmiennego oryginału PDF/FA(3) z formularzem decyzji człowieka).
 
-### Wariant A — *Nowoczesny dziennik finansowy*
+### Wariant A — _Nowoczesny dziennik finansowy_
 
 Koncepcja oparta na szlachetnej tradycji polskich ksiąg handlowych przetłumaczonej na współczesny język cyfrowy: ciepła kość słoniowa tła (`#faf9f5`), głęboki grafitowy atrament (`#191c1a`), cienkie linie rubryk ewidencyjnych (`#e5e2d9`), pojedynczy stonowany akcent leśnego szmaragdu (`#1d5c42`) oraz rygorystyczna typografia kolumn liczbowych (`tabular-nums`).
 
@@ -59,7 +59,7 @@ Koncepcja oparta na szlachetnej tradycji polskich ksiąg handlowych przetłumacz
 
 ---
 
-### Wariant B — *Spokojne studio finansów*
+### Wariant B — _Spokojne studio finansów_
 
 Przestrzenny, lekki układ narzędziowy z dużymi marginesami (`p-8`), zaokrąglonymi blokami prowadzącymi za rękę i rozbudowanymi opisami objaśniającymi każdy krok dla początkujących właścicieli jednoosobowych działalności gospodarczych.
 
@@ -87,7 +87,7 @@ Przestrzenny, lekki układ narzędziowy z dużymi marginesami (`p-8`), zaokrągl
 
 ---
 
-### Wariant C — *Profesjonalny warsztat księgowego*
+### Wariant C — _Profesjonalny warsztat księgowego_
 
 Wysokowydajny, zagęszczony interfejs operacyjny inspirowany narzędziami audytorskimi i systemami finansowo-księgowymi dla głównych księgowych oraz biur rachunkowych.
 
@@ -117,13 +117,13 @@ Wysokowydajny, zagęszczony interfejs operacyjny inspirowany narzędziami audyto
 
 ### Porównanie syntetyczne wariantów
 
-| Kryterium oceny (`Issue #13`) | Wariant A (Dziennik) | Wariant B (Studio) | Wariant C (Warsztat) | Synteza: **„Księga Współczesna”** |
-| --- | --- | --- | --- | --- |
-| Odróżnialność od „AI slop” | Bardzo wysoka | Średnia | Wysoka | **Bardzo wysoka** |
-| Zaufanie i autorytet prawny | Bardzo wysoka | Średnia | Wysoka | **Bardzo wysoka** |
-| Ergonomia przy 100+ fakturach | Dobra | Niska | Bardzo wysoka | **Bardzo wysoka** (przełącznik gęstości) |
-| Przyjazność dla JDG / uczących się | Dobra | Bardzo wysoka | Niska | **Wysoka** (`FieldHelpButton` + Akademia) |
-| Czytelność na telefonie (`< 768px`) | Wysoka | Wysoka | Trudna bez adaptacji | **Wysoka** (automatyczne karty pozycji) |
+| Kryterium oceny (`Issue #13`)       | Wariant A (Dziennik) | Wariant B (Studio) | Wariant C (Warsztat) | Synteza: **„Księga Współczesna”**         |
+| ----------------------------------- | -------------------- | ------------------ | -------------------- | ----------------------------------------- |
+| Odróżnialność od „AI slop”          | Bardzo wysoka        | Średnia            | Wysoka               | **Bardzo wysoka**                         |
+| Zaufanie i autorytet prawny         | Bardzo wysoka        | Średnia            | Wysoka               | **Bardzo wysoka**                         |
+| Ergonomia przy 100+ fakturach       | Dobra                | Niska              | Bardzo wysoka        | **Bardzo wysoka** (przełącznik gęstości)  |
+| Przyjazność dla JDG / uczących się  | Dobra                | Bardzo wysoka      | Niska                | **Wysoka** (`FieldHelpButton` + Akademia) |
+| Czytelność na telefonie (`< 768px`) | Wysoka               | Wysoka             | Trudna bez adaptacji | **Wysoka** (automatyczne karty pozycji)   |
 
 ---
 
@@ -142,6 +142,7 @@ Jako docelowy system projektowy Polish Accounting Platform wybieramy spójną sy
 ### Charakterystyczny motyw produktu (Sygnatura „Rubryki i Podstawy Prawnej”)
 
 Zamiast sztucznych ozdobników „Księga Współczesna” wyróżnia się trzema powtarzalnymi, użytecznymi detalami:
+
 - **Belka kontekstu księgowego (`CompanyPeriodHeader`)** — zawsze przypięta na górze, z wyraźnym rozdzieleniem nazwy firmy, NIP-u w formacie `XXX-XXX-XX-XX`, profilu podatkowego, okresu `RRRR-MM` i odznaki świeżości danych.
 - **Dwupoziomowy zapis kwoty (`MoneyAmount`)** — wyrównane do prawej cyfry `tabular-nums`, w których pełne złote mają mocny grafitowy ciężar, a część groszowa (`,00`) i kod waluty ISO (`PLN`, `EUR`) są subtelnie lżejsze wizualnie, co przyspiesza porównywanie rzędów wielkości bez utraty precyzji co do grosza.
 - **Pieczęć podstawy prawnej (`WhyTrigger` + `LegalBasisPanel`)** — kodeksowy ton `legal` z symbolem `§`, który jednym kliknięciem odsłania przepis, Dz.U., wersję reguły, status kontroli eksperta i rachunek krok po kroku.
@@ -152,34 +153,34 @@ Zamiast sztucznych ozdobników „Księga Współczesna” wyróżnia się trzem
 
 ### 4.1. Kolory powierzchni, linii i atramentu
 
-| Token semantyczny | Wartość HEX | Rola w interfejsie | Kontrast WCAG 2.2 |
-| --- | --- | --- | --- |
-| `canvas.DEFAULT` | `#faf9f5` | Tło główne aplikacji (ciepła kość słoniowa / papier księgowy) | Tło bazowe |
-| `canvas.subtle` | `#f4f2ec` | Lewa nawigacja, nagłówki tabel (`<thead>`), tła sekcji wtórnych | Separacja z `#ffffff` |
-| `canvas.document` | `#efece4` | Podłoże podglądu dokumentu oryginalnego w `SplitVerificationView` | Wyraźna granica oryginału |
-| `surface.DEFAULT` | `#ffffff` | Karty zadaniowe, wiersze tabel, pola formularzy, szuflady i dialogi | Tło zawartości |
-| `border.subtle` | `#e5e2d9` | Cienkie linie ewidencyjne wierszy i obramowania paneli (`1px`) | Nienachalny rytm rubryk |
-| `border.strong` | `#858177` | Obramowania pól formularzy, przełączników i aktywnych kontrolek | **3.85:1** na `#ffffff` / **3.69:1** na `#faf9f5` (AA 1.4.11) |
-| `ink.DEFAULT` | `#191c1a` | Tekst podstawowy, kwoty główne, nagłówki (głęboki grafit) | **16.8:1** na `#ffffff` (AAA) |
-| `ink.secondary` | `#464c48` | Tekst pomocniczy, opisy wierszy, parametry techniczne | **8.5:1** na `#faf9f5` (AAA) |
-| `ink.muted` | `#636b66` | Nadtytuły (`eyebrow`), jednostki w nagłówkach, wskazówki pól | **5.2:1** na `#faf9f5` (AA) |
-| `accent.DEFAULT` | `#1d5c42` | Akcent interakcji marki: główne przyciski akcji, aktywna pozycja menu, `focus` | **7.7:1** z `#ffffff` (AAA) |
-| `accent.hover` | `#164833` | Stan najechania głównego przycisku akcji | **9.8:1** z `#ffffff` (AAA) |
-| `accent.surface` | `#e7f1ec` | Tło aktywnej pozycji nawigacji i wyróżnionego filtra | Z tekstem `#164833` |
+| Token semantyczny | Wartość HEX | Rola w interfejsie                                                             | Kontrast WCAG 2.2                                             |
+| ----------------- | ----------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------- |
+| `canvas.DEFAULT`  | `#faf9f5`   | Tło główne aplikacji (ciepła kość słoniowa / papier księgowy)                  | Tło bazowe                                                    |
+| `canvas.subtle`   | `#f4f2ec`   | Lewa nawigacja, nagłówki tabel (`<thead>`), tła sekcji wtórnych                | Separacja z `#ffffff`                                         |
+| `canvas.document` | `#efece4`   | Podłoże podglądu dokumentu oryginalnego w `SplitVerificationView`              | Wyraźna granica oryginału                                     |
+| `surface.DEFAULT` | `#ffffff`   | Karty zadaniowe, wiersze tabel, pola formularzy, szuflady i dialogi            | Tło zawartości                                                |
+| `border.subtle`   | `#e5e2d9`   | Cienkie linie ewidencyjne wierszy i obramowania paneli (`1px`)                 | Nienachalny rytm rubryk                                       |
+| `border.strong`   | `#858177`   | Obramowania pól formularzy, przełączników i aktywnych kontrolek                | **3.85:1** na `#ffffff` / **3.69:1** na `#faf9f5` (AA 1.4.11) |
+| `ink.DEFAULT`     | `#191c1a`   | Tekst podstawowy, kwoty główne, nagłówki (głęboki grafit)                      | **16.8:1** na `#ffffff` (AAA)                                 |
+| `ink.secondary`   | `#464c48`   | Tekst pomocniczy, opisy wierszy, parametry techniczne                          | **8.5:1** na `#faf9f5` (AAA)                                  |
+| `ink.muted`       | `#636b66`   | Nadtytuły (`eyebrow`), jednostki w nagłówkach, wskazówki pól                   | **5.2:1** na `#faf9f5` (AA)                                   |
+| `accent.DEFAULT`  | `#1d5c42`   | Akcent interakcji marki: główne przyciski akcji, aktywna pozycja menu, `focus` | **7.7:1** z `#ffffff` (AAA)                                   |
+| `accent.hover`    | `#164833`   | Stan najechania głównego przycisku akcji                                       | **9.8:1** z `#ffffff` (AAA)                                   |
+| `accent.surface`  | `#e7f1ec`   | Tło aktywnej pozycji nawigacji i wyróżnionego filtra                           | Z tekstem `#164833`                                           |
 
 > **Zasada rozdziału semantycznego:** kolor marki `#1d5c42` oznacza **aktywne miejsce i główną akcję użytkownika**, a nie „sukces podatkowy”. Stany weryfikacji i zgodności używają osobnych tonów semantycznych poniżej.
 
 ### 4.2. Tony semantyczne (zawsze Kolor + Ikona SVG + Polska Etykieta)
 
-| Ton (`StatusTone`) | Tekst | Tło | Obramowanie | Obowiązkowy symbol / ikona | Przykładowe znaczenie domenowe |
-| --- | --- | --- | --- | --- | --- |
-| `success` | `#165b33` | `#eaf5ee` | `#b8dec6` | Znacznik wyboru w okręgu (`✓`) | `Zaksięgowano`, `Zatwierdzono`, `API odpowiada` |
-| `warning` | `#854d0e` | `#fef7e6` | `#f3d38c` | Trójkąt ostrzegawczy / zegar (`!`) | `Do weryfikacji`, `Termin za 5 dni`, `Średnia pewność AI` |
-| `danger` | `#991b1b` | `#fef2f2` | `#f5bcbc` | Ośmiokąt błędu (`×`) | `Zaległość`, `Konflikt duplikatu`, `Odmowa dostępu` |
-| `info` | `#1e40af` | `#eff6ff` | `#bfdbfe` | Okrąg informacyjny (`i`) | `Synchronizacja KSeF`, `Przetwarzanie OCR` |
-| `legal` | `#5b4618` | `#f7f4ea` | `#dcd3b8` | Znak paragrafu (`§`) | `Podstawa prawna`, `Zweryfikowano w Dz.U.` |
-| `accent` | `#164833` | `#e7f1ec` | `#b7d4c5` | Romboidalny znacznik kontekstu | `Aktywny okres`, `Lekcja Akademii` |
-| `neutral` | `#44403c` | `#f5f4f0` | `#dedbd2` | Kreska w okręgu (`–`) | `Wersja robocza`, `Planowane`, `Nie dotyczy` |
+| Ton (`StatusTone`) | Tekst     | Tło       | Obramowanie | Obowiązkowy symbol / ikona         | Przykładowe znaczenie domenowe                            |
+| ------------------ | --------- | --------- | ----------- | ---------------------------------- | --------------------------------------------------------- |
+| `success`          | `#165b33` | `#eaf5ee` | `#b8dec6`   | Znacznik wyboru w okręgu (`✓`)     | `Zaksięgowano`, `Zatwierdzono`, `API odpowiada`           |
+| `warning`          | `#854d0e` | `#fef7e6` | `#f3d38c`   | Trójkąt ostrzegawczy / zegar (`!`) | `Do weryfikacji`, `Termin za 5 dni`, `Średnia pewność AI` |
+| `danger`           | `#991b1b` | `#fef2f2` | `#f5bcbc`   | Ośmiokąt błędu (`×`)               | `Zaległość`, `Konflikt duplikatu`, `Odmowa dostępu`       |
+| `info`             | `#1e40af` | `#eff6ff` | `#bfdbfe`   | Okrąg informacyjny (`i`)           | `Synchronizacja KSeF`, `Przetwarzanie OCR`                |
+| `legal`            | `#5b4618` | `#f7f4ea` | `#dcd3b8`   | Znak paragrafu (`§`)               | `Podstawa prawna`, `Zweryfikowano w Dz.U.`                |
+| `accent`           | `#164833` | `#e7f1ec` | `#b7d4c5`   | Romboidalny znacznik kontekstu     | `Aktywny okres`, `Lekcja Akademii`                        |
+| `neutral`          | `#44403c` | `#f5f4f0` | `#dedbd2`   | Kreska w okręgu (`–`)              | `Wersja robocza`, `Planowane`, `Nie dotyczy`              |
 
 ### 4.3. Typografia, zapis liczb i formatowanie polskie
 
@@ -212,7 +213,7 @@ System komponentów `AppShell` egzekwuje czytelne granice wizualne i informacyjn
    - spokojniejszy nagłówek administracji organizacją (członkostwa, zaproszenia, uprawnienia klientów MCP, eksport danych archiwalnych);
    - nie miesza ustawień ról użytkowników z bieżącym księgowaniem faktur.
 3. **`surface="platform"` (`/platform/*` — Konsola operatora platformy):**
-   - wyraźny, chłodniejszy pasek ostrzegawczy operatora technicznego z informacją: *„Konsola operatora usługi — operator platformy nie posiada automatycznego dostępu do ksiąg, dokumentów ani danych podatkowych klientów”*;
+   - wyraźny, chłodniejszy pasek ostrzegawczy operatora technicznego z informacją: _„Konsola operatora usługi — operator platformy nie posiada automatycznego dostępu do ksiąg, dokumentów ani danych podatkowych klientów”_;
    - brak przełącznika firm klientów i brak funkcji cichej impersonacji.
 
 ---
@@ -222,13 +223,16 @@ System komponentów `AppShell` egzekwuje czytelne granice wizualne i informacyjn
 Zgodnie z procesem z `docs/21-kierunek-wizualny.md` (rozdz. „Jak zatwierdzić kierunek”) oraz `Issue #13`, projekt zweryfikowano na trzech reprezentatywnych zadaniach użytkownika na desktopie i telefonie (`< 768px`):
 
 ### Zadanie 1: „Znajdź dokument wymagający sprawdzenia i przejdź do decyzji”
+
 - **Przepływ Desktop:** użytkownik otwiera Pulpit → w górnej sekcji `ActionQueue` widzi jednozdaniowe podsumowanie (`Masz 2 pozycje wymagające decyzji człowieka`) oraz wiersz faktury z bursztynową odznaką `Pilne` i przyciskiem `Sprawdź dokument` → alternatywnie w `LedgerTable` filtruje status i przełącza gęstość na `Kompaktową`.
 - **Przepływ Mobile (`< 768px`):** `ActionQueue` układa przycisk akcji na pełną szerokość karty dotykowej (`min-h-10`), a `LedgerTable` prezentuje każdą fakturę jako osobną kartę ewidencyjną z nazwą kontrahenta, statusem i kwotą brutto bez przewijania w poziomie.
 
 ### Zadanie 2: „Sprawdź, w jakiej firmie, profilu i okresie pracujesz oraz czy dane są aktualne”
+
 - **Przepływ Desktop i Mobile:** stały nagłówek `CompanyPeriodHeader` bezpośrednio nad obszarem roboczym prezentuje pełną nazwę podmiotu, sformatowany NIP (`526-104-08-28`), profil (`JDG · KPiR · Skala PIT · VAT czynny`), selektor okresu (`2026-10`) oraz odznakę świeżości (`Dane syntetyczne · KSeF zsynchronizowano 10:40`). Ryzyko zaksięgowania faktury w niewłaściwej spółce lub miesiącu zostaje zredukowane przed wykonaniem jakiejkolwiek akcji.
 
 ### Zadanie 3: „Zidentyfikuj różnicę przed zatwierdzeniem oraz sprawdź podstawę prawną”
+
 - **Przepływ w `SplitVerificationView`:** po lewej użytkownik widzi podgląd oryginału wraz ze skrótem `SHA-256` i gwarancją nienaruszalności pliku; po prawej `AiProposalField` oznacza pola wyodrębnione z OCR, poziom pewności (`Średnia pewność — sprawdź z oryginałem`) oraz jawny blok porównania `Proponowano przez AI → Wartość zatwierdzona przez człowieka`.
 - **Kontrola przepisu i zatwierdzenie:** obok kwalifikacji podatkowej przycisk `WhyTrigger` (`§ Dlaczego?`) otwiera `LegalBasisPanel` z artykułem ustawy, pozycją Dz.U., krokami wyliczenia i linkiem do ISAP. Kliknięcie `Zatwierdź i zaksięguj` otwiera `CriticalConfirmDialog` podsumowujący firmę, okres, kwotę oraz skutki w dzienniku audytu.
 
@@ -238,20 +242,20 @@ Zgodnie z procesem z `docs/21-kierunek-wizualny.md` (rozdz. „Jak zatwierdzić 
 
 ### Moduły zaimplementowane w `packages/ui/src/` (Faza 1 — ten PR)
 
-| Moduł | Eksportowane elementy | Przeznaczenie |
-| --- | --- | --- |
-| `tokens.ts` | `ksiegaTokens`, `formatCurrencyPln`, `splitFormattedMoney`, `formatPolishDate`, `formatAccountingPeriod`, `formatNip`, `isValidNipChecksum`, `isSafeAppUrl`, `sanitizeAppUrl` | Tokeny kolorów/typografii, bezstratne formatowanie groszy PLN/ISO, dat, okresów, walidacja KSeF `TNIP` oraz ochrona URL |
-| `focus-trap.ts` | `useModalFocusTrap`, `attachModalFocusTrap`, `cycleFocusTrapIndex`, `cycleRadioGroupIndex` | Zarządzanie fokusem w modalach/szufladach (WCAG 2.4.3) oraz nawigacja strzałkami WAI-ARIA `radiogroup` |
-| `primitives.tsx` | `Card`, `StatusBadge`, `ToneIcon` | Kompatybilne wstecz prymitywy powierzchni i statusów z wbudowanymi ikonami SVG |
-| `money.tsx` | `MoneyAmount` | Tabularna prezentacja kwot finansowych z wyróżnieniem groszy i wariantami semantycznymi |
-| `shell.tsx` | `AppShell`, `CompanyPeriodHeader`, `DEFAULT_APP_NAV_SECTIONS` | Główny układ aplikacji z sekcjami nawigacji, szufladą mobilną, skip-linkiem i paskiem kontekstu firmy/okresu |
-| `ledger-table.tsx` | `LedgerTable`, `DataTable` | Tabela księgowa z jednostkami, przełącznikiem gęstości, kartami mobilnymi i stanami `loading`/`empty`/`error`/`forbidden` |
-| `workflow.tsx` | `ActionQueue`, `ObligationTimeline` | Kolejka decyzji człowieka oraz oś nadchodzących i zaległych obowiązków podatkowych/ZUS |
-| `legal-basis.tsx` | `LegalBasisPanel`, `WhyTrigger` | Panel wyjaśnialności prawa („Dlaczego? / Podstawa prawna”) z krokami obliczeń i linkiem urzędowym |
-| `verification.tsx` | `SplitVerificationView`, `AiProposalField` | Dwukolumnowa weryfikacja dokumentu (oryginał + SHA-256 vs decyzja człowieka, `diff` AI, blokada `Enter`) |
-| `forms.tsx` | `FormField`, `FieldHelpButton` | Dostępne pole formularza (`role="alert"`, `aria-invalid`, `aria-describedby`) z pomocą kontekstową `fieldHelpId` |
-| `confirm-dialog.tsx` | `CriticalConfirmDialog` | Modal zatwierdzania operacji krytycznych (księgowanie, zgoda MCP, zamknięcie okresu) z podsumowaniem audytowym |
-| `academy.tsx` | `AcademyLessonView`, `LessonLayout`, `InteractiveQuiz` | Komponenty edukacyjne Akademii Księgowości (przykład liczbowy, przepis, typowe błędy, zrzut ekranu, quiz) |
+| Moduł                | Eksportowane elementy                                                                                                                                                         | Przeznaczenie                                                                                                             |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `tokens.ts`          | `ksiegaTokens`, `formatCurrencyPln`, `splitFormattedMoney`, `formatPolishDate`, `formatAccountingPeriod`, `formatNip`, `isValidNipChecksum`, `isSafeAppUrl`, `sanitizeAppUrl` | Tokeny kolorów/typografii, bezstratne formatowanie groszy PLN/ISO, dat, okresów, walidacja KSeF `TNIP` oraz ochrona URL   |
+| `focus-trap.ts`      | `useModalFocusTrap`, `attachModalFocusTrap`, `cycleFocusTrapIndex`, `cycleRadioGroupIndex`                                                                                    | Zarządzanie fokusem w modalach/szufladach (WCAG 2.4.3) oraz nawigacja strzałkami WAI-ARIA `radiogroup`                    |
+| `primitives.tsx`     | `Card`, `StatusBadge`, `ToneIcon`                                                                                                                                             | Kompatybilne wstecz prymitywy powierzchni i statusów z wbudowanymi ikonami SVG                                            |
+| `money.tsx`          | `MoneyAmount`                                                                                                                                                                 | Tabularna prezentacja kwot finansowych z wyróżnieniem groszy i wariantami semantycznymi                                   |
+| `shell.tsx`          | `AppShell`, `CompanyPeriodHeader`, `DEFAULT_APP_NAV_SECTIONS`                                                                                                                 | Główny układ aplikacji z sekcjami nawigacji, szufladą mobilną, skip-linkiem i paskiem kontekstu firmy/okresu              |
+| `ledger-table.tsx`   | `LedgerTable`, `DataTable`                                                                                                                                                    | Tabela księgowa z jednostkami, przełącznikiem gęstości, kartami mobilnymi i stanami `loading`/`empty`/`error`/`forbidden` |
+| `workflow.tsx`       | `ActionQueue`, `ObligationTimeline`                                                                                                                                           | Kolejka decyzji człowieka oraz oś nadchodzących i zaległych obowiązków podatkowych/ZUS                                    |
+| `legal-basis.tsx`    | `LegalBasisPanel`, `WhyTrigger`                                                                                                                                               | Panel wyjaśnialności prawa („Dlaczego? / Podstawa prawna”) z krokami obliczeń i linkiem urzędowym                         |
+| `verification.tsx`   | `SplitVerificationView`, `AiProposalField`                                                                                                                                    | Dwukolumnowa weryfikacja dokumentu (oryginał + SHA-256 vs decyzja człowieka, `diff` AI, blokada `Enter`)                  |
+| `forms.tsx`          | `FormField`, `FieldHelpButton`                                                                                                                                                | Dostępne pole formularza (`role="alert"`, `aria-invalid`, `aria-describedby`) z pomocą kontekstową `fieldHelpId`          |
+| `confirm-dialog.tsx` | `CriticalConfirmDialog`                                                                                                                                                       | Modal zatwierdzania operacji krytycznych (księgowanie, zgoda MCP, zamknięcie okresu) z podsumowaniem audytowym            |
+| `academy.tsx`        | `AcademyLessonView`, `LessonLayout`, `InteractiveQuiz`                                                                                                                        | Komponenty edukacyjne Akademii Księgowości (przykład liczbowy, przepis, typowe błędy, zrzut ekranu, quiz)                 |
 
 ### Plan etapowego przejścia w `apps/web` (bez naruszania granic bieżących strumieni)
 

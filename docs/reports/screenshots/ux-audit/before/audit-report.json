@@ -1080,12 +1080,7 @@
         }
       ]
     },
-    "grantsShapeKeys": [
-      "tenantId",
-      "legalEntityId",
-      "members",
-      "grants"
-    ],
+    "grantsShapeKeys": ["tenantId", "legalEntityId", "members", "grants"],
     "grantsMembersCount": 2,
     "mcpProposalsCount": 1
   },
@@ -1737,9 +1732,7 @@
       "undersizedCount": 5,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/documents",
@@ -1783,9 +1776,7 @@
       "undersizedCount": 5,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/documents",
@@ -1829,9 +1820,7 @@
       "undersizedCount": 5,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/documents",
@@ -1875,9 +1864,7 @@
       "undersizedCount": 5,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/documents/doc-kpir-sales-001",
@@ -1903,9 +1890,7 @@
       "undersizedCount": 2,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "KAS-WL-"
-      ]
+      "misleadingClaims": ["KAS-WL-"]
     },
     {
       "route": "/app/documents/doc-kpir-sales-001",
@@ -2163,9 +2148,7 @@
       "undersizedCount": 1,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/vat",
@@ -2185,9 +2168,7 @@
       "undersizedCount": 1,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/vat",
@@ -2207,9 +2188,7 @@
       "undersizedCount": 1,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/vat",
@@ -2229,9 +2208,7 @@
       "undersizedCount": 1,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "GTU_12"
-      ]
+      "misleadingClaims": ["GTU_12"]
     },
     {
       "route": "/app/ledger",
@@ -2337,9 +2314,7 @@
       "undersizedCount": 2,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "IBAN w Wykazie KAS"
-      ]
+      "misleadingClaims": ["IBAN w Wykazie KAS"]
     },
     {
       "route": "/app/finance",
@@ -2365,9 +2340,7 @@
       "undersizedCount": 2,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "IBAN w Wykazie KAS"
-      ]
+      "misleadingClaims": ["IBAN w Wykazie KAS"]
     },
     {
       "route": "/app/finance",
@@ -2393,9 +2366,7 @@
       "undersizedCount": 2,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "IBAN w Wykazie KAS"
-      ]
+      "misleadingClaims": ["IBAN w Wykazie KAS"]
     },
     {
       "route": "/app/finance",
@@ -2421,9 +2392,7 @@
       "undersizedCount": 2,
       "unlabelledControls": [],
       "brokenImages": [],
-      "misleadingClaims": [
-        "IBAN w Wykazie KAS"
-      ]
+      "misleadingClaims": ["IBAN w Wykazie KAS"]
     },
     {
       "route": "/app/calendar",

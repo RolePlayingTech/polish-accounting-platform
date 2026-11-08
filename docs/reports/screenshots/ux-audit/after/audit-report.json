@@ -1080,12 +1080,7 @@
         }
       ]
     },
-    "grantsShapeKeys": [
-      "tenantId",
-      "legalEntityId",
-      "members",
-      "grants"
-    ],
+    "grantsShapeKeys": ["tenantId", "legalEntityId", "members", "grants"],
     "grantsMembersCount": 2,
     "mcpProposalsCount": 1
   },

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import {
   Card,
   CriticalConfirmDialog,
@@ -47,8 +47,9 @@ export function McpWorkbench({
 }: McpWorkbenchProps) {
   const router = useRouter();
   const [clientTab, setClientTab] = useState<McpClientTab>('claude');
-  const [currentProposals, setCurrentProposals] =
-    useState<readonly McpPendingProposalRecord[]>(proposals);
+  const [localProposals, setCurrentProposals] = useState<
+    readonly McpPendingProposalRecord[] | null
+  >(null);
   const [issuedCodesByProposal, setIssuedCodesByProposal] = useState<Record<string, string>>({});
   const [typedCodesByProposal, setTypedCodesByProposal] = useState<Record<string, string>>({});
   const [proposalToConfirm, setProposalToConfirm] = useState<{
@@ -62,9 +63,7 @@ export function McpWorkbench({
     detail: string;
   } | null>(null);
 
-  useEffect(() => {
-    setCurrentProposals(proposals);
-  }, [proposals]);
+  const currentProposals = localProposals ?? proposals;
 
   const endpointUrl = 'http://127.0.0.1:4000/api/v1/mcp';
 
@@ -180,7 +179,7 @@ export function McpWorkbench({
         if (data.confirmedProposalId) {
           const targetId = data.confirmedProposalId.toLowerCase();
           setCurrentProposals((prev) =>
-            prev.map((p) =>
+            (prev ?? proposals).map((p) =>
               p.proposalId.toLowerCase() === targetId
                 ? {
                     ...p,
@@ -194,7 +193,7 @@ export function McpWorkbench({
         if (data.rejectedProposalId) {
           const targetId = data.rejectedProposalId.toLowerCase();
           setCurrentProposals((prev) =>
-            prev.map((p) =>
+            (prev ?? proposals).map((p) =>
               p.proposalId.toLowerCase() === targetId ? { ...p, status: 'rejected' } : p,
             ),
           );

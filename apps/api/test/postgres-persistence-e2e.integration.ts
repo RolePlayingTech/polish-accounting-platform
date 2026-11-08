@@ -1315,7 +1315,8 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
     expect(docsOnCold.documents.some((d) => d.document.documentNumber === newDocNumber)).toBe(true);
     expect(
       docsOnCold.documents.some(
-        (d) => d.document.documentNumber === 'FV/COLD-CHALLENGE/2026/03/01' && d.status === 'posted',
+        (d) =>
+          d.document.documentNumber === 'FV/COLD-CHALLENGE/2026/03/01' && d.status === 'posted',
       ),
     ).toBe(true);
 

@@ -547,14 +547,14 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     const universalKey = `${actorUserIds.join(',')}|*`;
     const existingInFlight =
       this.inFlightBatchSync.get(cacheKey) ?? this.inFlightBatchSync.get(universalKey);
-    if (existingInFlight) {
+    if (!forceFresh && existingInFlight) {
       return existingInFlight;
     }
     const lastMs = Math.max(
       this.lastBatchSyncAtMs.get(cacheKey) ?? 0,
       this.lastBatchSyncAtMs.get(universalKey) ?? 0,
     );
-    if (Date.now() - lastMs < (forceFresh ? 200 : 800)) {
+    if (!forceFresh && Date.now() - lastMs < 800) {
       return true;
     }
 

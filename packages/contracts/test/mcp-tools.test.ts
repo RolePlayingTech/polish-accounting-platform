@@ -139,9 +139,9 @@ describe('MCP tool contracts', () => {
     expect(OfficialHttpsUrlSchema.safeParse('https://www.gov.pl/web/e-doreczenia').success).toBe(
       true,
     );
-    expect(OfficialHttpsUrlSchema.safeParse('https://nbp.pl/statystyka-i-sprawozdawczosc/').success).toBe(
-      true,
-    );
+    expect(
+      OfficialHttpsUrlSchema.safeParse('https://nbp.pl/statystyka-i-sprawozdawczosc/').success,
+    ).toBe(true);
     expect(OfficialHttpsUrlSchema.safeParse('https://uodo.gov.pl/').success).toBe(true);
 
     expect(KsefReferenceNumberSchema.safeParse('5260258901-20261015-ABCDEF-01').success).toBe(true);

@@ -20,7 +20,7 @@ Wybieramy **wariant A: transakcyjny lifecycle**, z dodatkowymi guardami SQL. Obe
 
 ## Transakcja, czas i kolejność blokad
 
-*(Poniższy opis przedstawia pierwotny model pojedynczego członkostwa z 6D-R; w [6D-3A](26-transakcyjna-autoryzacja-6d3a.md) został on rozszerzony na kanoniczny 6-poziomowy graf blokad obejmujący `app_user`, `user_oidc_identity`, parę członkostw w porządku `user_id ASC`, `legal_entity`, `company_access_grant` oraz `access_management_event`.)*
+_(Poniższy opis przedstawia pierwotny model pojedynczego członkostwa z 6D-R; w [6D-3A](26-transakcyjna-autoryzacja-6d3a.md) został on rozszerzony na kanoniczny 6-poziomowy graf blokad obejmujący `app_user`, `user_oidc_identity`, parę członkostw w porządku `user_id ASC`, `legal_entity`, `company_access_grant` oraz `access_management_event`.)_
 
 1. `SELECT ... FOR UPDATE` wybiera dokładnie `(tenant_id, user_id)`. Brak rekordu daje odmowę. W 6D-3A po pozytywnej autoryzacji ustawiany jest dodatkowo transakcyjny kontekst `set_config('pap.current_*', ..., true)` przygotowany pod RLS w 6D-3B.
 2. Pod blokadą sprawdzamy istniejący `operation_id`. Zgodny aktor i kanoniczna treść dają historyczne potwierdzenie bez ponownego wykonania; konflikt daje odmowę.

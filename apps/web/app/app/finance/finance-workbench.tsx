@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { BankReconciliationMatch, BankStatementTransaction } from '@pap/domain';
 import {
   Card,
@@ -53,23 +53,20 @@ export function FinanceWorkbench({
   const [content, setContent] = useState(SAMPLE_BANK_CSV);
   const [applySettlements, setApplySettlements] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [currentBankTransactions, setCurrentBankTransactions] =
-    useState<readonly BankStatementTransaction[]>(bankTransactions);
-  const [currentReconciliationMatches, setCurrentReconciliationMatches] =
-    useState<readonly BankReconciliationMatch[]>(reconciliationMatches);
+  const [localBankTransactions, setCurrentBankTransactions] = useState<
+    readonly BankStatementTransaction[] | null
+  >(null);
+  const [localReconciliationMatches, setCurrentReconciliationMatches] = useState<
+    readonly BankReconciliationMatch[] | null
+  >(null);
   const [feedback, setFeedback] = useState<{
     tone: 'success' | 'danger';
     title: string;
     detail: string;
   } | null>(null);
 
-  useEffect(() => {
-    setCurrentBankTransactions(bankTransactions);
-  }, [bankTransactions]);
-
-  useEffect(() => {
-    setCurrentReconciliationMatches(reconciliationMatches);
-  }, [reconciliationMatches]);
+  const currentBankTransactions = localBankTransactions ?? bankTransactions;
+  const currentReconciliationMatches = localReconciliationMatches ?? reconciliationMatches;
 
   const matchByTxId = new Map(currentReconciliationMatches.map((m) => [m.transactionId, m]));
   const unverifiedIbanDocs = openDocuments.filter(

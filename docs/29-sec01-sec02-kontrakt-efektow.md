@@ -133,38 +133,38 @@ Każdy scenariusz sprawdza wynik **i stan po COMMIT/ROLLBACK z konta kontrolnego
 Wykonać na prawdziwym loginie `pap_test_app`, także przy migratorze
 NOSUPERUSER/NOBYPASSRLS, na dokładnym końcowym SHA integracji.
 
-| Przypadek | Wymagany wynik |
-| --- | --- |
-| SEC-01: callback A próbuje probe A+B przy audycie A | B odrzucone; nieprzechwycony błąd wycofuje całą TX |
-| Bezpośredni SQL B pod przechwyconym poprawnym MAC company A | ACL/RLS odmawia, brak B |
-| Probe A, audit.operation_id NULL/B lub inny tenant/aktor/firma/czas | COMMIT odmawia, brak efektu |
-| write bez ID, z błędnym UUID, mutacja input po await | odmowa przed efektem lub niezmienny kanoniczny ID |
-| Poprawna probe A, retry A, konflikt A w innym scope/aktorze | jeden efekt; retry z nową decyzją; konflikt odmawia |
-| Poprawny read bez operationId | odczyt i audyt działają, brak prawa INSERT |
-| SEC-02: revoke G w TX1, retry w TX2, UPDATE revoked_at do t0−1 dzień | UPDATE odrzucone pod świeżym MAC, t0 bez zmian |
-| Grant G1 deduplikowany do G0, potem INSERT G1 pod zachowanym MAC | changed=false, effects={}, tylko G0; G1 nie powstaje |
-| Bezpośredni INSERT receipt pod access / access_event / audit | brak uprawnień/polityki INSERT |
-| UPDATE klucza grantu/członkostwa pod kolumnowym prawem blokowania | RLS/guard odmawia; SELECT FOR UPDATE/SHARE nadal działa |
-| Grant/revoke z innym kind, grantId, OLD/NEW, targetem lub czasem | odrzucenie; żadnego częściowego efektu |
-| Nowy grant; równoważny grant; konflikt użytego ID; grant przyszły | poprawne receipt/effects; zero ukrytych kopii; kontrolowany konflikt |
-| revoke_grant dla NULL, wcześniejszego, równego i późniejszego revoked_at | min(stare cofnięcie, decyzja); brak UPDATE przy braku zmiany |
-| revoke/reactivate z 0/1/wieloma grantami, także przyszłymi | wszystkie potrzebne cofnięcia dokładnie raz, wspólny decision_at |
-| Cofnięcie revoked i reaktywacja historycznego członkostwa z dawnymi grantami | brak odnowienia dawnych praw; poprawny changed/effects |
-| Nowa operacja no-op i historyczny retry (w tym receipt z transaction_id NULL) | brak DML, świeży audyt, historyczny wynik bez przepisywania |
-| Dwa wywołania executora tej samej komendy w jednej TX | receipt i efekty tylko raz; bez ponownej kaskady |
-| Nowy receipt bez audytu, audyt obcego receipt/kind/firmy, awaria INSERT audytu | constraint/rollback; brak efektu i receipt |
-| Mutacja po audycie, przywrócenie poprawnego MAC tej samej TX | brak nieautoryzowanego DML; wyłącznie ta sama idempotentna komenda |
-| Zmiana TimeZone/DateStyle przed COMMIT, grant o czasie równym decision_at | identyczne porównanie chwil i OLD/NEW; brak pozornych cofnięć |
-| savepoint → wykonanie → rollback to savepoint → restore MAC/retry | receipt/efekty/odroczone triggery nie rozchodzą się; ponowny audyt wymagany |
-| savepoint → utrata blokad → równoległe revoke/disable/zmiana roli → restore MAC | pełna weryfikacja H2/UoW; każdy bypass pozostaje blockerem, bez domniemania PASS |
-| Przechwycenie asercji i replay w innej TX/backendzie/roli lub po TTL | odmowa; brak efektu/receipt |
-| Wyścigi grant/revoke/reactivate; oba porządki UUID A→B i B→A | serializacja członkostwem, brak deadlocka i odnowienia grantów |
-| SEC-03: utrata potwierdzenia skutecznego COMMIT, potem retry tym samym ID | jeden efekt/receipt, committed + outcome_unknown, brak fałszywego rolled_back |
-| Błąd przed COMMIT i potwierdzony rollback adaptera | brak efektu/receipt, prawdziwy rolled_back |
-| Pula max=1 po odmowie, błędzie SQL i niepewnym zakończeniu | brak wycieku kontekstu/blokad; deny nie blokuje puli |
-| Cold install, upgrade 0000–0003 z syntetycznymi danymi, provisioning powtórzony | stare dane zachowane; historyczne tx NULL; poprawne ACL/FORCE RLS |
-| Migrator NOSUPERUSER i pgcrypto (H1), ACL wszystkich nowych funkcji | prawidłowa własność/search_path; brak PUBLIC EXECUTE i DDL runtime |
-| Kaskady 100/1000 grantów pod limitami/timeoutem Hetznera | zmierzyć koszt map OLD/NEW i odroczonych kontroli; timeout nie może utrwalić części efektów |
+| Przypadek                                                                       | Wymagany wynik                                                                              |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| SEC-01: callback A próbuje probe A+B przy audycie A                             | B odrzucone; nieprzechwycony błąd wycofuje całą TX                                          |
+| Bezpośredni SQL B pod przechwyconym poprawnym MAC company A                     | ACL/RLS odmawia, brak B                                                                     |
+| Probe A, audit.operation_id NULL/B lub inny tenant/aktor/firma/czas             | COMMIT odmawia, brak efektu                                                                 |
+| write bez ID, z błędnym UUID, mutacja input po await                            | odmowa przed efektem lub niezmienny kanoniczny ID                                           |
+| Poprawna probe A, retry A, konflikt A w innym scope/aktorze                     | jeden efekt; retry z nową decyzją; konflikt odmawia                                         |
+| Poprawny read bez operationId                                                   | odczyt i audyt działają, brak prawa INSERT                                                  |
+| SEC-02: revoke G w TX1, retry w TX2, UPDATE revoked_at do t0−1 dzień            | UPDATE odrzucone pod świeżym MAC, t0 bez zmian                                              |
+| Grant G1 deduplikowany do G0, potem INSERT G1 pod zachowanym MAC                | changed=false, effects={}, tylko G0; G1 nie powstaje                                        |
+| Bezpośredni INSERT receipt pod access / access_event / audit                    | brak uprawnień/polityki INSERT                                                              |
+| UPDATE klucza grantu/członkostwa pod kolumnowym prawem blokowania               | RLS/guard odmawia; SELECT FOR UPDATE/SHARE nadal działa                                     |
+| Grant/revoke z innym kind, grantId, OLD/NEW, targetem lub czasem                | odrzucenie; żadnego częściowego efektu                                                      |
+| Nowy grant; równoważny grant; konflikt użytego ID; grant przyszły               | poprawne receipt/effects; zero ukrytych kopii; kontrolowany konflikt                        |
+| revoke_grant dla NULL, wcześniejszego, równego i późniejszego revoked_at        | min(stare cofnięcie, decyzja); brak UPDATE przy braku zmiany                                |
+| revoke/reactivate z 0/1/wieloma grantami, także przyszłymi                      | wszystkie potrzebne cofnięcia dokładnie raz, wspólny decision_at                            |
+| Cofnięcie revoked i reaktywacja historycznego członkostwa z dawnymi grantami    | brak odnowienia dawnych praw; poprawny changed/effects                                      |
+| Nowa operacja no-op i historyczny retry (w tym receipt z transaction_id NULL)   | brak DML, świeży audyt, historyczny wynik bez przepisywania                                 |
+| Dwa wywołania executora tej samej komendy w jednej TX                           | receipt i efekty tylko raz; bez ponownej kaskady                                            |
+| Nowy receipt bez audytu, audyt obcego receipt/kind/firmy, awaria INSERT audytu  | constraint/rollback; brak efektu i receipt                                                  |
+| Mutacja po audycie, przywrócenie poprawnego MAC tej samej TX                    | brak nieautoryzowanego DML; wyłącznie ta sama idempotentna komenda                          |
+| Zmiana TimeZone/DateStyle przed COMMIT, grant o czasie równym decision_at       | identyczne porównanie chwil i OLD/NEW; brak pozornych cofnięć                               |
+| savepoint → wykonanie → rollback to savepoint → restore MAC/retry               | receipt/efekty/odroczone triggery nie rozchodzą się; ponowny audyt wymagany                 |
+| savepoint → utrata blokad → równoległe revoke/disable/zmiana roli → restore MAC | pełna weryfikacja H2/UoW; każdy bypass pozostaje blockerem, bez domniemania PASS            |
+| Przechwycenie asercji i replay w innej TX/backendzie/roli lub po TTL            | odmowa; brak efektu/receipt                                                                 |
+| Wyścigi grant/revoke/reactivate; oba porządki UUID A→B i B→A                    | serializacja członkostwem, brak deadlocka i odnowienia grantów                              |
+| SEC-03: utrata potwierdzenia skutecznego COMMIT, potem retry tym samym ID       | jeden efekt/receipt, committed + outcome_unknown, brak fałszywego rolled_back               |
+| Błąd przed COMMIT i potwierdzony rollback adaptera                              | brak efektu/receipt, prawdziwy rolled_back                                                  |
+| Pula max=1 po odmowie, błędzie SQL i niepewnym zakończeniu                      | brak wycieku kontekstu/blokad; deny nie blokuje puli                                        |
+| Cold install, upgrade 0000–0003 z syntetycznymi danymi, provisioning powtórzony | stare dane zachowane; historyczne tx NULL; poprawne ACL/FORCE RLS                           |
+| Migrator NOSUPERUSER i pgcrypto (H1), ACL wszystkich nowych funkcji             | prawidłowa własność/search_path; brak PUBLIC EXECUTE i DDL runtime                          |
+| Kaskady 100/1000 grantów pod limitami/timeoutem Hetznera                        | zmierzyć koszt map OLD/NEW i odroczonych kontroli; timeout nie może utrwalić części efektów |
 
 Komendy do wykonania przez QA (nie wykonywano ich w tej sesji), po aktualizacji
 testów do nowego kontraktu i przygotowaniu zatwierdzonego runnera z ADR-006:

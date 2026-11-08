@@ -174,7 +174,10 @@ export function Card({
   const toneClass = CARD_TONE_CLASSES[tone];
 
   return (
-    <Element className={`min-w-0 rounded-xl border p-5 ${toneClass} ${className}`.trim()} {...props}>
+    <Element
+      className={`min-w-0 rounded-xl border p-5 ${toneClass} ${className}`.trim()}
+      {...props}
+    >
       {(title || eyebrow || icon || actions) && (
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">

@@ -10,11 +10,11 @@ Platforma może działać jako prywatna instalacja open source, produkt SaaS lub
 
 ## Propozycja 1 — trzy odrębne obszary odpowiedzialności
 
-| Obszar | Przykładowe funkcje | Granica uprawnień |
-| --- | --- | --- |
-| **Platform control plane** (operator usługi) | status instancji, tenanty i ich statusy, użytkownicy w minimalnym zakresie, subskrypcje i zdarzenia billingowe, feature rollout, integracje, kolejki i diagnostyka, incydenty | *Nie* dziedziczy automatycznie dostępu do faktur, ksiąg i plików tenantów |
-| **Tenant administration** (właściciel/administrator organizacji) | firmy, zaproszenia, członkostwa, role, uprawnienia MCP, polityki, eksport danych, konfiguracja subskrypcji organizacji | tylko własny tenant i firmy, do których ma prawo |
-| **Accounting workspace** (operator, księgowy, recenzent, odczyt) | dokumenty, księgi, raporty, zatwierdzenia | dostęp do konkretnej `legal_entity`, okresu i akcji, nie globalny |
+| Obszar                                                           | Przykładowe funkcje                                                                                                                                                           | Granica uprawnień                                                         |
+| ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Platform control plane** (operator usługi)                     | status instancji, tenanty i ich statusy, użytkownicy w minimalnym zakresie, subskrypcje i zdarzenia billingowe, feature rollout, integracje, kolejki i diagnostyka, incydenty | _Nie_ dziedziczy automatycznie dostępu do faktur, ksiąg i plików tenantów |
+| **Tenant administration** (właściciel/administrator organizacji) | firmy, zaproszenia, członkostwa, role, uprawnienia MCP, polityki, eksport danych, konfiguracja subskrypcji organizacji                                                        | tylko własny tenant i firmy, do których ma prawo                          |
+| **Accounting workspace** (operator, księgowy, recenzent, odczyt) | dokumenty, księgi, raporty, zatwierdzenia                                                                                                                                     | dostęp do konkretnej `legal_entity`, okresu i akcji, nie globalny         |
 
 **Operator platformy nie jest automatycznie administratorem księgowości.** Wsparcie techniczne nie może podszywać się pod klienta. Ewentualny dostęp awaryjny (`break-glass`) wymaga osobnego ADR/procedury: określona przyczyna i zgoda, osobno ograniczony czas i zakres, MFA, log/alert oraz możliwość przeglądu przez klienta; w MVP nie implementujemy impersonacji.
 
@@ -26,7 +26,7 @@ Platforma może działać jako prywatna instalacja open source, produkt SaaS lub
 - Oddzielna aplikacja `apps/admin` **nie jest potrzebna na początku**; jeśli kiedyś będzie konieczne niezależne wdrożenie lub izolacja domeny administracyjnej, route/API boundaries pozwolą ją wydzielić. Wspólne komponenty UI nie oznaczają wspólnych uprawnień.
 - Brak aktywnej sesji i praw = odmowa. Nawigacja i ukrywanie linku nie są mechanizmem autoryzacji. Trasy platformowe po wdrożeniu logowania wymagają osobnych claimów/polityk + silnej reautoryzacji dla działań wysokiego ryzyka.
 
-**W pierwszym PR szkieletu (#5):** przygotować nazewnictwo i możliwość zbudowania tych shelli, ewentualnie statyczny/niedostępny produkcyjnie placeholder; *nie tworzyć* publicznego panelu administracyjnego z mockowanym przyciskiem zarządzania prawdziwymi użytkownikami i *nie implementować* własnego logowania.
+**W pierwszym PR szkieletu (#5):** przygotować nazewnictwo i możliwość zbudowania tych shelli, ewentualnie statyczny/niedostępny produkcyjnie placeholder; _nie tworzyć_ publicznego panelu administracyjnego z mockowanym przyciskiem zarządzania prawdziwymi użytkownikami i _nie implementować_ własnego logowania.
 
 ## Propozycja 3 — wspólna polityka dostępu
 
@@ -90,11 +90,11 @@ Modele `PlanVersion` i `EntitlementGrant` powinny jawnie definiować datę ważn
 
 ## Alternatywy i konsekwencje
 
-| Wariant | Ocena |
-| --- | --- |
-| Jeden panel „superadmin” do wszystkich dokumentów | Odrzucony: nadmierne uprawnienia, ryzyko tajemnicy księgowej/RODO i nadużyć |
-| Osobny `apps/admin` i mikroserwis billing w pierwszym PR | Odrzucony: narzut i przedwczesne sprzężenie z nieznanym cennikiem |
-| Twarde warunki `if plan=pro` w Next.js | Odrzucony: obejście przez MCP/API, duplikacja i migracje |
+| Wariant                                                                          | Ocena                                                                                     |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Jeden panel „superadmin” do wszystkich dokumentów                                | Odrzucony: nadmierne uprawnienia, ryzyko tajemnicy księgowej/RODO i nadużyć               |
+| Osobny `apps/admin` i mikroserwis billing w pierwszym PR                         | Odrzucony: narzut i przedwczesne sprzężenie z nieznanym cennikiem                         |
+| Twarde warunki `if plan=pro` w Next.js                                           | Odrzucony: obejście przez MCP/API, duplikacja i migracje                                  |
 | Trzy powierzchnie w jednym web + polityki serwerowe + późniejszy billing adapter | **Rekomendowany**: rozszerzalność, mały zakres startowy, zachowane granice bezpieczeństwa |
 
 ## Wymagane testy w przyszłych implementacjach

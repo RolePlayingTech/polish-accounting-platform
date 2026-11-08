@@ -430,7 +430,9 @@ describe('vat — sales/purchase registers, 50% vehicle deduction, MPP, art. 113
     });
     expect(anomalousZw.explanation.requiresHumanApproval).toBe(true);
     expect(
-      anomalousZw.explanation.warnings.some((w) => w.code === 'VAT_NONZERO_FOR_ZERO_OR_EXEMPT_RATE'),
+      anomalousZw.explanation.warnings.some(
+        (w) => w.code === 'VAT_NONZERO_FOR_ZERO_OR_EXEMPT_RATE',
+      ),
     ).toBe(true);
   });
 });

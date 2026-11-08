@@ -30,30 +30,30 @@ Każde ustalenie w niniejszym raporcie jest oznaczone jedną z czterech kategori
 
 Wszystkie poniższe dane mają status **[Potwierdzone na serwerze]**:
 
-| Parametr | Wartość odczytana na hoście | Ocena pod kątem Polish Accounting Platform |
-| --- | --- | --- |
-| Nazwa hosta / strefa | `hetz-1` (`nbg1-dc3`) / Hetzner vServer (KVM) | Standardowa maszyna wirtualna Hetzner Cloud w UE/EOG (Norymberga) |
-| System operacyjny | Ubuntu 24.04.3 LTS (`Noble Numbat`) | Wspierany LTS, nowoczesny systemd i biblioteka `glibc` |
-| Kernel i architektura | `Linux 6.8.0-90-generic` / `x86_64` | Zgodny z wymaganiami Node.js 24 i PostgreSQL 18 |
-| Procesor (CPU) | 2 vCPU (`Intel Xeon Processor, Skylake, IBRS`) | Wystarczające dla prywatnego stagingu; budowanie odbywa się poza serwerem (w CI) |
-| Pamięć RAM | `3.7 GiB` łącznie; `1.4 GiB` użyte; `2.4 GiB` buff/cache; **`2.3 GiB` dostępne (`available`)** | Szacowane łączne zapotrzebowanie Web + API + PostgreSQL 18 na poziomie `~350–500 MiB` to hipoteza (**[Założenie]**); zastosowano twarde limity (`MemoryHigh`/`MemoryMax`) w jednostkach `systemd` |
-| Pamięć Swap | `8.0 GiB` (`/mnt/HC_Volume_<REDACTED>/reels-api-swapfile`), **użyte `1.7 GiB`**, `vm.swappiness = 60` | Swap znajduje się na sieciowym wolumenie blokowym; aktywność wymiany stron w spoczynku wynosi `0 B/s` (`vmstat`) |
-| Dysk systemowy (`/`) | `/dev/sda1` (`ext4`), rozmiar `38 GiB`, użyte `22 GiB` (`60%`), **wolne `15 GiB`** | Wystarczające na binaria runtime i kod aplikacji przy retencji 3 wydań |
-| Dodatkowy wolumen blokowy | `/dev/sdb` (`ext4`) zamontowany w `/mnt/HC_Volume_<REDACTED>`, rozmiar `49 GiB`, użyte `23 GiB` (`49%`), **wolne `24 GiB`** | Przeznaczony na dane PostgreSQL stagingu oraz lokalne zrzuty `pg_dump` (w Etapie A dla danych syntetycznych) |
-| Czas działania (Uptime) | `286 dni, 22 godz.` | Bardzo wysoka stabilność hosta |
+| Parametr                  | Wartość odczytana na hoście                                                                                                 | Ocena pod kątem Polish Accounting Platform                                                                                                                                                        |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nazwa hosta / strefa      | `hetz-1` (`nbg1-dc3`) / Hetzner vServer (KVM)                                                                               | Standardowa maszyna wirtualna Hetzner Cloud w UE/EOG (Norymberga)                                                                                                                                 |
+| System operacyjny         | Ubuntu 24.04.3 LTS (`Noble Numbat`)                                                                                         | Wspierany LTS, nowoczesny systemd i biblioteka `glibc`                                                                                                                                            |
+| Kernel i architektura     | `Linux 6.8.0-90-generic` / `x86_64`                                                                                         | Zgodny z wymaganiami Node.js 24 i PostgreSQL 18                                                                                                                                                   |
+| Procesor (CPU)            | 2 vCPU (`Intel Xeon Processor, Skylake, IBRS`)                                                                              | Wystarczające dla prywatnego stagingu; budowanie odbywa się poza serwerem (w CI)                                                                                                                  |
+| Pamięć RAM                | `3.7 GiB` łącznie; `1.4 GiB` użyte; `2.4 GiB` buff/cache; **`2.3 GiB` dostępne (`available`)**                              | Szacowane łączne zapotrzebowanie Web + API + PostgreSQL 18 na poziomie `~350–500 MiB` to hipoteza (**[Założenie]**); zastosowano twarde limity (`MemoryHigh`/`MemoryMax`) w jednostkach `systemd` |
+| Pamięć Swap               | `8.0 GiB` (`/mnt/HC_Volume_<REDACTED>/reels-api-swapfile`), **użyte `1.7 GiB`**, `vm.swappiness = 60`                       | Swap znajduje się na sieciowym wolumenie blokowym; aktywność wymiany stron w spoczynku wynosi `0 B/s` (`vmstat`)                                                                                  |
+| Dysk systemowy (`/`)      | `/dev/sda1` (`ext4`), rozmiar `38 GiB`, użyte `22 GiB` (`60%`), **wolne `15 GiB`**                                          | Wystarczające na binaria runtime i kod aplikacji przy retencji 3 wydań                                                                                                                            |
+| Dodatkowy wolumen blokowy | `/dev/sdb` (`ext4`) zamontowany w `/mnt/HC_Volume_<REDACTED>`, rozmiar `49 GiB`, użyte `23 GiB` (`49%`), **wolne `24 GiB`** | Przeznaczony na dane PostgreSQL stagingu oraz lokalne zrzuty `pg_dump` (w Etapie A dla danych syntetycznych)                                                                                      |
+| Czas działania (Uptime)   | `286 dni, 22 godz.`                                                                                                         | Bardzo wysoka stabilność hosta                                                                                                                                                                    |
 
 ---
 
 ## 3. Dostępne narzędzia i przygotowane środowisko wykonawcze PAP
 
-| Narzędzie | Stan na serwerze Hetzner **[Potwierdzone na serwerze]** | Wymaganie Polish Accounting Platform **[Potwierdzone w repo]** | Status przygotowania |
-| --- | --- | --- | --- |
-| Node.js (systemowy) | `/usr/bin/node` w wersji **`v20.20.2`** | **`24.22.1`** (`>=24.22.1 <25`) | Systemowy `/usr/bin/node` pozostawiono **nietknięty** dla istniejących aplikacji |
-| Node.js 24 (izolowany dla PAP) | `/opt/pap-runtime/current/bin/node` w wersji **`v24.22.1`** | **`24.22.1`** | **Zainstalowany i zweryfikowany sumą SHA-256** w `/opt/pap-runtime/node-v24.22.1-linux-x64` |
-| `pnpm` (izolowany dla PAP) | `/opt/pap-runtime/pnpm/pnpm` w wersji **`12.15.0`** | `pnpm@12.15.0` | **Zainstalowany i zweryfikowany** z konta nieuprzywilejowanego `pap` |
-| PostgreSQL 18 | Przygotowana konfiguracja `postgres:18.6-alpine` (przypięta po SHA256) w `/mnt/HC_Volume_<REDACTED>/pap-staging/compose/docker-compose.postgres.yml` | **PostgreSQL 18** (`18.6` w CI) + rozszerzenie `btree_gist` | **Gotowa (nieuruchomiona)** — bindowana wyłącznie do `127.0.0.1:5432` |
-| Reverse proxy | `nginx/1.24.0 (Ubuntu)` aktywny; przygotowane nieaktywne pliki `/etc/nginx/sites-available/pap-staging.bootstrap-http.conf` i `pap-staging.https.conf` | HTTPS + bramka Basic Auth dla `ksiegowosc.roleplayingtech.com` | **Gotowe (nieaktywne)** — brak wpisu w `sites-enabled`, brak reloadu Nginx |
-| Zarządzanie certyfikatami | `certbot 2.9.0` + webroot `/var/lib/pap-acme/.well-known/acme-challenge` (`0750 root:www-data`) | Certyfikat TLS dla `ksiegowosc.roleplayingtech.com` | **Gotowe do wydania** po zgodzie właściciela (`-d ksiegowosc.roleplayingtech.com`) |
+| Narzędzie                      | Stan na serwerze Hetzner **[Potwierdzone na serwerze]**                                                                                                | Wymaganie Polish Accounting Platform **[Potwierdzone w repo]** | Status przygotowania                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Node.js (systemowy)            | `/usr/bin/node` w wersji **`v20.20.2`**                                                                                                                | **`24.22.1`** (`>=24.22.1 <25`)                                | Systemowy `/usr/bin/node` pozostawiono **nietknięty** dla istniejących aplikacji            |
+| Node.js 24 (izolowany dla PAP) | `/opt/pap-runtime/current/bin/node` w wersji **`v24.22.1`**                                                                                            | **`24.22.1`**                                                  | **Zainstalowany i zweryfikowany sumą SHA-256** w `/opt/pap-runtime/node-v24.22.1-linux-x64` |
+| `pnpm` (izolowany dla PAP)     | `/opt/pap-runtime/pnpm/pnpm` w wersji **`12.15.0`**                                                                                                    | `pnpm@12.15.0`                                                 | **Zainstalowany i zweryfikowany** z konta nieuprzywilejowanego `pap`                        |
+| PostgreSQL 18                  | Przygotowana konfiguracja `postgres:18.6-alpine` (przypięta po SHA256) w `/mnt/HC_Volume_<REDACTED>/pap-staging/compose/docker-compose.postgres.yml`   | **PostgreSQL 18** (`18.6` w CI) + rozszerzenie `btree_gist`    | **Gotowa (nieuruchomiona)** — bindowana wyłącznie do `127.0.0.1:5432`                       |
+| Reverse proxy                  | `nginx/1.24.0 (Ubuntu)` aktywny; przygotowane nieaktywne pliki `/etc/nginx/sites-available/pap-staging.bootstrap-http.conf` i `pap-staging.https.conf` | HTTPS + bramka Basic Auth dla `ksiegowosc.roleplayingtech.com` | **Gotowe (nieaktywne)** — brak wpisu w `sites-enabled`, brak reloadu Nginx                  |
+| Zarządzanie certyfikatami      | `certbot 2.9.0` + webroot `/var/lib/pap-acme/.well-known/acme-challenge` (`0750 root:www-data`)                                                        | Certyfikat TLS dla `ksiegowosc.roleplayingtech.com`            | **Gotowe do wydania** po zgodzie właściciela (`-d ksiegowosc.roleplayingtech.com`)          |
 
 ---
 
@@ -63,23 +63,24 @@ Wszystkie poniższe dane mają status **[Potwierdzone na serwerze]**:
 
 Stan odczytany przez `ss -lntup` oraz zweryfikowany z zewnątrz (**[Potwierdzone na serwerze]**):
 
-| Adres i port lokalny | Proces / Usługa | Użytkownik | Dostępność z internetu (`firewall-1`) | Przeznaczenie |
-| --- | --- | --- | --- | --- |
-| `0.0.0.0:22`, `[::]:22` | `sshd` | `root` | **`OPEN`** | Dostęp administracyjny SSH (tylko klucze publiczne) |
-| `0.0.0.0:80`, `[::]:80` | `nginx` | `root` / `www-data` | **`OPEN`** | Publiczny ruch HTTP i przekierowania / ACME challenge |
-| `0.0.0.0:443`, `[::]:443` | `nginx` | `root` / `www-data` | **`OPEN`** | Publiczny ruch HTTPS (reverse proxy dla wszystkich domen) |
-| `0.0.0.0:3001` | `python3 -m http.server 3001` (PID `3460`) | `admin` | **`FILTERED / TIMEOUT` (zablokowany)** | Nieużywany przez Nginx ani systemd historyczny proces w `/home/admin/stacks/dupa`; po usunięciu reguły `TCP 3001` w `firewall-1` niedostępny z internetu |
-| `*:3002` | `node` (PID `3153768`, PM2 `mfc-backend`) | `admin` | **`FILTERED / TIMEOUT` (zablokowany)** | Backend aplikacji `monitor-mfc.roleplayingtech.com` (dostępny wyłącznie przez Nginx) |
-| `0.0.0.0:3003` | `next-server (v16.2.1)` (PID `1400637`, PM2 `historia-technologii`) | `admin` | **`FILTERED / TIMEOUT` (zablokowany)** | Aplikacja Next.js (proxyowana z vhosta `swiadek-dziejow.pl`) |
-| `127.0.0.1:3004` | `node` (`swiadek-dziejow-articles.service`) | `admin` | Niedostępny (loopback) | CMS artykułów `swiadek-dziejow.pl` |
-| `127.0.0.1:3005` | `node` (`mumro-articles.service`) | `admin` | Niedostępny (loopback) | CMS artykułów `mumro.io` |
-| `127.0.0.1:3010` | `node` (`durnoty.service`) | `www-data` | Niedostępny (loopback) | Serwer aplikacji `durnoty.pl` |
-| `0.0.0.0:5174` | `node .../vite --host 0.0.0.0 --port 5174` (PID `2172892`) | `admin` | **`FILTERED / TIMEOUT` (zablokowany)** | Serwer Vite w `/var/www/mumro/frontend` (zablokowany z zewnątrz przez `firewall-1`) |
-| `127.0.0.1:8000` | `docker-proxy` (`reels-api-video-backend-1`) | `root` | Niedostępny (loopback) | Backend `reels-api.mumro.io` |
-| `127.0.0.1:8010` | `docker-proxy` (`shorts-api-shorts-backend-1`) | `root` | Niedostępny (loopback) | Backend `shorts-api.mumro.io` |
-| `127.0.0.1:8903` | `python3` (`social-media-manager.service`) | `admin` | Niedostępny (loopback) | API `social-media-manager` |
+| Adres i port lokalny      | Proces / Usługa                                                     | Użytkownik          | Dostępność z internetu (`firewall-1`)  | Przeznaczenie                                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------- | ------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `0.0.0.0:22`, `[::]:22`   | `sshd`                                                              | `root`              | **`OPEN`**                             | Dostęp administracyjny SSH (tylko klucze publiczne)                                                                                                      |
+| `0.0.0.0:80`, `[::]:80`   | `nginx`                                                             | `root` / `www-data` | **`OPEN`**                             | Publiczny ruch HTTP i przekierowania / ACME challenge                                                                                                    |
+| `0.0.0.0:443`, `[::]:443` | `nginx`                                                             | `root` / `www-data` | **`OPEN`**                             | Publiczny ruch HTTPS (reverse proxy dla wszystkich domen)                                                                                                |
+| `0.0.0.0:3001`            | `python3 -m http.server 3001` (PID `3460`)                          | `admin`             | **`FILTERED / TIMEOUT` (zablokowany)** | Nieużywany przez Nginx ani systemd historyczny proces w `/home/admin/stacks/dupa`; po usunięciu reguły `TCP 3001` w `firewall-1` niedostępny z internetu |
+| `*:3002`                  | `node` (PID `3153768`, PM2 `mfc-backend`)                           | `admin`             | **`FILTERED / TIMEOUT` (zablokowany)** | Backend aplikacji `monitor-mfc.roleplayingtech.com` (dostępny wyłącznie przez Nginx)                                                                     |
+| `0.0.0.0:3003`            | `next-server (v16.2.1)` (PID `1400637`, PM2 `historia-technologii`) | `admin`             | **`FILTERED / TIMEOUT` (zablokowany)** | Aplikacja Next.js (proxyowana z vhosta `swiadek-dziejow.pl`)                                                                                             |
+| `127.0.0.1:3004`          | `node` (`swiadek-dziejow-articles.service`)                         | `admin`             | Niedostępny (loopback)                 | CMS artykułów `swiadek-dziejow.pl`                                                                                                                       |
+| `127.0.0.1:3005`          | `node` (`mumro-articles.service`)                                   | `admin`             | Niedostępny (loopback)                 | CMS artykułów `mumro.io`                                                                                                                                 |
+| `127.0.0.1:3010`          | `node` (`durnoty.service`)                                          | `www-data`          | Niedostępny (loopback)                 | Serwer aplikacji `durnoty.pl`                                                                                                                            |
+| `0.0.0.0:5174`            | `node .../vite --host 0.0.0.0 --port 5174` (PID `2172892`)          | `admin`             | **`FILTERED / TIMEOUT` (zablokowany)** | Serwer Vite w `/var/www/mumro/frontend` (zablokowany z zewnątrz przez `firewall-1`)                                                                      |
+| `127.0.0.1:8000`          | `docker-proxy` (`reels-api-video-backend-1`)                        | `root`              | Niedostępny (loopback)                 | Backend `reels-api.mumro.io`                                                                                                                             |
+| `127.0.0.1:8010`          | `docker-proxy` (`shorts-api-shorts-backend-1`)                      | `root`              | Niedostępny (loopback)                 | Backend `shorts-api.mumro.io`                                                                                                                            |
+| `127.0.0.1:8903`          | `python3` (`social-media-manager.service`)                          | `admin`             | Niedostępny (loopback)                 | API `social-media-manager`                                                                                                                               |
 
 **Porty zarezerwowane dla Polish Accounting Platform (potwierdzone jako wolne):**
+
 - Web (`@pap/web`): `127.0.0.1:3100`
 - API (`@pap/api`): `127.0.0.1:4100`
 - PostgreSQL 18 (staging): `127.0.0.1:5432`
@@ -94,9 +95,9 @@ Zgodnie z wiążącą decyzją właściciela jedynym docelowym adresem aplikacji
 
 Wyniki zapytań do serwerów autorytatywnych (`ns09.domaincontrol.com.`, `ns10.domaincontrol.com.`) oraz resolverów `1.1.1.1`, `8.8.8.8`, `9.9.9.9`:
 
-| Nazwa DNS | Rekord `A` (IPv4) | Rekord `AAAA` (IPv6) | Rekord `CNAME` | Wskazuje na badany serwer Hetzner (`hetz-1`)? |
-| --- | --- | --- | --- | --- |
-| **`ksiegowosc.roleplayingtech.com`** *(jedyna domena kanoniczna)* | **`<HETZNER_IPV4>`** (`TTL 600`) | **Brak** | **Brak** | **TAK (`EXACT_MATCH_HOST_IPV4`)** — gotowa do wydania certyfikatu TLS i uruchomienia |
+| Nazwa DNS                                                         | Rekord `A` (IPv4)                | Rekord `AAAA` (IPv6) | Rekord `CNAME` | Wskazuje na badany serwer Hetzner (`hetz-1`)?                                        |
+| ----------------------------------------------------------------- | -------------------------------- | -------------------- | -------------- | ------------------------------------------------------------------------------------ |
+| **`ksiegowosc.roleplayingtech.com`** _(jedyna domena kanoniczna)_ | **`<HETZNER_IPV4>`** (`TTL 600`) | **Brak**             | **Brak**       | **TAK (`EXACT_MATCH_HOST_IPV4`)** — gotowa do wydania certyfikatu TLS i uruchomienia |
 
 ### 5.2. Konsekwencje techniczne użycia kanonicznej domeny ASCII `ksiegowosc.roleplayingtech.com`
 

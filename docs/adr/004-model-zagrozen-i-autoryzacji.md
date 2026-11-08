@@ -22,13 +22,13 @@ Role, macierz działań, zagrożenia i testy negatywne są określone w [docs/18
 
 ## Rozważone warianty
 
-| Wariant | Ocena |
-| --- | --- |
-| Uprawnienia egzekwowane tylko przez ukrywanie elementów UI | Odrzucone: REST, MCP lub bezpośrednie żądanie omija interfejs |
-| Osobna logika authZ dla UI, API i MCP | Odrzucone: rozjazd polityk i nieprzewidywalne różnice |
-| Jedna globalna rola superadmina do całego systemu | Odrzucone: niepotrzebny dostęp do dokumentów klientów i konflikt z ADR-003 |
-| Sam token OAuth jako kompletna decyzja dostępu do firmy | Odrzucone: granty i członkostwo mogą zostać cofnięte po wydaniu tokenu; potrzebna kontrola zasobu przy każdej operacji |
-| Wspólny policy check, granty ograniczone zakresem i defense in depth | **Proponowane**: wspólna semantyka, testowalne odmowy, późniejszy RLS jako dodatkowa bariera |
+| Wariant                                                              | Ocena                                                                                                                  |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Uprawnienia egzekwowane tylko przez ukrywanie elementów UI           | Odrzucone: REST, MCP lub bezpośrednie żądanie omija interfejs                                                          |
+| Osobna logika authZ dla UI, API i MCP                                | Odrzucone: rozjazd polityk i nieprzewidywalne różnice                                                                  |
+| Jedna globalna rola superadmina do całego systemu                    | Odrzucone: niepotrzebny dostęp do dokumentów klientów i konflikt z ADR-003                                             |
+| Sam token OAuth jako kompletna decyzja dostępu do firmy              | Odrzucone: granty i członkostwo mogą zostać cofnięte po wydaniu tokenu; potrzebna kontrola zasobu przy każdej operacji |
+| Wspólny policy check, granty ograniczone zakresem i defense in depth | **Proponowane**: wspólna semantyka, testowalne odmowy, późniejszy RLS jako dodatkowa bariera                           |
 
 ## Konsekwencje
 

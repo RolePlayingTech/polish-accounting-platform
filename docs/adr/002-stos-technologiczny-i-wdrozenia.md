@@ -17,25 +17,25 @@ Priorytety, w kolejności: **poprawność i bezpieczeństwo > audytowalność > 
 
 ## Decyzja: konkretny stos bazowy
 
-| Warstwa | Wybór | Warunki |
-| --- | --- | --- |
-| Język | TypeScript, `strict`, ESM | wspólny typowany kontrakt; żadnych implicit `any` w domenie |
-| Runtime | **Node.js 24 LTS** | pin wersji patch w obrazie i CI, aktualizacje bezpieczeństwa; Node 26 dopiero po wejściu w LTS i walidacji |
-| Web | **React + Next.js App Router** | renderowanie UI, bez bezpośredniego dostępu do ksiąg/DB z Next.js |
-| UI | **Tailwind CSS + shadcn/ui (Radix)** | dostępność WCAG 2.2 AA, polski język, brak frameworka narzucającego model domenowy |
-| API | **NestJS + FastifyAdapter** | moduły bounded context, OpenAPI `/api/v1`, limity i server-side authorization |
-| Walidacja kontraktów | **Zod + OpenAPI** | `packages/contracts`, jawne kontrakty, generowanie client SDK; brak bezwarunkowego zaufania typom TS |
-| Baza | **PostgreSQL** (wspierana stabilna linia) | ACID, FK, constraints, RLS, transakcje, indeksy; wersja konkretna w lockfile/IaC |
-| DB layer | **Drizzle ORM + jawny SQL** | migracje reviewowane; SQL dla constraints, locking, ledger i RLS |
-| Asynchroniczność | **pg-boss + oddzielne workery** | Postgres-backed queue na początek; retry, DLQ, idempotencja, limit concurrency |
-| Pliki | **S3-compatible object storage** | szyfrowanie w spoczynku, TLS, wersje/retencja, hash, brak publicznych bucketów |
-| Identity | **OIDC/OAuth 2.x**, referencyjnie **Keycloak** | MFA, PKCE, JWKS, short-lived scoped tokens; provider za adapterem; authZ w API |
-| MCP | **oficjalny TypeScript MCP SDK** | Streamable HTTP, wersja protokołu obsługiwana przez SDK, OAuth resource server, osobny gateway |
-| Observability | **OpenTelemetry + strukturalne logi** | PII redaction, correlation IDs; exporter i monitoring wymienialne |
-| Monorepo | **pnpm workspaces + Turborepo** | jeden lockfile, spójne zależności, cache tylko bez sekretów |
-| Testy | **Vitest, Playwright, Testcontainers** | testy jednostkowe, kontraktowe, izolacji tenantów, race conditions, e2e |
-| Infrastruktura | **Docker/Compose (dev), OpenTofu (stage/prod)** | managed containers, PostgreSQL i object store w UE/EOG; bez Kubernetes w MVP |
-| CD | **GitHub Actions** | code scanning, SBOM, review, ręczna bramka deploy; bez sekretów w PR forks |
+| Warstwa              | Wybór                                           | Warunki                                                                                                    |
+| -------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Język                | TypeScript, `strict`, ESM                       | wspólny typowany kontrakt; żadnych implicit `any` w domenie                                                |
+| Runtime              | **Node.js 24 LTS**                              | pin wersji patch w obrazie i CI, aktualizacje bezpieczeństwa; Node 26 dopiero po wejściu w LTS i walidacji |
+| Web                  | **React + Next.js App Router**                  | renderowanie UI, bez bezpośredniego dostępu do ksiąg/DB z Next.js                                          |
+| UI                   | **Tailwind CSS + shadcn/ui (Radix)**            | dostępność WCAG 2.2 AA, polski język, brak frameworka narzucającego model domenowy                         |
+| API                  | **NestJS + FastifyAdapter**                     | moduły bounded context, OpenAPI `/api/v1`, limity i server-side authorization                              |
+| Walidacja kontraktów | **Zod + OpenAPI**                               | `packages/contracts`, jawne kontrakty, generowanie client SDK; brak bezwarunkowego zaufania typom TS       |
+| Baza                 | **PostgreSQL** (wspierana stabilna linia)       | ACID, FK, constraints, RLS, transakcje, indeksy; wersja konkretna w lockfile/IaC                           |
+| DB layer             | **Drizzle ORM + jawny SQL**                     | migracje reviewowane; SQL dla constraints, locking, ledger i RLS                                           |
+| Asynchroniczność     | **pg-boss + oddzielne workery**                 | Postgres-backed queue na początek; retry, DLQ, idempotencja, limit concurrency                             |
+| Pliki                | **S3-compatible object storage**                | szyfrowanie w spoczynku, TLS, wersje/retencja, hash, brak publicznych bucketów                             |
+| Identity             | **OIDC/OAuth 2.x**, referencyjnie **Keycloak**  | MFA, PKCE, JWKS, short-lived scoped tokens; provider za adapterem; authZ w API                             |
+| MCP                  | **oficjalny TypeScript MCP SDK**                | Streamable HTTP, wersja protokołu obsługiwana przez SDK, OAuth resource server, osobny gateway             |
+| Observability        | **OpenTelemetry + strukturalne logi**           | PII redaction, correlation IDs; exporter i monitoring wymienialne                                          |
+| Monorepo             | **pnpm workspaces + Turborepo**                 | jeden lockfile, spójne zależności, cache tylko bez sekretów                                                |
+| Testy                | **Vitest, Playwright, Testcontainers**          | testy jednostkowe, kontraktowe, izolacji tenantów, race conditions, e2e                                    |
+| Infrastruktura       | **Docker/Compose (dev), OpenTofu (stage/prod)** | managed containers, PostgreSQL i object store w UE/EOG; bez Kubernetes w MVP                               |
+| CD                   | **GitHub Actions**                              | code scanning, SBOM, review, ręczna bramka deploy; bez sekretów w PR forks                                 |
 
 **Wersje frameworków i bibliotek:** wybierać stabilne, wspierane, wzajemnie kompatybilne wydania podczas bootstrapu w #5, przypiąć w `package.json`/`pnpm-lock.yaml` i aktualizować Renovate/Dependabot z testami. Nie używać automatycznie `latest` na produkcji. Na dzień 2026-10-26 Node 26 to jeszcze Current (LTS zaplanowane na 2026-10-28), dlatego bazą jest Node 24 LTS.
 
@@ -70,12 +70,12 @@ Konteksty mogą zostać oddzielone po zmierzeniu rzeczywistych granic obciążen
 
 ## Środowiska i wdrażanie
 
-| Środowisko | Tożsamość/dane | Integracje zewnętrzne | Cel |
-| --- | --- | --- | --- |
-| Local | syntetyczne, lokalny OIDC/Keycloak, PostgreSQL, MinIO | mock/test | Docker Compose i developer experience |
-| CI | ephemeral testcontainers, synth fixtures | stubs; egress allowlist | testy i scanning, nigdy produkcyjne KSeF |
-| Staging | oddzielna organizacja i zasoby, fikcyjne dane | sandbox/test MF; ścisłe credentials | testy odtworzenia, migracji, obciążenia |
-| Production | region UE/EOG, oddzielne konta, szyfrowanie/KMS, MFA | tylko jawnie zatwierdzone adaptery | wyłącznie po audycie i zgodzie właściciela |
+| Środowisko | Tożsamość/dane                                        | Integracje zewnętrzne               | Cel                                        |
+| ---------- | ----------------------------------------------------- | ----------------------------------- | ------------------------------------------ |
+| Local      | syntetyczne, lokalny OIDC/Keycloak, PostgreSQL, MinIO | mock/test                           | Docker Compose i developer experience      |
+| CI         | ephemeral testcontainers, synth fixtures              | stubs; egress allowlist             | testy i scanning, nigdy produkcyjne KSeF   |
+| Staging    | oddzielna organizacja i zasoby, fikcyjne dane         | sandbox/test MF; ścisłe credentials | testy odtworzenia, migracji, obciążenia    |
+| Production | region UE/EOG, oddzielne konta, szyfrowanie/KMS, MFA  | tylko jawnie zatwierdzone adaptery  | wyłącznie po audycie i zgodzie właściciela |
 
 - Backup PITR, cykliczny restore drill, RPO/RTO zdefiniowane przed uruchomieniem (na etapie E0 nie deklarujemy niezweryfikowanych liczb).
 - Migracje forward-compatible (expand/migrate/contract), blokady rollout gdy migracja niekompatybilna; rollback aplikacji nie może cofać wpisów finansowych.
@@ -84,16 +84,16 @@ Konteksty mogą zostać oddzielone po zmierzeniu rzeczywistych granic obciążen
 
 ## Rozważone warianty
 
-| Wariant | Zalety | Wady / decyzja |
-| --- | --- | --- |
-| Next.js full-stack + baza bez osobnego API | szybki start, mniej serwisów | zbyt silne sprzężenie UI, MCP i domeny: **odrzucone** |
-| NestJS + Fastify, modułowy monolit | spójne use-cases, DI, czytelne moduły, skalowanie API | pewien narzut Nest: **wybrany** |
-| Fastify bez Nest | mniejszy narzut, duża kontrola | wymaga ręcznego standardu modularności/DI: rezerwowy wariant |
-| Mikroserwisy od początku | niezależne wdrożenia | transakcje rozproszone, wyższy koszt i complexity: **odroczone** |
-| Prisma zamiast Drizzle | wygodne relacje i generator | większe rozbieżności w zaawansowanym SQL/RLS; **nie wybrane** |
-| Redis/BullMQ zamiast pg-boss | skalowalna, odrębna kolejka | dodatkowy stan i utrzymanie; rozważyć po benchmarkach |
-| Zewnętrzny SaaS auth zamiast Keycloak | mniejsza administracja | zależność dostawcy i koszt; OIDC adapter pozwala wymienić |
-| Kubernetes od początku | automatyzacja orkiestracji | nadmiar operacji w MVP: nie teraz |
+| Wariant                                    | Zalety                                                | Wady / decyzja                                                   |
+| ------------------------------------------ | ----------------------------------------------------- | ---------------------------------------------------------------- |
+| Next.js full-stack + baza bez osobnego API | szybki start, mniej serwisów                          | zbyt silne sprzężenie UI, MCP i domeny: **odrzucone**            |
+| NestJS + Fastify, modułowy monolit         | spójne use-cases, DI, czytelne moduły, skalowanie API | pewien narzut Nest: **wybrany**                                  |
+| Fastify bez Nest                           | mniejszy narzut, duża kontrola                        | wymaga ręcznego standardu modularności/DI: rezerwowy wariant     |
+| Mikroserwisy od początku                   | niezależne wdrożenia                                  | transakcje rozproszone, wyższy koszt i complexity: **odroczone** |
+| Prisma zamiast Drizzle                     | wygodne relacje i generator                           | większe rozbieżności w zaawansowanym SQL/RLS; **nie wybrane**    |
+| Redis/BullMQ zamiast pg-boss               | skalowalna, odrębna kolejka                           | dodatkowy stan i utrzymanie; rozważyć po benchmarkach            |
+| Zewnętrzny SaaS auth zamiast Keycloak      | mniejsza administracja                                | zależność dostawcy i koszt; OIDC adapter pozwala wymienić        |
+| Kubernetes od początku                     | automatyzacja orkiestracji                            | nadmiar operacji w MVP: nie teraz                                |
 
 ## Koszt i trade-offs
 

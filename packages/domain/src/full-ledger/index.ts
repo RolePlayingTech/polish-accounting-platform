@@ -561,9 +561,7 @@ export function generateBalanceSheet(
 }
 
 export type CitVehicleUsageKind =
-  | 'exclusive_business_100'
-  | 'mixed_use_75'
-  | 'nkup_representation_or_excluded';
+  'exclusive_business_100' | 'mixed_use_75' | 'nkup_representation_or_excluded';
 
 export interface QualifyCitVehicleExpenseInput {
   readonly eventDate: string;
@@ -657,7 +655,8 @@ export function qualifyCitVehicleExpense(
   const steps: ExplanationStep[] = [
     {
       stepNumber: 1,
-      label: 'Ustalenie kosztu bilansowego (netto + nieodliczony podatek VAT wg art. 16 ust. 1 pkt 46 lit. a CIT)',
+      label:
+        'Ustalenie kosztu bilansowego (netto + nieodliczony podatek VAT wg art. 16 ust. 1 pkt 46 lit. a CIT)',
       formula: 'accountingExpenseBase = netGrosze + nonDeductibleVatGrosze',
       inputs: {
         netGrosze: input.netGrosze,
@@ -670,7 +669,8 @@ export function qualifyCitVehicleExpense(
     },
     {
       stepNumber: 2,
-      label: 'Podział kosztu bilansowego na koszt podatkowy KUP (75%) oraz wyłączenie NKUP (25% wg art. 16 ust. 1 pkt 51 CIT)',
+      label:
+        'Podział kosztu bilansowego na koszt podatkowy KUP (75%) oraz wyłączenie NKUP (25% wg art. 16 ust. 1 pkt 51 CIT)',
       formula:
         input.usageKind === 'mixed_use_75'
           ? 'kup = round_half_up(accountingExpenseBase * 75%); nkup = accountingExpenseBase - kup'

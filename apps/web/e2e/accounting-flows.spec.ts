@@ -105,11 +105,13 @@ async function switchCompanyViaHeader(page: Page, legalEntityId: string): Promis
 }
 
 test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', () => {
+  // eslint-disable-next-line no-empty-pattern
   test.beforeAll(async ({}, testInfo) => {
     testInfo.setTimeout(90_000);
     await startSandboxApi();
   });
 
+  // eslint-disable-next-line no-empty-pattern
   test.afterAll(async ({}, testInfo) => {
     testInfo.setTimeout(30_000);
     await stopSandboxApi(apiProcess);
