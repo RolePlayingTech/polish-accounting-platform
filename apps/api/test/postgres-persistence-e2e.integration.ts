@@ -1118,6 +1118,7 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
       {
         method: 'POST',
         headers: janHeaders1,
+        body: JSON.stringify({}),
       },
     );
     expect(coldChallengeBeforeRestartRes.status).toBe(200);
