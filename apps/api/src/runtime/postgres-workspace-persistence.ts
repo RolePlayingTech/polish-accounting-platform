@@ -69,6 +69,7 @@ import {
   COMPANY_JDG_KPIR_ID,
   COMPANY_TENANT_2_ID,
   DEMO_DEFAULT_PERIOD,
+  InMemoryAccountingWorkspaceStore,
   TENANT_1_ID,
   TENANT_2_ID,
   auditIdentifier,
@@ -1075,12 +1076,26 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     }
 
     const verifiedMembership = facts.membership;
-    const txWorkspace = new AccountingWorkspaceService({ seedDemoData: false });
-    const existingUser = this.store.getUserById(uId);
-    if (existingUser) {
-      txWorkspace.store.upsertUser(existingUser);
+    const txStore = new InMemoryAccountingWorkspaceStore();
+    const txWorkspace = new AccountingWorkspaceService({
+      store: txStore,
+      clock: this.innerWorkspace.clock,
+      seedDemoData: false,
+      sandboxMailboxTransport: this.innerWorkspace.sandboxMailboxTransport,
+    });
+    for (const u of this.store.listUsers()) {
+      txStore.upsertUser(u);
     }
-    txWorkspace.store.upsertMembership(verifiedMembership);
+    if (!txStore.getUserById(uId)) {
+      txStore.upsertUser({
+        userId: uId,
+        subject: actor.subject ?? uId,
+        displayName: actor.displayName ?? `Użytkownik ${uId.slice(0, 8)}`,
+        email: actor.email ?? 'uzytkownik@pap.example',
+        active: true,
+      });
+    }
+    txStore.upsertMembership(verifiedMembership);
     const created = txWorkspace.createCompany(actor, rawTenantId, parsedReq.data);
     const candidateCompany = txWorkspace.store.getCompany(
       parseTenantId(created.company.tenantId),

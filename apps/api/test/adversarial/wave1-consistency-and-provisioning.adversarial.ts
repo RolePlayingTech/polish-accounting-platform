@@ -29,7 +29,7 @@ import {
   connectDatabase,
   provisionDatabaseContextKey,
 } from '@pap/db';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../../src/app.module.js';
 import type { PostgresBackedWorkspaceService } from '../../src/runtime/postgres-workspace-persistence.js';
 import { ACCOUNTING_WORKSPACE_SERVICE } from '../../src/runtime/workspace-runtime.js';
@@ -154,6 +154,13 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
     });
     await seedApp.close();
+  });
+
+  afterEach(async () => {
+    for (const app of openApps) {
+      await app.close();
+    }
+    openApps.clear();
   });
 
   afterAll(async () => {
