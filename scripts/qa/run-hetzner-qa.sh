@@ -122,7 +122,7 @@ fi
 export CI="1"
 export NEXT_TELEMETRY_DISABLED="1"
 export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=512}"
-export TURBO_CONCURRENCY="${TURBO_CONCURRENCY:-2}"
+export TURBO_CONCURRENCY="${TURBO_CONCURRENCY:-1}"
 export RAYON_NUM_THREADS="${RAYON_NUM_THREADS:-2}"
 export TOKIO_WORKER_THREADS="${TOKIO_WORKER_THREADS:-2}"
 
@@ -198,6 +198,8 @@ run_step() {
 }
 
 OVERALL_RC=0
+INITIAL_PREFLIGHT_JSON="${TMP_RESULTS_DIR}/initial-preflight.json"
+node "${REPO_ROOT}/scripts/qa/preflight.mjs" --allow-main-inspect --json > "${INITIAL_PREFLIGHT_JSON}" || true
 
 # 1. Preflight Git + skan sekretów
 if ! run_step "git_preflight_and_secret_scan" "node scripts/qa/preflight.mjs" "local" \
@@ -217,15 +219,14 @@ NEED_ADVERSARIAL=0
 
 if [[ "${SCOPE}" == "auto" ]]; then
   AUTO_FLAGS="$(node -e '
-    import("./scripts/qa/preflight.mjs").then(({ runPreflight }) => {
-      const res = runPreflight({ allowMainInspect: true });
-      const c = res.classification;
-      const code = c.requiredChecks.some((ch) => ch.id === "typecheck_and_lint") ? 1 : 0;
-      const dbApi = c.requiresBothDbAndApiIntegration ? 1 : 0;
-      const adv = c.requiresAdversarialSuite ? 1 : 0;
-      console.log(`${code} ${dbApi} ${adv}`);
-    });
-  ')"
+    import { readFileSync } from "node:fs";
+    const res = JSON.parse(readFileSync(process.argv[1], "utf8"));
+    const c = res.classification;
+    const code = c.requiredChecks.some((ch) => ch.id === "typecheck_and_lint") ? 1 : 0;
+    const dbApi = c.requiresBothDbAndApiIntegration ? 1 : 0;
+    const adv = c.requiresAdversarialSuite ? 1 : 0;
+    console.log(`${code} ${dbApi} ${adv}`);
+  ' "${INITIAL_PREFLIGHT_JSON}")"
   read -r NEED_CODE_CHECKS NEED_DB_API_INTEGRATION NEED_ADVERSARIAL <<< "${AUTO_FLAGS}"
 elif [[ "${SCOPE}" == "docs" ]]; then
   NEED_CODE_CHECKS=0
@@ -245,9 +246,23 @@ elif [[ "${SCOPE}" == "full" ]]; then
   NEED_ADVERSARIAL=1
 fi
 
+BUILD_OK=1
+if (( NEED_CODE_CHECKS == 1 || NEED_DB_API_INTEGRATION == 1 || NEED_ADVERSARIAL == 1 )); then
+  # Budujemy pakiety zależności wewnątrz limitu cgroups przed uruchomieniem typecheck/test/integracji
+  if ! run_step "build_integration_dependencies" "pnpm --filter @pap/db... --filter @pap/mcp... build" "local" \
+    run_bounded_host_cmd corepack pnpm --filter @pap/db... --filter @pap/mcp... build; then
+    OVERALL_RC=1
+    BUILD_OK=0
+  fi
+fi
+
+run_typecheck_and_lint() {
+  run_bounded_host_cmd corepack pnpm typecheck && run_bounded_host_cmd corepack pnpm lint
+}
+
 if (( NEED_CODE_CHECKS == 1 )); then
   if ! run_step "typecheck_and_lint" "pnpm typecheck && pnpm lint" "local" \
-    run_bounded_host_cmd bash -euo pipefail -c 'corepack pnpm typecheck && corepack pnpm lint'; then
+    run_typecheck_and_lint; then
     OVERALL_RC=1
   fi
   if ! run_step "unit_tests" "pnpm test" "local" \
@@ -267,10 +282,7 @@ if (( NEED_DB_API_INTEGRATION == 1 || NEED_ADVERSARIAL == 1 )); then
     exit 2
   fi
 
-  # Budujemy pakiety zależności wewnątrz limitu cgroups przed uruchomieniem testów integracyjnych w @pap/db i @pap/api
-  if ! run_step "build_integration_dependencies" "pnpm --filter @pap/db... --filter @pap/mcp... build" "local" \
-    run_bounded_host_cmd corepack pnpm --filter @pap/db... --filter @pap/mcp... build; then
-    OVERALL_RC=1
+  if (( BUILD_OK == 0 )); then
     record_check "hetzner_pg18_db_integration" "pnpm --filter @pap/db test:integration" "hetzner-ephemeral-pg18" "NOT RUN" "null"
     record_check "hetzner_pg18_api_integration" "pnpm --filter @pap/api test:integration" "hetzner-ephemeral-pg18" "NOT RUN" "null"
     record_check "hetzner_pg18_adversarial_regressions" "pnpm --filter @pap/api test:adversarial" "hetzner-ephemeral-pg18" "NOT RUN" "null"
@@ -338,16 +350,15 @@ fi
 REPORT_RC=0
 node -e '
   import { readFileSync, writeFileSync } from "node:fs";
-  import { runPreflight } from "./scripts/qa/preflight.mjs";
   import { formatEvidenceReportMarkdown, validateEvidenceReport } from "./scripts/qa/verification-matrix.mjs";
 
-  const [checksFile, headSha, baseSha, hostName, nodeVer, cleanupStr, reportJsonPath, reportMdPath] = process.argv.slice(1);
+  const [checksFile, preflightJsonPath, headSha, baseSha, hostName, nodeVer, cleanupStr, reportJsonPath, reportMdPath] = process.argv.slice(1);
   const checks = readFileSync(checksFile, "utf8")
     .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => JSON.parse(line));
 
-  const preflight = runPreflight({ allowMainInspect: true });
+  const preflight = JSON.parse(readFileSync(preflightJsonPath, "utf8"));
   const cleanupVerified = cleanupStr === "true" ? true : cleanupStr === "false" ? false : null;
 
   const report = {
@@ -376,7 +387,7 @@ node -e '
   if (!validation.technicalChecksValid) {
     process.exit(1);
   }
-' "${CHECKS_FILE}" "${HEAD_SHA}" "${BASE_SHA}" "${HOSTNAME_VAL}" "${NODE_VER}" "${CLEANUP_VERIFIED}" "${REPORT_JSON}" "${REPORT_MD}" || REPORT_RC=$?
+' "${CHECKS_FILE}" "${INITIAL_PREFLIGHT_JSON}" "${HEAD_SHA}" "${BASE_SHA}" "${HOSTNAME_VAL}" "${NODE_VER}" "${CLEANUP_VERIFIED}" "${REPORT_JSON}" "${REPORT_MD}" || REPORT_RC=$?
 
 if (( REPORT_RC != 0 )); then
   OVERALL_RC=1
