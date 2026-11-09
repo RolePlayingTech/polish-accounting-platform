@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { OidcConfigError } from '@pap/application';
+import { OidcConfigError } from '../src/auth/oidc-config.js';
 import {
   AcceptTenantInvitationResponseSchema,
   AccessMutationResponseSchema,
