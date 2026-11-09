@@ -442,13 +442,14 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
     expect(reuseJson.ok).toBe(false);
     expect(reuseJson.reason).toBe('generation_conflict');
 
+    const freshRefreshBundle = await obtainOidcTokens(idpA!, redirectUri, winnerReceipt!.subject);
     const firstRefreshRes = await fetch(idpA!.tokenEndpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         grant_type: 'refresh_token',
         client_id: idpA!.clientId,
-        refresh_token: ownerTokens.refreshToken,
+        refresh_token: freshRefreshBundle.refreshToken,
       }).toString(),
     });
     expect(firstRefreshRes.status).toBe(200);
@@ -459,7 +460,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
       body: new URLSearchParams({
         grant_type: 'refresh_token',
         client_id: idpA!.clientId,
-        refresh_token: ownerTokens.refreshToken,
+        refresh_token: freshRefreshBundle.refreshToken,
       }).toString(),
     });
     expect(replayRefreshRes.status).toBe(400);
@@ -540,48 +541,51 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
       },
     );
     expect(crossIdpStealAttempt.status).toBe(403);
+
+    for (const app of openApps) {
+      await app.close().catch(() => undefined);
+    }
+    openApps.clear();
   }, 120_000);
 
   it('ADV-83-03 & ADV-83-04: granice eskalacji tenant_admin, 10x wyścig single-use zaproszenia bez sierot app_user, natychmiastowe cofanie między instancjami + unieważnianie sesji BFF oraz blokada piaskownicy', async () => {
-    // Osobny schemat dla izolowanego scenariusza zaproszeń i cofania
-    const subSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
-    await owner!.client`CREATE SCHEMA ${owner!.client(subSchema)}`;
-    const subMigrator = connectDatabase(process.env, subSchema, { roleScope: 'migrator' });
-    try {
-      await applySqlMigrationsToSchema(subMigrator.client);
-      const runtimeUser = new URL(runtimeUrl).username;
-      await provisionDatabaseContextKey(subMigrator.db, {
-        keyId,
-        keyHex,
-        runtimeRole: runtimeUser,
-      });
-      await configureRuntimePrivileges(subMigrator.db, runtimeUser);
+    // Czyste odtworzenie schematu danych (rozszerzenie btree_gist jest globalne w bazie i musi należeć do aktywnego schematu)
+    await owner!.client`DROP SCHEMA IF EXISTS ${owner!.client(dataSchema)} CASCADE`;
+    await owner!.client`CREATE SCHEMA ${owner!.client(dataSchema)}`;
+    await applySqlMigrationsToSchema(owner!.client);
+    const runtimeUser = new URL(runtimeUrl).username;
+    await provisionDatabaseContextKey(owner!.db, {
+      keyId,
+      keyHex,
+      runtimeRole: runtimeUser,
+    });
+    await configureRuntimePrivileges(owner!.db, runtimeUser);
 
+    idpA!.registerUser({
+      subject: 'adv-s4-owner',
+      email: 'owner.s4@syntetyczny.example',
+      emailVerified: true,
+      displayName: 'Właściciel S4',
+    });
+    idpA!.registerUser({
+      subject: 'adv-s4-admin',
+      email: 'admin.s4@syntetyczny.example',
+      emailVerified: true,
+      displayName: 'Administrator S4',
+    });
+    for (let i = 0; i < 10; i += 1) {
       idpA!.registerUser({
-        subject: 'adv-s4-owner',
-        email: 'owner.s4@syntetyczny.example',
+        subject: `adv-s4-racer-${String(i)}`,
+        email: `racer.${String(i)}@syntetyczny.example`,
         emailVerified: true,
-        displayName: 'Właściciel S4',
+        displayName: `Kandydat Wyścigu ${String(i)}`,
       });
-      idpA!.registerUser({
-        subject: 'adv-s4-admin',
-        email: 'admin.s4@syntetyczny.example',
-        emailVerified: true,
-        displayName: 'Administrator S4',
-      });
-      for (let i = 0; i < 10; i += 1) {
-        idpA!.registerUser({
-          subject: `adv-s4-racer-${String(i)}`,
-          email: `racer.${String(i)}@syntetyczny.example`,
-          emailVerified: true,
-          displayName: `Kandydat Wyścigu ${String(i)}`,
-        });
-      }
+    }
 
-      const envSub: Record<string, string> = {
-        ...buildRuntimeEnv(idpA!),
-        PAP_DB_SCHEMA: subSchema,
-      };
+    const envSub: Record<string, string> = {
+      ...buildRuntimeEnv(idpA!),
+      PAP_DB_SCHEMA: dataSchema,
+    };
 
       const cliOut: string[] = [];
       const cliRc = await runBootstrapOwnerCli(
@@ -767,9 +771,9 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
       // 9 przegranych NIE utworzyło osieroconych tożsamości w user_oidc_identity / app_user!
       for (let i = 0; i < 10; i += 1) {
         if (i === winnerIdx) continue;
-        const rows = await subMigrator.client<{ readonly cnt: string }[]>`
+        const rows = await owner!.client<{ readonly cnt: string }[]>`
           SELECT count(*)::text AS cnt
-          FROM ${subMigrator.client(subSchema)}.user_oidc_identity
+          FROM ${owner!.client(dataSchema)}.user_oidc_identity
           WHERE subject = ${`adv-s4-racer-${String(i)}`}
         `;
         expect(rows[0]!.cnt).toBe('0');
@@ -857,11 +861,5 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
           PAP_SANDBOX_AUTH_ENABLED: 'true',
         }),
       ).toThrow(OidcConfigError);
-    } finally {
-      await owner!.client`DROP SCHEMA IF EXISTS ${owner!.client(subSchema)} CASCADE`.catch(
-        () => undefined,
-      );
-      await subMigrator.client.end({ timeout: 2 }).catch(() => undefined);
-    }
   }, 120_000);
 });
