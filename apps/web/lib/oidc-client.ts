@@ -341,6 +341,7 @@ export async function callApiBffSessionRpc<T>(
   subPath:
     | '/oidc-state/create'
     | '/oidc-state/consume'
+    | '/identity/ensure'
     | '/session/create'
     | '/session/get'
     | '/session/context'

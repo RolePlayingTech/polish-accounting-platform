@@ -132,35 +132,36 @@ async function obtainOidcBearerToken(
 async function postBffAuthenticatedJson(params: {
   readonly baseUrl: string;
   readonly path: string;
-  readonly bffSecret: string;
+  readonly webSessionSecret: string;
   readonly payload: unknown;
 }): Promise<Response> {
-  const rawBody = JSON.stringify(params.payload);
-  const timestampSec = String(Math.floor(Date.now() / 1000));
-  const hmacKey = resolveBffInternalHmacKey({ PAP_BFF_INTERNAL_SECRET: params.bffSecret });
-  const sig = computeBffInternalSignatureHex({
+  const timestampMs = String(Date.now());
+  const hmacKey = resolveBffInternalHmacKey({ PAP_WEB_SESSION_SECRET: params.webSessionSecret });
+  if (!hmacKey) {
+    throw new Error('Brak klucza HMAC BFF.');
+  }
+  const sig = computeBffInternalSignatureHex(
     hmacKey,
-    timestampSec,
-    method: 'POST',
-    path: params.path,
-    rawBody,
-  });
+    'POST',
+    params.path,
+    timestampMs,
+    params.payload,
+  );
 
   return fetch(`${params.baseUrl}${params.path}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-PAP-BFF-Timestamp': timestampSec,
-      'X-PAP-BFF-Signature': sig,
+      'x-bff-timestamp': timestampMs,
+      'x-bff-signature': sig,
     },
-    body: rawBody,
+    body: JSON.stringify(params.payload),
   });
 }
 
 describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegacji, natychmiastowe cofanie dostępu między instancjami API oraz blokada sandboxu PAP_RUNTIME_MODE (#83)', () => {
   const keyId = 'pap-api-wave2-s4-ctx';
   const keyHex = randomBytes(32).toString('hex');
-  const bffSecret = randomBytes(32).toString('hex');
   const sessionSecret = randomBytes(32).toString('hex');
   const redirectUri = 'http://127.0.0.1:3204/api/session/oidc/callback';
 
@@ -263,8 +264,7 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
       PAP_DB_SCHEMA: dataSchema,
       PAP_DB_CONTEXT_KEY_ID: keyId,
       PAP_DB_CONTEXT_KEY_HEX: keyHex,
-      PAP_BFF_INTERNAL_SECRET: bffSecret,
-      PAP_SESSION_TOKEN_ENCRYPTION_SECRET: sessionSecret,
+      PAP_WEB_SESSION_SECRET: sessionSecret,
       PAP_SANDBOX_AUTH_ENABLED: 'false',
       PAP_SEED_SYNTHETIC_DEMO: 'false',
       PAP_OIDC_ISSUER: idp!.issuer,
@@ -401,7 +401,7 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     const ensureAnnaRes = await postBffAuthenticatedJson({
       baseUrl: instB.baseUrl,
       path: '/api/v1/auth/bff/identity/ensure',
-      bffSecret,
+      webSessionSecret: sessionSecret,
       payload: {
         accessToken: annaToken,
         displayName: 'Anna Księgowa',
