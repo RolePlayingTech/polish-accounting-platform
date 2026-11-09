@@ -1153,7 +1153,7 @@ export async function verifyOidcIdToken(input: {
     );
   }
 
-  let signatureValid = false;
+  let signatureValid: boolean;
   try {
     signatureValid = verifyJwsSignatureWithNodeCrypto(
       alg as AsymmetricJwsAlg,

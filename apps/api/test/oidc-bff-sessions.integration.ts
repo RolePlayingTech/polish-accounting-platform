@@ -419,13 +419,16 @@ describe('Wave 2 Slice 2 — OIDC Authorization Code + PKCE, współdzielone ses
       reasonCode: 'identity_not_provisioned',
     });
 
-    // Endpoint syntetycznych person jest wyłączony (403), brak cichego fallbacku!
+    // Endpoint syntetycznych person jest wyłączony (404 sandbox_oidc_disabled), brak cichego fallbacku!
     const synthAttempt = await fetch(`${inst1.baseUrl}/api/v1/oidc/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ personaId: 'jan-testowy' }),
     });
-    expect(synthAttempt.status).toBe(403);
+    expect(synthAttempt.status).toBe(404);
+    await expect(synthAttempt.json()).resolves.toMatchObject({
+      reasonCode: 'sandbox_oidc_disabled',
+    });
 
     // 4. Utworzenie nieprzezroczystych sesji BFF w PostgreSQL przez instancję #1 i odczyt z instancji #2 + po restarcie instancji #1
     const annaSessionHash = sha256Hex('opaque-cookie-anna-prod-grade');

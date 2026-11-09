@@ -774,7 +774,8 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
           body: JSON.stringify({ returnTo: '/app' }),
         }),
       );
-      const mismatchFlowCookie = mismatchInitRes.cookies.get(OIDC_FLOW_COOKIE_NAME)?.value!;
+      const mismatchFlowCookie = mismatchInitRes.cookies.get(OIDC_FLOW_COOKIE_NAME)?.value ?? '';
+      expect(mismatchFlowCookie.length).toBeGreaterThan(0);
       const mismatchAuthUrl = new URL(
         ((await mismatchInitRes.json()) as { authorizationUrl: string }).authorizationUrl,
       );
@@ -885,7 +886,7 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
       expect(okCallback.cookies.get(OIDC_TOKEN_COOKIE_NAME)?.value ?? '').toBe('');
       expect(okCallback.cookies.get(SESSION_CONTEXT_COOKIE_NAME)?.value ?? '').toBe('');
 
-      const annaOpaqueSessionId = okCallback.cookies.get(BFF_SESSION_COOKIE_NAME)?.value!;
+      const annaOpaqueSessionId = okCallback.cookies.get(BFF_SESSION_COOKIE_NAME)?.value ?? '';
       expect(annaOpaqueSessionId.length).toBeGreaterThanOrEqual(32);
 
       // Ponowne użycie tego samego state + ciasteczka (replay callbacku) -> 401 oidc_state_replayed
