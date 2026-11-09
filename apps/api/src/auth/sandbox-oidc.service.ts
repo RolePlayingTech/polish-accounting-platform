@@ -11,9 +11,11 @@ import {
   IssueSandboxTokenRequestSchema,
   IssueSandboxTokenResponseSchema,
   OidcDiscoveryDocumentSchema,
+  RuntimeModeSchema,
   type IssueSandboxTokenResponse,
   type ListSandboxPersonasResponse,
   type OidcDiscoveryDocument,
+  type RuntimeMode,
 } from '@pap/contracts';
 import { SignJWT, exportJWK, generateKeyPair, type CryptoKey, type JWK } from 'jose';
 import { OidcConfigError, type OidcVerifierConfig } from './oidc-config.js';
@@ -58,10 +60,45 @@ function assertHttpsIssuerUrl(rawUrl: string): void {
   }
 }
 
+export function resolveApiRuntimeMode(
+  env: Readonly<Record<string, string | undefined>>,
+): RuntimeMode | null {
+  const raw = env.PAP_RUNTIME_MODE?.trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = RuntimeModeSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new OidcConfigError(
+      `Nieznana wartość PAP_RUNTIME_MODE=${raw}; oczekiwano LOCAL_DEV, STAGING_PRIVATE, PUBLIC_DEMO lub PRODUCTION (fail-closed).`,
+    );
+  }
+  if (parsed.data === 'LOCAL_DEV' && env.NODE_ENV?.trim() === 'production') {
+    throw new OidcConfigError(
+      'PAP_RUNTIME_MODE=LOCAL_DEV jest zabronione przy NODE_ENV=production (fail-closed).',
+    );
+  }
+  if (parsed.data !== 'LOCAL_DEV') {
+    if (env.PAP_SANDBOX_AUTH_ENABLED === 'true') {
+      throw new OidcConfigError(
+        `PAP_SANDBOX_AUTH_ENABLED=true jest bezwzględnie zabronione w trybie PAP_RUNTIME_MODE=${parsed.data} (fail-closed).`,
+      );
+    }
+    if (env.PAP_SEED_SYNTHETIC_DEMO === 'true') {
+      throw new OidcConfigError(
+        `PAP_SEED_SYNTHETIC_DEMO=true jest bezwzględnie zabronione w trybie PAP_RUNTIME_MODE=${parsed.data} (fail-closed).`,
+      );
+    }
+  }
+  return parsed.data;
+}
+
 function validateAndResolveSandboxEnabled(
   env: Readonly<Record<string, string | undefined>>,
   resolvedIssuer: string,
 ): boolean {
+  resolveApiRuntimeMode(env);
+
   if (env.PAP_SANDBOX_AUTH_ENABLED !== 'true') {
     return false;
   }

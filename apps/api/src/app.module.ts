@@ -22,6 +22,7 @@ import { DocumentsBooksController } from './controllers/documents-books.controll
 import { EducationRulesController } from './controllers/education-rules.controller.js';
 import { OperationsAutomationController } from './controllers/operations-automation.controller.js';
 import { SessionIdentityController } from './controllers/session-identity.controller.js';
+import { TenantInvitationsController } from './controllers/tenant-invitations.controller.js';
 import { AccountingWorkspaceExceptionFilter } from './filters/workspace-exception.filter.js';
 import { HealthController } from './health.controller.js';
 import { RemoteMcpFastifyRegistrar } from './mcp/remote-mcp.registrar.js';
@@ -133,6 +134,7 @@ const API_CONTROLLERS = [
   SandboxOidcController,
   BffSessionController,
   SessionIdentityController,
+  TenantInvitationsController,
   CompaniesAccessController,
   DocumentsBooksController,
   OperationsAutomationController,

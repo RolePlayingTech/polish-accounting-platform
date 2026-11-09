@@ -19,7 +19,10 @@ import {
 } from '@pap/db';
 import { JwksOidcAccessTokenVerifier } from '../auth/jwks-oidc-token-verifier.js';
 import { loadOidcVerifierConfig } from '../auth/oidc-config.js';
-import { SandboxOidcService } from '../auth/sandbox-oidc.service.js';
+import {
+  SandboxOidcService,
+  resolveApiRuntimeMode,
+} from '../auth/sandbox-oidc.service.js';
 import {
   OwnerBootstrapError,
   RuntimeOwnerBootstrapService,
@@ -101,8 +104,12 @@ export function createApiRuntimeServices(
     );
   }
 
+  const runtimeMode = resolveApiRuntimeMode(env);
   const sandboxOidc = new SandboxOidcService(env);
-  const seedDemoData = env.PAP_SEED_SYNTHETIC_DEMO !== 'false';
+  const seedDemoData =
+    runtimeMode !== null && runtimeMode !== 'LOCAL_DEV'
+      ? false
+      : env.PAP_SEED_SYNTHETIC_DEMO !== 'false';
   const workspace = new AccountingWorkspaceService({ seedDemoData });
   const oidcVerifier = buildOidcVerifier(env, sandboxOidc);
   const mcpDomainPort = workspace.createWorkspaceMcpDomainPort();
@@ -145,12 +152,16 @@ export async function createApiRuntimeServicesAsync(
     return createApiRuntimeServices(env);
   }
 
+  const runtimeMode = resolveApiRuntimeMode(env);
   const sandboxOidc = new SandboxOidcService(env);
   const oidcVerifier = buildOidcVerifier(env, sandboxOidc);
   const pgRuntime = await connectPostgresRuntime(env);
 
   try {
-    if (env.PAP_SEED_SYNTHETIC_DEMO === 'true') {
+    if (
+      (runtimeMode === null || runtimeMode === 'LOCAL_DEV') &&
+      env.PAP_SEED_SYNTHETIC_DEMO === 'true'
+    ) {
       await seedSyntheticDemoToPostgres({
         runtime: pgRuntime,
         migratorDatabaseUrl: env.PAP_MIGRATOR_DATABASE_URL,

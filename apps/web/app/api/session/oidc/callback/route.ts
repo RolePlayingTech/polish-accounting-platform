@@ -276,25 +276,63 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    if (meResp.kind !== 'ok') {
+    let resolvedActor: MeCompaniesRemoteResponse['actor'];
+    let companies: MeCompaniesRemoteResponse['companies'] = [];
+
+    if (meResp.kind === 'ok') {
+      resolvedActor = meResp.data.actor;
+      companies = meResp.data.companies ?? [];
+    } else if (meResp.kind === 'forbidden' && meResp.reasonCode === 'identity_not_provisioned') {
+      const ensured = await callApiBffSessionRpc<
+        | {
+            readonly ok: true;
+            readonly userId: string;
+            readonly issuer: string;
+            readonly subject: string;
+            readonly profile: { readonly displayName: string; readonly email: string };
+          }
+        | { readonly ok: false; readonly reason: string }
+      >('/identity/ensure', {
+        accessToken: exchanged.accessToken,
+        ...(exchanged.claims.displayName ? { displayName: exchanged.claims.displayName } : {}),
+        ...(exchanged.claims.email ? { email: exchanged.claims.email } : {}),
+      });
+
+      if (!ensured.ok) {
+        return buildCallbackFailureResponse({
+          prefersJson,
+          trustedOrigin,
+          status: 403,
+          reasonCode: 'inactive_user_account',
+          messagePl: 'Konto użytkownika jest nieaktywne lub tożsamość OIDC została cofnięta.',
+          loginAuthState: 'insufficient_permissions',
+        });
+      }
+
+      resolvedActor = {
+        userId: ensured.userId,
+        issuer: ensured.issuer,
+        subject: ensured.subject,
+        displayName: ensured.profile.displayName,
+      };
+      companies = [];
+    } else {
       const reasonCode =
         meResp.kind === 'forbidden'
           ? (meResp.reasonCode ?? 'forbidden')
           : 'authorization_validation_failed';
-      const isNoMembership = reasonCode === 'identity_not_provisioned';
       return buildCallbackFailureResponse({
         prefersJson,
         trustedOrigin,
         status: 403,
-        reasonCode: isNoMembership ? 'no_tenant_membership' : reasonCode,
+        reasonCode,
         messagePl:
           meResp.message ??
           'Twoja tożsamość OIDC nie posiada aktywnego dostępu do platformy księgowej.',
-        loginAuthState: isNoMembership ? 'no_tenant_membership' : 'insufficient_permissions',
+        loginAuthState: 'insufficient_permissions',
       });
     }
 
-    const resolvedActor = meResp.data.actor;
     if (
       typeof resolvedActor?.userId !== 'string' ||
       resolvedActor.userId.trim().length === 0 ||
@@ -312,7 +350,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const companies = meResp.data.companies ?? [];
     const primaryCompany = companies[0] ?? null;
 
     const displayName =

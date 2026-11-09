@@ -38,6 +38,8 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     NOT has_any_column_privilege('pap_user_profile', 'SELECT,INSERT,UPDATE,REFERENCES') AND
     NOT has_table_privilege('pap_identity_lifecycle_event', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
     NOT has_any_column_privilege('pap_identity_lifecycle_event', 'SELECT,INSERT,UPDATE,REFERENCES') AND
+    NOT has_table_privilege('pap_tenant_invitation', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('pap_tenant_invitation', 'SELECT,INSERT,UPDATE,REFERENCES') AND
     NOT has_table_privilege('security_decision_event', 'SELECT,UPDATE,DELETE,TRUNCATE') AND
     NOT has_any_column_privilege('security_decision_event', 'SELECT,UPDATE,REFERENCES') AND
     NOT has_any_column_privilege('access_management_event', 'INSERT,UPDATE') AND
@@ -52,7 +54,7 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     has_function_privilege('pap_list_actor_accessible_entities()', 'EXECUTE') AND
     has_function_privilege('pap_bff_session_op(jsonb)', 'EXECUTE') AND
     has_function_privilege('pap_wave2_identity_op(jsonb)', 'EXECUTE') AND
-    (SELECT count(*) = 31 AND bool_and(
+    (SELECT count(*) = 32 AND bool_and(
         c.relrowsecurity
         AND c.relforcerowsecurity
         AND c.relowner <> r.oid
@@ -68,7 +70,7 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
           'settlement_item','bank_statement_import','bank_transaction','tax_obligation_item',
           'mcp_prepared_proposal','notification_preference','notification_outbox',
           'sandbox_mailbox_message','pap_oidc_auth_state','pap_bff_session',
-          'pap_user_profile','pap_identity_lifecycle_event'
+          'pap_user_profile','pap_identity_lifecycle_event','pap_tenant_invitation'
         )) AND
     NOT EXISTS (
       SELECT 1 FROM pg_class c

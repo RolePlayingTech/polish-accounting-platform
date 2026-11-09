@@ -229,6 +229,26 @@ export class CompaniesAccessController {
     );
   }
 
+  @Post('/tenants/:tenantId/memberships/:targetUserId/revoke')
+  @RequireHumanApprovalScope()
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  revokeTenantMembership(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('targetUserId') targetUserId: string,
+    @Body() body?: unknown,
+  ) {
+    const actor = requireRequestActor(request);
+    const parsedBody = isPlainRecord(body)
+      ? {
+          ...(typeof body['operationId'] === 'string' ? { operationId: body['operationId'] } : {}),
+          ...(typeof body['reason'] === 'string' ? { reason: body['reason'] } : {}),
+        }
+      : undefined;
+    return this.workspace.revokeTenantMembership(actor, tenantId, targetUserId, parsedBody);
+  }
+
   @Get('/tenants/:tenantId/companies/:legalEntityId/audit-log')
   @Header('Cache-Control', 'no-store')
   getAuditLog(

@@ -119,10 +119,14 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
     for (const stmt of [
       'SELECT * FROM pap_user_profile',
       'SELECT * FROM pap_identity_lifecycle_event',
+      'SELECT * FROM pap_tenant_invitation',
       `INSERT INTO pap_user_profile (user_id, display_name, email) VALUES ('${randomUUID()}', 'Atak', 'atak@syntetyczny.example')`,
+      `INSERT INTO pap_tenant_invitation (id, operation_id, tenant_id, token_sha256, invitee_email, intended_role, invited_by_user_id, reason, expires_at) VALUES ('${randomUUID()}', '${randomUUID()}', '${randomUUID()}', '${'a'.repeat(64)}', 'atak@syntetyczny.example', 'tenant_member', '${randomUUID()}', 'atak', now() + interval '1 hour')`,
       'DELETE FROM pap_identity_lifecycle_event',
+      'DELETE FROM pap_tenant_invitation',
       'TRUNCATE pap_user_profile',
       'TRUNCATE pap_identity_lifecycle_event',
+      'TRUNCATE pap_tenant_invitation',
     ]) {
       await expectDatabaseError(rtSql.unsafe(stmt), '42501');
     }
@@ -374,5 +378,141 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
         email: sharedEmail,
       }),
     ).toBeNull();
+  });
+
+  it('Wave 2 Slice 4 — rozstrzyga 10-krotny współbieżny wyścig akceptacji single-use zaproszenia (dokładnie 1 wygrywa, zero wycieku app_user u 9 przegranych) i wycofuje transakcję przy TOCTOU utracie grantu zapraszającego', async () => {
+    const invOwnerId = userId(randomUUID());
+    const invTenantId = tenantId(randomUUID());
+    const invEntityId = randomUUID();
+
+    await identityStore.provisionUserWithOidcIdentity({
+      userId: invOwnerId,
+      identityId: randomUUID(),
+      issuer: ISSUER,
+      subject: 's4-pg-owner',
+    });
+    await storeA.upsertUserProfile({
+      userId: invOwnerId,
+      displayName: 'Właściciel Testu Wyścigu',
+      email: 'wlasciciel.wyscig@syntetyczny.example',
+    });
+
+    await owner.client`INSERT INTO tenant (id, name, created_at) VALUES (${invTenantId}, 'Organizacja Wyścigu Zaproszeń', now() - interval '1 day')`;
+    await owner.client`INSERT INTO legal_entity (id, tenant_id, name, created_at) VALUES (${invEntityId}, ${invTenantId}, 'Spółka Docelowa Grantu', now() - interval '1 day')`;
+    await owner.client`INSERT INTO tenant_membership (tenant_id, user_id, role, status, valid_from, valid_until)
+      VALUES (${invTenantId}, ${invOwnerId}, 'tenant_owner', 'active', now() - interval '1 day', NULL)`;
+
+    const raceTokenSha256 = randomBytes(32).toString('hex');
+    const createdInv = await storeA.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: invOwnerId,
+      tenantId: invTenantId,
+      tokenSha256: raceTokenSha256,
+      inviteeEmail: 'wyscig.kandydat@syntetyczny.example',
+      intendedRole: 'tenant_member',
+      initialCompanyGrants: [
+        {
+          legalEntityId: invEntityId,
+          actions: ['read', 'write'],
+        },
+      ],
+      reason: 'Współbieżny test 10x single-use akceptacji zaproszenia',
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    expect(createdInv.ok).toBe(true);
+
+    const raceResults = await Promise.all(
+      Array.from({ length: 10 }, (_, idx) => {
+        const targetStore = idx % 2 === 0 ? storeA : storeB;
+        return targetStore.acceptTenantInvitation({
+          operationId: randomUUID(),
+          tokenSha256: raceTokenSha256,
+          issuer: ISSUER,
+          subject: `s4-race-accept-sub-${String(idx)}`,
+          displayName: `Uczestnik Wyścigu ${String(idx)}`,
+          email: `uczestnik-${String(idx)}@syntetyczny.example`,
+        });
+      }),
+    );
+
+    const raceWinners = raceResults.filter(
+      (r): r is Extract<typeof r, { readonly ok: true }> => r.ok === true,
+    );
+    const raceLosers = raceResults.filter(
+      (r): r is Extract<typeof r, { readonly ok: false }> => r.ok === false,
+    );
+
+    expect(raceWinners).toHaveLength(1);
+    expect(raceLosers).toHaveLength(9);
+    for (const loser of raceLosers) {
+      expect(loser.reason).toBe('invitation_already_used');
+    }
+
+    // Wyłącznie zwycięzca wyścigu otrzymał rekord user_oidc_identity, członkostwo oraz 2 granty (read + write)
+    const provisionedRaceIdentities = await owner.client<{ readonly subject: string }[]>`
+      SELECT subject FROM user_oidc_identity WHERE subject LIKE 's4-race-accept-sub-%'
+    `;
+    expect(provisionedRaceIdentities).toHaveLength(1);
+
+    const winnerGrants = await owner.client<{ readonly action: string }[]>`
+      SELECT action FROM company_access_grant
+      WHERE tenant_id = ${invTenantId}::uuid AND user_id = ${raceWinners[0]!.userId}::uuid
+      ORDER BY action ASC
+    `;
+    expect(winnerGrants.map((g) => g.action)).toEqual(['read', 'write']);
+
+    // Test atomowego wycofania TOCTOU: tenant_admin wystawia zaproszenie z grantem, traci grant przed akceptacją -> pełny ROLLBACK
+    const adminId = userId(randomUUID());
+    await identityStore.provisionUserWithOidcIdentity({
+      userId: adminId,
+      identityId: randomUUID(),
+      issuer: ISSUER,
+      subject: 's4-pg-admin-toctou',
+    });
+    await owner.client`INSERT INTO tenant_membership (tenant_id, user_id, role, status, valid_from, valid_until)
+      VALUES (${invTenantId}, ${adminId}, 'tenant_admin', 'active', now() - interval '1 hour', NULL)`;
+    const adminGrantId = randomUUID();
+    await owner.client`INSERT INTO company_access_grant (grant_id, tenant_id, user_id, legal_entity_id, action, valid_from, valid_until, revoked_at)
+      VALUES (${adminGrantId}, ${invTenantId}, ${adminId}, ${invEntityId}, 'read', now() - interval '1 hour', NULL, NULL)`;
+
+    const toctouTokenSha256 = randomBytes(32).toString('hex');
+    const adminInv = await storeA.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: adminId,
+      tenantId: invTenantId,
+      tokenSha256: toctouTokenSha256,
+      inviteeEmail: 'toctou.invitee@syntetyczny.example',
+      intendedRole: 'tenant_member',
+      initialCompanyGrants: [{ legalEntityId: invEntityId, actions: ['read'] }],
+      reason: 'Zaproszenie przed cofnięciem grantu administratora',
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    expect(adminInv.ok).toBe(true);
+
+    // Cofnięcie grantu administratora przed akceptacją
+    await owner.client`UPDATE company_access_grant SET revoked_at = clock_timestamp() WHERE grant_id = ${adminGrantId}::uuid`;
+
+    const toctouAccept = await storeB.acceptTenantInvitation({
+      operationId: randomUUID(),
+      tokenSha256: toctouTokenSha256,
+      issuer: ISSUER,
+      subject: 's4-pg-toctou-invitee',
+      displayName: 'Niedoszły Członek TOCTOU',
+      email: 'toctou.invitee@syntetyczny.example',
+    });
+    expect(toctouAccept).toEqual({
+      ok: false,
+      reason: 'inviter_authority_revoked',
+    });
+
+    const toctouInviteeRows = await owner.client<{ readonly cnt: string }[]>`
+      SELECT count(*)::text AS cnt FROM user_oidc_identity WHERE subject = 's4-pg-toctou-invitee'
+    `;
+    expect(toctouInviteeRows[0]!.cnt).toBe('0');
+
+    const toctouInvStatus = await owner.client<{ readonly status: string }[]>`
+      SELECT status FROM pap_tenant_invitation WHERE token_sha256 = ${toctouTokenSha256}
+    `;
+    expect(toctouInvStatus[0]!.status).toBe('pending');
   });
 });

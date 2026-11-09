@@ -125,6 +125,8 @@ export {
 export { PostgresWebSessionStore } from './web-session-store.js';
 export {
   PostgresIdentityLifecycleStore,
+  listTenantMemberDirectoryFromPostgres,
   type BootstrapInitialCompanyInTxOptions,
   type BootstrapInitialOwnerWithCompanyResult,
+  type TenantMemberDirectoryItem,
 } from './identity-lifecycle.js';
