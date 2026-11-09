@@ -14,6 +14,8 @@ import { randomUUID } from 'node:crypto';
 import {
   InMemoryAccountingWorkspaceStore,
   auditIdentifier,
+  normalizeSessionDisplayName,
+  normalizeSessionSafeEmail,
   type IdentityLifecycleStorePort,
   type OidcAccessTokenVerifier,
   type SecurityAuditRecorder,
@@ -227,11 +229,22 @@ export class JwtBearerAuthGuard implements CanActivate {
 
     const { identity } = verified;
     const dbResolved = await this.identityResolver.resolveVerifiedIdentity(identity);
-    const storeUserBySubject = this.workspace.store.getUserBySubject(identity.subject);
 
     if (!dbResolved) {
-      if (storeUserBySubject) {
+      const storeUserBySubject = this.workspace.store.getUserBySubject(
+        identity.subject,
+        identity.issuer,
+      );
+      const isExactSameIssuerMatch =
+        storeUserBySubject !== null && storeUserBySubject.issuer === identity.issuer;
+      const isLegacyInactiveMatch =
+        storeUserBySubject !== null &&
+        storeUserBySubject.issuer === undefined &&
+        !storeUserBySubject.active;
+
+      if (storeUserBySubject && (isExactSameIssuerMatch || isLegacyInactiveMatch)) {
         if (
+          isExactSameIssuerMatch &&
           storeUserBySubject.active &&
           this.workspace.store instanceof InMemoryAccountingWorkspaceStore
         ) {
@@ -257,8 +270,7 @@ export class JwtBearerAuthGuard implements CanActivate {
       });
     }
 
-    const storeUser =
-      this.workspace.store.getUserById(dbResolved.userId) ?? storeUserBySubject ?? null;
+    const storeUser = this.workspace.store.getUserById(dbResolved.userId);
     if (storeUser && !storeUser.active) {
       await this.recordDenial(requestId, params, 'authentication_failed');
       throw new ForbiddenException({
@@ -281,9 +293,10 @@ export class JwtBearerAuthGuard implements CanActivate {
 
     const resolvedUser = storeUser ?? {
       userId: dbResolved.userId,
+      issuer: identity.issuer,
       subject: identity.subject,
-      displayName: persistedProfile?.displayName ?? identity.subject,
-      email: persistedProfile?.email ?? 'uzytkownik@pap.example',
+      displayName: normalizeSessionDisplayName(persistedProfile?.displayName, identity.subject),
+      email: normalizeSessionSafeEmail(persistedProfile?.email),
       active: true,
     };
     if (!storeUser && this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {

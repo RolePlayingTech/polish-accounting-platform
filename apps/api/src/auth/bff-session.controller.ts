@@ -12,6 +12,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
+import { SafeEmailAddressSchema } from '@pap/contracts';
 import type {
   IdentityLifecycleStorePort,
   WebBffSessionRecord,
@@ -351,11 +352,16 @@ export class BffSessionController {
       if (!res.ok) {
         return res;
       }
-      if (this.identityLifecycleStore) {
+      const normalizedEmail = res.session.email.trim().toLowerCase();
+      if (
+        this.identityLifecycleStore &&
+        !normalizedEmail.endsWith('.invalid') &&
+        SafeEmailAddressSchema.safeParse(normalizedEmail).success
+      ) {
         await this.identityLifecycleStore.upsertUserProfile({
           userId: res.session.userId,
           displayName: res.session.displayName,
-          email: res.session.email,
+          email: normalizedEmail,
           now,
         });
       }

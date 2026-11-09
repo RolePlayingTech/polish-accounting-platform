@@ -98,7 +98,7 @@ export class SessionIdentityController {
         : 'oidc';
 
     const accessTokenExpiresAt = decodeTokenExpIsoFallback(actor.rawBearerToken, now);
-    const sessionExpiresAt = new Date(now.getTime() + 28_800_000).toISOString();
+    const sessionExpiresAt = accessTokenExpiresAt;
 
     return buildAuthenticatedSessionView({
       authMethod,

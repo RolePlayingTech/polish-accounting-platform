@@ -775,10 +775,16 @@ BEGIN
 
     IF EXISTS (
       SELECT 1
+      FROM pap_identity_lifecycle_event
+      WHERE kind = 'bootstrap_owner'
+    ) OR EXISTS (
+      SELECT 1
       FROM tenant_membership m
       JOIN app_user u ON u.id = m.user_id
       WHERE m.role = 'tenant_owner'
         AND m.status = 'active'
+        AND m.valid_from <= now_ts
+        AND (m.valid_until IS NULL OR m.valid_until > now_ts)
         AND u.status = 'active'
         AND u.disabled_at IS NULL
     ) THEN
@@ -921,7 +927,11 @@ BEGIN
     VALUES (resolved_user_id, display_name_val, email_val, now_ts, now_ts)
     ON CONFLICT (user_id) DO UPDATE
       SET display_name = EXCLUDED.display_name,
-          email = EXCLUDED.email,
+          email = CASE
+            WHEN EXCLUDED.email LIKE '%.invalid' AND pap_user_profile.email NOT LIKE '%.invalid'
+              THEN pap_user_profile.email
+            ELSE EXCLUDED.email
+          END,
           updated_at = GREATEST(pap_user_profile.created_at, EXCLUDED.updated_at)
     RETURNING * INTO prof_row;
 

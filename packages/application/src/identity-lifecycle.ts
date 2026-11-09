@@ -3,6 +3,7 @@ import {
   AuthenticatedSessionViewSchema,
   BootstrapOwnerRequestSchema,
   BootstrapOwnerResponseSchema,
+  SafeEmailAddressSchema,
   TaxPeriodMonthSchema,
   type AccessibleCompanyItem,
   type AuthenticatedSessionView,
@@ -166,6 +167,50 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     });
   }
 
+  captureSnapshot(): {
+    readonly profiles: Map<string, UserProfileRecord>;
+    readonly tenantNames: Map<string, string>;
+    readonly identities: Map<string, { readonly userId: string; readonly active: boolean }>;
+    readonly bootstrapEvents: Map<
+      string,
+      { readonly requestKey: string; readonly receipt: BootstrapInitialOwnerReceipt }
+    >;
+  } {
+    return {
+      profiles: new Map(this.#profiles),
+      tenantNames: new Map(this.#tenantNames),
+      identities: new Map(this.#identities),
+      bootstrapEvents: new Map(this.#bootstrapEvents),
+    };
+  }
+
+  restoreSnapshot(snapshot: {
+    readonly profiles: ReadonlyMap<string, UserProfileRecord>;
+    readonly tenantNames: ReadonlyMap<string, string>;
+    readonly identities: ReadonlyMap<string, { readonly userId: string; readonly active: boolean }>;
+    readonly bootstrapEvents: ReadonlyMap<
+      string,
+      { readonly requestKey: string; readonly receipt: BootstrapInitialOwnerReceipt }
+    >;
+  }): void {
+    this.#profiles.clear();
+    for (const [k, v] of snapshot.profiles) {
+      this.#profiles.set(k, v);
+    }
+    this.#tenantNames.clear();
+    for (const [k, v] of snapshot.tenantNames) {
+      this.#tenantNames.set(k, v);
+    }
+    this.#identities.clear();
+    for (const [k, v] of snapshot.identities) {
+      this.#identities.set(k, v);
+    }
+    this.#bootstrapEvents.clear();
+    for (const [k, v] of snapshot.bootstrapEvents) {
+      this.#bootstrapEvents.set(k, v);
+    }
+  }
+
   async bootstrapInitialOwner(
     input: BootstrapInitialOwnerStoreInput,
   ): Promise<BootstrapInitialOwnerStoreResult> {
@@ -211,6 +256,10 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       };
     }
 
+    if (this.#bootstrapEvents.size > 0) {
+      return { ok: false, reason: 'owner_already_bootstrapped' };
+    }
+
     if (this.#workspaceStore) {
       for (const user of this.#workspaceStore.listUsers()) {
         if (!user.active) {
@@ -222,8 +271,6 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
           }
         }
       }
-    } else if (this.#bootstrapEvents.size > 0) {
-      return { ok: false, reason: 'owner_already_bootstrapped' };
     }
 
     const identityKey = `${issuer}\u0000${subject}`;
@@ -268,6 +315,7 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     if (this.#workspaceStore) {
       this.#workspaceStore.upsertUser({
         userId: parseUserId(resolvedUserId),
+        issuer,
         subject,
         displayName,
         email,
@@ -313,10 +361,22 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     }
     const nowIso = (input.now ?? new Date()).toISOString();
     const prev = this.#profiles.get(input.userId);
+    const candidateEmail = input.email.trim().toLowerCase();
+    const effectiveEmail =
+      prev &&
+      !prev.email.endsWith('.invalid') &&
+      (candidateEmail.endsWith('.invalid') || !SafeEmailAddressSchema.safeParse(candidateEmail).success)
+        ? prev.email
+        : candidateEmail;
+    const candidateDisplayName = input.displayName.trim().slice(0, 160);
+    const effectiveDisplayName =
+      candidateDisplayName.length > 0
+        ? candidateDisplayName
+        : (prev?.displayName ?? 'Użytkownik');
     const next: UserProfileRecord = Object.freeze({
       userId: input.userId,
-      displayName: input.displayName.trim(),
-      email: input.email.trim().toLowerCase(),
+      displayName: effectiveDisplayName,
+      email: effectiveEmail,
       createdAt: prev?.createdAt ?? nowIso,
       updatedAt: nowIso,
     });
@@ -403,6 +463,21 @@ export interface BuildAuthenticatedSessionViewInput {
   readonly personaId?: string | undefined;
 }
 
+export function normalizeSessionDisplayName(raw: string | undefined, fallbackSubject: string): string {
+  const trimmed = (raw ?? '').trim();
+  if (trimmed.length > 0) {
+    return trimmed.slice(0, 160);
+  }
+  const fallback = fallbackSubject.trim().slice(0, 160);
+  return fallback.length > 0 ? fallback : 'Użytkownik';
+}
+
+export function normalizeSessionSafeEmail(raw: string | undefined): string {
+  const candidate = (raw ?? '').trim().toLowerCase();
+  const parsed = SafeEmailAddressSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : 'uzytkownik@pap.example';
+}
+
 export function buildAuthenticatedSessionView(
   input: BuildAuthenticatedSessionViewInput,
 ): AuthenticatedSessionView {
@@ -412,6 +487,8 @@ export function buildAuthenticatedSessionView(
 
   const parsedPeriod = TaxPeriodMonthSchema.safeParse(input.requestedPeriod);
   const period = parsedPeriod.success ? parsedPeriod.data : DEMO_DEFAULT_PERIOD;
+  const safeDisplayName = normalizeSessionDisplayName(input.displayName, input.subject);
+  const safeEmail = normalizeSessionSafeEmail(input.email);
 
   if (activeMemberships.length === 0) {
     return AuthenticatedSessionViewSchema.parse({
@@ -420,8 +497,8 @@ export function buildAuthenticatedSessionView(
       userId: input.userId,
       issuer: input.issuer,
       subject: input.subject,
-      displayName: input.displayName,
-      email: input.email,
+      displayName: safeDisplayName,
+      email: safeEmail,
       tenantId: null,
       legalEntityId: null,
       period,
@@ -453,8 +530,8 @@ export function buildAuthenticatedSessionView(
     userId: input.userId,
     issuer: input.issuer,
     subject: input.subject,
-    displayName: input.displayName,
-    email: input.email,
+    displayName: safeDisplayName,
+    email: safeEmail,
     tenantId: selectedTenantId,
     legalEntityId: selectedLegalEntityId,
     period,

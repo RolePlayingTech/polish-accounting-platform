@@ -131,17 +131,28 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
       kind: 'get_actor_session_directory',
       userId: randomUUID(),
     });
-    const forgedCtx = JSON.stringify({
-      version: 1,
-      purpose: 'identity_lifecycle',
-      command: JSON.parse(forgedCmd),
-    });
 
     await expectDatabaseError(
       runtimeConnA.db.transaction(async (tx) => {
-        await tx.execute(sql`SELECT set_config('pap.context', ${forgedCtx}, true)`);
-        await tx.execute(sql`SELECT set_config('pap.context_key_id', 'wave2-identity-test', true)`);
-        await tx.execute(sql`SELECT set_config('pap.context_sig', ${'0'.repeat(64)}, true)`);
+        const [binding] = await tx.execute<{
+          xid: string;
+          pid: number;
+          database: string;
+          role: string;
+          expires: string;
+        }>(sql`SELECT pg_current_xact_id()::text AS xid, pg_backend_pid() AS pid,
+          current_database() AS database, session_user::text AS role,
+          (extract(epoch FROM clock_timestamp()) * 1000 + 30000)::bigint::text AS expires`);
+        const forgedCtx = JSON.stringify({
+          version: 1,
+          key_id: 'wave2-identity-test',
+          ...binding,
+          purpose: 'identity_lifecycle',
+          command: JSON.parse(forgedCmd),
+        });
+        await tx.execute(
+          sql`SELECT set_config('pap.context', ${forgedCtx}, true), set_config('pap.context_signature', ${'0'.repeat(64)}, true)`,
+        );
         await tx.execute(sql`SELECT pap_wave2_identity_op(${forgedCmd}::jsonb)`);
       }),
       '42501',
@@ -225,15 +236,31 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
       reason: 'operation_conflict',
     });
 
-    // Trigger append-only blokuje UPDATE oraz DELETE na pap_identity_lifecycle_event nawet dla właściciela schematu
+    // Trigger append-only blokuje UPDATE oraz DELETE na pap_identity_lifecycle_event nawet dla właściciela schematu (ERRCODE 23514)
     await expectDatabaseError(
       owner.client`UPDATE pap_identity_lifecycle_event SET reason = 'manipulacja' WHERE operation_id = ${winner.receipt.operationId}::uuid`,
-      '55000',
+      '23514',
     );
     await expectDatabaseError(
       owner.client`DELETE FROM pap_identity_lifecycle_event WHERE operation_id = ${winner.receipt.operationId}::uuid`,
-      '55000',
+      '23514',
     );
+
+    // Nawet po późniejszym wyłączeniu konta pierwotnego właściciela jednorazowy bootstrap pozostaje trwale zablokowany (P1-1)
+    await identityStore.disableUserAccount({ userId: userId(winner.receipt.userId) });
+    const afterOwnerDisabled = await storeB.bootstrapInitialOwner({
+      operationId: randomUUID(),
+      issuer: ISSUER,
+      subject: 'nowy-kandydat-po-wylaczeniu-wlasciciela',
+      displayName: 'Próba Re-bootstrapu',
+      email: 'rebootstrap@syntetyczny.example',
+      tenantName: 'Nowa Organizacja Po Blokadzie',
+      reason: 'Próba ponownego bootstrapu po wyłączeniu pierwszego właściciela',
+    });
+    expect(afterOwnerDisabled).toEqual({
+      ok: false,
+      reason: 'owner_already_bootstrapped',
+    });
   });
 
   it('nie łączy tożsamości po kolizji adresu e-mail i zwraca pełny katalog wielotenantowy z filtracją wygasłych/odwołanych członkostw', async () => {
@@ -271,6 +298,15 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
     expect(profAlpha?.userId).toBe(userAlpha);
     expect(profBeta?.userId).toBe(userBeta);
     expect(userAlpha).not.toBe(userBeta);
+
+    // Próba nadpisania prawdziwego e-maila syntetycznym placeholderem '*.invalid' zachowuje dotychczasowy adres e-mail (P1-3)
+    const afterInvalidPlaceholder = await storeA.upsertUserProfile({
+      userId: userAlpha,
+      displayName: 'Anna Kolizja Pierwsza Zaktualizowana',
+      email: 'brak-adresu@oidc.invalid',
+    });
+    expect(afterInvalidPlaceholder?.email).toBe(sharedEmail);
+    expect(afterInvalidPlaceholder?.displayName).toBe('Anna Kolizja Pierwsza Zaktualizowana');
 
     // Dodajemy dwie aktywne organizacje oraz jedną wygasłą dla userAlpha, zero dla userBeta
     const baseNow = new Date('2026-11-09T14:00:00.000Z');

@@ -17,8 +17,17 @@ import {
 } from '@pap/db';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
+import {
+  computeBffInternalSignatureHex,
+  resolveBffInternalHmacKey,
+} from '../src/auth/bff-session.controller.js';
 import { runBootstrapOwnerCli } from '../src/cli/bootstrap-owner.js';
-import { createApiRuntimeServicesAsync } from '../src/runtime/workspace-runtime.js';
+import {
+  ACCOUNTING_WORKSPACE_SERVICE,
+  createApiRuntimeServices,
+  createApiRuntimeServicesAsync,
+  type WorkspaceRuntimePort,
+} from '../src/runtime/workspace-runtime.js';
 import { startIsolatedOidcIdp, type IsolatedOidcIdpHandle } from './helpers/isolated-oidc-idp.js';
 
 interface DrizzleJournalFile {
@@ -247,7 +256,7 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
             address: 'ul. Marszałkowska 10, 00-590 Warszawa',
           },
         }),
-      ).rejects.toThrow('Symulowana awaria');
+      ).rejects.toThrow('ROLLBACK');
     } finally {
       await rtFault.close?.();
     }
@@ -490,6 +499,47 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
     expect(meView1.legalEntityId).toBe(secondCompany.company.legalEntityId);
     expect(meView1.memberships).toHaveLength(2);
     expect(meView1.companies).toHaveLength(3);
+    expect(meView1.sessionExpiresAt).toBe(meView1.accessTokenExpiresAt);
+
+    // 9b. Utworzenie sesji BFF z placeholderem 'brak-adresu@oidc.invalid' NIE nadpisuje prawdziwego e-maila właścicielki (P1-3)
+    const bffHmacKey = resolveBffInternalHmacKey({
+      NODE_ENV: 'production',
+      PAP_WEB_SESSION_SECRET: bffSecret,
+    })!;
+    const bffCreateBody = {
+      sessionIdHash: createHash('sha256').update('katarzyna-bff-placeholder-check', 'utf8').digest('hex'),
+      userId: bootstrapped.userId,
+      issuer: idp!.issuer,
+      subject: 'owner-oidc-sub-katarzyna',
+      displayName: 'Katarzyna Właścicielka',
+      email: 'brak-adresu@oidc.invalid',
+      tenantId: bootstrapped.tenantId,
+      legalEntityId: bootstrapped.legalEntityId,
+      period: '2026-11',
+      encryptedTokens: 'v1.placeholder.tokens',
+      accessTokenExpiresAt: new Date(Date.now() + 300_000).toISOString(),
+      expiresAt: new Date(Date.now() + 28_800_000).toISOString(),
+    };
+    const bffPath = '/api/v1/auth/bff/session/create';
+    const bffTs = String(Date.now());
+    const bffSig = computeBffInternalSignatureHex(bffHmacKey, 'POST', bffPath, bffTs, bffCreateBody);
+    const bffRes = await fetch(`${inst1.baseUrl}${bffPath}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-bff-timestamp': bffTs,
+        'x-bff-signature': bffSig,
+      },
+      body: JSON.stringify(bffCreateBody),
+    });
+    expect(bffRes.status).toBe(200);
+
+    const meAfterBffPlaceholder = await fetch(`${inst2.baseUrl}/api/v1/me/session`, {
+      headers: { Authorization: `Bearer ${ownerToken}` },
+    });
+    expect(meAfterBffPlaceholder.status).toBe(200);
+    const meAfterBffJson = AuthenticatedSessionViewSchema.parse(await meAfterBffPlaceholder.json());
+    expect(meAfterBffJson.email).toBe('katarzyna.wlascicielka@syntetyczne-biuro.example');
 
     // Przełączenie aktywnej organizacji na secondTenantId na instancji #2 wybiera właściwy podmiot z drugiej organizacji
     const switchTenantRes = await fetch(
@@ -519,5 +569,145 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
       expect(view.memberships).toEqual([]);
       expect(view.companies).toEqual([]);
     }
+
+    // 11. Kolizja samego 'subject' między dwoma różnymi wystawcami OIDC (cross-issuer P0-2):
+    //     drugi wystawca IdP2 z tym samym subject='owner-oidc-sub-katarzyna' NIE przejmuje tożsamości Katarzyny ani NIE dezaktywuje jej konta!
+    const idp2 = await startIsolatedOidcIdp({
+      clientId: 'pap-web',
+      resourceAudience: 'pap-api',
+      allowedRedirectUris: [redirectUri],
+      accessTokenTtlSeconds: 300,
+    });
+    try {
+      const crossIssuerSameSubjectId = randomUUID();
+      await identityStore.provisionUserWithOidcIdentity({
+        userId: crossIssuerSameSubjectId as ReturnType<typeof import('@pap/domain').userId>,
+        identityId: randomUUID(),
+        issuer: idp2.issuer,
+        subject: 'owner-oidc-sub-katarzyna',
+      });
+
+      const instIdp2 = await bootApiInstance({
+        ...baseApiEnv,
+        PAP_OIDC_ISSUER: idp2.issuer,
+        PAP_OIDC_JWKS_URI: idp2.jwksUri,
+      });
+      openApps.add(instIdp2.app);
+
+      // Wstrzykujemy rekordy Katarzyny i Tomasza (z idp1) do pamięci podręcznej instIdp2, aby bezpośrednio przetestować ochronę w workspace.store!
+      const idp2Workspace = instIdp2.app.get<WorkspaceRuntimePort>(ACCOUNTING_WORKSPACE_SERVICE);
+      idp2Workspace.store.upsertUser({
+        id: bootstrapped.userId as ReturnType<typeof import('@pap/domain').userId>,
+        issuer: idp!.issuer,
+        subject: 'owner-oidc-sub-katarzyna',
+        displayName: 'Katarzyna Właścicielka',
+        email: 'katarzyna.wlascicielka@syntetyczne-biuro.example',
+        status: 'active',
+      });
+      idp2Workspace.store.upsertUser({
+        id: unassignedUserId as ReturnType<typeof import('@pap/domain').userId>,
+        issuer: idp!.issuer,
+        subject: 'unassigned-oidc-sub-tomasz',
+        displayName: 'Tomasz Pierwszy IdP1',
+        email: 'tomasz.idp1@syntetyczne-biuro.example',
+        status: 'active',
+      });
+
+      const idp2TokenSameSub = idp2.issueDirectAccessToken({
+        user: {
+          subject: 'owner-oidc-sub-katarzyna',
+          email: 'obcy-z-drugiego-idp@syntetyczne-biuro.example',
+          displayName: 'Obcy Z Drugiego IdP',
+        },
+      });
+      const meCrossIssuerRes = await fetch(`${instIdp2.baseUrl}/api/v1/me/session`, {
+        headers: { Authorization: `Bearer ${idp2TokenSameSub}` },
+      });
+      expect(meCrossIssuerRes.status).toBe(200);
+      const meCrossIssuerView = AuthenticatedSessionViewSchema.parse(await meCrossIssuerRes.json());
+      expect(meCrossIssuerView.userId).toBe(crossIssuerSameSubjectId);
+      expect(meCrossIssuerView.userId).not.toBe(bootstrapped.userId);
+      expect(meCrossIssuerView.state).toBe('no_tenant_membership');
+      expect(meCrossIssuerView.companies).toEqual([]);
+
+      // Oraz niezałożony użytkownik z idp2 o subject należącym do Tomasza z idp1 nie dezaktywuje konta Tomasza ani właścicielki (brak Cross-Issuer DoS)
+      const idp2UnprovisionedToken = idp2.issueDirectAccessToken({
+        user: {
+          subject: 'unassigned-oidc-sub-tomasz',
+          email: 'tomasz.nowy@syntetyczne-biuro.example',
+          displayName: 'Obcy Tomasz IdP2',
+        },
+      });
+      const unprovRes = await fetch(`${instIdp2.baseUrl}/api/v1/me/session`, {
+        headers: { Authorization: `Bearer ${idp2UnprovisionedToken}` },
+      });
+      expect(unprovRes.status).toBe(403);
+      await expect(unprovRes.json()).resolves.toMatchObject({
+        reasonCode: 'identity_not_provisioned',
+      });
+
+      expect(idp2Workspace.store.getUser(unassignedUserId)?.status).toBe('active');
+      const stillActiveOwnerRes = await fetch(`${inst1.baseUrl}/api/v1/me/session`, {
+        headers: { Authorization: `Bearer ${ownerToken}` },
+      });
+      expect(stillActiveOwnerRes.status).toBe(200);
+    } finally {
+      await idp2.close();
+    }
+  });
+
+  it('wycofuje atomowo stan in-memory właściciela i organizacji, gdy inicjalizacja spółki początkowej zakończy się błędem (P1-2)', async () => {
+    const rtMem = createApiRuntimeServices({
+      NODE_ENV: 'test',
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+    });
+    rtMem.ownerBootstrap.beforeInitialCompanyCommitHook = () => {
+      throw new Error('Symulowany błąd hooka in-memory');
+    };
+
+    await expect(
+      rtMem.ownerBootstrap.bootstrapInitialOwner({
+        operationId: randomUUID(),
+        issuer: 'https://in-memory-idp.syntetyczny.example/realms/pap',
+        subject: 'inmem-owner-01',
+        displayName: 'Jan Właściciel Pamięciowy',
+        email: 'jan.inmem@syntetyczny.example',
+        tenantName: 'Organizacja Pamięciowa',
+        reason: 'Test wycofania nieudanego bootstrapu w trybie in-memory',
+        initialCompany: {
+          displayName: 'Spółka Pamięciowa Sp. z o.o.',
+          nip: '5213017228',
+          legalForm: 'sp_z_o_o',
+          profileCode: 'spzoo_pelne_ksiegi',
+          vatStatus: 'czynny',
+          address: 'ul. Testowa 1, 00-001 Warszawa',
+        },
+      }),
+    ).rejects.toThrow('Symulowany błąd hooka in-memory');
+
+    expect(rtMem.workspace.store.listUsers()).toEqual([]);
+    expect(rtMem.workspace.store.listAllCompanies()).toEqual([]);
+
+    // Po usunięciu błędu kolejna próba bootstrapu w tej samej instancji in-memory przechodzi bez fałszywego 409 owner_already_bootstrapped
+    rtMem.ownerBootstrap.beforeInitialCompanyCommitHook = undefined;
+    const succeeded = await rtMem.ownerBootstrap.bootstrapInitialOwner({
+      operationId: randomUUID(),
+      issuer: 'https://in-memory-idp.syntetyczny.example/realms/pap',
+      subject: 'inmem-owner-01',
+      displayName: 'Jan Właściciel Pamięciowy',
+      email: 'jan.inmem@syntetyczny.example',
+      tenantName: 'Organizacja Pamięciowa',
+      reason: 'Ponowienie bootstrapu po atomowym wycofaniu migawki in-memory',
+      initialCompany: {
+        displayName: 'Spółka Pamięciowa Sp. z o.o.',
+        nip: '5213017228',
+        legalForm: 'sp_z_o_o',
+        profileCode: 'spzoo_pelne_ksiegi',
+        vatStatus: 'czynny',
+        address: 'ul. Testowa 1, 00-001 Warszawa',
+      },
+    });
+    expect(succeeded.ok).toBe(true);
+    expect(succeeded.legalEntityId).toBeTruthy();
   });
 });

@@ -21,6 +21,10 @@ import {
   persistCompanyTaxSettingsToScope,
 } from './postgres-demo-seed.js';
 import { canonicalJsonStringify, deterministicUuidV4 } from './postgres-mappers.js';
+import {
+  captureWorkspaceRamSnapshot,
+  restoreWorkspaceRamSnapshot,
+} from './postgres-ram-snapshot.js';
 import type { ConnectedPostgresRuntime } from './postgres-runtime-config.js';
 import type { WorkspaceRuntimePort } from './postgres-workspace-persistence.js';
 
@@ -260,6 +264,7 @@ export class RuntimeOwnerBootstrapService implements OwnerBootstrapPort {
 
       this.#workspace.store.upsertUser({
         userId: parseUserId(res.receipt.userId),
+        issuer: res.receipt.issuer,
         subject: res.receipt.subject,
         displayName: res.receipt.displayName,
         email: res.receipt.email,
@@ -290,7 +295,26 @@ export class RuntimeOwnerBootstrapService implements OwnerBootstrapPort {
       });
     }
 
-    // Ścieżka in-memory (testy jednostkowe / LOCAL_DEV bez PostgreSQL)
+    // Ścieżka in-memory (testy jednostkowe / LOCAL_DEV bez PostgreSQL):
+    // walidujemy szablon początkowego podmiotu przed mutacją stanu i wykonujemy atomowy rollback migawki przy jakimkolwiek błędzie.
+    if (data.initialCompany) {
+      prepareInitialCompanyTemplate(
+        data.subject,
+        data.displayName,
+        data.email.toLowerCase(),
+        data.initialCompany,
+      );
+    }
+
+    const emptyGateways = new Set<never>();
+    const lifecycleSnap =
+      this.#lifecycleStore instanceof InMemoryIdentityLifecycleStore
+        ? this.#lifecycleStore.captureSnapshot()
+        : undefined;
+    const workspaceSnap = this.#innerWorkspace
+      ? captureWorkspaceRamSnapshot(this.#innerWorkspace, emptyGateways)
+      : undefined;
+
     const storeRes = await this.#lifecycleStore.bootstrapInitialOwner({
       operationId,
       ...(data.userId !== undefined ? { userId: data.userId } : {}),
@@ -317,28 +341,38 @@ export class RuntimeOwnerBootstrapService implements OwnerBootstrapPort {
 
     let provisionedLegalEntityId: string | null = storeRes.receipt.legalEntityId;
     if (!storeRes.idempotentReplay && data.initialCompany) {
-      const created = await this.#workspace.createCompany(
-        {
-          userId: parseUserId(storeRes.receipt.userId),
-          issuer: storeRes.receipt.issuer,
-          subject: storeRes.receipt.subject,
-          displayName: storeRes.receipt.displayName,
-          email: storeRes.receipt.email,
-          scopes: ['pap:ui:full'],
-        },
-        storeRes.receipt.tenantId,
-        data.initialCompany,
-      );
-      provisionedLegalEntityId = created.company.legalEntityId;
-      if (this.#lifecycleStore instanceof InMemoryIdentityLifecycleStore) {
-        this.#lifecycleStore.recordBootstrapInitialCompany(operationId, provisionedLegalEntityId);
-      }
-      if (this.beforeInitialCompanyCommitHook) {
-        await this.beforeInitialCompanyCommitHook({
-          tenantId: storeRes.receipt.tenantId,
-          legalEntityId: provisionedLegalEntityId,
-          nip: created.company.nip,
-        });
+      try {
+        const created = await this.#workspace.createCompany(
+          {
+            userId: parseUserId(storeRes.receipt.userId),
+            issuer: storeRes.receipt.issuer,
+            subject: storeRes.receipt.subject,
+            displayName: storeRes.receipt.displayName,
+            email: storeRes.receipt.email,
+            scopes: ['pap:ui:full'],
+          },
+          storeRes.receipt.tenantId,
+          data.initialCompany,
+        );
+        provisionedLegalEntityId = created.company.legalEntityId;
+        if (this.#lifecycleStore instanceof InMemoryIdentityLifecycleStore) {
+          this.#lifecycleStore.recordBootstrapInitialCompany(operationId, provisionedLegalEntityId);
+        }
+        if (this.beforeInitialCompanyCommitHook) {
+          await this.beforeInitialCompanyCommitHook({
+            tenantId: storeRes.receipt.tenantId,
+            legalEntityId: provisionedLegalEntityId,
+            nip: created.company.nip,
+          });
+        }
+      } catch (err) {
+        if (lifecycleSnap && this.#lifecycleStore instanceof InMemoryIdentityLifecycleStore) {
+          this.#lifecycleStore.restoreSnapshot(lifecycleSnap);
+        }
+        if (workspaceSnap && this.#innerWorkspace) {
+          restoreWorkspaceRamSnapshot(this.#innerWorkspace, emptyGateways, workspaceSnap);
+        }
+        throw err;
       }
     }
 
