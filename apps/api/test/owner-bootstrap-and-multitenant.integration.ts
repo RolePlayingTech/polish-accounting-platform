@@ -240,12 +240,11 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
           reason: 'Test wycofania atomowej transakcji bootstrapu właściciela',
           initialCompany: {
             displayName: 'Spółka Wycofana Sp. z o.o.',
-            nip: '5250001009',
-            legalForm: 'sp_zoo',
-            taxRegime: 'cit_estonski',
+            nip: '5213017228',
+            legalForm: 'sp_z_o_o',
+            profileCode: 'spzoo_pelne_ksiegi',
             vatStatus: 'czynny',
-            vatSettlementPeriod: 'monthly',
-            accountingMethod: 'pelne_ksiegi',
+            address: 'ul. Marszałkowska 10, 00-590 Warszawa',
           },
         }),
       ).rejects.toThrow('Symulowana awaria');
@@ -271,12 +270,11 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
     const bootstrapOpId = randomUUID();
     const initialCompanyJson = JSON.stringify({
       displayName: 'Kancelaria Katarzyna Pierwsza Sp. z o.o.',
-      nip: '5250001009',
-      legalForm: 'sp_zoo',
-      taxRegime: 'cit_estonski',
+      nip: '5213017228',
+      legalForm: 'sp_z_o_o',
+      profileCode: 'spzoo_pelne_ksiegi',
       vatStatus: 'czynny',
-      vatSettlementPeriod: 'monthly',
-      accountingMethod: 'pelne_ksiegi',
+      address: 'ul. Marszałkowska 10, 00-590 Warszawa',
     });
 
     const cliStdout: string[] = [];
@@ -440,12 +438,11 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
         },
         body: JSON.stringify({
           displayName: 'Kancelaria Katarzyna Druga JDG',
-          nip: '5213004002',
+          nip: '5250002008',
           legalForm: 'jdg',
-          taxRegime: 'kpir_liniowy',
+          profileCode: 'jdg_kpir_liniowy',
           vatStatus: 'czynny',
-          vatSettlementPeriod: 'monthly',
-          accountingMethod: 'kpir',
+          address: 'ul. Królewska 5, 30-045 Kraków',
         }),
       },
     );
@@ -465,11 +462,9 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
           displayName: 'Doradztwo Katarzyna Ryczałt',
           nip: '5261040828',
           legalForm: 'jdg',
-          taxRegime: 'ryczalt',
+          profileCode: 'jdg_ryczalt',
           vatStatus: 'zwolniony',
-          vatSettlementPeriod: 'monthly',
-          accountingMethod: 'ewidencja_przychodow',
-          ryczaltDefaultRatePercent: 12,
+          address: 'ul. Gdańska 12, 80-001 Gdańsk',
         }),
       },
     );
