@@ -103,19 +103,13 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
   }
 
   async #executeOp(
-    signedCommand: {
-      readonly kind: string;
-      readonly stateHash?: string | undefined;
-      readonly sessionIdHash?: string | undefined;
-      readonly userId?: string | undefined;
-    },
     fullPayload: Readonly<Record<string, unknown>>,
   ): Promise<Record<string, unknown>> {
     try {
       return await this.#db.transaction(async (tx) => {
         await this.#signer.apply(tx, {
           purpose: 'bff_session',
-          command: signedCommand,
+          command: fullPayload,
         });
         const [row] = await tx.execute<{ result: Record<string, unknown> | string }>(
           sql`SELECT pap_bff_session_op(${JSON.stringify(fullPayload)}::jsonb) AS result`,
@@ -137,19 +131,13 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
   async createOidcAuthState(
     input: CreateOidcAuthStateInput,
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
-    const result = await this.#executeOp(
-      {
-        kind: 'create_auth_state',
-        stateHash: input.stateHash,
-      },
-      {
-        kind: 'create_auth_state',
-        stateHash: input.stateHash,
-        encryptedPayload: input.encryptedPayload,
-        expiresAtIso: input.expiresAt.toISOString(),
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'create_auth_state',
+      stateHash: input.stateHash,
+      encryptedPayload: input.encryptedPayload,
+      expiresAtIso: input.expiresAt.toISOString(),
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     if (result['ok'] === true) {
       return { ok: true };
@@ -164,17 +152,11 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
     readonly stateHash: string;
     readonly now?: Date | undefined;
   }): Promise<ConsumeOidcAuthStateResult> {
-    const result = await this.#executeOp(
-      {
-        kind: 'consume_auth_state',
-        stateHash: input.stateHash,
-      },
-      {
-        kind: 'consume_auth_state',
-        stateHash: input.stateHash,
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'consume_auth_state',
+      stateHash: input.stateHash,
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     if (result['ok'] === true && result['state']) {
       return {
@@ -190,29 +172,22 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
   }
 
   async createSession(input: CreateWebBffSessionInput): Promise<CreateWebBffSessionResult> {
-    const result = await this.#executeOp(
-      {
-        kind: 'create_session',
-        sessionIdHash: input.sessionIdHash,
-        userId: input.userId,
-      },
-      {
-        kind: 'create_session',
-        sessionIdHash: input.sessionIdHash,
-        userId: input.userId,
-        issuer: input.issuer,
-        subject: input.subject,
-        displayName: input.displayName,
-        email: input.email,
-        tenantId: input.tenantId,
-        legalEntityId: input.legalEntityId,
-        period: input.period,
-        encryptedTokens: input.encryptedTokens,
-        accessTokenExpiresAtIso: input.accessTokenExpiresAt.toISOString(),
-        expiresAtIso: input.expiresAt.toISOString(),
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'create_session',
+      sessionIdHash: input.sessionIdHash,
+      userId: input.userId,
+      issuer: input.issuer,
+      subject: input.subject,
+      displayName: input.displayName,
+      email: input.email,
+      tenantId: input.tenantId,
+      legalEntityId: input.legalEntityId,
+      period: input.period,
+      encryptedTokens: input.encryptedTokens,
+      accessTokenExpiresAtIso: input.accessTokenExpiresAt.toISOString(),
+      expiresAtIso: input.expiresAt.toISOString(),
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     if (result['ok'] === true && result['session']) {
       return {
@@ -231,17 +206,11 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
     readonly sessionIdHash: string;
     readonly now?: Date | undefined;
   }): Promise<GetWebBffSessionResult> {
-    const result = await this.#executeOp(
-      {
-        kind: 'get_session',
-        sessionIdHash: input.sessionIdHash,
-      },
-      {
-        kind: 'get_session',
-        sessionIdHash: input.sessionIdHash,
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'get_session',
+      sessionIdHash: input.sessionIdHash,
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     if (result['ok'] === true && result['session']) {
       return {
@@ -259,20 +228,14 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
   async updateSessionContext(
     input: UpdateWebBffSessionContextInput,
   ): Promise<GetWebBffSessionResult> {
-    const result = await this.#executeOp(
-      {
-        kind: 'update_session_context',
-        sessionIdHash: input.sessionIdHash,
-      },
-      {
-        kind: 'update_session_context',
-        sessionIdHash: input.sessionIdHash,
-        tenantId: input.tenantId,
-        legalEntityId: input.legalEntityId,
-        period: input.period,
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'update_session_context',
+      sessionIdHash: input.sessionIdHash,
+      tenantId: input.tenantId,
+      legalEntityId: input.legalEntityId,
+      period: input.period,
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     if (result['ok'] === true && result['session']) {
       return {
@@ -290,24 +253,18 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
   async rotateSessionTokens(
     input: RotateWebBffSessionTokensInput,
   ): Promise<RotateWebBffSessionTokensResult> {
-    const result = await this.#executeOp(
-      {
-        kind: 'rotate_session_tokens',
-        sessionIdHash: input.sessionIdHash,
-      },
-      {
-        kind: 'rotate_session_tokens',
-        sessionIdHash: input.sessionIdHash,
-        expectedGeneration: input.expectedGeneration,
-        encryptedTokens: input.encryptedTokens,
-        accessTokenExpiresAtIso: input.accessTokenExpiresAt.toISOString(),
-        ...(input.sessionExpiresAt
-          ? { sessionExpiresAtIso: input.sessionExpiresAt.toISOString() }
-          : {}),
-        ...(input.gracePeriodMs !== undefined ? { gracePeriodMs: input.gracePeriodMs } : {}),
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'rotate_session_tokens',
+      sessionIdHash: input.sessionIdHash,
+      expectedGeneration: input.expectedGeneration,
+      encryptedTokens: input.encryptedTokens,
+      accessTokenExpiresAtIso: input.accessTokenExpiresAt.toISOString(),
+      ...(input.sessionExpiresAt
+        ? { sessionExpiresAtIso: input.sessionExpiresAt.toISOString() }
+        : {}),
+      ...(input.gracePeriodMs !== undefined ? { gracePeriodMs: input.gracePeriodMs } : {}),
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     if (result['ok'] === true && result['session']) {
       return {
@@ -328,17 +285,11 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
     readonly sessionIdHash: string;
     readonly now?: Date | undefined;
   }): Promise<{ readonly ok: true; readonly revoked: boolean }> {
-    const result = await this.#executeOp(
-      {
-        kind: 'revoke_session',
-        sessionIdHash: input.sessionIdHash,
-      },
-      {
-        kind: 'revoke_session',
-        sessionIdHash: input.sessionIdHash,
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'revoke_session',
+      sessionIdHash: input.sessionIdHash,
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     return {
       ok: true,
@@ -350,17 +301,11 @@ export class PostgresWebSessionStore implements WebSessionStorePort {
     readonly userId: string;
     readonly now?: Date | undefined;
   }): Promise<{ readonly ok: true; readonly revokedCount: number }> {
-    const result = await this.#executeOp(
-      {
-        kind: 'revoke_user_sessions',
-        userId: input.userId,
-      },
-      {
-        kind: 'revoke_user_sessions',
-        userId: input.userId,
-        ...(input.now ? { nowIso: input.now.toISOString() } : {}),
-      },
-    );
+    const result = await this.#executeOp({
+      kind: 'revoke_user_sessions',
+      userId: input.userId,
+      ...(input.now ? { nowIso: input.now.toISOString() } : {}),
+    });
 
     return {
       ok: true,

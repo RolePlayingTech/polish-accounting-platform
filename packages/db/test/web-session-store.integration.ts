@@ -20,10 +20,11 @@ import {
 const id = (n: number) => `00000000-0000-4000-8000-${n.toString().padStart(12, '0')}`;
 const USER_1 = userId(id(501));
 const USER_2 = userId(id(502));
+const USER_NONEXISTENT = userId(id(599));
 const TENANT_1 = tenantId(id(601));
 const ENTITY_1 = legalEntityId(id(701));
 const ISSUER = 'https://idp.syntetyczny.example/realms/pap';
-const runtimeRole = 'pap_test_bff_runtime';
+const runtimeRole = 'pap_test_app' as const;
 
 function sha256Hex(raw: string): string {
   return createHash('sha256').update(raw, 'utf8').digest('hex');
@@ -33,10 +34,13 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
   let owner: TestDatabase;
   let runtimeConnA: ReturnType<typeof connectDatabase>;
   let runtimeConnB: ReturnType<typeof connectDatabase>;
+  let signer: PostgresContextSigner;
   let storeA: PostgresWebSessionStore;
   let storeB: PostgresWebSessionStore;
   let identityStore: PostgresUserIdentityStore;
   let createdRole = false;
+  let databasePublicPrivileges: string[] = [];
+  let publicSchemaCreate = false;
 
   beforeAll(async () => {
     owner = await createTestDatabase();
@@ -47,8 +51,23 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
     if (preprovisionedRuntimeUrl) {
       runtimeUrl = preprovisionedRuntimeUrl;
     } else {
+      if ((await sql`SELECT 1 FROM pg_roles WHERE rolname = ${runtimeRole}`).length) {
+        throw new Error('Test wymaga wolnej nazwy pap_test_app na odizolowanej instancji.');
+      }
+      databasePublicPrivileges = Array.from(
+        await sql`SELECT privilege_type FROM pg_database,
+        LATERAL aclexplode(coalesce(datacl, acldefault('d', datdba))) a
+        WHERE datname = current_database() AND a.grantee = 0`,
+        (r) => String(r.privilege_type),
+      );
+      publicSchemaCreate =
+        (
+          await sql`SELECT 1 FROM pg_namespace,
+        LATERAL aclexplode(coalesce(nspacl, acldefault('n', nspowner))) a
+        WHERE nspname = 'public' AND a.grantee = 0 AND a.privilege_type = 'CREATE'`
+        ).length > 0;
       const password = randomBytes(24).toString('hex');
-      await sql.unsafe(`CREATE ROLE ${runtimeRole} LOGIN PASSWORD '${password}'
+      await sql.unsafe(`CREATE ROLE pap_test_app LOGIN PASSWORD '${password}'
         NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`);
       createdRole = true;
       const url = new URL(process.env.DATABASE_URL!);
@@ -57,18 +76,14 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
       runtimeUrl = url.toString();
     }
 
-    const effectiveRole = preprovisionedRuntimeUrl
-      ? new URL(preprovisionedRuntimeUrl).username
-      : runtimeRole;
-
     await applyMigrations(owner.db, owner.dataSchema);
     const keyHex = randomBytes(32).toString('hex');
     await provisionDatabaseContextKey(owner.db, {
       keyId: 'wave2-bff-test',
       keyHex,
-      runtimeRole: effectiveRole,
+      runtimeRole,
     });
-    await configureRuntimePrivileges(owner.db, effectiveRole);
+    await configureRuntimePrivileges(owner.db, runtimeRole);
 
     await sql`INSERT INTO tenant (id, name) VALUES (${TENANT_1}, 'Organizacja Testowa BFF')`;
     await sql`INSERT INTO legal_entity (id, tenant_id, display_name) VALUES (${ENTITY_1}, ${TENANT_1}, 'Spółka Testowa BFF')`;
@@ -99,7 +114,7 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
     );
 
     await assertRuntimeDatabaseSecurity(runtimeConnA.db);
-    const signer = new PostgresContextSigner({ keyId: 'wave2-bff-test', keyHex });
+    signer = new PostgresContextSigner({ keyId: 'wave2-bff-test', keyHex });
     storeA = new PostgresWebSessionStore(runtimeConnA.db, signer);
     storeB = new PostgresWebSessionStore(runtimeConnB.db, signer);
   });
@@ -108,8 +123,17 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
     await runtimeConnA?.client.end({ timeout: 1 });
     await runtimeConnB?.client.end({ timeout: 1 });
     if (createdRole) {
-      await owner.client.unsafe(`DROP OWNED BY ${runtimeRole}`);
-      await owner.client.unsafe(`DROP ROLE ${runtimeRole}`);
+      await owner.client.unsafe('DROP OWNED BY pap_test_app');
+      await owner.client.unsafe('DROP ROLE pap_test_app');
+      for (const privilege of databasePublicPrivileges) {
+        if (!['CONNECT', 'TEMPORARY', 'CREATE'].includes(privilege)) {
+          throw new Error('Nieznany ACL bazy.');
+        }
+        await owner.client.unsafe(`GRANT ${privilege} ON DATABASE pap_test TO PUBLIC`);
+      }
+      if (publicSchemaCreate) {
+        await owner.client.unsafe('GRANT CREATE ON SCHEMA public TO PUBLIC');
+      }
     }
     await owner?.cleanup();
   });
@@ -129,21 +153,52 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
       await expectDatabaseError(sql.unsafe(stmt), '42501');
     }
 
-    // Próba wywołania pap_bff_session_op bez ważnego podpisu HMAC w pap.context kończy się odmową 42501
+    const forgedContext = JSON.stringify({
+      version: 1,
+      purpose: 'bff_session',
+      command: { kind: 'get_session', sessionIdHash: 'b'.repeat(64) },
+    });
+    const forgedSig = '0'.repeat(64);
+    const getCmdJson = JSON.stringify({
+      kind: 'get_session',
+      sessionIdHash: 'b'.repeat(64),
+    });
+
+    // 1. Próba wywołania pap_bff_session_op bez ważnego podpisu HMAC w pap.context kończy się odmową 42501
     await expectDatabaseError(
       sql.begin(async (tx) => {
-        await tx`SELECT set_config('pap.context', '{"v":1,"purpose":"bff_session","bffCommand":{"kind":"get_session","sessionIdHash":"${'b'.repeat(64)}"}}', true),
-                        set_config('pap.context_signature', ${'0'.repeat(64)}, true)`;
-        await tx`SELECT pap_bff_session_op(${JSON.stringify({
-          kind: 'get_session',
-          sessionIdHash: 'b'.repeat(64),
-        })}::jsonb)`;
+        await tx`SELECT set_config('pap.context', ${forgedContext}::text, true),
+                        set_config('pap.context_signature', ${forgedSig}::text, true)`;
+        await tx`SELECT pap_bff_session_op(${getCmdJson}::jsonb)`;
+      }),
+      '42501',
+    );
+
+    // 2. Próba podmiany pola (np. nowIso) w parametrze SQL względem podpisanego pap.context->'command' kończy się odmową 42501 (P1-3)
+    const tamperedCmdJson = JSON.stringify({
+      kind: 'get_session',
+      sessionIdHash: 'b'.repeat(64),
+      nowIso: '2000-01-01T00:00:00.000Z',
+    });
+    await expectDatabaseError(
+      runtimeConnA.db.transaction(async (tx) => {
+        await signer.apply(tx, {
+          purpose: 'bff_session',
+          command: {
+            kind: 'get_session',
+            sessionIdHash: 'b'.repeat(64),
+            nowIso: '2026-11-09T12:00:00.000Z',
+          },
+        });
+        await tx.execute(
+          (await import('drizzle-orm')).sql`SELECT pap_bff_session_op(${tamperedCmdJson}::jsonb)`,
+        );
       }),
       '42501',
     );
   });
 
-  it('gwarantuje atomowe jednorazowe zużycie stanu PKCE (10 równoległych żądań -> dokładnie 1 sukces i 9 already_consumed) oraz odrzuca wygasły stan', async () => {
+  it('gwarantuje atomowe jednorazowe zużycie stanu PKCE (10 równoległych żądań -> dokładnie 1 sukces i 9 state_already_consumed) oraz odrzuca wygasły stan', async () => {
     const stateHash = sha256Hex('pkce-concurrent-state-1');
     await storeA.createOidcAuthState({
       stateHash,
@@ -159,7 +214,7 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
 
     const successes = parallelResults.filter((r) => r.ok);
     const replays = parallelResults.filter(
-      (r) => !r.ok && r.reason === 'already_consumed',
+      (r) => !r.ok && r.reason === 'state_already_consumed',
     );
     expect(successes).toHaveLength(1);
     expect(replays).toHaveLength(9);
@@ -177,12 +232,67 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
       stateHash: expiredHash,
       now: new Date(baseNow.getTime() + 11_000),
     });
-    expect(expiredRes).toEqual({ ok: false, reason: 'expired' });
+    expect(expiredRes).toEqual({ ok: false, reason: 'state_expired' });
   });
 
   it('współdzieli sesję między dwiema instancjami, obsługuje współbieżną rotację tokenów i natychmiast unieważnia sesję po cofnięciu tożsamości lub wyłączeniu konta', async () => {
     const sessionIdHash = sha256Hex('opaque-session-anna-1');
     const now = new Date('2026-11-09T12:00:00.000Z');
+
+    // P0-1: Fail-closed dla nieistniejącego app_user, nieistniejącego (issuer, subject) oraz rozjazdu (USER_1, sub USER_2)
+    expect(
+      await storeA.createSession({
+        sessionIdHash: sha256Hex('nonexistent-user-session'),
+        userId: USER_NONEXISTENT,
+        issuer: ISSUER,
+        subject: 'anna-oidc-sub',
+        displayName: 'Duch',
+        email: 'duch@syntetyczny.example',
+        tenantId: TENANT_1,
+        legalEntityId: ENTITY_1,
+        period: '2026-11',
+        encryptedTokens: 'v1.ghost.tokens',
+        accessTokenExpiresAt: new Date(now.getTime() + 300_000),
+        expiresAt: new Date(now.getTime() + 28_800_000),
+        now,
+      }),
+    ).toEqual({ ok: false, reason: 'user_disabled_or_identity_revoked' });
+
+    expect(
+      await storeA.createSession({
+        sessionIdHash: sha256Hex('unknown-oidc-sub-session'),
+        userId: USER_1,
+        issuer: ISSUER,
+        subject: 'nieistniejacy-sub',
+        displayName: 'Anna Księgowa',
+        email: 'anna@biuro-syntetyczne.example',
+        tenantId: TENANT_1,
+        legalEntityId: ENTITY_1,
+        period: '2026-11',
+        encryptedTokens: 'v1.unknown.tokens',
+        accessTokenExpiresAt: new Date(now.getTime() + 300_000),
+        expiresAt: new Date(now.getTime() + 28_800_000),
+        now,
+      }),
+    ).toEqual({ ok: false, reason: 'user_disabled_or_identity_revoked' });
+
+    expect(
+      await storeA.createSession({
+        sessionIdHash: sha256Hex('cross-user-sub-mismatch-session'),
+        userId: USER_1,
+        issuer: ISSUER,
+        subject: 'bartosz-oidc-sub',
+        displayName: 'Anna Księgowa',
+        email: 'anna@biuro-syntetyczne.example',
+        tenantId: TENANT_1,
+        legalEntityId: ENTITY_1,
+        period: '2026-11',
+        encryptedTokens: 'v1.mismatch.tokens',
+        accessTokenExpiresAt: new Date(now.getTime() + 300_000),
+        expiresAt: new Date(now.getTime() + 28_800_000),
+        now,
+      }),
+    ).toEqual({ ok: false, reason: 'user_disabled_or_identity_revoked' });
 
     const created = await storeA.createSession({
       sessionIdHash,
@@ -261,7 +371,7 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
         sessionIdHash,
         now: new Date(now.getTime() + 2_000),
       }),
-    ).toEqual({ ok: false, reason: 'user_inactive_or_identity_revoked' });
+    ).toEqual({ ok: false, reason: 'user_disabled_or_identity_revoked' });
 
     // Analogicznie wyłączenie konta app_user natychmiast blokuje sesję drugiego użytkownika
     const sessionUser2Hash = sha256Hex('opaque-session-bartosz-1');
@@ -291,6 +401,6 @@ describe('Wave 2 Slice 2 — PostgresWebSessionStore (FORCE RLS, NOBYPASSRLS, ws
         sessionIdHash: sessionUser2Hash,
         now: new Date(now.getTime() + 2_000),
       }),
-    ).toEqual({ ok: false, reason: 'user_inactive_or_identity_revoked' });
+    ).toEqual({ ok: false, reason: 'user_disabled_or_identity_revoked' });
   });
 });

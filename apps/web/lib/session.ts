@@ -279,8 +279,6 @@ export function parseSessionCookies(raw: {
     return {
       oidcToken: trimmedToken,
       context: validated.data,
-      authMethod: 'synthetic_local_dev',
-      hasTenantMembership: true,
     };
   } catch {
     return null;

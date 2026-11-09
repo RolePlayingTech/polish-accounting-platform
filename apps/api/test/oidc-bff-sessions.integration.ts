@@ -202,7 +202,7 @@ describe('Wave 2 Slice 2 — OIDC Authorization Code + PKCE, współdzielone ses
       displayName: 'Nieuprawniony o tym samym emailu',
     });
 
-    dataSchema = `pap_w2s2_${randomUUID().replaceAll('-', '')}`;
+    dataSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
     owner = connectDatabase(process.env, dataSchema, { roleScope: 'migrator' });
     await owner.client`CREATE SCHEMA ${owner.client(dataSchema)}`;
     schemaCreated = true;
@@ -536,13 +536,13 @@ describe('Wave 2 Slice 2 — OIDC Authorization Code + PKCE, współdzielone ses
     expect(forgedRes.status).toBe(401);
 
     // Wylogowanie na instancji #1 unieważnia sesję również na instancji #2!
-    const revokeRes = await callBffInternalRpc<{ revoked: boolean }>(
+    const revokeRes = await callBffInternalRpc<{ ok: boolean; revoked: boolean }>(
       inst1.baseUrl,
       bffSecret,
       '/session/revoke',
       { sessionIdHash: annaSessionHash },
     );
-    expect(revokeRes.json).toEqual({ revoked: true });
+    expect(revokeRes.json).toEqual({ ok: true, revoked: true });
 
     const replayAfterLogoutOnInst2 = await callBffInternalRpc<{ ok: boolean; reason?: string }>(
       inst2.baseUrl,
@@ -550,7 +550,7 @@ describe('Wave 2 Slice 2 — OIDC Authorization Code + PKCE, współdzielone ses
       '/session/get',
       { sessionIdHash: annaSessionHash },
     );
-    expect(replayAfterLogoutOnInst2.json).toEqual({ ok: false, reason: 'revoked' });
+    expect(replayAfterLogoutOnInst2.json).toEqual({ ok: false, reason: 'session_revoked' });
 
     // Instancja API bez skonfigurowanego PAP_WEB_SESSION_SECRET zawodzi zamknięcie (503 auth_service_unavailable)
     const { PAP_WEB_SESSION_SECRET: _omitted, ...envWithoutSecret } = baseApiEnv;

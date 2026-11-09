@@ -159,6 +159,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     );
   }
 
+  const secFetchMode = request.headers.get('sec-fetch-mode')?.trim().toLowerCase();
+  const secFetchDest = request.headers.get('sec-fetch-dest')?.trim().toLowerCase();
+  if (
+    (secFetchMode && secFetchMode !== 'navigate') ||
+    (secFetchDest && secFetchDest !== 'document')
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reasonCode: 'invalid_navigation_context',
+        error:
+          'Inicjacja logowania OIDC metodą GET wymaga pełnej nawigacji dokumentu (użyj POST dla wywołań fetch/XHR).',
+      },
+      { status: 400, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+
   const url = new URL(request.url);
   const rawReturnTo = url.searchParams.get('returnTo') ?? undefined;
   const prefersJson = (request.headers.get('accept') ?? '').includes('application/json');

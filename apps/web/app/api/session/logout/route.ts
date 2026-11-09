@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import {
   OidcServiceUnavailableError,
   callApiBffSessionRpc,
+  resolveTrustedApplicationOrigin,
   sha256Hex,
 } from '../../../../lib/oidc-client';
 import { assertSameOriginMutation } from '../../../../lib/request-security';
@@ -9,6 +10,26 @@ import { shouldUseSecureSessionCookie } from '../../../../lib/runtime-mode';
 import { BFF_SESSION_COOKIE_NAME, clearSessionFromResponse } from '../../../../lib/session';
 
 const OPAQUE_SESSION_ID_REGEX = /^[A-Za-z0-9_-]{32,128}$/;
+
+function resolveCandidateRequestOrigin(request: NextRequest): string {
+  const url = new URL(request.url);
+  const forwardedProto = request.headers
+    .get('x-forwarded-proto')
+    ?.split(',')[0]
+    ?.trim()
+    .toLowerCase();
+  const forwardedHost = request.headers
+    .get('x-forwarded-host')
+    ?.split(',')[0]
+    ?.trim()
+    .toLowerCase();
+  const hostHeader = request.headers.get('host')?.trim().toLowerCase();
+
+  const protocol =
+    forwardedProto === 'https' || forwardedProto === 'http' ? `${forwardedProto}:` : url.protocol;
+  const host = forwardedHost || hostHeader || url.host;
+  return `${protocol}//${host}`;
+}
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const csrfError = assertSameOriginMutation(request);
@@ -62,8 +83,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return response;
   }
 
-  const requestOrigin = new URL(request.url).origin;
-  const response = NextResponse.redirect(new URL('/login', requestOrigin), {
+  const trustedOrigin = resolveTrustedApplicationOrigin(resolveCandidateRequestOrigin(request));
+  if (!trustedOrigin) {
+    const response = NextResponse.json(
+      {
+        ok: false,
+        reasonCode: 'untrusted_request_origin',
+        error: 'Odrzucono przekierowanie wylogowania dla niezaufanego originu żądania.',
+      },
+      { status: 400, headers: { 'Cache-Control': 'no-store' } },
+    );
+    clearSessionFromResponse(response, isSecure);
+    return response;
+  }
+
+  const response = NextResponse.redirect(new URL('/login', trustedOrigin), {
     status: 303,
     headers: { 'Cache-Control': 'no-store' },
   });

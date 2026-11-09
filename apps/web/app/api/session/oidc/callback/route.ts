@@ -43,7 +43,7 @@ interface MeCompaniesRemoteResponse {
   }[];
 }
 
-function resolveRequestOrigin(request: NextRequest): string {
+function resolveCandidateRequestOrigin(request: NextRequest): string {
   const url = new URL(request.url);
   const forwardedProto = request.headers
     .get('x-forwarded-proto')
@@ -63,16 +63,31 @@ function resolveRequestOrigin(request: NextRequest): string {
   return `${protocol}//${host}`;
 }
 
+function buildUntrustedOriginFailureResponse(): NextResponse {
+  const isSecure = shouldUseSecureSessionCookie();
+  const res = NextResponse.json(
+    {
+      ok: false,
+      reasonCode: 'untrusted_request_origin',
+      error:
+        'Odrzucono callback OIDC dla niezaufanego nagłówka Host / X-Forwarded-Host / X-Forwarded-Proto.',
+    },
+    { status: 400, headers: { 'Cache-Control': 'no-store' } },
+  );
+  clearSessionFromResponse(res, isSecure);
+  return res;
+}
+
 function buildCallbackFailureResponse(input: {
   readonly prefersJson: boolean;
-  readonly requestOrigin: string;
+  readonly trustedOrigin: string | null;
   readonly status: number;
   readonly reasonCode: string;
   readonly messagePl: string;
   readonly loginAuthState: string;
 }): NextResponse {
-  const isSecure = shouldUseSecureSessionCookie(input.requestOrigin);
-  if (input.prefersJson) {
+  const isSecure = shouldUseSecureSessionCookie(input.trustedOrigin ?? undefined);
+  if (input.prefersJson || !input.trustedOrigin) {
     const res = NextResponse.json(
       {
         ok: false,
@@ -85,7 +100,7 @@ function buildCallbackFailureResponse(input: {
     return res;
   }
 
-  const loginUrl = new URL('/login', input.requestOrigin);
+  const loginUrl = new URL('/login', input.trustedOrigin);
   loginUrl.searchParams.set('authState', input.loginAuthState);
   const res = NextResponse.redirect(loginUrl, {
     status: 303,
@@ -96,40 +111,60 @@ function buildCallbackFailureResponse(input: {
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
-  const requestOrigin = resolveRequestOrigin(request);
   const prefersJson = (request.headers.get('accept') ?? '').includes('application/json');
-  const url = new URL(request.url);
-
-  const oauthError = url.searchParams.get('error');
-  if (oauthError) {
-    return buildCallbackFailureResponse({
-      prefersJson,
-      requestOrigin,
-      status: 401,
-      reasonCode: 'oidc_provider_denied',
-      messagePl: 'Logowanie u dostawcy tożsamości OIDC zostało anulowane lub odrzucone.',
-      loginAuthState: 'session_expired_or_invalid',
-    });
-  }
-
-  const parsedQuery = OidcCallbackQuerySchema.safeParse({
-    code: url.searchParams.get('code') ?? undefined,
-    state: url.searchParams.get('state') ?? undefined,
-  });
-  if (!parsedQuery.success) {
-    return buildCallbackFailureResponse({
-      prefersJson,
-      requestOrigin,
-      status: 400,
-      reasonCode: 'invalid_callback_parameters',
-      messagePl: 'Brak wymaganych parametrów zwrotnych OIDC (code oraz state).',
-      loginAuthState: 'session_expired_or_invalid',
-    });
-  }
+  const candidateOrigin = resolveCandidateRequestOrigin(request);
+  let trustedOrigin: string | null = null;
 
   try {
     const config = loadWebOidcClientConfig();
-    const stateHash = sha256Hex(parsedQuery.data.state);
+    const allowedOrigins = new Set<string>();
+    for (const allowedUri of config.allowedRedirectUris) {
+      allowedOrigins.add(new URL(allowedUri).origin);
+    }
+
+    let normalizedCandidate: string;
+    try {
+      normalizedCandidate = new URL(candidateOrigin).origin;
+    } catch {
+      return buildUntrustedOriginFailureResponse();
+    }
+
+    if (!allowedOrigins.has(normalizedCandidate)) {
+      return buildUntrustedOriginFailureResponse();
+    }
+    trustedOrigin = normalizedCandidate;
+
+    const url = new URL(request.url);
+    const oauthError = url.searchParams.get('error');
+    if (oauthError) {
+      return buildCallbackFailureResponse({
+        prefersJson,
+        trustedOrigin,
+        status: 401,
+        reasonCode: 'oidc_provider_denied',
+        messagePl: 'Logowanie u dostawcy tożsamości OIDC zostało anulowane lub odrzucone.',
+        loginAuthState: 'session_expired_or_invalid',
+      });
+    }
+
+    const parsedQuery = OidcCallbackQuerySchema.safeParse({
+      code: url.searchParams.get('code') ?? undefined,
+      state: url.searchParams.get('state') ?? undefined,
+    });
+    const authCode = parsedQuery.success ? parsedQuery.data.code : undefined;
+    const authState = parsedQuery.success ? parsedQuery.data.state : undefined;
+    if (!parsedQuery.success || !authCode || !authState) {
+      return buildCallbackFailureResponse({
+        prefersJson,
+        trustedOrigin,
+        status: 400,
+        reasonCode: 'invalid_callback_parameters',
+        messagePl: 'Brak wymaganych parametrów zwrotnych OIDC (code oraz state).',
+        loginAuthState: 'session_expired_or_invalid',
+      });
+    }
+
+    const stateHash = sha256Hex(authState);
     const flowCookie = request.cookies.get(OIDC_FLOW_COOKIE_NAME)?.value;
 
     // Ochrona przed Login CSRF: przeglądarka kończąca przepływ OIDC musi posiadać podpisane ciasteczko
@@ -137,7 +172,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!verifyOidcFlowBindingCookie(flowCookie, stateHash)) {
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: 401,
         reasonCode: 'invalid_oidc_flow_binding',
         messagePl:
@@ -155,20 +190,27 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             readonly expiresAt: string;
           };
         }
-      | { readonly ok: false; readonly reason: 'not_found' | 'already_consumed' | 'expired' }
+      | {
+          readonly ok: false;
+          readonly reason:
+            | 'invalid_state_hash'
+            | 'state_not_found'
+            | 'state_already_consumed'
+            | 'state_expired';
+        }
     >('/oidc-state/consume', { stateHash });
 
     if (!consumed.ok) {
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: 401,
         reasonCode:
-          consumed.reason === 'already_consumed'
+          consumed.reason === 'state_already_consumed'
             ? 'oidc_state_replayed'
             : 'oidc_state_invalid_or_expired',
         messagePl:
-          consumed.reason === 'already_consumed'
+          consumed.reason === 'state_already_consumed'
             ? 'Wykryto ponowne użycie jednorazowego stanu OIDC (replay) — żądanie odrzucone.'
             : 'Sesja logowania OIDC wygasła lub stan jest nieprawidłowy. Rozpocznij logowanie ponownie.',
         loginAuthState: 'session_expired_or_invalid',
@@ -180,13 +222,21 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       `oidc_state:${stateHash}`,
     );
 
+    let flowRedirectOrigin: string;
+    try {
+      flowRedirectOrigin = new URL(flowPayload.redirectUri).origin;
+    } catch {
+      flowRedirectOrigin = '';
+    }
+
     if (
       flowPayload.issuer !== config.issuer ||
-      !config.allowedRedirectUris.includes(flowPayload.redirectUri)
+      !config.allowedRedirectUris.includes(flowPayload.redirectUri) ||
+      flowRedirectOrigin !== trustedOrigin
     ) {
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: 401,
         reasonCode: 'redirect_uri_or_issuer_mismatch',
         messagePl: 'Niezgodność wystawcy OIDC lub adresu zwrotnego redirect_uri.',
@@ -196,7 +246,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const metadata = await resolveOidcProviderMetadata(config);
     const exchanged = await exchangeAuthorizationCode({
-      code: parsedQuery.data.code,
+      code: authCode,
       codeVerifier: flowPayload.codeVerifier,
       redirectUri: flowPayload.redirectUri,
       expectedNonce: flowPayload.nonce,
@@ -218,7 +268,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (meResp.kind === 'unauthorized') {
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: 401,
         reasonCode: 'access_token_rejected',
         messagePl: 'Weryfikacja tokena dostępowego OIDC w rdzeniu API zakończyła się odmową.',
@@ -234,7 +284,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       const isNoMembership = reasonCode === 'identity_not_provisioned';
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: 403,
         reasonCode: isNoMembership ? 'no_tenant_membership' : reasonCode,
         messagePl:
@@ -245,6 +295,23 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
 
     const resolvedActor = meResp.data.actor;
+    if (
+      typeof resolvedActor?.userId !== 'string' ||
+      resolvedActor.userId.trim().length === 0 ||
+      resolvedActor.issuer !== exchanged.claims.issuer ||
+      resolvedActor.subject !== exchanged.claims.subject
+    ) {
+      return buildCallbackFailureResponse({
+        prefersJson,
+        trustedOrigin,
+        status: 401,
+        reasonCode: 'token_actor_mismatch',
+        messagePl:
+          'Niezgodność tożsamości (issuer, subject) między id_token a zweryfikowanym tokenem dostępowym API.',
+        loginAuthState: 'session_expired_or_invalid',
+      });
+    }
+
     const companies = meResp.data.companies ?? [];
     const primaryCompany = companies[0] ?? null;
 
@@ -286,7 +353,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (!created.ok) {
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: 403,
         reasonCode: 'inactive_user_account',
         messagePl: 'Konto użytkownika jest nieaktywne lub tożsamość OIDC została cofnięta.',
@@ -294,7 +361,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const safeReturnTo = sanitizeInternalRedirect(flowPayload.returnTo, '/app', requestOrigin);
+    const safeReturnTo = sanitizeInternalRedirect(flowPayload.returnTo, '/app', trustedOrigin);
 
     if (prefersJson) {
       const response = NextResponse.json(
@@ -312,22 +379,22 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         },
         { status: 200, headers: { 'Cache-Control': 'no-store' } },
       );
-      writeOpaqueBffSessionCookie(response, sessionId, requestOrigin, BFF_SESSION_TTL_SECONDS);
+      writeOpaqueBffSessionCookie(response, sessionId, trustedOrigin, BFF_SESSION_TTL_SECONDS);
       return response;
     }
 
-    const redirectTarget = new URL(safeReturnTo, requestOrigin);
+    const redirectTarget = new URL(safeReturnTo, trustedOrigin);
     const response = NextResponse.redirect(redirectTarget, {
       status: 303,
       headers: { 'Cache-Control': 'no-store' },
     });
-    writeOpaqueBffSessionCookie(response, sessionId, requestOrigin, BFF_SESSION_TTL_SECONDS);
+    writeOpaqueBffSessionCookie(response, sessionId, trustedOrigin, BFF_SESSION_TTL_SECONDS);
     return response;
   } catch (err) {
     if (err instanceof OidcConfigurationError || err instanceof OidcServiceUnavailableError) {
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: 503,
         reasonCode: 'auth_service_unavailable',
         messagePl: err.message,
@@ -337,7 +404,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     if (err instanceof OidcSecurityValidationError) {
       return buildCallbackFailureResponse({
         prefersJson,
-        requestOrigin,
+        trustedOrigin,
         status: err.statusCode,
         reasonCode: err.reasonCode,
         messagePl: err.message,
@@ -346,7 +413,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     }
     return buildCallbackFailureResponse({
       prefersJson,
-      requestOrigin,
+      trustedOrigin,
       status: 503,
       reasonCode: 'auth_service_unavailable',
       messagePl: 'Wystąpił błąd podczas finalizacji logowania OIDC (tryb fail-closed).',

@@ -224,9 +224,14 @@ export class InMemoryWebSessionStore implements WebSessionStorePort {
       return { ok: false, reason: 'state_already_exists' };
     }
 
+    let prunedStates = 0;
     for (const [hash, existing] of this.#authStates.entries()) {
       if (existing.expiresAt.getTime() <= now.getTime() - 3_600_000) {
         this.#authStates.delete(hash);
+        prunedStates += 1;
+        if (prunedStates >= 64) {
+          break;
+        }
       }
     }
 
@@ -300,6 +305,17 @@ export class InMemoryWebSessionStore implements WebSessionStorePort {
 
     if (this.#sessions.has(input.sessionIdHash)) {
       return { ok: false, reason: 'session_already_exists' };
+    }
+
+    let prunedSessions = 0;
+    for (const [hash, existing] of this.#sessions.entries()) {
+      if (existing.expiresAt.getTime() <= now.getTime() - 24 * 3_600_000) {
+        this.#sessions.delete(hash);
+        prunedSessions += 1;
+        if (prunedSessions >= 64) {
+          break;
+        }
+      }
     }
 
     const created: WebBffSessionRecord = freezeSessionRecord({
@@ -405,16 +421,19 @@ export class InMemoryWebSessionStore implements WebSessionStorePort {
       return current;
     }
 
-    if (current.session.refreshGeneration > input.expectedGeneration) {
-      return {
-        ok: true,
-        rotated: false,
-        alreadyAdvanced: true,
-        session: current.session,
-      };
-    }
-
-    if (current.session.refreshGeneration < input.expectedGeneration) {
+    if (current.session.refreshGeneration !== input.expectedGeneration) {
+      if (
+        input.expectedGeneration === current.session.refreshGeneration - 1 &&
+        current.session.previousGraceUntil !== null &&
+        now.getTime() <= current.session.previousGraceUntil.getTime()
+      ) {
+        return {
+          ok: true,
+          rotated: false,
+          alreadyAdvanced: true,
+          session: current.session,
+        };
+      }
       return { ok: false, reason: 'generation_conflict' };
     }
 

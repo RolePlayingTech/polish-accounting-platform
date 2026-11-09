@@ -210,6 +210,13 @@ export class BffSessionController {
     }
   }
 
+  private parseAllowedTestNow(raw: unknown): Date | undefined {
+    if (this.env['NODE_ENV'] !== 'test') {
+      return undefined;
+    }
+    return parseOptionalIsoDate(raw, 'now');
+  }
+
   private async runStoreOperation<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
@@ -244,7 +251,7 @@ export class BffSessionController {
     this.assertInternalBffAuth(request, body);
 
     const expiresAt = parseRequiredIsoDate(body['expiresAt'], 'expiresAt');
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(() =>
       this.sessionStore.createOidcAuthState({
@@ -269,7 +276,7 @@ export class BffSessionController {
       unknown
     >;
     this.assertInternalBffAuth(request, body);
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(async () => {
       const res = await this.sessionStore.consumeOidcAuthState({
@@ -310,7 +317,7 @@ export class BffSessionController {
       'accessTokenExpiresAt',
     );
     const expiresAt = parseRequiredIsoDate(body['expiresAt'], 'expiresAt');
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(async () => {
       const res = await this.sessionStore.createSession({
@@ -351,7 +358,7 @@ export class BffSessionController {
       unknown
     >;
     this.assertInternalBffAuth(request, body);
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(async () => {
       const res = await this.sessionStore.getSession({
@@ -380,7 +387,7 @@ export class BffSessionController {
       unknown
     >;
     this.assertInternalBffAuth(request, body);
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(async () => {
       const res = await this.sessionStore.updateSessionContext({
@@ -418,7 +425,7 @@ export class BffSessionController {
       'accessTokenExpiresAt',
     );
     const sessionExpiresAt = parseOptionalIsoDate(body['sessionExpiresAt'], 'sessionExpiresAt');
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(async () => {
       const res = await this.sessionStore.rotateSessionTokens({
@@ -457,7 +464,7 @@ export class BffSessionController {
       unknown
     >;
     this.assertInternalBffAuth(request, body);
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(() =>
       this.sessionStore.revokeSession({
@@ -479,7 +486,7 @@ export class BffSessionController {
       unknown
     >;
     this.assertInternalBffAuth(request, body);
-    const now = parseOptionalIsoDate(body['now'], 'now');
+    const now = this.parseAllowedTestNow(body['now']);
 
     return this.runStoreOperation(() =>
       this.sessionStore.revokeAllSessionsForUser({

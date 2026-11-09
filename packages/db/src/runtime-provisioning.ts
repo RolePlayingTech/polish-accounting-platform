@@ -24,7 +24,7 @@ CREATE INDEX IF NOT EXISTS pap_oidc_auth_state_expires_idx ON pap_oidc_auth_stat
 
 CREATE TABLE IF NOT EXISTS pap_bff_session (
   session_id_hash text PRIMARY KEY,
-  user_id uuid NOT NULL,
+  user_id uuid NOT NULL REFERENCES app_user(id),
   issuer text NOT NULL,
   subject text NOT NULL,
   display_name text NOT NULL,
@@ -110,12 +110,7 @@ BEGIN
   signed_cmd := c->'command';
   op_kind := cmd->>'kind';
 
-  IF op_kind IS NULL
-    OR signed_cmd->>'kind' IS DISTINCT FROM op_kind
-    OR signed_cmd->>'stateHash' IS DISTINCT FROM cmd->>'stateHash'
-    OR signed_cmd->>'sessionIdHash' IS DISTINCT FROM cmd->>'sessionIdHash'
-    OR signed_cmd->>'userId' IS DISTINCT FROM cmd->>'userId'
-  THEN
+  IF op_kind IS NULL OR signed_cmd IS DISTINCT FROM cmd THEN
     RAISE EXCEPTION 'Niezgodność podpisanej komendy magazynu sesji BFF' USING ERRCODE = '42501';
   END IF;
 
@@ -138,7 +133,12 @@ BEGIN
     END IF;
 
     DELETE FROM pap_oidc_auth_state
-    WHERE expires_at <= now_ts - interval '1 hour';
+    WHERE state_hash IN (
+      SELECT state_hash
+      FROM pap_oidc_auth_state
+      WHERE expires_at <= now_ts - interval '1 hour'
+      LIMIT 64
+    );
 
     IF EXISTS (
       SELECT 1 FROM pap_oidc_auth_state WHERE state_hash = (cmd->>'stateHash')
@@ -213,24 +213,28 @@ BEGIN
       RETURN jsonb_build_object('ok', false, 'reason', 'invalid_session_input');
     END IF;
 
-    IF EXISTS (
-      SELECT 1 FROM app_user u
+    IF NOT EXISTS (
+      SELECT 1
+      FROM app_user u
+      JOIN user_oidc_identity i ON i.user_id = u.id
       WHERE u.id = (cmd->>'userId')::uuid
-        AND (u.status <> 'active' OR u.disabled_at IS NOT NULL)
-    ) OR EXISTS (
-      SELECT 1 FROM user_oidc_identity i
-      JOIN app_user u ON u.id = i.user_id
-      WHERE i.issuer = (cmd->>'issuer')
+        AND u.status = 'active'
+        AND u.disabled_at IS NULL
+        AND i.issuer = (cmd->>'issuer')
         AND i.subject = (cmd->>'subject')
-        AND (
-          i.status <> 'active'
-          OR i.revoked_at IS NOT NULL
-          OR u.status <> 'active'
-          OR u.disabled_at IS NOT NULL
-        )
+        AND i.status = 'active'
+        AND i.revoked_at IS NULL
     ) THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'user_disabled_or_identity_revoked');
     END IF;
+
+    DELETE FROM pap_bff_session
+    WHERE session_id_hash IN (
+      SELECT session_id_hash
+      FROM pap_bff_session
+      WHERE expires_at <= now_ts - interval '24 hours'
+      LIMIT 64
+    );
 
     IF EXISTS (
       SELECT 1 FROM pap_bff_session WHERE session_id_hash = (cmd->>'sessionIdHash')
@@ -319,21 +323,17 @@ BEGIN
       RETURN jsonb_build_object('ok', false, 'reason', 'session_expired');
     END IF;
 
-    IF EXISTS (
-      SELECT 1 FROM app_user u
+    IF NOT EXISTS (
+      SELECT 1
+      FROM app_user u
+      JOIN user_oidc_identity i ON i.user_id = u.id
       WHERE u.id = sess_row.user_id
-        AND (u.status <> 'active' OR u.disabled_at IS NOT NULL)
-    ) OR EXISTS (
-      SELECT 1 FROM user_oidc_identity i
-      JOIN app_user u ON u.id = i.user_id
-      WHERE i.issuer = sess_row.issuer
+        AND u.status = 'active'
+        AND u.disabled_at IS NULL
+        AND i.issuer = sess_row.issuer
         AND i.subject = sess_row.subject
-        AND (
-          i.status <> 'active'
-          OR i.revoked_at IS NOT NULL
-          OR u.status <> 'active'
-          OR u.disabled_at IS NOT NULL
-        )
+        AND i.status = 'active'
+        AND i.revoked_at IS NULL
     ) THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'user_disabled_or_identity_revoked');
     END IF;
@@ -387,21 +387,17 @@ BEGIN
     IF sess_row.expires_at <= now_ts THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'session_expired');
     END IF;
-    IF EXISTS (
-      SELECT 1 FROM app_user u
+    IF NOT EXISTS (
+      SELECT 1
+      FROM app_user u
+      JOIN user_oidc_identity i ON i.user_id = u.id
       WHERE u.id = sess_row.user_id
-        AND (u.status <> 'active' OR u.disabled_at IS NOT NULL)
-    ) OR EXISTS (
-      SELECT 1 FROM user_oidc_identity i
-      JOIN app_user u ON u.id = i.user_id
-      WHERE i.issuer = sess_row.issuer
+        AND u.status = 'active'
+        AND u.disabled_at IS NULL
+        AND i.issuer = sess_row.issuer
         AND i.subject = sess_row.subject
-        AND (
-          i.status <> 'active'
-          OR i.revoked_at IS NOT NULL
-          OR u.status <> 'active'
-          OR u.disabled_at IS NOT NULL
-        )
+        AND i.status = 'active'
+        AND i.revoked_at IS NULL
     ) THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'user_disabled_or_identity_revoked');
     END IF;
@@ -468,55 +464,53 @@ BEGIN
     IF sess_row.expires_at <= now_ts THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'session_expired');
     END IF;
-    IF EXISTS (
-      SELECT 1 FROM app_user u
+    IF NOT EXISTS (
+      SELECT 1
+      FROM app_user u
+      JOIN user_oidc_identity i ON i.user_id = u.id
       WHERE u.id = sess_row.user_id
-        AND (u.status <> 'active' OR u.disabled_at IS NOT NULL)
-    ) OR EXISTS (
-      SELECT 1 FROM user_oidc_identity i
-      JOIN app_user u ON u.id = i.user_id
-      WHERE i.issuer = sess_row.issuer
+        AND u.status = 'active'
+        AND u.disabled_at IS NULL
+        AND i.issuer = sess_row.issuer
         AND i.subject = sess_row.subject
-        AND (
-          i.status <> 'active'
-          OR i.revoked_at IS NOT NULL
-          OR u.status <> 'active'
-          OR u.disabled_at IS NOT NULL
-        )
+        AND i.status = 'active'
+        AND i.revoked_at IS NULL
     ) THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'user_disabled_or_identity_revoked');
     END IF;
 
-    IF sess_row.refresh_generation > expected_gen THEN
-      RETURN jsonb_build_object(
-        'ok', true,
-        'rotated', false,
-        'alreadyAdvanced', true,
-        'session', jsonb_build_object(
-          'sessionIdHash', sess_row.session_id_hash,
-          'userId', sess_row.user_id,
-          'issuer', sess_row.issuer,
-          'subject', sess_row.subject,
-          'displayName', sess_row.display_name,
-          'email', sess_row.email,
-          'tenantId', sess_row.tenant_id,
-          'legalEntityId', sess_row.legal_entity_id,
-          'period', sess_row.period,
-          'encryptedTokens', sess_row.encrypted_tokens,
-          'accessTokenExpiresAt', to_char(sess_row.access_token_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-          'refreshGeneration', sess_row.refresh_generation,
-          'previousEncryptedTokens', sess_row.previous_encrypted_tokens,
-          'previousAccessTokenExpiresAt', CASE WHEN sess_row.previous_access_token_expires_at IS NULL THEN NULL ELSE to_char(sess_row.previous_access_token_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
-          'previousGraceUntil', CASE WHEN sess_row.previous_grace_until IS NULL THEN NULL ELSE to_char(sess_row.previous_grace_until, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
-          'expiresAt', to_char(sess_row.expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-          'revokedAt', NULL,
-          'createdAt', to_char(sess_row.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
-          'updatedAt', to_char(sess_row.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
-        )
-      );
-    END IF;
-
-    IF sess_row.refresh_generation < expected_gen THEN
+    IF sess_row.refresh_generation <> expected_gen THEN
+      IF expected_gen = sess_row.refresh_generation - 1
+        AND sess_row.previous_grace_until IS NOT NULL
+        AND now_ts <= sess_row.previous_grace_until
+      THEN
+        RETURN jsonb_build_object(
+          'ok', true,
+          'rotated', false,
+          'alreadyAdvanced', true,
+          'session', jsonb_build_object(
+            'sessionIdHash', sess_row.session_id_hash,
+            'userId', sess_row.user_id,
+            'issuer', sess_row.issuer,
+            'subject', sess_row.subject,
+            'displayName', sess_row.display_name,
+            'email', sess_row.email,
+            'tenantId', sess_row.tenant_id,
+            'legalEntityId', sess_row.legal_entity_id,
+            'period', sess_row.period,
+            'encryptedTokens', sess_row.encrypted_tokens,
+            'accessTokenExpiresAt', to_char(sess_row.access_token_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'refreshGeneration', sess_row.refresh_generation,
+            'previousEncryptedTokens', sess_row.previous_encrypted_tokens,
+            'previousAccessTokenExpiresAt', CASE WHEN sess_row.previous_access_token_expires_at IS NULL THEN NULL ELSE to_char(sess_row.previous_access_token_expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
+            'previousGraceUntil', CASE WHEN sess_row.previous_grace_until IS NULL THEN NULL ELSE to_char(sess_row.previous_grace_until, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') END,
+            'expiresAt', to_char(sess_row.expires_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'revokedAt', NULL,
+            'createdAt', to_char(sess_row.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'updatedAt', to_char(sess_row.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          )
+        );
+      END IF;
       RETURN jsonb_build_object('ok', false, 'reason', 'generation_conflict');
     END IF;
 

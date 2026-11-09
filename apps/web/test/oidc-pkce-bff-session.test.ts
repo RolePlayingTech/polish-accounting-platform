@@ -12,7 +12,10 @@ import { NextRequest } from 'next/server';
 import { describe, expect, it } from 'vitest';
 import { POST as loginPost } from '../app/api/session/login/route.js';
 import { POST as logoutPost } from '../app/api/session/logout/route.js';
-import { POST as oidcAuthorizePost } from '../app/api/session/oidc/authorize/route.js';
+import {
+  GET as oidcAuthorizeGet,
+  POST as oidcAuthorizePost,
+} from '../app/api/session/oidc/authorize/route.js';
 import { GET as oidcCallbackGet } from '../app/api/session/oidc/callback/route.js';
 import { POST as refreshPost } from '../app/api/session/refresh/route.js';
 import {
@@ -410,6 +413,7 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
     >();
     const bffSessions = new Map<string, Record<string, unknown>>();
     let forceStoreUnavailable = false;
+    let forceActorSubjectOverride: string | null = null;
     let idpIssuer = '';
 
     const server = createServer(async (req, res) => {
@@ -526,7 +530,7 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
             actor: {
               userId: '11111111-1111-4111-8111-000000000901',
               issuer: idpIssuer,
-              subject: 'anna-sub',
+              subject: forceActorSubjectOverride ?? 'anna-sub',
               displayName: 'Anna Księgowa',
             },
             companies: [
@@ -589,11 +593,11 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
         if (url.pathname.endsWith('/oidc-state/consume')) {
           const st = bffStates.get(String(body['stateHash']));
           if (!st) {
-            sendJson(res, 200, { ok: false, reason: 'not_found' });
+            sendJson(res, 200, { ok: false, reason: 'state_not_found' });
             return;
           }
           if (st.consumed) {
-            sendJson(res, 200, { ok: false, reason: 'already_consumed' });
+            sendJson(res, 200, { ok: false, reason: 'state_already_consumed' });
             return;
           }
           st.consumed = true;
@@ -627,11 +631,11 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
         if (url.pathname.endsWith('/session/get')) {
           const rec = bffSessions.get(String(body['sessionIdHash']));
           if (!rec) {
-            sendJson(res, 200, { ok: false, reason: 'not_found' });
+            sendJson(res, 200, { ok: false, reason: 'session_not_found' });
             return;
           }
           if (rec['revokedAt']) {
-            sendJson(res, 200, { ok: false, reason: 'revoked' });
+            sendJson(res, 200, { ok: false, reason: 'session_revoked' });
             return;
           }
           sendJson(res, 200, { ok: true, session: rec });
@@ -640,7 +644,7 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
         if (url.pathname.endsWith('/session/rotate')) {
           const rec = bffSessions.get(String(body['sessionIdHash']));
           if (!rec || rec['revokedAt']) {
-            sendJson(res, 200, { ok: false, reason: 'revoked' });
+            sendJson(res, 200, { ok: false, reason: 'session_revoked' });
             return;
           }
           const expectedGen = Number(body['expectedGeneration']);
@@ -649,6 +653,7 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
             rec['refreshGeneration'] = currentGen + 1;
             rec['encryptedTokens'] = body['encryptedTokens'];
             rec['accessTokenExpiresAt'] = body['accessTokenExpiresAt'];
+            rec['previousGraceUntil'] = new Date(Date.now() + 30_000).toISOString();
             rec['updatedAt'] = nowIso;
             sendJson(res, 200, {
               ok: true,
@@ -658,7 +663,11 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
             });
             return;
           }
-          if (expectedGen === currentGen - 1) {
+          if (
+            expectedGen === currentGen - 1 &&
+            typeof rec['previousGraceUntil'] === 'string' &&
+            Date.now() <= new Date(rec['previousGraceUntil']).getTime()
+          ) {
             sendJson(res, 200, {
               ok: true,
               rotated: false,
@@ -675,7 +684,7 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
           if (rec) {
             rec['revokedAt'] = nowIso;
           }
-          sendJson(res, 200, { revoked: Boolean(rec) });
+          sendJson(res, 200, { ok: true, revoked: Boolean(rec) });
           return;
         }
       }
@@ -706,7 +715,7 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
     process.env.PAP_OIDC_ALLOWED_REDIRECT_URIS = `${redirectUri1},${redirectUri2}`;
 
     try {
-      // 1. Ochrona CSRF na POST /api/session/oidc/authorize
+      // 1. Ochrona CSRF na POST /api/session/oidc/authorize oraz Sec-Fetch-* na GET (P2-1)
       const csrfAuthorize = await oidcAuthorizePost(
         new NextRequest(`${webOrigin1}/api/session/oidc/authorize`, {
           method: 'POST',
@@ -719,6 +728,85 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
         }),
       );
       expect(csrfAuthorize.status).toBe(403);
+
+      const subresourceGetAuthorize = await oidcAuthorizeGet(
+        new NextRequest(`${webOrigin1}/api/session/oidc/authorize`, {
+          method: 'GET',
+          headers: {
+            host: '127.0.0.1:3101',
+            'sec-fetch-site': 'same-site',
+            'sec-fetch-mode': 'no-cors',
+            'sec-fetch-dest': 'image',
+          },
+        }),
+      );
+      expect(subresourceGetAuthorize.status).toBe(400);
+      await expect(subresourceGetAuthorize.json()).resolves.toMatchObject({
+        reasonCode: 'invalid_navigation_context',
+      });
+
+      // P1-1: Odrzucenie sfałszowanego X-Forwarded-Host na callbacku błędnym (zero Open Redirect!)
+      const spoofedHostCallback = await oidcCallbackGet(
+        new NextRequest(`${redirectUri1}?error=access_denied`, {
+          headers: {
+            host: '127.0.0.1:3101',
+            'x-forwarded-host': 'evil.example',
+            'x-forwarded-proto': 'https',
+          },
+        }),
+      );
+      expect(spoofedHostCallback.status).toBe(400);
+      expect(spoofedHostCallback.headers.get('location')).toBeNull();
+      await expect(spoofedHostCallback.json()).resolves.toMatchObject({
+        reasonCode: 'untrusted_request_origin',
+      });
+
+      // P1-2: Odrzucenie rozjazdu (issuer, subject) między id_token a odpowiedzią /api/v1/me/companies
+      const mismatchInitRes = await oidcAuthorizePost(
+        new NextRequest(`${webOrigin1}/api/session/oidc/authorize`, {
+          method: 'POST',
+          headers: {
+            host: '127.0.0.1:3101',
+            origin: webOrigin1,
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ returnTo: '/app' }),
+        }),
+      );
+      const mismatchFlowCookie = mismatchInitRes.cookies.get(OIDC_FLOW_COOKIE_NAME)?.value!;
+      const mismatchAuthUrl = new URL(
+        ((await mismatchInitRes.json()) as { authorizationUrl: string }).authorizationUrl,
+      );
+      const mismatchCode = `code_mismatch_${randomUUID()}`;
+      oidcCodes.set(mismatchCode, {
+        codeChallenge: mismatchAuthUrl.searchParams.get('code_challenge')!,
+        nonce: mismatchAuthUrl.searchParams.get('nonce')!,
+        redirectUri: redirectUri1,
+        subject: 'anna-sub',
+        email: 'anna@alfa.pl',
+        name: 'Anna Księgowa',
+        consumed: false,
+        expired: false,
+      });
+      forceActorSubjectOverride = 'bartosz-sub';
+      const mismatchCallback = await oidcCallbackGet(
+        new NextRequest(
+          `${redirectUri1}?code=${encodeURIComponent(mismatchCode)}&state=${encodeURIComponent(mismatchAuthUrl.searchParams.get('state')!)}`,
+          {
+            headers: {
+              host: '127.0.0.1:3101',
+              accept: 'application/json',
+              cookie: `${OIDC_FLOW_COOKIE_NAME}=${mismatchFlowCookie}`,
+            },
+          },
+        ),
+      );
+      forceActorSubjectOverride = null;
+      expect(mismatchCallback.status).toBe(401);
+      await expect(mismatchCallback.json()).resolves.toMatchObject({
+        reasonCode: 'token_actor_mismatch',
+      });
 
       // 2. Poprawne rozpoczęcie logowania Anny na Instancji Web #1
       const authInitRes = await oidcAuthorizePost(

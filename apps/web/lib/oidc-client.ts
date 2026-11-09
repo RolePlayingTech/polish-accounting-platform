@@ -9,6 +9,7 @@ import {
   randomBytes,
   timingSafeEqual,
   verify as cryptoVerify,
+  type JsonWebKey as CryptoJsonWebKey,
 } from 'node:crypto';
 import { isIP } from 'node:net';
 import { resolveValidatedApiBaseUrl } from './api-url';
@@ -694,6 +695,62 @@ export function resolveRedirectUriForOrigin(
   );
 }
 
+/**
+ * Weryfikuje origin kandydujący z żądania HTTP względem skonfigurowanej białej listy originów aplikacji
+ * (`PAP_OIDC_REDIRECT_URI`, `PAP_OIDC_ALLOWED_REDIRECT_URIS`, `PAP_APP_PUBLIC_ORIGIN`), a w `LOCAL_DEV`
+ * bez skonfigurowanego OIDC dopuszcza wyłącznie loopback (`localhost` / `127.0.0.1`).
+ */
+export function resolveTrustedApplicationOrigin(
+  candidateOrigin: string,
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): string | null {
+  let normalizedCandidate: string;
+  try {
+    const u = new URL(candidateOrigin);
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+      return null;
+    }
+    normalizedCandidate = u.origin;
+  } catch {
+    return null;
+  }
+
+  const allowedOrigins = new Set<string>();
+  const rawPrimary = env['PAP_OIDC_REDIRECT_URI']?.trim();
+  const rawExtra = env['PAP_OIDC_ALLOWED_REDIRECT_URIS']?.trim();
+  const rawPublicOrigin = env['PAP_APP_PUBLIC_ORIGIN']?.trim();
+
+  for (const raw of [rawPrimary, ...(rawExtra ? rawExtra.split(',') : []), rawPublicOrigin]) {
+    if (!raw?.trim()) continue;
+    try {
+      const parsed = new URL(raw.trim());
+      if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+        allowedOrigins.add(parsed.origin);
+      }
+    } catch {
+      // Niepoprawne wpisy konfiguracji zostaną odrzucone przez loadWebOidcClientConfig.
+    }
+  }
+
+  if (allowedOrigins.size > 0) {
+    return allowedOrigins.has(normalizedCandidate) ? normalizedCandidate : null;
+  }
+
+  try {
+    const mode = resolveWebRuntimeMode(env);
+    if (mode === 'LOCAL_DEV' && env['NODE_ENV'] !== 'production') {
+      const parsed = new URL(normalizedCandidate);
+      if (LOOPBACK_HOSTS.has(parsed.hostname.toLowerCase())) {
+        return normalizedCandidate;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export function generatePkceAndFlowMaterial(): {
   readonly state: string;
   readonly stateHash: string;
@@ -938,7 +995,7 @@ function verifyJwsSignatureWithNodeCrypto(
   }
 
   const pubKey = createPublicKey({
-    key: jwk as JsonWebKey,
+    key: jwk as CryptoJsonWebKey,
     format: 'jwk',
   });
 

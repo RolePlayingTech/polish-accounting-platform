@@ -62,8 +62,8 @@ export function isSyntheticPersonaLoginAllowed(
 
 /**
  * Określa, czy ciasteczka sesji BFF muszą posiadać atrybut `Secure`.
- * Zawsze `true` w `NODE_ENV=production`, dla protokołu `https:` oraz we wszystkich trybach innych niż `LOCAL_DEV`
- * (chyba że środowisko testowe Vitest/HTTP loopback działa bez TLS w `NODE_ENV=test` z `PAP_ALLOW_HTTP_LOOPBACK_TEST_COOKIES=true`).
+ * Wymusza `Secure: true` bezwarunkowo poza `LOCAL_DEV` oraz w `NODE_ENV=production`
+ * (niezależnie od nagłówków żądania `Host` / `X-Forwarded-Proto`).
  */
 export function shouldUseSecureSessionCookie(
   requestUrl?: string | undefined,
@@ -71,23 +71,6 @@ export function shouldUseSecureSessionCookie(
 ): boolean {
   if (env['NODE_ENV'] === 'production') {
     return true;
-  }
-  if (requestUrl) {
-    try {
-      const parsed = new URL(requestUrl);
-      if (parsed.protocol === 'https:') {
-        return true;
-      }
-      if (
-        env['NODE_ENV'] === 'test' &&
-        env['PAP_ALLOW_HTTP_LOOPBACK_TEST_COOKIES'] === 'true' &&
-        (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost')
-      ) {
-        return false;
-      }
-    } catch {
-      return true;
-    }
   }
 
   try {
@@ -97,6 +80,15 @@ export function shouldUseSecureSessionCookie(
     }
   } catch {
     return true;
+  }
+
+  if (requestUrl) {
+    try {
+      const parsed = new URL(requestUrl);
+      return parsed.protocol === 'https:';
+    } catch {
+      return true;
+    }
   }
 
   return false;
