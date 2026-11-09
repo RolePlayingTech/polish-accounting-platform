@@ -69,7 +69,7 @@ async function bootApiInstance(
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule.register(env),
     new FastifyAdapter({ logger: false }),
-    { logger: false },
+    { logger: false, abortOnError: false },
   );
   await app.listen(0, '127.0.0.1');
   const addr = app.getHttpServer().address();
@@ -259,6 +259,7 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     return {
       NODE_ENV: 'test',
       PAP_RUNTIME_MODE: 'STAGING_PRIVATE',
+      PAP_OIDC_ENV: 'test',
       PAP_DATABASE_ENV: 'test',
       DATABASE_URL: runtimeUrl,
       PAP_DB_SCHEMA: dataSchema,
