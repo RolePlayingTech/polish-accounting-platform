@@ -175,7 +175,7 @@ export async function runBootstrapOwnerCli(
     );
     return 1;
   } finally {
-    if (runtime) {
+    if (runtime?.close) {
       await runtime.close().catch(() => undefined);
     }
   }
