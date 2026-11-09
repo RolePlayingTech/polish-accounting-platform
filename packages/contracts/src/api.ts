@@ -144,15 +144,21 @@ export const IssueSandboxTokenResponseSchema = z
 
 export type IssueSandboxTokenResponse = z.infer<typeof IssueSandboxTokenResponseSchema>;
 
+export const OidcSigningAlgSchema = z.enum(['ES256', 'RS256', 'PS256', 'EdDSA']);
+export type OidcSigningAlgContract = z.infer<typeof OidcSigningAlgSchema>;
+
 export const OidcDiscoveryDocumentSchema = z
   .object({
     issuer: z.string().min(1),
+    authorization_endpoint: z.string().min(1).optional(),
+    end_session_endpoint: z.string().min(1).optional(),
     jwks_uri: z.string().min(1),
     token_endpoint: z.string().min(1),
     response_types_supported: z.array(z.string().min(1)),
     grant_types_supported: z.array(z.string().min(1)),
+    code_challenge_methods_supported: z.array(z.literal('S256')).min(1).optional(),
     subject_types_supported: z.array(z.string().min(1)),
-    id_token_signing_alg_values_supported: z.array(z.literal('ES256')),
+    id_token_signing_alg_values_supported: z.array(OidcSigningAlgSchema).min(1),
     token_endpoint_auth_methods_supported: z.array(z.string().min(1)),
     scopes_supported: z.array(z.string().min(1)),
   })
@@ -1523,5 +1529,284 @@ export const CompanyAuditListResponseSchema = z
   .strict();
 
 export type CompanyAuditListResponse = z.infer<typeof CompanyAuditListResponseSchema>;
+
+/** 17. Wave 2: Real OIDC Authentication, BFF Sessions, Owner Bootstrap & Tenant Invitations */
+export const RuntimeModeSchema = z.enum([
+  'LOCAL_DEV',
+  'STAGING_PRIVATE',
+  'PUBLIC_DEMO',
+  'PRODUCTION',
+]);
+export type RuntimeModeContract = z.infer<typeof RuntimeModeSchema>;
+
+export const AuthSessionStateCodeSchema = z.enum([
+  'authenticated',
+  'signed_out',
+  'signing_in',
+  'session_expired_or_invalid',
+  'no_tenant_membership',
+  'invitation_pending_or_expired',
+  'insufficient_permissions',
+  'auth_service_unavailable',
+]);
+export type AuthSessionStateCode = z.infer<typeof AuthSessionStateCodeSchema>;
+
+export const SafeRelativeRedirectPathSchema = z
+  .string()
+  .min(1)
+  .max(512)
+  .refine(
+    (val) =>
+      val.startsWith('/') &&
+      !val.startsWith('//') &&
+      !val.includes('\\') &&
+      !/[\u0000-\u001F\u007F]/.test(val),
+    'Dozwolona jest wyłącznie wewnętrzna ścieżka względna zaczynająca się od pojedynczego ukośnika (/).',
+  );
+export type SafeRelativeRedirectPath = z.infer<typeof SafeRelativeRedirectPathSchema>;
+
+export const OidcAuthorizeRequestSchema = z
+  .object({
+    returnTo: SafeRelativeRedirectPathSchema.optional(),
+    invitationToken: z.string().min(24).max(256).optional(),
+  })
+  .strict();
+export type OidcAuthorizeRequest = z.infer<typeof OidcAuthorizeRequestSchema>;
+
+export const OidcAuthorizeResponseSchema = z
+  .object({
+    authorizationUrl: z.string().url(),
+    state: z.string().min(16).max(256),
+    expiresAt: IsoUtcTimestampSchema,
+  })
+  .strict();
+export type OidcAuthorizeResponse = z.infer<typeof OidcAuthorizeResponseSchema>;
+
+export const OidcCallbackQuerySchema = z
+  .object({
+    code: z.string().min(8).max(2048).optional(),
+    state: z.string().min(16).max(256).optional(),
+    error: z.string().min(1).max(120).optional(),
+    error_description: z.string().min(1).max(500).optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (!val.error && (!val.code || !val.state)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['code'],
+        message: 'Callback OIDC wymaga pary (code, state) lub kodu błędu dostawcy (error).',
+      });
+    }
+  });
+export type OidcCallbackQuery = z.infer<typeof OidcCallbackQuerySchema>;
+
+export const TenantMembershipSummarySchema = z
+  .object({
+    tenantId: UuidSelectorSchema,
+    tenantName: z.string().min(1).max(240),
+    role: TenantMemberRoleSchema,
+    status: z.enum(['active', 'revoked']),
+    validFrom: IsoUtcTimestampSchema,
+    validUntil: IsoUtcTimestampSchema.nullable(),
+  })
+  .strict();
+export type TenantMembershipSummaryContract = z.infer<typeof TenantMembershipSummarySchema>;
+
+export const AuthenticatedSessionViewSchema = z
+  .object({
+    state: AuthSessionStateCodeSchema,
+    authMethod: z.enum(['oidc', 'sandbox_persona']),
+    userId: UuidSelectorSchema,
+    issuer: z.string().min(1),
+    subject: z.string().min(1),
+    displayName: z.string().min(1).max(160),
+    email: SafeEmailAddressSchema,
+    tenantId: UuidSelectorSchema.nullable(),
+    legalEntityId: UuidSelectorSchema.nullable(),
+    period: TaxPeriodMonthSchema,
+    memberships: z.array(TenantMembershipSummarySchema),
+    companies: z.array(AccessibleCompanyItemSchema),
+    sessionExpiresAt: IsoUtcTimestampSchema,
+    accessTokenExpiresAt: IsoUtcTimestampSchema,
+    personaId: z.string().min(1).max(64).optional(),
+  })
+  .strict();
+export type AuthenticatedSessionView = z.infer<typeof AuthenticatedSessionViewSchema>;
+
+export const UpdateSessionContextRequestSchema = z
+  .object({
+    tenantId: UuidSelectorSchema.optional(),
+    legalEntityId: UuidSelectorSchema.optional(),
+    period: TaxPeriodMonthSchema.optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (!val.tenantId && !val.legalEntityId && !val.period) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['tenantId'],
+        message: 'Wymagane jest podanie co najmniej jednego pola kontekstu (tenantId, legalEntityId lub period).',
+      });
+    }
+  });
+export type UpdateSessionContextRequest = z.infer<typeof UpdateSessionContextRequestSchema>;
+
+export const BootstrapOwnerRequestSchema = z
+  .object({
+    issuer: z.string().min(1).max(512),
+    subject: z.string().min(1).max(256),
+    displayName: z.string().min(2).max(160),
+    email: SafeEmailAddressSchema,
+    tenantName: z.string().min(2).max(240),
+    tenantId: UuidSelectorSchema.optional(),
+    userId: UuidSelectorSchema.optional(),
+    initialCompany: CreateCompanyRequestSchema.optional(),
+    operationId: UuidSelectorSchema.optional(),
+  })
+  .strict();
+export type BootstrapOwnerRequest = z.infer<typeof BootstrapOwnerRequestSchema>;
+
+export const BootstrapOwnerResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    idempotentReplay: z.boolean(),
+    userId: UuidSelectorSchema,
+    issuer: z.string().min(1),
+    subject: z.string().min(1),
+    displayName: z.string().min(1),
+    email: SafeEmailAddressSchema,
+    tenantId: UuidSelectorSchema,
+    tenantName: z.string().min(1),
+    role: z.literal('tenant_owner'),
+    legalEntityId: UuidSelectorSchema.nullable(),
+    operationId: UuidSelectorSchema,
+    occurredAt: IsoUtcTimestampSchema,
+  })
+  .strict();
+export type BootstrapOwnerResponse = z.infer<typeof BootstrapOwnerResponseSchema>;
+
+export const TenantInvitationStatusSchema = z.enum([
+  'pending',
+  'accepted',
+  'expired',
+  'revoked',
+  'rejected',
+]);
+export type TenantInvitationStatusContract = z.infer<typeof TenantInvitationStatusSchema>;
+
+export const InvitationCompanyGrantDraftSchema = z
+  .object({
+    legalEntityId: UuidSelectorSchema,
+    actions: z.array(z.enum(['read', 'write'])).min(1).max(2),
+  })
+  .strict();
+export type InvitationCompanyGrantDraft = z.infer<typeof InvitationCompanyGrantDraftSchema>;
+
+export const CreateTenantInvitationRequestSchema = z
+  .object({
+    inviteeEmail: SafeEmailAddressSchema,
+    inviteeDisplayName: z.string().min(2).max(160).optional(),
+    intendedRole: TenantMemberRoleSchema,
+    initialCompanyGrants: z.array(InvitationCompanyGrantDraftSchema).max(50).optional(),
+    expiresInHours: z.number().int().min(1).max(720).optional(),
+    operationId: UuidSelectorSchema.optional(),
+  })
+  .strict();
+export type CreateTenantInvitationRequest = z.infer<typeof CreateTenantInvitationRequestSchema>;
+
+export const TenantInvitationItemSchema = z
+  .object({
+    invitationId: UuidSelectorSchema,
+    tenantId: UuidSelectorSchema,
+    tenantName: z.string().min(1).max(240),
+    inviteeMaskedEmail: z.string().min(3).max(160),
+    inviteeDisplayName: z.string().min(1).max(160).nullable(),
+    intendedRole: TenantMemberRoleSchema,
+    initialCompanyGrants: z.array(InvitationCompanyGrantDraftSchema),
+    status: TenantInvitationStatusSchema,
+    invitedByUserId: UuidSelectorSchema,
+    invitedByDisplayName: z.string().min(1).max(160),
+    createdAt: IsoUtcTimestampSchema,
+    expiresAt: IsoUtcTimestampSchema,
+    acceptedAt: IsoUtcTimestampSchema.nullable(),
+    acceptedByUserId: UuidSelectorSchema.nullable(),
+    revokedAt: IsoUtcTimestampSchema.nullable(),
+    rejectedAt: IsoUtcTimestampSchema.nullable(),
+  })
+  .strict();
+export type TenantInvitationItemContract = z.infer<typeof TenantInvitationItemSchema>;
+
+export const CreateTenantInvitationResponseSchema = z
+  .object({
+    invitation: TenantInvitationItemSchema,
+    invitationToken: z.string().min(24).max(256),
+    acceptPath: SafeRelativeRedirectPathSchema,
+    auditEventId: z.string().min(1),
+  })
+  .strict();
+export type CreateTenantInvitationResponse = z.infer<typeof CreateTenantInvitationResponseSchema>;
+
+export const ListTenantInvitationsResponseSchema = z
+  .object({
+    tenantId: UuidSelectorSchema,
+    invitations: z.array(TenantInvitationItemSchema),
+  })
+  .strict();
+export type ListTenantInvitationsResponse = z.infer<typeof ListTenantInvitationsResponseSchema>;
+
+export const AcceptTenantInvitationRequestSchema = z
+  .object({
+    invitationToken: z.string().min(24).max(256),
+    displayName: z.string().min(2).max(160).optional(),
+    operationId: UuidSelectorSchema.optional(),
+  })
+  .strict();
+export type AcceptTenantInvitationRequest = z.infer<typeof AcceptTenantInvitationRequestSchema>;
+
+export const AcceptTenantInvitationResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    invitation: TenantInvitationItemSchema,
+    membership: TenantMembershipSummarySchema,
+    grantedCompanyIds: z.array(UuidSelectorSchema),
+    auditEventId: z.string().min(1),
+  })
+  .strict();
+export type AcceptTenantInvitationResponse = z.infer<typeof AcceptTenantInvitationResponseSchema>;
+
+export const RevokeTenantInvitationRequestSchema = z
+  .object({
+    reason: z.string().min(3).max(400).optional(),
+    operationId: UuidSelectorSchema.optional(),
+  })
+  .strict();
+export type RevokeTenantInvitationRequest = z.infer<typeof RevokeTenantInvitationRequestSchema>;
+
+export const RevokeTenantInvitationResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    invitation: TenantInvitationItemSchema,
+    auditEventId: z.string().min(1),
+  })
+  .strict();
+export type RevokeTenantInvitationResponse = z.infer<typeof RevokeTenantInvitationResponseSchema>;
+
+export const RejectTenantInvitationRequestSchema = z
+  .object({
+    invitationToken: z.string().min(24).max(256),
+    reason: z.string().min(3).max(400).optional(),
+  })
+  .strict();
+export type RejectTenantInvitationRequest = z.infer<typeof RejectTenantInvitationRequestSchema>;
+
+export const RejectTenantInvitationResponseSchema = z
+  .object({
+    ok: z.literal(true),
+    invitation: TenantInvitationItemSchema,
+    auditEventId: z.string().min(1),
+  })
+  .strict();
+export type RejectTenantInvitationResponse = z.infer<typeof RejectTenantInvitationResponseSchema>;
 
 export { DocumentLineItemSchema, JournalEntryLineSchema };
