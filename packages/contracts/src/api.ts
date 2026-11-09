@@ -1560,7 +1560,10 @@ export const SafeRelativeRedirectPathSchema = z
       val.startsWith('/') &&
       !val.startsWith('//') &&
       !val.includes('\\') &&
-      !/[\u0000-\u001F\u007F]/.test(val),
+      ![...val].some((ch) => {
+        const code = ch.charCodeAt(0);
+        return code <= 0x1f || code === 0x7f;
+      }),
     'Dozwolona jest wyłącznie wewnętrzna ścieżka względna zaczynająca się od pojedynczego ukośnika (/).',
   );
 export type SafeRelativeRedirectPath = z.infer<typeof SafeRelativeRedirectPathSchema>;
