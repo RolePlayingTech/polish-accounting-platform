@@ -553,6 +553,7 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
       tokenSha256: driftTokenSha256,
       inviteeEmail: 'ntp-drift@syntetyczny.example',
       intendedRole: 'tenant_member',
+      initialCompanyGrants: [],
       reason: 'Test odporności na dryf zegara NTP',
       expiresAt: new Date(Date.now() + 3_600_000),
       now: driftFutureNow,
@@ -580,6 +581,7 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
       tokenSha256: accountlessRejectTokenSha256,
       inviteeEmail: 'bezkontowy.odrzucajacy@syntetyczny.example',
       intendedRole: 'tenant_member',
+      initialCompanyGrants: [],
       reason: 'Zaproszenie do testu bezkontowego odrzucenia',
       expiresAt: new Date(Date.now() + 3_600_000),
     });
