@@ -41,6 +41,8 @@ interface RefreshTokenRecord {
 }
 
 export interface IsolatedOidcIdpOptions {
+  readonly port?: number | undefined;
+  readonly interactiveConsentInBrowser?: boolean | undefined;
   readonly clientId?: string | undefined;
   readonly clientSecret?: string | undefined;
   readonly resourceAudience?: string | undefined;
@@ -99,6 +101,15 @@ async function readRequestBody(req: IncomingMessage): Promise<string> {
     chunks.push(typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk);
   }
   return Buffer.concat(chunks).toString('utf8');
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -183,10 +194,6 @@ export async function startIsolatedOidcIdp(
         const rawScope =
           url.searchParams.get('scope') ??
           'openid profile email pap:ui:full pap:mcp:read pap:mcp:prepare';
-        const loginSubject =
-          url.searchParams.get('test_subject') ??
-          req.headers['x-test-oidc-subject']?.toString() ??
-          Array.from(usersBySubject.keys())[0];
 
         if (
           responseType !== 'code' ||
@@ -201,6 +208,37 @@ export async function startIsolatedOidcIdp(
           sendJson(res, 400, { error: 'invalid_request' });
           return;
         }
+
+        if (url.searchParams.get('test_cancel') === '1') {
+          const cb = new URL(redirectUri);
+          cb.searchParams.set('error', 'access_denied');
+          cb.searchParams.set('state', state);
+          res.writeHead(302, { Location: cb.toString(), 'Cache-Control': 'no-store' });
+          res.end();
+          return;
+        }
+
+        const explicitSubject =
+          url.searchParams.get('test_subject') ??
+          req.headers['x-test-oidc-subject']?.toString();
+
+        if (options.interactiveConsentInBrowser && !explicitSubject) {
+          const userButtons = Array.from(usersBySubject.values())
+            .map(
+              (u) =>
+                `<button type="submit" name="test_subject" value="${escapeHtml(u.subject)}" style="display:block;width:100%;margin-top:8px;padding:10px 14px;border-radius:6px;border:1px solid #1d5c42;background:#1d5c42;color:#fff;font-weight:600;cursor:pointer;">Zaloguj jako ${escapeHtml(u.displayName)} (${escapeHtml(u.email)})</button>`,
+            )
+            .join('');
+          const html = `<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>Izolowany dostawca OIDC (Test IdP)</title></head><body style="font-family:system-ui,sans-serif;max-width:480px;margin:40px auto;padding:24px;background:#faf9f5;color:#191c1a;"><h1 style="font-size:20px;">Zewnętrzny dostawca tożsamości OIDC</h1><p style="font-size:14px;color:#464c48;">Wybierz konto do uwierzytelnienia OAuth 2.0 + PKCE (S256):</p><form method="get" action="/authorize"><input type="hidden" name="response_type" value="${escapeHtml(responseType)}"><input type="hidden" name="client_id" value="${escapeHtml(reqClientId)}"><input type="hidden" name="redirect_uri" value="${escapeHtml(redirectUri)}"><input type="hidden" name="state" value="${escapeHtml(state)}"><input type="hidden" name="nonce" value="${escapeHtml(nonce)}"><input type="hidden" name="code_challenge" value="${escapeHtml(codeChallenge)}"><input type="hidden" name="code_challenge_method" value="${escapeHtml(codeChallengeMethod)}"><input type="hidden" name="scope" value="${escapeHtml(rawScope)}">${userButtons}<button type="submit" name="test_cancel" value="1" style="display:block;width:100%;margin-top:12px;padding:8px 14px;border-radius:6px;border:1px solid #858177;background:#fff;color:#191c1a;cursor:pointer;">Anuluj logowanie</button></form></body></html>`;
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Cache-Control': 'no-store',
+          });
+          res.end(html);
+          return;
+        }
+
+        const loginSubject = explicitSubject ?? Array.from(usersBySubject.keys())[0];
 
         const user = loginSubject ? usersBySubject.get(loginSubject) : undefined;
         if (!user) {
@@ -442,7 +480,7 @@ export async function startIsolatedOidcIdp(
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve());
+    server.listen(options.port ?? 0, '127.0.0.1', () => resolve());
   });
 
   const address = server.address();

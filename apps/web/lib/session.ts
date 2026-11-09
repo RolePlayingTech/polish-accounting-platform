@@ -289,7 +289,7 @@ function mapBffRecordToActiveSession(
   record: SerializedBffSessionRecord,
   tokens: StoredBffTokenBundle,
 ): ActiveWebSession {
-  const hasMembership = Boolean(record.tenantId && record.legalEntityId);
+  const hasMembership = Boolean(record.tenantId);
   return {
     oidcToken: tokens.accessToken,
     authMethod: 'oidc',
@@ -302,9 +302,11 @@ function mapBffRecordToActiveSession(
       userId: record.userId,
       displayName: record.displayName,
       email: record.email,
-      roleSummaryPl: hasMembership
-        ? 'Użytkownik uwierzytelniony OIDC'
-        : 'Konto OIDC bez przypisanej organizacji',
+      roleSummaryPl: !hasMembership
+        ? 'Konto OIDC bez przypisanej organizacji'
+        : record.legalEntityId
+          ? 'Użytkownik uwierzytelniony OIDC'
+          : 'Użytkownik OIDC (wybór lub utworzenie podmiotu)',
       tenantId: record.tenantId ?? '',
       legalEntityId: record.legalEntityId ?? '',
       period: record.period,

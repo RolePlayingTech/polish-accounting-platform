@@ -12,16 +12,31 @@ import { WorkspaceAccessDeniedCard } from '../../components/access-denied-card';
 import { SystemStatusDiagnosticSection } from '../../components/system-status-section';
 import { AcademyDisclaimerBanner } from '../../components/ui-controls';
 import { WorkspaceShell } from '../../components/workspace-shell';
-import { mapDomainExplanationToBasisInfo } from '../../lib/field-help';
+import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../lib/field-help';
 import { readPublicSystemStatus } from '../../lib/read-system-status';
+import { isSyntheticPersonaLoginAllowed } from '../../lib/runtime-mode';
 import { readServerSession } from '../../lib/session';
 import {
   WorkspaceAccessError,
+  getAuthenticatedSessionOverview,
   getDashboardSnapshot,
   listAccessibleCompaniesForSession,
 } from '../../lib/synthetic-workspace';
+import { OidcOnboardingClient } from './oidc-onboarding-client';
 
-export default async function AppDashboardPage() {
+const SAFE_INVITE_TOKEN_REGEX = /^[A-Za-z0-9_-]{24,256}$/;
+
+export default async function AppDashboardPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ invite?: string }>;
+}) {
+  const resolvedParams = searchParams ? await searchParams : {};
+  const rawInvite =
+    typeof resolvedParams.invite === 'string' ? resolvedParams.invite.trim() : '';
+  const inviteToken = SAFE_INVITE_TOKEN_REGEX.test(rawInvite) ? rawInvite : undefined;
+  const allowPersonas = isSyntheticPersonaLoginAllowed();
+
   const [systemStatus, session] = await Promise.all([
     readPublicSystemStatus(),
     readServerSession(),
@@ -56,14 +71,98 @@ export default async function AppDashboardPage() {
       }
     }
 
+    if (session && session.authMethod === 'oidc') {
+      let meOverview: Awaited<ReturnType<typeof getAuthenticatedSessionOverview>> = null;
+      let overviewError: { status: number; reason: string; message: string } | null = null;
+      try {
+        meOverview = await getAuthenticatedSessionOverview(session);
+      } catch (err) {
+        if (err instanceof WorkspaceAccessError) {
+          overviewError = {
+            status: err.statusCode,
+            reason: err.reasonCode,
+            message: err.message,
+          };
+        } else {
+          overviewError = {
+            status: 503,
+            reason: 'auth_service_unavailable',
+            message: 'Nie udało się zweryfikować stanu sesji i członkostwa w API.',
+          };
+        }
+      }
+
+      const activeMemberships = (meOverview?.memberships ?? []).map((m) => ({
+        tenantId: m.tenantId,
+        tenantName: m.tenantName,
+        role: m.role,
+      }));
+      const hasAdminMembership = activeMemberships.some(
+        (m) => m.role === 'tenant_owner' || m.role === 'tenant_admin',
+      );
+      const onboardingMode =
+        !meOverview || meOverview.state === 'no_tenant_membership' || activeMemberships.length === 0
+          ? 'invitation_only'
+          : hasAdminMembership && fallbackAccessible.length === 0
+            ? 'owner_first_company'
+            : 'member_no_company_grants';
+
+      return (
+        <WorkspaceShell
+          activeHref="/app"
+          pageEyebrow="Pulpit organizacji · Księga Współczesna"
+          pageTitle={
+            onboardingMode === 'owner_first_company'
+              ? 'Skonfiguruj pierwszy podmiot w organizacji'
+              : onboardingMode === 'invitation_only'
+                ? 'Dołącz do organizacji'
+                : 'Wybór podmiotu i uprawnienia w organizacji'
+          }
+          pageSubtitle="Każdy podmiot prawny oraz operacja księgowa podlegają izolacji międzyorganizacyjnej i jawnej autoryzacji człowieka."
+          sessionContext={session.context}
+          activeCompany={null}
+          accessibleCompanies={fallbackAccessible}
+          allowSyntheticLogin={allowPersonas}
+        >
+          <div className="space-y-6">
+            {overviewError ? (
+              <WorkspaceAccessDeniedCard
+                statusCode={overviewError.status}
+                reasonCode={overviewError.reason}
+                messagePl={overviewError.message}
+                accessibleCompanies={fallbackAccessible}
+              />
+            ) : (
+              <OidcOnboardingClient
+                mode={onboardingMode}
+                initialInviteToken={inviteToken}
+                memberships={activeMemberships}
+                accessibleCompanies={fallbackAccessible}
+                helpMap={{
+                  nip: mustResolveUiFieldHelp('nip'),
+                  taxRegime: mustResolveUiFieldHelp('tax_regime'),
+                }}
+              />
+            )}
+            <AcademyDisclaimerBanner />
+          </div>
+        </WorkspaceShell>
+      );
+    }
+
     return (
       <WorkspaceShell
         activeHref="/app"
         pageEyebrow="Pulpit księgowy · Księga Współczesna"
         pageTitle="Warsztat księgowy i status platformy"
-        pageSubtitle="Zaloguj się na syntetyczną personę testową, aby pracować na księgach JDG i Sp. z o.o., lub przejdź bezpośrednio do Akademii Polskiej Księgowości."
+        pageSubtitle={
+          allowPersonas
+            ? 'Zaloguj się na syntetyczną personę testową, aby pracować na księgach JDG i Sp. z o.o., lub przejdź bezpośrednio do Akademii Polskiej Księgowości.'
+            : 'Zaloguj się do aplikacji przez dostawcę tożsamości OIDC lub przejdź do Akademii Polskiej Księgowości.'
+        }
         sessionContext={null}
         activeCompany={null}
+        allowSyntheticLogin={allowPersonas}
       >
         <div className="space-y-6">
           {session && sessionError ? (
@@ -78,7 +177,11 @@ export default async function AppDashboardPage() {
           <Card
             as="div"
             tone="accent"
-            eyebrow="Środowisko demonstracyjne na danych syntetycznych"
+            eyebrow={
+              allowPersonas
+                ? 'Środowisko demonstracyjne na danych syntetycznych'
+                : 'Warsztat polskiej księgowości 2025/2026'
+            }
             title="Rozpocznij pracę w księdze lub otwórz kurs księgowości"
           >
             <p className="max-w-3xl text-sm leading-relaxed text-[#464c48]">
@@ -90,10 +193,14 @@ export default async function AppDashboardPage() {
 
             <div className="mt-5 flex flex-wrap items-center gap-3">
               <Link
-                href="/login"
+                href={
+                  inviteToken
+                    ? `/login?invite=${encodeURIComponent(inviteToken)}`
+                    : '/login'
+                }
                 className="inline-flex min-h-10 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-4 py-2 text-sm font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
               >
-                Zaloguj się do środowiska testowego
+                {allowPersonas ? 'Zaloguj się do środowiska testowego' : 'Zaloguj się do aplikacji'}
               </Link>
               <Link
                 href="/academy"
@@ -188,6 +295,7 @@ export default async function AppDashboardPage() {
       sessionContext={session.context}
       activeCompany={snapshot.activeCompany}
       accessibleCompanies={snapshot.accessibleCompanies}
+      allowSyntheticLogin={allowPersonas}
       pageActions={
         <div className="flex flex-wrap items-center gap-2">
           <Link
@@ -206,6 +314,18 @@ export default async function AppDashboardPage() {
       }
     >
       <div className="space-y-6">
+        {session.authMethod === 'oidc' && inviteToken ? (
+          <OidcOnboardingClient
+            mode="inline_invite_banner"
+            initialInviteToken={inviteToken}
+            memberships={[]}
+            accessibleCompanies={snapshot.accessibleCompanies}
+            helpMap={{
+              nip: mustResolveUiFieldHelp('nip'),
+              taxRegime: mustResolveUiFieldHelp('tax_regime'),
+            }}
+          />
+        ) : null}
         <div
           data-testid="dashboard-financial-overview"
           className="grid gap-3.5 sm:grid-cols-2 xl:grid-cols-5"

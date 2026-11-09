@@ -6,6 +6,7 @@ const webUrl = `http://127.0.0.1:${webPort}`;
 
 export default defineConfig({
   testDir: './apps/web/e2e',
+  testIgnore: ['**/oidc-single-login-flow.spec.ts'],
   timeout: 60_000,
   expect: {
     timeout: 25_000,

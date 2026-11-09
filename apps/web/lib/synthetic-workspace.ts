@@ -1,4 +1,11 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import type {
+  AuthenticatedSessionView,
+  CreateTenantInvitationResponse,
+  ListTenantInvitationsResponse,
+  RevokeTenantInvitationResponse,
+  TenantInvitationItemContract,
+} from '@pap/contracts';
 import {
   POLISH_LEGAL_RULES_REGISTRY,
   STANDARD_SPZOO_CHART_OF_ACCOUNTS,
@@ -1802,7 +1809,10 @@ function getPreviousMonthPeriod(period: string): string {
   return `${String(year)}-${String(month - 1).padStart(2, '0')}`;
 }
 
-function assertValidSessionIdentity(session: ActiveWebSession | null): ActiveWebSession {
+function assertValidSessionIdentity(
+  session: ActiveWebSession | null,
+  options?: { readonly requireActiveCompany?: boolean },
+): ActiveWebSession {
   if (!session) {
     throw new WorkspaceAccessError(
       401,
@@ -1810,6 +1820,8 @@ function assertValidSessionIdentity(session: ActiveWebSession | null): ActiveWeb
       'Sesja wygasła lub użytkownik nie jest zalogowany. Zaloguj się ponownie na ekranie logowania.',
     );
   }
+
+  const requireActiveCompany = options?.requireActiveCompany ?? true;
 
   if (session.authMethod === 'oidc') {
     const token = session.oidcToken.trim();
@@ -1833,11 +1845,7 @@ function assertValidSessionIdentity(session: ActiveWebSession | null): ActiveWeb
       );
     }
 
-    if (
-      session.hasTenantMembership === false ||
-      !session.context.tenantId ||
-      !session.context.legalEntityId
-    ) {
+    if (session.hasTenantMembership === false || !session.context.tenantId) {
       throw new WorkspaceAccessError(
         403,
         'no_tenant_membership',
@@ -1845,15 +1853,30 @@ function assertValidSessionIdentity(session: ActiveWebSession | null): ActiveWeb
       );
     }
 
-    if (
-      !STRICT_UUID_REGEX.test(session.context.tenantId) ||
-      !STRICT_UUID_REGEX.test(session.context.legalEntityId)
-    ) {
+    if (!STRICT_UUID_REGEX.test(session.context.tenantId)) {
       throw new WorkspaceAccessError(
         401,
         'invalid_session_context',
-        'Kontekst sesji BFF zawiera nieprawidłowy identyfikator UUID — zaloguj się ponownie.',
+        'Kontekst sesji BFF zawiera nieprawidłowy identyfikator organizacji UUID — zaloguj się ponownie.',
       );
+    }
+
+    if (requireActiveCompany) {
+      if (!session.context.legalEntityId) {
+        throw new WorkspaceAccessError(
+          403,
+          'no_company_selected',
+          'Organizacja nie posiada jeszcze utworzonego podmiotu prawnego lub Twoje konto nie ma aktywnego grantu do żadnej firmy.',
+        );
+      }
+
+      if (!STRICT_UUID_REGEX.test(session.context.legalEntityId)) {
+        throw new WorkspaceAccessError(
+          401,
+          'invalid_session_context',
+          'Kontekst sesji BFF zawiera nieprawidłowy identyfikator podmiotu UUID — zaloguj się ponownie.',
+        );
+      }
     }
 
     return session;
@@ -2018,7 +2041,10 @@ export async function verifySessionAccess(
 export async function listAccessibleCompaniesForSession(
   session: ActiveWebSession,
 ): Promise<readonly CompanyProfileRecord[]> {
-  assertValidSessionIdentity(session);
+  if (session.authMethod === 'oidc' && (!session.context.tenantId || session.hasTenantMembership === false)) {
+    return [];
+  }
+  assertValidSessionIdentity(session, { requireActiveCompany: false });
 
   if (!isOfflineDemoModeEnabled()) {
     const remote = await papBffFetch<{
@@ -2460,10 +2486,77 @@ export async function getDashboardSnapshot(session: ActiveWebSession): Promise<D
   };
 }
 
+export interface TenantDirectoryMemberSummary {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly maskedEmail: string;
+  readonly tenantRole: 'tenant_owner' | 'tenant_admin' | 'tenant_member';
+  readonly status: 'active' | 'revoked';
+}
+
+export async function getAuthenticatedSessionOverview(
+  session: ActiveWebSession,
+): Promise<AuthenticatedSessionView | null> {
+  if (isOfflineDemoModeEnabled()) {
+    return null;
+  }
+  const token = session.oidcToken.trim();
+  if (token.length < 16 || !STRICT_UUID_REGEX.test(session.context.userId)) {
+    throw new WorkspaceAccessError(
+      401,
+      'invalid_session_context',
+      'Sesja uwierzytelniania jest niepoprawna — zaloguj się ponownie.',
+    );
+  }
+  const remote = await papBffFetch<AuthenticatedSessionView>('/api/v1/me/session', {
+    method: 'GET',
+    bearerToken: token,
+  });
+  if (remote.kind === 'not_found') {
+    return null;
+  }
+  if (remote.kind !== 'ok') {
+    throwWorkspaceErrorFromRemote(
+      remote,
+      'Usługa API (apps/api) jest niedostępna (503) — nie można odczytać stanu tożsamości i członkostwa.',
+    );
+  }
+  return remote.data;
+}
+
+export async function listTenantInvitationsForSession(
+  session: ActiveWebSession,
+): Promise<readonly TenantInvitationItemContract[]> {
+  if (isOfflineDemoModeEnabled()) {
+    return [];
+  }
+  assertValidSessionIdentity(session, { requireActiveCompany: false });
+  const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
+  const remote = await papBffFetch<ListTenantInvitationsResponse>(
+    `/api/v1/tenants/${safeTenantId}/invitations`,
+    {
+      method: 'GET',
+      bearerToken: session.oidcToken,
+    },
+  );
+  if (remote.kind === 'forbidden' || remote.kind === 'not_found') {
+    return [];
+  }
+  if (remote.kind !== 'ok') {
+    throwWorkspaceErrorFromRemote(
+      remote,
+      'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać listy zaproszeń organizacji.',
+    );
+  }
+  return remote.data.invitations;
+}
+
 export async function getCompaniesManagementSnapshot(session: ActiveWebSession): Promise<{
   readonly activeCompany: CompanyProfileRecord;
   readonly accessibleCompanies: readonly CompanyProfileRecord[];
   readonly grants: readonly CompanyUserGrantRecord[];
+  readonly members: readonly TenantDirectoryMemberSummary[];
+  readonly invitations: readonly TenantInvitationItemContract[];
   readonly auditLog: readonly AuditLogEntryRecord[];
   readonly zusPreview: MonthlyZusContributionsResult | null;
 }> {
@@ -2472,15 +2565,9 @@ export async function getCompaniesManagementSnapshot(session: ActiveWebSession):
   if (!isOfflineDemoModeEnabled()) {
     const safeTenantId = assertUuidPathParam(activeCompany.tenantId, 'tenantId');
     const safeEntityId = assertUuidPathParam(activeCompany.legalEntityId, 'legalEntityId');
-    const [grantsRes, auditRes] = await Promise.all([
+    const [grantsRes, auditRes, invitations] = await Promise.all([
       papBffFetch<{
-        members: readonly {
-          readonly userId: string;
-          readonly displayName: string;
-          readonly maskedEmail: string;
-          readonly tenantRole: 'tenant_owner' | 'tenant_admin' | 'tenant_member';
-          readonly status: 'active' | 'revoked';
-        }[];
+        members: readonly TenantDirectoryMemberSummary[];
         grants: readonly {
           readonly grantId: string;
           readonly userId: string;
@@ -2509,6 +2596,7 @@ export async function getCompaniesManagementSnapshot(session: ActiveWebSession):
         method: 'GET',
         bearerToken: session.oidcToken,
       }),
+      listTenantInvitationsForSession(session),
     ]);
 
     if (grantsRes.kind !== 'ok') {
@@ -2582,7 +2670,15 @@ export async function getCompaniesManagementSnapshot(session: ActiveWebSession):
       });
     }
 
-    return { activeCompany, accessibleCompanies, grants, auditLog, zusPreview };
+    return {
+      activeCompany,
+      accessibleCompanies,
+      grants,
+      members: grantsRes.data.members,
+      invitations,
+      auditLog,
+      zusPreview,
+    };
   }
 
   const store = getStore();
@@ -2609,7 +2705,15 @@ export async function getCompaniesManagementSnapshot(session: ActiveWebSession):
     });
   }
 
-  return { activeCompany, accessibleCompanies, grants, auditLog, zusPreview };
+  return {
+    activeCompany,
+    accessibleCompanies,
+    grants,
+    members: [],
+    invitations: [],
+    auditLog,
+    zusPreview,
+  };
 }
 
 export async function getDocumentsForActiveCompany(
@@ -3221,7 +3325,7 @@ export async function createCompanyMutation(
     readonly vatStatus: 'czynny' | 'zwolniony_art_113';
   },
 ): Promise<CompanyProfileRecord> {
-  assertValidSessionIdentity(session);
+  assertValidSessionIdentity(session, { requireActiveCompany: false });
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
 
   const nipCheck = validatePolishNip(input.nip);
@@ -3551,6 +3655,140 @@ export async function manageCompanyGrantMutation(
         `Cofnięto grant dostępu (${target.grantId}) dla ${target.userDisplayName}.`,
       );
     }
+  }
+}
+
+export async function createTenantInvitationMutation(
+  session: ActiveWebSession,
+  input: {
+    readonly inviteeEmail: string;
+    readonly inviteeDisplayName?: string;
+    readonly intendedRole: 'tenant_admin' | 'tenant_member';
+    readonly initialCompanyGrants?: readonly {
+      readonly legalEntityId: string;
+      readonly actions: readonly ('read' | 'write')[];
+    }[];
+    readonly expiresInHours?: number;
+    readonly reason: string;
+  },
+): Promise<CreateTenantInvitationResponse> {
+  assertValidSessionIdentity(session, { requireActiveCompany: false });
+  const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
+
+  if (isOfflineDemoModeEnabled()) {
+    throw new WorkspaceAccessError(
+      501,
+      'offline_demo_unsupported',
+      'Zaproszenia OIDC wymagają połączonej usługi API.',
+    );
+  }
+
+  const trimmedEmail = input.inviteeEmail.trim();
+  const trimmedName = input.inviteeDisplayName?.trim();
+  const trimmedReason = input.reason.trim() || 'Zaproszenie do współpracy w organizacji';
+
+  const remote = await papBffFetch<CreateTenantInvitationResponse>(
+    `/api/v1/tenants/${safeTenantId}/invitations`,
+    {
+      method: 'POST',
+      bearerToken: session.oidcToken,
+      body: {
+        inviteeEmail: trimmedEmail,
+        ...(trimmedName && trimmedName.length >= 2 ? { inviteeDisplayName: trimmedName } : {}),
+        intendedRole: input.intendedRole,
+        ...(input.initialCompanyGrants && input.initialCompanyGrants.length > 0
+          ? {
+              initialCompanyGrants: input.initialCompanyGrants.map((g) => ({
+                legalEntityId: g.legalEntityId,
+                actions: [...g.actions],
+              })),
+            }
+          : {}),
+        ...(input.expiresInHours ? { expiresInHours: input.expiresInHours } : {}),
+        reason: trimmedReason,
+      },
+    },
+  );
+  if (remote.kind !== 'ok') {
+    throwWorkspaceErrorFromRemote(
+      remote,
+      'Nie udało się wystawić jednorazowego zaproszenia do organizacji w API.',
+    );
+  }
+  return remote.data;
+}
+
+export async function revokeTenantInvitationMutation(
+  session: ActiveWebSession,
+  input: {
+    readonly invitationId: string;
+    readonly reason: string;
+  },
+): Promise<RevokeTenantInvitationResponse> {
+  assertValidSessionIdentity(session, { requireActiveCompany: false });
+  const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
+  const safeInvitationId = assertUuidPathParam(input.invitationId, 'invitationId');
+
+  if (isOfflineDemoModeEnabled()) {
+    throw new WorkspaceAccessError(
+      501,
+      'offline_demo_unsupported',
+      'Cofanie zaproszeń OIDC wymaga połączonej usługi API.',
+    );
+  }
+
+  const remote = await papBffFetch<RevokeTenantInvitationResponse>(
+    `/api/v1/tenants/${safeTenantId}/invitations/${safeInvitationId}/revoke`,
+    {
+      method: 'POST',
+      bearerToken: session.oidcToken,
+      body: {
+        reason: input.reason.trim() || 'Cofnięcie zaproszenia przez administratora organizacji',
+      },
+    },
+  );
+  if (remote.kind !== 'ok') {
+    throwWorkspaceErrorFromRemote(remote, 'Nie udało się cofnąć zaproszenia w API.');
+  }
+  return remote.data;
+}
+
+export async function revokeTenantMembershipMutation(
+  session: ActiveWebSession,
+  input: {
+    readonly targetUserId: string;
+    readonly reason: string;
+  },
+): Promise<void> {
+  assertValidSessionIdentity(session, { requireActiveCompany: false });
+  const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
+  const safeTargetUserId = assertUuidPathParam(input.targetUserId, 'targetUserId');
+
+  if (isOfflineDemoModeEnabled()) {
+    throw new WorkspaceAccessError(
+      501,
+      'offline_demo_unsupported',
+      'Cofanie członkostwa w organizacji wymaga połączonej usługi API.',
+    );
+  }
+
+  const remote = await papBffFetch<AccessMutationResponse>(
+    `/api/v1/tenants/${safeTenantId}/memberships/${safeTargetUserId}/revoke`,
+    {
+      method: 'POST',
+      bearerToken: session.oidcToken,
+      body: {
+        reason:
+          input.reason.trim() ||
+          'Natychmiastowe cofnięcie członkostwa i dostępu do podmiotów organizacji',
+      },
+    },
+  );
+  if (remote.kind !== 'ok') {
+    throwWorkspaceErrorFromRemote(
+      remote,
+      'Nie udało się cofnąć członkostwa użytkownika w organizacji.',
+    );
   }
 }
 

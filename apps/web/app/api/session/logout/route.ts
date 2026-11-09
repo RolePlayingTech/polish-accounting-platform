@@ -6,7 +6,10 @@ import {
   sha256Hex,
 } from '../../../../lib/oidc-client';
 import { assertSameOriginMutation } from '../../../../lib/request-security';
-import { shouldUseSecureSessionCookie } from '../../../../lib/runtime-mode';
+import {
+  isSyntheticPersonaLoginAllowed,
+  shouldUseSecureSessionCookie,
+} from '../../../../lib/runtime-mode';
 import { BFF_SESSION_COOKIE_NAME, clearSessionFromResponse } from '../../../../lib/session';
 
 const OPAQUE_SESSION_ID_REGEX = /^[A-Za-z0-9_-]{32,128}$/;
@@ -75,8 +78,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       return response;
     }
 
+    const postLogoutRedirect = isSyntheticPersonaLoginAllowed()
+      ? '/login'
+      : '/login?authState=signed_out';
     const response = NextResponse.json(
-      { ok: true, redirectTo: '/login' },
+      { ok: true, redirectTo: postLogoutRedirect },
       { headers: { 'Cache-Control': 'no-store' } },
     );
     clearSessionFromResponse(response, isSecure);
@@ -97,7 +103,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return response;
   }
 
-  const response = NextResponse.redirect(new URL('/login', trustedOrigin), {
+  const postLogoutRedirect = isSyntheticPersonaLoginAllowed()
+    ? '/login'
+    : '/login?authState=signed_out';
+  const response = NextResponse.redirect(new URL(postLogoutRedirect, trustedOrigin), {
     status: 303,
     headers: { 'Cache-Control': 'no-store' },
   });
