@@ -373,9 +373,10 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
       },
       body: JSON.stringify({
         displayName: 'Alfa Usługi Księgowe JDG',
-        nip: '5250002008',
+        nip: '5213004125',
         legalForm: 'jdg',
         profileCode: 'jdg_kpir_liniowy',
+        vatStatus: 'czynny',
       }),
     });
     expect(createComp1Res.status).toBe(201);
@@ -389,9 +390,10 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
       },
       body: JSON.stringify({
         displayName: 'Alfa Audyt Sp. z o.o.',
-        nip: '5213017228',
+        nip: '7792301205',
         legalForm: 'sp_z_o_o',
         profileCode: 'spzoo_pelne_ksiegi',
+        vatStatus: 'czynny',
       }),
     });
     expect(createComp2Res.status).toBe(201);

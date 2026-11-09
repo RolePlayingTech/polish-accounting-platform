@@ -98,13 +98,14 @@ function buildOidcVerifier(
 export function createApiRuntimeServices(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): ApiRuntimeServices {
+  const runtimeMode = resolveApiRuntimeMode(env);
+
   if (hasConfiguredDatabaseUrl(env)) {
     throw new DatabaseConfigError(
       'Skonfigurowano DATABASE_URL — użyj asynchronicznej fabryki createApiRuntimeServicesAsync, aby zweryfikować zabezpieczenia RLS i połączyć z PostgreSQL 18.6.',
     );
   }
 
-  const runtimeMode = resolveApiRuntimeMode(env);
   const sandboxOidc = new SandboxOidcService(env);
   const seedDemoData =
     runtimeMode !== null && runtimeMode !== 'LOCAL_DEV'
