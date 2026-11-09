@@ -36,7 +36,6 @@ import {
 } from '@pap/application';
 import {
   decideAccessManagementAuthorization,
-  grantId as parseGrantId,
   legalEntityId as parseLegalEntityId,
   tenantId as parseTenantId,
   userId as parseUserId,
@@ -774,7 +773,7 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
               operationId: randomUUID(),
               tenantId: canonicalTenantId,
               userId: canonicalInviteeId,
-              validUntil: inviterValidUntil,
+              validUntil: inviterValidUntil ? inviterValidUntil.toISOString() : null,
             },
             decisionAtIso: decisionNowIso,
             requestId: input.operationId,
@@ -795,13 +794,13 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
             const probeCmd: AccessManagementCommand = {
               kind: 'grant',
               operationId: randomUUID(),
-              grantId: parseGrantId(randomUUID()),
+              grantId: randomUUID(),
               tenantId: canonicalTenantId,
               userId: canonicalInviteeId,
               legalEntityId: firstEntityId,
               action: 'read',
-              validFrom: decisionNow,
-              validUntil: inviterValidUntil,
+              validFrom: decisionNowIso,
+              validUntil: inviterValidUntil ? inviterValidUntil.toISOString() : null,
             };
             await this.#signer.apply(tx, {
               purpose: 'facts',
@@ -825,7 +824,7 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
 
             inviterGrants = lockedGrantRows.map((g) => ({
               ...g,
-              grantId: parseGrantId(g.grantId),
+              grantId: g.grantId,
               tenantId: parseTenantId(g.tenantId),
               userId: parseUserId(g.userId),
               legalEntityId: parseLegalEntityId(g.legalEntityId),
@@ -892,13 +891,13 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
                 command: {
                   kind: 'grant',
                   operationId: randomUUID(),
-                  grantId: parseGrantId(randomUUID()),
+                  grantId: randomUUID(),
                   tenantId: canonicalTenantId,
                   userId: canonicalInviteeId,
                   legalEntityId: canonicalEntityId,
                   action,
-                  validFrom: decisionNow,
-                  validUntil: boundedUntil,
+                  validFrom: decisionNowIso,
+                  validUntil: boundedUntil ? boundedUntil.toISOString() : null,
                 },
                 decisionAtIso: decisionNowIso,
                 requestId: input.operationId,
@@ -977,7 +976,7 @@ export interface TenantMemberDirectoryItem {
 }
 
 export async function listTenantMemberDirectoryFromPostgres(
-  db: Pick<Database, 'transaction'>,
+  db: IdentityLifecycleDatabase,
   signer: PostgresContextSigner,
   input: {
     readonly actorUserId: string;
