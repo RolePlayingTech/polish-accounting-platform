@@ -572,6 +572,16 @@ export function createPostgresAccountingScope(
 
     async getLegalEntitySummary() {
       assertActive();
+      const lockKey = `${context.tenantId}:${context.legalEntityId}`;
+      if (context.action === 'write') {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock(hashtext('pap_company_uow'), hashtext(${lockKey}))`,
+        );
+      } else {
+        await tx.execute(
+          sql`SELECT pg_advisory_xact_lock_shared(hashtext('pap_company_uow'), hashtext(${lockKey}))`,
+        );
+      }
       const [row] = await tx
         .select()
         .from(legalEntity)
@@ -581,7 +591,7 @@ export function createPostgresAccountingScope(
             eq(legalEntity.id, context.legalEntityId),
           ),
         )
-        .for(context.action === 'write' ? 'update' : 'share');
+        .for('share');
       assertActive();
       return deepFreeze(row ?? null);
     },
@@ -662,6 +672,10 @@ export function createPostgresAccountingScope(
       if (context.action !== 'write') {
         throw new Error('Blokada zapisu profilu podatkowego firmy wymaga jawnego prawa zapisu.');
       }
+      const lockKey = `${context.tenantId}:${context.legalEntityId}`;
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext('pap_company_uow'), hashtext(${lockKey}))`,
+      );
       const [row] = await tx
         .select()
         .from(companyTaxSettings)

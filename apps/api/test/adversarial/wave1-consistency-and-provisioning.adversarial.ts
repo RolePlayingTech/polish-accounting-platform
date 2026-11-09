@@ -1096,7 +1096,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
         writerCommittedWhileReaderInFlight = true;
         return {
           status: res.status,
-          body: (await res.json()) as { document?: { status?: string } },
+          body: CompanyDocumentItemSchema.parse(await res.json()),
         };
       });
 
@@ -1104,17 +1104,19 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       expect(writerCommittedWhileReaderInFlight).toBe(false);
 
       // 3. Zwalniamy wstrzymany odczyt na Instancji B — musi zwrócić 100% spójny snapshot sprzed księgowania
-      // (brak rozjazdu, w którym dokument jest 'draft' w pendingApprovals, a expensesKupGrosze/unpaidPayablesGrosze/unpaidInvoices zawierają już zaksięgowane kwoty!).
+      // (brak rozjazdu między accounting_document odczytanym przed barierą a kpir_entry/settlement_item odczytywanymi po barierze!).
       releaseReaderFromMidpoint();
 
       const [midReadResult, postResult] = await Promise.all([midReadOverviewPromise, postPromise]);
       expect(midReadResult.status).toBe(200);
       expect(postResult.status).toBe(200);
-      expect(postResult.body.document?.status).toBe('posted');
+      expect(postResult.body.status).toBe('posted');
 
-      expect(midReadResult.body.pendingApprovals.aiDocumentProposalsCount).toBe(
-        baselineOverview.pendingApprovals.aiDocumentProposalsCount,
-      );
+      expect(
+        midReadResult.body.recentAuditEvents.some(
+          (ev) => ev.action === 'document_approved_and_posted' && ev.summaryPl.includes(draftDocNum),
+        ),
+      ).toBe(false);
       expect(midReadResult.body.kpis.expensesKupGrosze).toBe(
         baselineOverview.kpis.expensesKupGrosze,
       );
@@ -1137,9 +1139,11 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
         )
       ).json(),
     );
-    expect(afterPostOverview.pendingApprovals.aiDocumentProposalsCount).toBe(
-      baselineOverview.pendingApprovals.aiDocumentProposalsCount - 1,
-    );
+    expect(
+      afterPostOverview.recentAuditEvents.some(
+        (ev) => ev.action === 'document_approved_and_posted' && ev.summaryPl.includes(draftDocNum),
+      ),
+    ).toBe(true);
     expect(afterPostOverview.kpis.expensesKupGrosze).toBe(
       baselineOverview.kpis.expensesKupGrosze + 200_000,
     );
@@ -1149,6 +1153,104 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
     expect(
       afterPostOverview.unpaidInvoices.some((inv) => inv.documentNumber === draftDocNum),
     ).toBe(true);
+
+    // (c) Odwrotny splot: zapis approve-and-post wstrzymany w beforeCommitHook (po zapisaniu wierszy w DB, przed COMMIT)
+    // oraz równoległy odczyt wielozapytaniowy na Instancji B — czytelnik czeka na zwolnienie blokady zapisu i widzi pełny stan po COMMIT.
+    const secondDraftDocNum = 'FV/ADV-79/READ-CONSISTENCY/2026/03/02';
+    const secondCreateRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          documentNumber: secondDraftDocNum,
+          direction: 'purchase',
+          issueDate: '2026-03-30',
+          dueDate: '2026-04-13',
+          counterpartyName: 'Kontrahent Spójności Po Zapisie Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaSprzetu,
+          suggestedCategory: 'uslugi_obce',
+          lines: [
+            {
+              description: 'Druga faktura testująca oczekiwanie odczytu na zakończenie zapisu',
+              netGrosze: 100_000,
+              vatRate: '23',
+            },
+          ],
+        }),
+      },
+    );
+    expect(secondCreateRes.status).toBe(201);
+    const secondDraft = CompanyDocumentItemSchema.parse(await secondCreateRes.json());
+
+    let notifyWriterBeforeCommit!: () => void;
+    const writerBeforeCommitPromise = new Promise<void>((resolve) => {
+      notifyWriterBeforeCommit = resolve;
+    });
+    let releaseWriterCommit!: () => void;
+    const releaseWriterCommitPromise = new Promise<void>((resolve) => {
+      releaseWriterCommit = resolve;
+    });
+
+    serviceA.beforeCommitHook = async (info) => {
+      if (info.action === 'write' && info.actionKind === 'approveAndPostDocument') {
+        notifyWriterBeforeCommit();
+        await releaseWriterCommitPromise;
+      }
+    };
+
+    try {
+      const secondPostPromise = fetch(
+        `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents/${secondDraft.documentId}/approve-and-post`,
+        {
+          method: 'POST',
+          headers: headersA,
+          body: JSON.stringify({}),
+        },
+      );
+
+      await writerBeforeCommitPromise;
+
+      let readerResolvedBeforeWriterCommit = false;
+      const readerWaitingPromise = fetch(
+        `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/overview?period=2026-03`,
+        { headers: headersB },
+      ).then(async (res) => {
+        readerResolvedBeforeWriterCommit = true;
+        return CompanyOverviewResponseSchema.parse(await res.json());
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(readerResolvedBeforeWriterCommit).toBe(false);
+
+      releaseWriterCommit();
+
+      const [secondPostRes, readerAfterCommitOverview] = await Promise.all([
+        secondPostPromise,
+        readerWaitingPromise,
+      ]);
+      expect(secondPostRes.status).toBe(200);
+      expect(
+        readerAfterCommitOverview.recentAuditEvents.some(
+          (ev) =>
+            ev.action === 'document_approved_and_posted' &&
+            ev.summaryPl.includes(secondDraftDocNum),
+        ),
+      ).toBe(true);
+      expect(readerAfterCommitOverview.kpis.expensesKupGrosze).toBe(
+        afterPostOverview.kpis.expensesKupGrosze + 100_000,
+      );
+      expect(readerAfterCommitOverview.kpis.unpaidPayablesGrosze).toBe(
+        afterPostOverview.kpis.unpaidPayablesGrosze + 123_000,
+      );
+      expect(
+        readerAfterCommitOverview.unpaidInvoices.some(
+          (inv) => inv.documentNumber === secondDraftDocNum,
+        ),
+      ).toBe(true);
+    } finally {
+      serviceA.beforeCommitHook = undefined;
+    }
   });
 
   it('ADV-80-01: 20 równoczesnych prób utworzenia firmy o tym samym NIP na dwóch instancjach tworzy dokładnie 1 kompletną firmę, a pozostałe kończą się 409 bez sierot w DB', async () => {
