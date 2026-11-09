@@ -398,7 +398,7 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
     });
 
     await owner.client`INSERT INTO tenant (id, name, created_at) VALUES (${invTenantId}, 'Organizacja Wyścigu Zaproszeń', now() - interval '1 day')`;
-    await owner.client`INSERT INTO legal_entity (id, tenant_id, name, created_at) VALUES (${invEntityId}, ${invTenantId}, 'Spółka Docelowa Grantu', now() - interval '1 day')`;
+    await owner.client`INSERT INTO legal_entity (id, tenant_id, display_name, created_at) VALUES (${invEntityId}, ${invTenantId}, 'Spółka Docelowa Grantu', now() - interval '1 day')`;
     await owner.client`INSERT INTO tenant_membership (tenant_id, user_id, role, status, valid_from, valid_until)
       VALUES (${invTenantId}, ${invOwnerId}, 'tenant_owner', 'active', now() - interval '1 day', NULL)`;
 
