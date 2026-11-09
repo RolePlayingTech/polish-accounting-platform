@@ -1053,7 +1053,7 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
 
   it('0009 wymusza na poziomie schematu PostgreSQL unikalność (tenant_id, nip) przy tworzeniu i aktualizacji NIP, dopuszczając ten sam NIP w innym tenancie', async () => {
     const entityA3 = legalEntityId(id(304));
-    const nipA1 = '5261040828';
+    const nipA1 = '5260250995';
     const nipA3 = '5213017228';
 
     await owner.client`
