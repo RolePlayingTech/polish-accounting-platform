@@ -20,7 +20,7 @@ export default async function ProductHomePage() {
       : 'Zaloguj się do aplikacji';
   const envBadgeLabel = allowPersonas
     ? 'Środowisko syntetyczne — brak prawdziwych rozliczeń'
-    : runtimeMode === 'PRODUCTION' || runtimeMode === 'PRODUCTION_PRELAUNCH'
+    : runtimeMode === 'PRODUCTION' || runtimeMode === 'PUBLIC_DEMO'
       ? 'Bezpieczne logowanie OIDC + PKCE'
       : 'Prywatne środowisko testowe — dane syntetyczne';
 

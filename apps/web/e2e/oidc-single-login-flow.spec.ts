@@ -159,14 +159,16 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
         .click();
       await ownerPage.waitForURL(/\/app$/, { timeout: 45_000 });
 
-      // Sprawdzenie atrybutów bezpieczeństwa nieprzezroczystego ciasteczka sesji BFF
+      // Sprawdzenie atrybutów bezpieczeństwa nieprzezroczystego ciasteczka sesji BFF (pap_session_id)
       const ownerCookies = await ownerContext.cookies();
-      const bffCookie = ownerCookies.find((c) => c.name === 'pap_oidc_token');
+      const bffCookie = ownerCookies.find((c) => c.name === 'pap_session_id');
       expect(bffCookie).toBeDefined();
       expect(bffCookie!.httpOnly).toBe(true);
       expect(bffCookie!.secure).toBe(true);
       expect(bffCookie!.sameSite).toBe('Lax');
       expect(bffCookie!.value.includes('.')).toBe(false);
+      expect(ownerCookies.find((c) => c.name === 'pap_oidc_token')).toBeUndefined();
+      expect(ownerCookies.find((c) => c.name === 'pap_session_ctx')).toBeUndefined();
 
       // 4. Onboarding właściciela bez podmiotów: utworzenie Firmy 1 na ekranie /app
       await expect(ownerPage.getByTestId('owner-first-company-card')).toBeVisible();
@@ -228,7 +230,8 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
 
       // 6. Drugi niezależny kontekst przeglądarki (Ewa Księgowa): logowanie z linku zaproszenia i akceptacja
       const accountantPage = await accountantContext.newPage();
-      await accountantPage.goto(acceptPath!);
+      const inviteLoginResp = await accountantPage.goto(acceptPath!);
+      expect(inviteLoginResp?.headers()['referrer-policy']).toBe('no-referrer');
       await expect(
         accountantPage.getByText('Wykryto jednorazowe zaproszenie do organizacji'),
       ).toBeVisible();
@@ -291,6 +294,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       await ownerPage.waitForURL(/\/login\?authState=signed_out/);
       await expect(ownerPage.getByText('Wylogowano pomyślnie')).toBeVisible();
       const postLogoutCookies = await ownerContext.cookies();
+      expect(postLogoutCookies.find((c) => c.name === 'pap_session_id')).toBeUndefined();
       expect(postLogoutCookies.find((c) => c.name === 'pap_oidc_token')).toBeUndefined();
     } finally {
       await accountantContext.close();

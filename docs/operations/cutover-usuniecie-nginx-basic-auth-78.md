@@ -20,8 +20,8 @@ Przejście na docelowy model logowania użytkownika opisany w **Issue #78** oraz
 
 Przed wykonaniem jakiejkolwiek zmiany w Nginx wszystkie poniższe punkty muszą mieć status **TAK**:
 
-- [ ] **Migracja `0010` wdrożona na bazie stagingu** (tabele `pap_oidc_auth_state`, `pap_bff_session`, `pap_user_profile`, `pap_identity_lifecycle_event`, `pap_tenant_invitation` pod `FORCE RLS` i rolą runtime `NOBYPASSRLS`).
-- [ ] **Tryb uruchomieniowy ustawiony na `PAP_RUNTIME_MODE=STAGING_PRIVATE`** (lub `PRODUCTION_PRELAUNCH`) zarówno w usłudze `@pap/api`, jak i `@pap/web`:
+- [ ] **Migracje bazodanowe do `0009_company-tenant-nip-uniqueness.sql` wdrożone na bazie stagingu oraz wykonany `configureRuntimePrivileges`** tworzący tabele i funkcje Fali 2 (`pap_oidc_auth_state`, `pap_bff_session`, `pap_user_profile`, `pap_identity_lifecycle_event`, `pap_tenant_invitation` pod `FORCE RLS` i rolą runtime `NOBYPASSRLS`).
+- [ ] **Tryb uruchomieniowy ustawiony na `PAP_RUNTIME_MODE=STAGING_PRIVATE`** (lub docelowo `PUBLIC_DEMO` / `PRODUCTION`) zarówno w usłudze `@pap/api`, jak i `@pap/web`:
   - `PAP_SANDBOX_AUTH_ENABLED=false`
   - `PAP_SEED_SYNTHETIC_DEMO=false`
   - silny sekret `PAP_WEB_SESSION_SECRET` (`>= 32` bajty losowej entropii, współdzielony wyłącznie między `@pap/web` a `@pap/api` na loopbacku).
@@ -40,7 +40,7 @@ Przed wykonaniem jakiejkolwiek zmiany w Nginx wszystkie poniższe punkty muszą 
   - `POST /api/v1/oidc/token` → `404` (`sandbox_oidc_disabled`)
   - `POST /api/v1/auth/sandbox/token` → `404` (`sandbox_oidc_disabled`)
   - `GET /api/v1/oidc/personas` → `404` (`sandbox_oidc_disabled`)
-  - `POST /api/session/login` → `403` (`synthetic_persona_login_disabled`).
+  - `POST /api/session/login` → `403` (`synthetic_persona_disabled`).
 
 ---
 
@@ -65,6 +65,7 @@ Usuń wyłącznie dyrektywy `auth_basic` oraz `auth_basic_user_file`, zachowują
    server_name ksiegowosc.roleplayingtech.com;
 
    # Certyfikaty TLS, HSTS i nagłówki bezpieczeństwa pozostają bez zmian
++  add_header Referrer-Policy "no-referrer" always;
 -  auth_basic "Polish Accounting Platform — Staging";
 -  auth_basic_user_file /etc/nginx/.htpasswd-ksiegowosc;
 
@@ -117,7 +118,7 @@ Wykonaj z zewnętrznej maszyny (bez poświadczeń Basic Auth):
    - `curl -sS -o /dev/null -w "%{http_code}\n" -X POST https://ksiegowosc.roleplayingtech.com/api/session/login -H "Origin: https://ksiegowosc.roleplayingtech.com" -H "Content-Type: application/json" -d '{"personaId":"jan-testowy"}'` → **`403`**.
    - Nieuwierzytelnione żądanie do `/app/companies` wyświetla wyłącznie kartę wymaganego logowania OIDC bez ujawniania jakichkolwiek danych podmiotów.
 4. **Test logowania właściciela w przeglądarce:**
-   - Wejście na `https://ksiegowosc.roleplayingtech.com/login` → pojedyncze logowanie OIDC → poprawne utworzenie ciasteczka `pap_oidc_token` (`Secure; HttpOnly; SameSite=Lax`) → dostęp do organizacji właściciela oraz poprawne wylogowanie do `/login?authState=signed_out`.
+   - Wejście na `https://ksiegowosc.roleplayingtech.com/login` → pojedyncze logowanie OIDC → poprawne utworzenie nieprzezroczystego ciasteczka sesji BFF `pap_session_id` (`Secure; HttpOnly; SameSite=Lax`) → dostęp do organizacji właściciela oraz poprawne wylogowanie do `/login?authState=signed_out`.
 
 ---
 

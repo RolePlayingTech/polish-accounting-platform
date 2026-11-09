@@ -13,6 +13,7 @@ import {
 } from '@pap/ui';
 import type { SessionContext } from '../lib/session';
 import { AVAILABLE_PERIODS, type CompanyProfileRecord } from '../lib/workspace-types';
+import { useAllowSyntheticLogin } from './runtime-mode-provider';
 
 export const WORKSPACE_NAV_SECTIONS: readonly NavSection[] = [
   {
@@ -84,7 +85,7 @@ export function WorkspaceShell({
   accessibleCompanies = [],
   activeCompany,
   activeHref,
-  allowSyntheticLogin = true,
+  allowSyntheticLogin,
   children,
   offlineDemoMode,
   pageActions,
@@ -94,6 +95,8 @@ export function WorkspaceShell({
   sessionContext,
   surface = 'app',
 }: WorkspaceShellProps) {
+  const contextAllowSyntheticLogin = useAllowSyntheticLogin();
+  const effectiveAllowSyntheticLogin = allowSyntheticLogin ?? contextAllowSyntheticLogin;
   const router = useRouter();
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
@@ -305,9 +308,9 @@ export function WorkspaceShell({
         <div className="flex flex-wrap items-center gap-2.5">
           <StatusBadge
             size="sm"
-            tone={allowSyntheticLogin ? 'warning' : 'info'}
+            tone={effectiveAllowSyntheticLogin ? 'warning' : 'info'}
             label={
-              allowSyntheticLogin
+              effectiveAllowSyntheticLogin
                 ? 'Dane syntetyczne (środowisko testowe)'
                 : 'Brak aktywnej sesji aplikacji'
             }
@@ -327,7 +330,9 @@ export function WorkspaceShell({
             href="/login"
             className="inline-flex min-h-8 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-3 py-1 text-xs font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
           >
-            {allowSyntheticLogin ? 'Zaloguj się do środowiska testowego' : 'Zaloguj się'}
+            {effectiveAllowSyntheticLogin
+              ? 'Zaloguj się do środowiska testowego'
+              : 'Zaloguj się'}
           </Link>
         </div>
       </div>

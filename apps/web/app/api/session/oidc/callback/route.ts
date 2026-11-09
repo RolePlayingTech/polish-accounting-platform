@@ -143,7 +143,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         status: 401,
         reasonCode: 'oidc_provider_denied',
         messagePl: 'Logowanie u dostawcy tożsamości OIDC zostało anulowane lub odrzucone.',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'oidc_denied_or_cancelled',
       });
     }
 
@@ -160,7 +160,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         status: 400,
         reasonCode: 'invalid_callback_parameters',
         messagePl: 'Brak wymaganych parametrów zwrotnych OIDC (code oraz state).',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -177,7 +177,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         reasonCode: 'invalid_oidc_flow_binding',
         messagePl:
           'Niezgodność stanu bezpieczeństwa przepływu OIDC (brak lub błędne wiązanie przeglądarki ze state).',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -213,7 +213,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           consumed.reason === 'state_already_consumed'
             ? 'Wykryto ponowne użycie jednorazowego stanu OIDC (replay) — żądanie odrzucone.'
             : 'Sesja logowania OIDC wygasła lub stan jest nieprawidłowy. Rozpocznij logowanie ponownie.',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -240,7 +240,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         status: 401,
         reasonCode: 'redirect_uri_or_issuer_mismatch',
         messagePl: 'Niezgodność wystawcy OIDC lub adresu zwrotnego redirect_uri.',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -362,7 +362,10 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         readonly subject: string;
         readonly email: string;
         readonly tenantId: string | null;
-        readonly memberships: readonly { readonly tenantId: string }[];
+        readonly memberships: readonly {
+          readonly tenantId: string;
+          readonly status: string;
+        }[];
       }>('/api/v1/me/session', {
         method: 'GET',
         bearerToken: exchanged.accessToken,
@@ -411,9 +414,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             loginAuthState: 'session_expired_or_invalid',
           });
         }
-        if (!sessionTenantId && meSessionResp.data.state === 'active') {
-          sessionTenantId =
-            meSessionResp.data.tenantId ?? meSessionResp.data.memberships[0]?.tenantId ?? null;
+        if (!sessionTenantId && meSessionResp.data.state === 'authenticated') {
+          const activeMembership = meSessionResp.data.memberships.find(
+            (m) => m.status === 'active',
+          );
+          sessionTenantId = meSessionResp.data.tenantId ?? activeMembership?.tenantId ?? null;
         }
         if (
           typeof meSessionResp.data.email === 'string' &&

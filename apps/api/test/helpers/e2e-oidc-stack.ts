@@ -157,7 +157,7 @@ async function main(): Promise<void> {
       baseApiEnv['DATABASE_URL'] = runtimeUrl;
       baseApiEnv['PAP_DB_SCHEMA'] = dataSchema;
       baseApiEnv['PAP_DB_CONTEXT_KEY_ID'] = keyId;
-      baseApiEnv['PAP_DB_CONTEXT_HMAC_HEX'] = keyHex;
+      baseApiEnv['PAP_DB_CONTEXT_KEY_HEX'] = keyHex;
       baseApiEnv['PAP_ENFORCE_RUNTIME_DB_SECURITY'] = 'true';
 
       const cliOut: string[] = [];

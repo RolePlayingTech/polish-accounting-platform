@@ -136,7 +136,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     );
   }
 
-  const nextLegalEntityId = remote.data.grantedCompanyIds[0] ?? session.context.legalEntityId ?? '';
+  const preservedEntityId =
+    remote.data.membership.tenantId === session.context.tenantId
+      ? (session.context.legalEntityId ?? '')
+      : '';
+  const nextLegalEntityId = remote.data.grantedCompanyIds[0] ?? preservedEntityId;
   const updatedContext = {
     ...session.context,
     tenantId: remote.data.membership.tenantId,

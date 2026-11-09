@@ -1931,7 +1931,14 @@ export async function verifySessionAccess(
   targetLegalEntityId: string,
   action: 'read' | 'write',
 ): Promise<CompanyProfileRecord> {
-  const verifiedSession = assertValidSessionIdentity(session);
+  const verifiedSession = assertValidSessionIdentity(session, { requireActiveCompany: false });
+  if (!targetLegalEntityId || !targetLegalEntityId.trim()) {
+    throw new WorkspaceAccessError(
+      403,
+      'no_company_selected',
+      'Organizacja nie posiada jeszcze utworzonego podmiotu prawnego lub Twoje konto nie ma aktywnego grantu do żadnej firmy.',
+    );
+  }
   const safeTenantId = assertUuidPathParam(targetTenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(targetLegalEntityId, 'legalEntityId');
 

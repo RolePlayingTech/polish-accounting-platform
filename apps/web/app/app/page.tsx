@@ -92,11 +92,13 @@ export default async function AppDashboardPage({
         }
       }
 
-      const activeMemberships = (meOverview?.memberships ?? []).map((m) => ({
-        tenantId: m.tenantId,
-        tenantName: m.tenantName,
-        role: m.role,
-      }));
+      const activeMemberships = (meOverview?.memberships ?? [])
+        .filter((m) => m.status === 'active')
+        .map((m) => ({
+          tenantId: m.tenantId,
+          tenantName: m.tenantName,
+          role: m.role,
+        }));
       const hasAdminMembership = activeMemberships.some(
         (m) => m.role === 'tenant_owner' || m.role === 'tenant_admin',
       );

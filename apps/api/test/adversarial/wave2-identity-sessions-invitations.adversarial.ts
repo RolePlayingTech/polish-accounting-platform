@@ -244,7 +244,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
       DATABASE_URL: runtimeUrl,
       PAP_DB_SCHEMA: dataSchema,
       PAP_DB_CONTEXT_KEY_ID: keyId,
-      PAP_DB_CONTEXT_HMAC_HEX: keyHex,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
       PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
       PAP_SEED_SYNTHETIC_DEMO: 'false',
       PAP_SANDBOX_AUTH_ENABLED: 'false',
@@ -297,7 +297,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
           reasonCode: (err as { reasonCode?: string }).reasonCode ?? 'unknown',
         };
       } finally {
-        await rt.close();
+        await rt.close?.();
       }
     });
 
@@ -423,7 +423,8 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
     expect(rotateRace.filter((r) => r.ok && r.rotated === true).length).toBe(1);
     expect(rotateRace.filter((r) => r.ok && r.alreadyAdvanced === true).length).toBe(7);
 
-    // Po upływie okna karencji (gracePeriodMs = 5s) ponowne użycie expectedGeneration: 0 unieważnia całą sesję!
+    // Po upływie okna karencji (gracePeriodMs = 5s) ponowne użycie expectedGeneration: 0 kończy się odmową generation_conflict,
+    // a ponowne użycie zużytego refresh_token w IdP kończy się invalid_grant i unieważnieniem sesji BFF!
     const afterGrace = new Date(rotateNow.getTime() + 10_000).toISOString();
     const reuseRes = await postBffInternal({
       baseUrl: inst2.baseUrl,
@@ -439,7 +440,37 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
     });
     const reuseJson = (await reuseRes.json()) as { ok: boolean; reason?: string };
     expect(reuseJson.ok).toBe(false);
-    expect(reuseJson.reason).toBe('reuse_detected');
+    expect(reuseJson.reason).toBe('generation_conflict');
+
+    const firstRefreshRes = await fetch(idpA!.tokenEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: idpA!.clientId,
+        refresh_token: ownerTokens.refreshToken,
+      }).toString(),
+    });
+    expect(firstRefreshRes.status).toBe(200);
+
+    const replayRefreshRes = await fetch(idpA!.tokenEndpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        client_id: idpA!.clientId,
+        refresh_token: ownerTokens.refreshToken,
+      }).toString(),
+    });
+    expect(replayRefreshRes.status).toBe(400);
+
+    const revokeStolenSessRes = await postBffInternal({
+      baseUrl: inst2.baseUrl,
+      path: '/api/v1/auth/bff/session/revoke',
+      webSessionSecret: sessionSecret,
+      payload: { sessionIdHash, now: afterGrace },
+    });
+    expect(revokeStolenSessRes.status).toBe(200);
 
     const getAfterReuse = await postBffInternal({
       baseUrl: inst1.baseUrl,
