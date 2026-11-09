@@ -117,7 +117,7 @@ export async function startIsolatedOidcIdp(
   const clientId = options.clientId ?? 'pap-web';
   const clientSecret = options.clientSecret;
   const resourceAudience = options.resourceAudience ?? 'pap-api';
-  let accessTokenTtlSeconds = options.accessTokenTtlSeconds ?? 300;
+  const accessTokenTtlSeconds = options.accessTokenTtlSeconds ?? 300;
   const codeTtlMs = options.codeTtlMs ?? 60_000;
 
   const allowedRedirects = new Set<string>(options.allowedRedirectUris ?? []);
