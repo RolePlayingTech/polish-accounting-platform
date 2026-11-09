@@ -264,10 +264,10 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
   });
 
   it('Wave 2 Slice 4 — egzekwuje haszowanie SHA-256 tokenów zaproszeń, maskowanie e-maili, granice delegacji ról i firm oraz ochronę TOCTOU przy akceptacji', async () => {
-    const rawToken = generateOpaqueInvitationToken();
-    expect(rawToken.length).toBeGreaterThanOrEqual(40);
-    const tokenHash = hashInvitationTokenSha256(rawToken);
-    expect(tokenHash).toMatch(/^[0-9a-f]{64}$/);
+    const generated = generateOpaqueInvitationToken();
+    expect(generated.rawToken.length).toBeGreaterThanOrEqual(40);
+    expect(generated.tokenSha256).toBe(hashInvitationTokenSha256(generated.rawToken));
+    expect(generated.tokenSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(maskInvitationEmail('Anna.Ksiegowa@Biuro.Example')).toBe('an***@biuro.example');
     expect(maskInvitationEmail('a@biuro.example')).toBe('a***@biuro.example');
 
@@ -333,7 +333,7 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
       operationId: randomUUID(),
       actorUserId: boot.receipt.userId,
       tenantId: tId,
-      tokenSha256: hashInvitationTokenSha256(generateOpaqueInvitationToken()),
+      tokenSha256: generateOpaqueInvitationToken().tokenSha256,
       inviteeEmail: 'kandydat@syntetyczny.example',
       intendedRole: 'tenant_owner',
       reason: 'Próba delegacji roli właściciela',
@@ -351,7 +351,7 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
       operationId: randomUUID(),
       actorUserId: boot.receipt.userId,
       tenantId: tId,
-      tokenSha256: hashInvitationTokenSha256(adminToken),
+      tokenSha256: adminToken.tokenSha256,
       inviteeEmail: 'admin@syntetyczny.example',
       intendedRole: 'tenant_admin',
       initialCompanyGrants: [{ legalEntityId: comp1, actions: ['read'] }],
@@ -363,7 +363,7 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
 
     const acceptAdmin = await lifecycle.acceptTenantInvitation({
       operationId: randomUUID(),
-      tokenSha256: hashInvitationTokenSha256(adminToken),
+      tokenSha256: adminToken.tokenSha256,
       issuer: 'https://idp.syntetyczny.example/realms/pap',
       subject: 'admin-s4-unit',
       displayName: 'Piotr Admin',
@@ -380,7 +380,7 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
       operationId: randomUUID(),
       actorUserId: acceptAdmin.userId,
       tenantId: tId,
-      tokenSha256: hashInvitationTokenSha256(generateOpaqueInvitationToken()),
+      tokenSha256: generateOpaqueInvitationToken().tokenSha256,
       inviteeEmail: 'member@syntetyczny.example',
       intendedRole: 'tenant_member',
       initialCompanyGrants: [{ legalEntityId: comp2, actions: ['read'] }],
@@ -399,7 +399,7 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
       operationId: randomUUID(),
       actorUserId: acceptAdmin.userId,
       tenantId: tId,
-      tokenSha256: hashInvitationTokenSha256(memberToken),
+      tokenSha256: memberToken.tokenSha256,
       inviteeEmail: 'member@syntetyczny.example',
       intendedRole: 'tenant_member',
       initialCompanyGrants: [{ legalEntityId: comp1, actions: ['read'] }],
@@ -415,7 +415,7 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
 
     const acceptAfterToctou = await lifecycle.acceptTenantInvitation({
       operationId: randomUUID(),
-      tokenSha256: hashInvitationTokenSha256(memberToken),
+      tokenSha256: memberToken.tokenSha256,
       issuer: 'https://idp.syntetyczny.example/realms/pap',
       subject: 'member-s4-unit',
       displayName: 'Celina Member',

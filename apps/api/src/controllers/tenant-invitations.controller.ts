@@ -38,7 +38,6 @@ import {
   RejectTenantInvitationResponseSchema,
   RevokeTenantInvitationRequestSchema,
   RevokeTenantInvitationResponseSchema,
-  UuidSelectorSchema,
   type AcceptTenantInvitationResponse,
   type CreateTenantInvitationResponse,
   type ListTenantInvitationsResponse,
@@ -65,6 +64,8 @@ import {
 } from '../runtime/workspace-runtime.js';
 
 const DEFAULT_INVITATION_EXPIRES_IN_HOURS = 72;
+const STRICT_UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function resolveOperationId(
   explicitOperationId: string | undefined,
@@ -73,7 +74,7 @@ function resolveOperationId(
   if (explicitOperationId) {
     return explicitOperationId;
   }
-  if (headerIdempotencyKey && UuidSelectorSchema.safeParse(headerIdempotencyKey).success) {
+  if (headerIdempotencyKey && STRICT_UUID_REGEX.test(headerIdempotencyKey)) {
     return headerIdempotencyKey;
   }
   return randomUUID();
@@ -256,8 +257,7 @@ export class TenantInvitationsController {
     const now = new Date();
     const expiresInHours = parsedBody.data.expiresInHours ?? DEFAULT_INVITATION_EXPIRES_IN_HOURS;
     const expiresAt = new Date(now.getTime() + expiresInHours * 3_600_000);
-    const rawToken = generateOpaqueInvitationToken();
-    const tokenSha256 = hashInvitationTokenSha256(rawToken);
+    const { rawToken, tokenSha256 } = generateOpaqueInvitationToken();
     const operationId = resolveOperationId(parsedBody.data.operationId, actor.idempotencyKey);
 
     let result;
@@ -382,7 +382,7 @@ export class TenantInvitationsController {
       throw err;
     }
 
-    if (!UuidSelectorSchema.safeParse(rawInvitationId).success) {
+    if (!STRICT_UUID_REGEX.test(rawInvitationId)) {
       throw new BadRequestException({
         statusCode: 400,
         error: 'bad_request',
@@ -485,7 +485,10 @@ export class TenantInvitationsController {
         issuer: caller.issuer,
         subject: caller.subject,
         displayName: normalizeSessionDisplayName(
-          parsedBody.data.displayName ?? caller.displayName ?? result.invitation.inviteeDisplayName,
+          parsedBody.data.displayName ??
+            caller.displayName ??
+            result.invitation.inviteeDisplayName ??
+            undefined,
           caller.subject,
         ),
         email: normalizeSessionSafeEmail(caller.email),
