@@ -368,6 +368,8 @@ export class BffSessionController {
       if (
         this.identityLifecycleStore &&
         !normalizedEmail.endsWith('.invalid') &&
+        !normalizedEmail.includes('***@') &&
+        normalizedEmail !== 'uzytkownik@pap.example' &&
         SafeEmailAddressSchema.safeParse(normalizedEmail).success
       ) {
         await this.identityLifecycleStore.upsertUserProfile({

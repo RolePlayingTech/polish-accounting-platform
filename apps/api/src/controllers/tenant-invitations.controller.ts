@@ -558,16 +558,18 @@ export class TenantInvitationsController {
       throwAcceptOrRejectInvitationError(result.reason);
     }
 
-    const canonicalUserId = parseUserId(result.userId);
-    if (!this.workspace.store.getUserById(canonicalUserId)) {
-      this.workspace.store.upsertUser({
-        userId: canonicalUserId,
-        issuer: caller.issuer,
-        subject: caller.subject,
-        displayName: normalizeSessionDisplayName(caller.displayName, caller.subject),
-        email: normalizeSessionSafeEmail(caller.email),
-        active: true,
-      });
+    if (result.userId !== null) {
+      const canonicalUserId = parseUserId(result.userId);
+      if (!this.workspace.store.getUserById(canonicalUserId)) {
+        this.workspace.store.upsertUser({
+          userId: canonicalUserId,
+          issuer: caller.issuer,
+          subject: caller.subject,
+          displayName: normalizeSessionDisplayName(caller.displayName, caller.subject),
+          email: normalizeSessionSafeEmail(caller.email),
+          active: true,
+        });
+      }
     }
 
     return RejectTenantInvitationResponseSchema.parse({

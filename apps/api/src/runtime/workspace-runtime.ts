@@ -171,14 +171,15 @@ export async function createApiRuntimeServicesAsync(
     }
 
     const innerWorkspace = await hydrateWorkspaceFromPostgres(pgRuntime, sandboxOidc.getIssuer());
+    const webSessionStore = new PostgresWebSessionStore(pgRuntime.connection.db, pgRuntime.signer);
     const workspace = new PostgresBackedWorkspaceService({
       runtime: pgRuntime,
       innerWorkspace,
       oidcVerifier,
       sandboxIssuer: sandboxOidc.getIssuer(),
+      webSessionStore,
     });
     const mcpGateway = workspace.createBoundMcpGateway();
-    const webSessionStore = new PostgresWebSessionStore(pgRuntime.connection.db, pgRuntime.signer);
     const identityLifecycleStore = new PostgresIdentityLifecycleStore(
       pgRuntime.connection.db,
       pgRuntime.signer,

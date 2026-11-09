@@ -449,8 +449,10 @@ export class JwtBearerAuthGuard implements CanActivate {
       });
     }
 
+    const needsProfileHydration =
+      !storeUser || !storeUser.issuer || storeUser.email.includes('***@');
     let persistedProfile: { readonly displayName: string; readonly email: string } | null = null;
-    if (!storeUser && this.identityLifecycleStore) {
+    if (needsProfileHydration && this.identityLifecycleStore) {
       const dir = await this.identityLifecycleStore
         .getActorSessionDirectory(dbResolved.userId)
         .catch(() => null);
@@ -459,15 +461,28 @@ export class JwtBearerAuthGuard implements CanActivate {
       }
     }
 
-    const resolvedUser = storeUser ?? {
-      userId: dbResolved.userId,
-      issuer: identity.issuer,
-      subject: identity.subject,
-      displayName: normalizeSessionDisplayName(persistedProfile?.displayName, identity.subject),
-      email: normalizeSessionSafeEmail(persistedProfile?.email),
-      active: true,
-    };
-    if (!storeUser && this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {
+    const resolvedUser = storeUser
+      ? {
+          ...storeUser,
+          issuer: storeUser.issuer ?? identity.issuer,
+          subject: storeUser.issuer ? storeUser.subject : identity.subject,
+          displayName: persistedProfile
+            ? normalizeSessionDisplayName(persistedProfile.displayName, storeUser.displayName)
+            : storeUser.displayName,
+          email:
+            persistedProfile && !persistedProfile.email.includes('***@')
+              ? normalizeSessionSafeEmail(persistedProfile.email)
+              : storeUser.email,
+        }
+      : {
+          userId: dbResolved.userId,
+          issuer: identity.issuer,
+          subject: identity.subject,
+          displayName: normalizeSessionDisplayName(persistedProfile?.displayName, identity.subject),
+          email: normalizeSessionSafeEmail(persistedProfile?.email),
+          active: true,
+        };
+    if (needsProfileHydration && this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {
       this.workspace.store.upsertUser(resolvedUser);
     }
 

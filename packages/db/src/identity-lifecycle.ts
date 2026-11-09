@@ -138,7 +138,7 @@ interface SqlAcceptInvitationOpResponse {
 interface SqlRejectInvitationOpResponse {
   readonly ok: boolean;
   readonly idempotentReplay?: boolean;
-  readonly userId?: string;
+  readonly userId?: string | null;
   readonly invitation?: TenantInvitationRecord;
   readonly auditEventId?: string;
   readonly reason?: RejectTenantInvitationDeniedReason;
@@ -538,6 +538,10 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
     return runManagedTransaction(
       this.#db,
       async (tx) => {
+        const txClockNow = await readTransactionClockNow(tx);
+        const evalNow = input.now ?? txClockNow;
+        const decisionNow = evalNow.getTime() > txClockNow.getTime() ? txClockNow : evalNow;
+
         const res = await this.#executeOp<SqlCreateInvitationOpResponse>(tx, 'create_invitation', {
           operationId: input.operationId,
           actorUserId: input.actorUserId,
@@ -554,7 +558,8 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
           })),
           expiresAtIso: input.expiresAt.toISOString(),
           reason: input.reason,
-          ...(input.now !== undefined ? { nowIso: input.now.toISOString() } : {}),
+          nowIso: decisionNow.toISOString(),
+          evalNowIso: evalNow.toISOString(),
         });
         if (!res.ok || !res.invitation || !res.auditEventId) {
           return Object.freeze({
@@ -576,13 +581,18 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
     input: ListTenantInvitationsStoreInput,
   ): Promise<ListTenantInvitationsStoreResult> {
     return this.#db.transaction(async (tx) => {
+      const txClockNow = await readTransactionClockNow(tx);
+      const evalNow = input.now ?? txClockNow;
+      const decisionNow = evalNow.getTime() > txClockNow.getTime() ? txClockNow : evalNow;
+
       const res = await this.#executeOp<SqlListInvitationsOpResponse>(
         tx,
         'list_tenant_invitations',
         {
           actorUserId: input.actorUserId,
           tenantId: input.tenantId,
-          ...(input.now !== undefined ? { nowIso: input.now.toISOString() } : {}),
+          nowIso: decisionNow.toISOString(),
+          evalNowIso: evalNow.toISOString(),
         },
       );
       if (!res.ok || !res.tenantId || !res.invitations) {
@@ -605,13 +615,18 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
     return runManagedTransaction(
       this.#db,
       async (tx) => {
+        const txClockNow = await readTransactionClockNow(tx);
+        const evalNow = input.now ?? txClockNow;
+        const decisionNow = evalNow.getTime() > txClockNow.getTime() ? txClockNow : evalNow;
+
         const res = await this.#executeOp<SqlRevokeInvitationOpResponse>(tx, 'revoke_invitation', {
           operationId: input.operationId,
           actorUserId: input.actorUserId,
           tenantId: input.tenantId,
           invitationId: input.invitationId,
           reason: input.reason,
-          ...(input.now !== undefined ? { nowIso: input.now.toISOString() } : {}),
+          nowIso: decisionNow.toISOString(),
+          evalNowIso: evalNow.toISOString(),
         });
         if (!res.ok || !res.invitation || !res.auditEventId) {
           return Object.freeze({
@@ -949,7 +964,7 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
           nowIso: decisionNow.toISOString(),
           evalNowIso: evalNow.toISOString(),
         });
-        if (!res.ok || !res.userId || !res.invitation || !res.auditEventId) {
+        if (!res.ok || !res.invitation || !res.auditEventId) {
           return Object.freeze({
             ok: false as const,
             reason: res.reason ?? 'invalid_invitation_input',
@@ -958,7 +973,7 @@ export class PostgresIdentityLifecycleStore implements IdentityLifecycleStorePor
         return Object.freeze({
           ok: true as const,
           idempotentReplay: res.idempotentReplay === true,
-          userId: res.userId,
+          userId: res.userId ?? null,
           invitation: freezeInvitationRecord(res.invitation),
           auditEventId: res.auditEventId,
         });

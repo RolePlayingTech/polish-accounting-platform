@@ -2670,6 +2670,7 @@ export function createPostgresAccountingScope(
 }
 
 export interface ListTenantCompanyGrantsForAdminFactsInput {
+  readonly actorUserId: string;
   readonly tenantId: string;
   readonly candidateUserIds: readonly string[];
 }
@@ -2683,14 +2684,16 @@ export interface TenantCompanyGrantsAdminDiscoveryResult {
  * Czysto odczytowe odkrywanie wszystkich grantów podmiotowych (`company_access_grant`) oraz
  * członkostw (`tenant_membership`) w danym tenancie zgodnie z polityką `FORCE RLS`
  * `pap_grant_read` + `pap_admin_allowed` (`0006_security-foundation.sql:21-35, 454-461`).
- * Podpisuje kontekst administracyjny `facts` z obiektem `command` dla aktywnego właściciela
- * lub administratora tenanta — zero DML, zero wierszy w `security_decision_event`.
+ * Podpisuje kontekst administracyjny `facts` z obiektem `command` wyłącznie dla aktywnego
+ * wywołującego właściciela lub administratora tenanta (`actorUserId`) — zero DML, zero wierszy
+ * w `security_decision_event` oraz brak eskalacji dla zwykłego członka (`tenant_member`).
  */
 export async function listTenantCompanyGrantsForAdminFacts(
   db: Pick<ReturnType<typeof connectDatabase>['db'], 'transaction'>,
   signer: PostgresContextSigner,
   input: ListTenantCompanyGrantsForAdminFactsInput,
 ): Promise<TenantCompanyGrantsAdminDiscoveryResult> {
+  const canonicalActorId = parseUserId(input.actorUserId);
   const canonicalTenantId = parseTenantId(input.tenantId);
   const candidateIds = Array.from(new Set(input.candidateUserIds.map((raw) => parseUserId(raw))));
   if (candidateIds.length === 0) {
@@ -2698,10 +2701,44 @@ export async function listTenantCompanyGrantsForAdminFacts(
   }
 
   return db.transaction(async (tx) => {
-    const memberships: (typeof tenantMembership.$inferSelect)[] = [];
-    let adminUserId: ReturnType<typeof parseUserId> | null = null;
+    const txClockNow = await readTransactionClockNow(tx);
 
+    await signer.apply(tx, {
+      purpose: 'facts',
+      actorUserId: canonicalActorId,
+      tenantId: canonicalTenantId,
+    });
+    const [actorMembership] = await tx
+      .select()
+      .from(tenantMembership)
+      .where(
+        and(
+          eq(tenantMembership.tenantId, canonicalTenantId),
+          eq(tenantMembership.userId, canonicalActorId),
+        ),
+      );
+
+    const isActorActiveAdmin =
+      Boolean(actorMembership) &&
+      actorMembership!.status === 'active' &&
+      (actorMembership!.role === 'tenant_owner' || actorMembership!.role === 'tenant_admin') &&
+      actorMembership!.validFrom.getTime() <= txClockNow.getTime() &&
+      (actorMembership!.validUntil === null ||
+        actorMembership!.validUntil.getTime() > txClockNow.getTime());
+
+    if (!isActorActiveAdmin) {
+      return deepFreeze({
+        memberships: actorMembership ? [actorMembership] : [],
+        grants: [],
+      });
+    }
+
+    const memberships: (typeof tenantMembership.$inferSelect)[] = [];
     for (const candidateUserId of candidateIds) {
+      if (candidateUserId === canonicalActorId && actorMembership) {
+        memberships.push(actorMembership);
+        continue;
+      }
       await signer.apply(tx, {
         purpose: 'facts',
         actorUserId: candidateUserId,
@@ -2718,25 +2755,14 @@ export async function listTenantCompanyGrantsForAdminFacts(
         );
       if (mRow) {
         memberships.push(mRow);
-        if (
-          adminUserId === null &&
-          mRow.status === 'active' &&
-          (mRow.role === 'tenant_owner' || mRow.role === 'tenant_admin')
-        ) {
-          adminUserId = candidateUserId;
-        }
       }
-    }
-
-    if (!adminUserId) {
-      return deepFreeze({ memberships, grants: [] });
     }
 
     const grantsByGrantId = new Map<string, CompanyAccessGrantRecord>();
     for (const targetUserId of candidateIds) {
       await signer.apply(tx, {
         purpose: 'facts',
-        actorUserId: adminUserId,
+        actorUserId: canonicalActorId,
         tenantId: canonicalTenantId,
         targetUserId,
         command: {

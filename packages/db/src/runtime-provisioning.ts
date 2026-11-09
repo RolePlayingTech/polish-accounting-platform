@@ -1035,7 +1035,14 @@ BEGIN
     ON CONFLICT (user_id) DO UPDATE
       SET display_name = EXCLUDED.display_name,
           email = CASE
-            WHEN EXCLUDED.email LIKE '%.invalid' AND pap_user_profile.email NOT LIKE '%.invalid'
+            WHEN (
+              EXCLUDED.email LIKE '%.invalid'
+              OR EXCLUDED.email = 'uzytkownik@pap.example'
+              OR position('***@' IN EXCLUDED.email) > 0
+            )
+              AND pap_user_profile.email NOT LIKE '%.invalid'
+              AND pap_user_profile.email <> 'uzytkownik@pap.example'
+              AND position('***@' IN pap_user_profile.email) = 0
               THEN pap_user_profile.email
             ELSE EXCLUDED.email
           END,
@@ -1175,9 +1182,14 @@ BEGIN
               ELSE EXCLUDED.display_name
             END,
             email = CASE
-              WHEN (EXCLUDED.email LIKE '%.invalid' OR EXCLUDED.email = 'uzytkownik@pap.example')
+              WHEN (
+                EXCLUDED.email LIKE '%.invalid'
+                OR EXCLUDED.email = 'uzytkownik@pap.example'
+                OR position('***@' IN EXCLUDED.email) > 0
+              )
                 AND pap_user_profile.email NOT LIKE '%.invalid'
                 AND pap_user_profile.email <> 'uzytkownik@pap.example'
+                AND position('***@' IN pap_user_profile.email) = 0
               THEN pap_user_profile.email
               ELSE EXCLUDED.email
             END,
@@ -1734,7 +1746,7 @@ BEGIN
 
     UPDATE pap_tenant_invitation
     SET status = 'revoked',
-        revoked_at = now_ts,
+        revoked_at = GREATEST(inv_row.created_at, now_ts),
         revoked_by_user_id = actor_id_val
     WHERE id = inv_row.id
     RETURNING * INTO inv_row;
@@ -1867,7 +1879,7 @@ BEGIN
       IF NOT FOUND OR user_row.status <> 'active' OR user_row.disabled_at IS NOT NULL THEN
         RETURN jsonb_build_object('ok', false, 'reason', 'user_disabled');
       END IF;
-      IF resolved_user_id IS NOT NULL AND resolved_user_id <> actor_id_val THEN
+      IF resolved_user_id IS DISTINCT FROM actor_id_val THEN
         RETURN jsonb_build_object('ok', false, 'reason', 'invalid_invitation_input');
       END IF;
     END IF;
@@ -1983,9 +1995,17 @@ BEGIN
               ELSE pap_user_profile.display_name
             END,
             email = CASE
-              WHEN (EXCLUDED.email LIKE '%.invalid' OR EXCLUDED.email = 'uzytkownik@pap.example')
-                AND pap_user_profile.email NOT LIKE '%.invalid'
-                AND pap_user_profile.email <> 'uzytkownik@pap.example'
+              WHEN NULLIF(btrim(cmd->>'email'), '') IS NULL
+                OR (
+                  (
+                    EXCLUDED.email LIKE '%.invalid'
+                    OR EXCLUDED.email = 'uzytkownik@pap.example'
+                    OR position('***@' IN EXCLUDED.email) > 0
+                  )
+                  AND pap_user_profile.email NOT LIKE '%.invalid'
+                  AND pap_user_profile.email <> 'uzytkownik@pap.example'
+                  AND position('***@' IN pap_user_profile.email) = 0
+                )
               THEN pap_user_profile.email
               ELSE EXCLUDED.email
             END,
@@ -2187,7 +2207,7 @@ BEGIN
       IF NOT FOUND OR user_row.status <> 'active' OR user_row.disabled_at IS NOT NULL THEN
         RETURN jsonb_build_object('ok', false, 'reason', 'user_disabled');
       END IF;
-      IF resolved_user_id IS NOT NULL AND resolved_user_id <> actor_id_val THEN
+      IF resolved_user_id IS DISTINCT FROM actor_id_val THEN
         RETURN jsonb_build_object('ok', false, 'reason', 'invalid_invitation_input');
       END IF;
     END IF;
@@ -2241,37 +2261,9 @@ BEGIN
 
     SELECT * INTO tenant_row FROM tenant WHERE id = inv_row.tenant_id FOR SHARE;
 
-    display_name_val := left(
-      btrim(COALESCE(NULLIF(btrim(cmd->>'displayName'), ''), inv_row.invitee_display_name, subject_val)),
-      160
-    );
-    IF display_name_val = '' THEN
-      display_name_val := left(subject_val, 160);
-    END IF;
-
-    email_val := lower(btrim(COALESCE(NULLIF(btrim(cmd->>'email'), ''), inv_row.invitee_email)));
-    IF char_length(email_val) < 3
-      OR char_length(email_val) > 254
-      OR position('@' IN email_val) < 2
-    THEN
-      email_val := inv_row.invitee_email;
-    END IF;
-
-    IF resolved_user_id IS NULL THEN
-      resolved_user_id := gen_random_uuid();
-      INSERT INTO app_user (id, status, created_at, disabled_at)
-      VALUES (resolved_user_id, 'active', now_ts, NULL);
-
-      INSERT INTO user_oidc_identity (id, user_id, issuer, subject, status, linked_at, revoked_at)
-      VALUES (gen_random_uuid(), resolved_user_id, issuer_val, subject_val, 'active', now_ts, NULL);
-
-      INSERT INTO pap_user_profile (user_id, display_name, email, created_at, updated_at)
-      VALUES (resolved_user_id, display_name_val, email_val, now_ts, now_ts);
-    END IF;
-
     UPDATE pap_tenant_invitation
     SET status = 'rejected',
-        rejected_at = now_ts,
+        rejected_at = GREATEST(inv_row.created_at, now_ts),
         rejected_by_user_id = resolved_user_id
     WHERE id = inv_row.id
     RETURNING * INTO inv_row;
@@ -2382,6 +2374,10 @@ BEGIN
       OR (actor_member_row.valid_until IS NOT NULL AND actor_member_row.valid_until <= eval_now_ts)
     THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'membership_inactive');
+    END IF;
+
+    IF actor_member_row.role NOT IN ('tenant_owner', 'tenant_admin') THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'admin_role_required');
     END IF;
 
     SELECT COALESCE(

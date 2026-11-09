@@ -80,6 +80,7 @@ import {
   type AccountingWorkspaceStorePort,
   type ExecuteAuthorizedCompanyActionResult,
   type OidcAccessTokenVerifier,
+  type WebSessionStorePort,
   type WorkspaceActorContext,
 } from '@pap/application';
 import type {
@@ -217,6 +218,7 @@ export interface PostgresBackedWorkspaceServiceOptions {
   readonly innerWorkspace: AccountingWorkspaceService;
   readonly oidcVerifier: OidcAccessTokenVerifier;
   readonly sandboxIssuer: string;
+  readonly webSessionStore?: WebSessionStorePort | undefined;
 }
 
 export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
@@ -225,6 +227,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   private readonly innerWorkspace: AccountingWorkspaceService;
   private readonly oidcVerifier: OidcAccessTokenVerifier;
   private readonly sandboxIssuer: string;
+  private readonly webSessionStore: WebSessionStorePort | undefined;
   private readonly mutationMutex = new AsyncMutationMutex();
   private readonly boundGateways = new Set<PapMcpGateway>();
   private readonly inFlightBatchSync = new Map<string, Promise<boolean>>();
@@ -291,6 +294,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     this.store = options.innerWorkspace.store;
     this.oidcVerifier = options.oidcVerifier;
     this.sandboxIssuer = options.sandboxIssuer;
+    this.webSessionStore = options.webSessionStore;
 
     const origPortFactory = this.innerWorkspace.createWorkspaceMcpDomainPort.bind(
       this.innerWorkspace,
@@ -1301,7 +1305,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     rawTenantId: string,
     actorUserId: string,
     extraUserIds?: readonly string[],
-  ): Promise<void> {
+  ): Promise<boolean> {
     const tId = parseTenantId(rawTenantId);
     const directoryMembers = await listTenantMemberDirectoryFromPostgres(
       this.runtime.connection.db,
@@ -1311,6 +1315,10 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         tenantId: tId,
       },
     ).catch(() => []);
+
+    if (directoryMembers.length === 0) {
+      return false;
+    }
 
     for (const member of directoryMembers) {
       const mUserId = parseUserId(member.userId);
@@ -1347,6 +1355,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       this.runtime.connection.db,
       this.runtime.signer,
       {
+        actorUserId,
         tenantId: tId,
         candidateUserIds: [...candidateUserIds],
       },
@@ -1398,6 +1407,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         }
       }
     }
+    return true;
   }
 
   getCompanyAccess(
@@ -1411,24 +1421,49 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       legalEntityId,
       'read',
       async (_scope, txWorkspace) => {
-        await this.syncTenantDirectoryAndGrantsFromPostgres(tenantId, actor.userId);
-        const allUserIds = this.store.listUsers().map((u) => u.userId);
-        const syncedBatch = await this.syncActorAccessibleGrantsBatch(allUserIds, tenantId, true);
-        if (!syncedBatch) {
-          for (const user of this.store.listUsers()) {
-            await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
-          }
-        }
+        const isAdminSync = await this.syncTenantDirectoryAndGrantsFromPostgres(
+          tenantId,
+          actor.userId,
+        );
         const tId = parseTenantId(tenantId);
         const leId = parseLegalEntityId(legalEntityId);
-        for (const user of this.store.listUsers()) {
-          txWorkspace.store.upsertUser(user);
-        }
-        for (const m of this.store.listTenantMemberships(tId)) {
-          txWorkspace.store.upsertMembership(m);
-        }
-        for (const g of this.store.listGrantsForCompany(tId, leId)) {
-          txWorkspace.store.upsertGrant(g);
+        const actorId = parseUserId(actor.userId);
+        if (isAdminSync) {
+          const allUserIds = this.store.listUsers().map((u) => u.userId);
+          const syncedBatch = await this.syncActorAccessibleGrantsBatch(
+            allUserIds,
+            tenantId,
+            true,
+          );
+          if (!syncedBatch) {
+            for (const user of this.store.listUsers()) {
+              await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
+            }
+          }
+          for (const user of this.store.listUsers()) {
+            txWorkspace.store.upsertUser(user);
+          }
+          for (const m of this.store.listTenantMemberships(tId)) {
+            txWorkspace.store.upsertMembership(m);
+          }
+          for (const g of this.store.listGrantsForCompany(tId, leId)) {
+            txWorkspace.store.upsertGrant(g);
+          }
+        } else {
+          await this.syncCompanyGrantsIntoMemory(actor.userId, tenantId, legalEntityId, true);
+          const actorUser = this.store.getUserById(actorId);
+          if (actorUser) {
+            txWorkspace.store.upsertUser(actorUser);
+          }
+          const actorMembership = this.store.getMembership(tId, actorId);
+          if (actorMembership) {
+            txWorkspace.store.upsertMembership(actorMembership);
+          }
+          for (const g of this.store.listGrantsForCompany(tId, leId)) {
+            if (g.userId === actorId) {
+              txWorkspace.store.upsertGrant(g);
+            }
+          }
         }
         return txWorkspace.getCompanyAccess(actor, tenantId, legalEntityId);
       },
@@ -1516,6 +1551,22 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     await this.syncActorAccessibleGrantsBatch([userId], tenantId, true);
   }
 
+  private async revokeUserSessionsFailClosed(userId: string, now?: Date): Promise<void> {
+    if (!this.webSessionStore) {
+      return;
+    }
+    try {
+      await this.webSessionStore.revokeAllSessionsForUser({ userId, now });
+    } catch {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        error: 'service_unavailable',
+        reasonCode: 'auth_service_unavailable',
+        message: 'Magazyn sesji BFF jest chwilowo niedostępny podczas cofania dostępu (fail-closed).',
+      });
+    }
+  }
+
   async revokeTenantMembership(
     actor: WorkspaceActorContext,
     rawTenantId: string,
@@ -1523,6 +1574,24 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     rawRequest?: { readonly operationId?: string | undefined; readonly reason?: string | undefined },
   ): Promise<AccessMutationResponse> {
     return this.runAtomicMutation(async () => {
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let operationId: string;
+      if (rawRequest?.operationId !== undefined) {
+        const trimmedOpId = rawRequest.operationId.trim();
+        if (!UUID_RE.test(trimmedOpId)) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_operation_id',
+            'Identyfikator operacji (operationId) musi być poprawnym UUID.',
+          );
+        }
+        operationId = trimmedOpId.toLowerCase();
+      } else if (actor.idempotencyKey && UUID_RE.test(actor.idempotencyKey.trim())) {
+        operationId = actor.idempotencyKey.trim().toLowerCase();
+      } else {
+        operationId = randomUUID();
+      }
+
       let tId: ReturnType<typeof parseTenantId>;
       let targetUserId: ReturnType<typeof parseUserId>;
       try {
@@ -1543,7 +1612,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       const result = await manageAccess(
         {
           kind: 'revoke_membership',
-          operationId: rawRequest?.operationId ?? randomUUID(),
+          operationId,
           tenantId: tId,
           userId: targetUserId,
         },
@@ -1591,6 +1660,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       }
 
       const revokedAt = new Date(result.receipt.occurredAt);
+      await this.revokeUserSessionsFailClosed(targetUserId, revokedAt);
+
       const cachedMembership = this.store.getMembership(tId, targetUserId);
       if (cachedMembership) {
         this.store.upsertMembership({
@@ -1716,10 +1787,13 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         );
       }
 
+      const revokedAt = new Date(result.receipt.occurredAt);
+      await this.revokeUserSessionsFailClosed(targetUserId, revokedAt);
+
       if (matchedGrant && matchedGrant.revokedAt === null) {
         this.store.upsertGrant({
           ...matchedGrant,
-          revokedAt: new Date(result.receipt.occurredAt),
+          revokedAt,
         });
       }
       await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId, true);

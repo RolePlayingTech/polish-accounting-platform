@@ -262,7 +262,7 @@ export type RejectTenantInvitationDeniedReason =
 export interface RejectTenantInvitationStoreResultSuccess {
   readonly ok: true;
   readonly idempotentReplay: boolean;
-  readonly userId: string;
+  readonly userId: string | null;
   readonly invitation: TenantInvitationRecord;
   readonly auditEventId: string;
 }
@@ -1268,9 +1268,23 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       return { ok: false, reason: 'identity_revoked' };
     }
 
-    const existingStoreUser = input.actorUserId
-      ? this.#workspaceStore.getUserById(parseUserId(input.actorUserId))
-      : this.#workspaceStore.getUserBySubject(subject, issuer);
+    const existingStoreUser = this.#workspaceStore.getUserBySubject(subject, issuer);
+    const existingInviteeUserIdStr = existingIdentity?.userId ?? existingStoreUser?.userId ?? null;
+    if (input.actorUserId !== undefined) {
+      let parsedActorId: ReturnType<typeof parseUserId>;
+      try {
+        parsedActorId = parseUserId(input.actorUserId);
+      } catch {
+        return { ok: false, reason: 'invalid_invitation_input' };
+      }
+      const actorRecord = this.#workspaceStore.getUserById(parsedActorId);
+      if (!actorRecord || !actorRecord.active) {
+        return { ok: false, reason: 'user_disabled' };
+      }
+      if (existingInviteeUserIdStr !== parsedActorId) {
+        return { ok: false, reason: 'invalid_invitation_input' };
+      }
+    }
     if (existingStoreUser && !existingStoreUser.active) {
       return { ok: false, reason: 'user_disabled' };
     }
@@ -1342,7 +1356,6 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       return { ok: false, reason: 'invalid_invitation_input' };
     }
 
-    const existingInviteeUserIdStr = existingIdentity?.userId ?? existingStoreUser?.userId ?? null;
     if (existingInviteeUserIdStr) {
       const existingInviteeId = parseUserId(existingInviteeUserIdStr);
       if (existingInviteeId === inviterId) {
@@ -1429,8 +1442,10 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     const resolvedInvitee = await this.provisionOrResolveOidcUser({
       issuer,
       subject,
-      displayName: input.displayName ?? stored.inviteeDisplayName ?? undefined,
-      email: input.email ?? stored.inviteeEmail,
+      displayName: existingInviteeUserIdStr
+        ? input.displayName
+        : (input.displayName ?? stored.inviteeDisplayName ?? undefined),
+      email: existingInviteeUserIdStr ? input.email : (input.email ?? stored.inviteeEmail),
       now,
     });
     if (!resolvedInvitee.ok) {
@@ -1529,9 +1544,23 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     if (existingIdentity && !existingIdentity.active) {
       return { ok: false, reason: 'identity_revoked' };
     }
-    const existingStoreUser = input.actorUserId
-      ? this.#workspaceStore.getUserById(parseUserId(input.actorUserId))
-      : this.#workspaceStore.getUserBySubject(subject, issuer);
+    const existingStoreUser = this.#workspaceStore.getUserBySubject(subject, issuer);
+    const existingInviteeUserIdStr = existingIdentity?.userId ?? existingStoreUser?.userId ?? null;
+    if (input.actorUserId !== undefined) {
+      let parsedActorId: ReturnType<typeof parseUserId>;
+      try {
+        parsedActorId = parseUserId(input.actorUserId);
+      } catch {
+        return { ok: false, reason: 'invalid_invitation_input' };
+      }
+      const actorRecord = this.#workspaceStore.getUserById(parsedActorId);
+      if (!actorRecord || !actorRecord.active) {
+        return { ok: false, reason: 'user_disabled' };
+      }
+      if (existingInviteeUserIdStr !== parsedActorId) {
+        return { ok: false, reason: 'invalid_invitation_input' };
+      }
+    }
     if (existingStoreUser && !existingStoreUser.active) {
       return { ok: false, reason: 'user_disabled' };
     }
@@ -1548,7 +1577,7 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
         return { ok: false, reason: 'operation_conflict' };
       }
       const prevPayload = prevOp.payload as {
-        readonly userId: string;
+        readonly userId: string | null;
         readonly invitation: TenantInvitationRecord;
         readonly auditEventId: string;
       };
@@ -1577,25 +1606,6 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       return { ok: false, reason: 'invitation_expired' };
     }
 
-    const snapshot = this.captureSnapshot();
-    const resolvedActor = await this.provisionOrResolveOidcUser({
-      issuer,
-      subject,
-      displayName: input.displayName ?? stored.inviteeDisplayName ?? undefined,
-      email: input.email ?? stored.inviteeEmail,
-      now,
-    });
-    if (!resolvedActor.ok) {
-      this.restoreSnapshot(snapshot);
-      return {
-        ok: false,
-        reason:
-          resolvedActor.reason === 'invalid_identity_input'
-            ? 'invalid_invitation_input'
-            : resolvedActor.reason,
-      };
-    }
-
     stored.status = 'rejected';
     stored.rejectedAt = now.toISOString();
     const auditEventId = randomUUID();
@@ -1604,7 +1614,7 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       kind: 'reject_invitation',
       requestKey: reqKey,
       payload: {
-        userId: resolvedActor.userId,
+        userId: existingInviteeUserIdStr,
         invitation,
         auditEventId,
       },
@@ -1613,7 +1623,7 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     return {
       ok: true,
       idempotentReplay: false,
-      userId: resolvedActor.userId,
+      userId: existingInviteeUserIdStr,
       invitation,
       auditEventId,
     };
@@ -1627,10 +1637,13 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     const nowIso = (input.now ?? new Date()).toISOString();
     const prev = this.#profiles.get(input.userId);
     const candidateEmail = input.email.trim().toLowerCase();
+    const isPlaceholderOrMasked = (addr: string): boolean =>
+      addr.endsWith('.invalid') ||
+      addr === 'uzytkownik@pap.example' ||
+      addr.includes('***@') ||
+      !SafeEmailAddressSchema.safeParse(addr).success;
     const effectiveEmail =
-      prev &&
-      !prev.email.endsWith('.invalid') &&
-      (candidateEmail.endsWith('.invalid') || !SafeEmailAddressSchema.safeParse(candidateEmail).success)
+      prev && !isPlaceholderOrMasked(prev.email) && isPlaceholderOrMasked(candidateEmail)
         ? prev.email
         : candidateEmail;
     const candidateDisplayName = input.displayName.trim().slice(0, 160);

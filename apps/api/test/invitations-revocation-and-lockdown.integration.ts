@@ -354,13 +354,21 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     const instB = await bootApiInstance(makeRuntimeEnv());
     openApps.add(instB.app);
 
-    // W STAGING_PRIVATE endpointy piaskownicy są wyłączone (404)
-    const sandboxTokenAttempt = await fetch(`${instA.baseUrl}/api/v1/auth/sandbox-token`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ personaKey: 'owner' }),
-    });
-    expect(sandboxTokenAttempt.status).toBe(404);
+    // W STAGING_PRIVATE rzeczywiste endpointy piaskownicy są wyłączone (404 sandbox_oidc_disabled)
+    for (const [method, path, payload] of [
+      ['POST', '/api/v1/auth/sandbox/token', { personaKey: 'owner' }],
+      ['POST', '/api/v1/oidc/token', { personaKey: 'owner' }],
+      ['GET', '/api/v1/oidc/personas', undefined],
+    ] as const) {
+      const sandboxAttempt = await fetch(`${instA.baseUrl}${path}`, {
+        method,
+        headers: payload ? { 'Content-Type': 'application/json' } : {},
+        ...(payload ? { body: JSON.stringify(payload) } : {}),
+      });
+      expect(sandboxAttempt.status).toBe(404);
+      const sandboxErr = (await sandboxAttempt.json()) as { reasonCode?: string };
+      expect(sandboxErr.reasonCode).toBe('sandbox_oidc_disabled');
+    }
 
     const ownerToken = await obtainOidcBearerToken(idp!, redirectUri, 's4-owner-marek');
 
@@ -584,6 +592,56 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     );
     expect(annaComp2Denied.status).toBe(403);
 
+    // P0-1: Anna (tenant_member) w widoku /access Firmy 1 widzi wyłącznie własne członkostwo i własny grant (bez wycieku właściciela!)
+    const annaAccessViewRes = await fetch(
+      `${instB.baseUrl}/api/v1/tenants/${tenantId}/companies/${comp1.legalEntityId}/access`,
+      { headers: { Authorization: `Bearer ${annaToken}` } },
+    );
+    expect(annaAccessViewRes.status).toBe(200);
+    const annaAccessView = CompanyAccessResponseSchema.parse(await annaAccessViewRes.json());
+    expect(annaAccessView.members.map((m) => m.userId)).toEqual([ensureAnnaJson.userId]);
+    expect(annaAccessView.grants.every((g) => g.userId === ensureAnnaJson.userId)).toBe(true);
+
+    const bffHmacKey = resolveBffInternalHmacKey(makeRuntimeEnv())!;
+    async function callSignedBff(
+      baseUrl: string,
+      pathname: string,
+      body: Record<string, unknown>,
+    ): Promise<Response> {
+      const ts = String(Date.now());
+      const sig = computeBffInternalSignatureHex(bffHmacKey, 'POST', pathname, ts, body);
+      return fetch(`${baseUrl}${pathname}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-bff-timestamp': ts,
+          'x-bff-signature': sig,
+        },
+        body: JSON.stringify(body),
+      });
+    }
+
+    // P0-2: Utworzenie aktywnej sesji BFF dla Anny przed cofnięciem grantu -> cofnięcie grantu natychmiast unieważnia sesję BFF
+    const annaSessionHash1 = createHash('sha256')
+      .update(`anna-bff-session-grant-${randomUUID()}`, 'utf8')
+      .digest('hex');
+    const createBff1Res = await callSignedBff(instA.baseUrl, '/api/v1/auth/bff/session/create', {
+      sessionIdHash: annaSessionHash1,
+      userId: ensureAnnaJson.userId,
+      issuer: idp!.issuer,
+      subject: 's4-ksiegowa-anna',
+      displayName: 'Anna Księgowa Zewnętrzna',
+      email: 'anna.ksiegowa@syntetyczne-biuro.example',
+      tenantId,
+      legalEntityId: comp1.legalEntityId,
+      period: '2026-10',
+      encryptedTokens: 'v1.syntetyczny.zaszyfrowany.token.1',
+      accessTokenExpiresAt: new Date(Date.now() + 900_000).toISOString(),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(createBff1Res.status).toBe(200);
+    expect(((await createBff1Res.json()) as { ok: boolean }).ok).toBe(true);
+
     // Właściciel na Instancji A (która nie wykonywała akceptacji!) widzi grant Anny i cofa go po grantId
     const accessListRes = await fetch(
       `${instA.baseUrl}/api/v1/tenants/${tenantId}/companies/${comp1.legalEntityId}/access`,
@@ -610,6 +668,18 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     expect(revokeGrantRes.status).toBe(200);
     AccessMutationResponseSchema.parse(await revokeGrantRes.json());
 
+    // Sesja BFF Anny odpytywana na Instancji B jest natychmiast oznaczona jako session_revoked (P0-2)
+    const getBff1AfterGrantRevoke = await callSignedBff(
+      instB.baseUrl,
+      '/api/v1/auth/bff/session/get',
+      { sessionIdHash: annaSessionHash1 },
+    );
+    expect(getBff1AfterGrantRevoke.status).toBe(200);
+    expect(await getBff1AfterGrantRevoke.json()).toEqual({
+      ok: false,
+      reason: 'session_revoked',
+    });
+
     // Natychmiast (0 ms oczekiwania) Instancja B odmawia Annie odczytu Firmy 1 (403)
     const annaAfterGrantRevoke = await fetch(
       `${instB.baseUrl}/api/v1/tenants/${tenantId}/companies/${comp1.legalEntityId}/overview`,
@@ -626,6 +696,48 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     );
     expect(annaSessionAfterGrantRevoke.state).toBe('authenticated');
     expect(annaSessionAfterGrantRevoke.companies).toEqual([]);
+    // P1-1: Prawdziwy adres e-mail Anny nie został nadpisany zamaskowanym adresem z katalogu członków!
+    expect(annaSessionAfterGrantRevoke.email).toBe('anna.ksiegowa@syntetyczne-biuro.example');
+
+    // P2-1: Niepoprawny operationId przy cofaniu członkostwa zwraca 400 invalid_operation_id bez mutacji
+    const invalidOpRevokeRes = await fetch(
+      `${instA.baseUrl}/api/v1/tenants/${tenantId}/memberships/${ensureAnnaJson.userId}/revoke`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${ownerToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          operationId: 'nie-jest-uuid',
+          reason: 'Test walidacji operationId przed mutacją',
+        }),
+      },
+    );
+    expect(invalidOpRevokeRes.status).toBe(400);
+    expect(((await invalidOpRevokeRes.json()) as { reasonCode?: string }).reasonCode).toBe(
+      'invalid_operation_id',
+    );
+
+    // P0-2: Druga aktywna sesja BFF Anny przed cofnięciem członkostwa -> cofnięcie członkostwa unieważnia sesję BFF
+    const annaSessionHash2 = createHash('sha256')
+      .update(`anna-bff-session-member-${randomUUID()}`, 'utf8')
+      .digest('hex');
+    const createBff2Res = await callSignedBff(instA.baseUrl, '/api/v1/auth/bff/session/create', {
+      sessionIdHash: annaSessionHash2,
+      userId: ensureAnnaJson.userId,
+      issuer: idp!.issuer,
+      subject: 's4-ksiegowa-anna',
+      displayName: 'Anna Księgowa Zewnętrzna',
+      email: 'anna.ksiegowa@syntetyczne-biuro.example',
+      tenantId,
+      legalEntityId: null,
+      period: '2026-10',
+      encryptedTokens: 'v1.syntetyczny.zaszyfrowany.token.2',
+      accessTokenExpiresAt: new Date(Date.now() + 900_000).toISOString(),
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+    });
+    expect(createBff2Res.status).toBe(200);
 
     // Właściciel na Instancji A cofa członkostwo Anny w organizacji -> Instancja B natychmiast przechodzi w stan no_tenant_membership
     const revokeMembershipRes = await fetch(
@@ -643,6 +755,17 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     );
     expect(revokeMembershipRes.status).toBe(200);
     AccessMutationResponseSchema.parse(await revokeMembershipRes.json());
+
+    const getBff2AfterMemberRevoke = await callSignedBff(
+      instB.baseUrl,
+      '/api/v1/auth/bff/session/get',
+      { sessionIdHash: annaSessionHash2 },
+    );
+    expect(getBff2AfterMemberRevoke.status).toBe(200);
+    expect(await getBff2AfterMemberRevoke.json()).toEqual({
+      ok: false,
+      reason: 'session_revoked',
+    });
 
     const annaSessionAfterMemberRevokeRes = await fetch(`${instB.baseUrl}/api/v1/me/session`, {
       headers: { Authorization: `Bearer ${annaToken}` },
@@ -896,6 +1019,12 @@ describe('Wave 2 Slice 4 — Zaproszenia (single-use + SHA-256), granice delegac
     expect(rejectDamianRes.status).toBe(200);
     const rejectedDamian = RejectTenantInvitationResponseSchema.parse(await rejectDamianRes.json());
     expect(rejectedDamian.invitation.status).toBe('rejected');
+
+    // P1-2: Bezkontowe odrzucenie zaproszenia NIE tworzy rekordu app_user ani user_oidc_identity dla Damiana
+    const damianIdentityRows = await owner!.client<{ readonly cnt: string }[]>`
+      SELECT count(*)::text AS cnt FROM ${owner!.client(dataSchema)}.user_oidc_identity WHERE subject = 's4-odrzucajacy-damian'
+    `;
+    expect(damianIdentityRows[0]!.cnt).toBe('0');
 
     const acceptAfterRejectRes = await fetch(`${instA.baseUrl}/api/v1/invitations/accept`, {
       method: 'POST',

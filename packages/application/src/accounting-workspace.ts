@@ -1995,7 +1995,7 @@ export class AccountingWorkspaceService {
     rawTenantId: string,
     rawLegalEntityId: string,
   ): CompanyAccessResponse {
-    const { tId, leId } = this.authorizeCompanyOperation(
+    const { tId, leId, uId } = this.authorizeCompanyOperation(
       actor,
       rawTenantId,
       rawLegalEntityId,
@@ -2003,8 +2003,19 @@ export class AccountingWorkspaceService {
       'get_company_access',
     );
     const now = this.clock.now();
-    const memberships = this.store.listTenantMemberships(tId);
-    const members = memberships.map((m) => {
+    const actorMembership = this.store.getMembership(tId, uId);
+    const isActorActiveAdmin =
+      Boolean(actorMembership) &&
+      actorMembership!.status === 'active' &&
+      (actorMembership!.role === 'tenant_owner' || actorMembership!.role === 'tenant_admin') &&
+      actorMembership!.validFrom.getTime() <= now.getTime() &&
+      (actorMembership!.validUntil === null ||
+        actorMembership!.validUntil.getTime() > now.getTime());
+
+    const visibleMemberships = this.store
+      .listTenantMemberships(tId)
+      .filter((m) => isActorActiveAdmin || m.userId === uId);
+    const members = visibleMemberships.map((m) => {
       const user = this.store.getUserById(m.userId);
       return {
         userId: m.userId,
@@ -2015,7 +2026,10 @@ export class AccountingWorkspaceService {
       };
     });
 
-    const grants = this.store.listGrantsForCompany(tId, leId).map((g) => {
+    const visibleGrants = this.store
+      .listGrantsForCompany(tId, leId)
+      .filter((g) => isActorActiveAdmin || g.userId === uId);
+    const grants = visibleGrants.map((g) => {
       const user = this.store.getUserById(g.userId);
       const isActive =
         g.revokedAt === null &&
@@ -2263,6 +2277,24 @@ export class AccountingWorkspaceService {
     rawTargetUserId: string,
     rawRequest?: { readonly operationId?: string | undefined; readonly reason?: string | undefined },
   ): AccessMutationResponse {
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let operationId: string;
+    if (rawRequest?.operationId !== undefined) {
+      const trimmedOpId = rawRequest.operationId.trim();
+      if (!UUID_RE.test(trimmedOpId)) {
+        throw new AccountingWorkspaceValidationError(
+          400,
+          'invalid_operation_id',
+          'Identyfikator operacji (operationId) musi być poprawnym UUID.',
+        );
+      }
+      operationId = trimmedOpId.toLowerCase();
+    } else if (actor.idempotencyKey && UUID_RE.test(actor.idempotencyKey.trim())) {
+      operationId = actor.idempotencyKey.trim().toLowerCase();
+    } else {
+      operationId = randomUUID();
+    }
+
     let tId: TenantId;
     try {
       tId = parseTenantId(rawTenantId);
@@ -2335,7 +2367,7 @@ export class AccountingWorkspaceService {
     return AccessMutationResponseSchema.parse({
       ok: true,
       receipt: {
-        operationId: rawRequest?.operationId ?? randomUUID(),
+        operationId,
         occurredAt: now.toISOString(),
         changed,
         grantId: null,

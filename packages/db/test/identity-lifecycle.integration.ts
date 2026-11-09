@@ -3,7 +3,11 @@ import { tenantId, userId } from '@pap/domain';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { connectDatabase } from '../src/client.js';
-import { PostgresIdentityLifecycleStore } from '../src/identity-lifecycle.js';
+import { listTenantCompanyGrantsForAdminFacts } from '../src/accounting-scope.js';
+import {
+  PostgresIdentityLifecycleStore,
+  listTenantMemberDirectoryFromPostgres,
+} from '../src/identity-lifecycle.js';
 import { applyMigrations } from '../src/migrations.js';
 import {
   configureRuntimePrivileges,
@@ -514,5 +518,89 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
       SELECT status FROM pap_tenant_invitation WHERE token_sha256 = ${toctouTokenSha256}
     `;
     expect(toctouInvStatus[0]!.status).toBe('pending');
+
+    // P0-1: Zwykły członek (tenant_member) NIE może odczytać katalogu członków tenanta ani grantów innych osób
+    const memberWinnerId = raceWinners[0]!.userId;
+    const memberDirAttempt = await listTenantMemberDirectoryFromPostgres(
+      runtimeConnA.db,
+      signer,
+      {
+        actorUserId: memberWinnerId,
+        tenantId: invTenantId,
+      },
+    );
+    expect(memberDirAttempt).toEqual([]);
+
+    const memberAdminFactsAttempt = await listTenantCompanyGrantsForAdminFacts(
+      runtimeConnA.db,
+      signer,
+      {
+        actorUserId: memberWinnerId,
+        tenantId: invTenantId,
+        candidateUserIds: [memberWinnerId, adminId],
+      },
+    );
+    expect(memberAdminFactsAttempt.grants).toEqual([]);
+    expect(memberAdminFactsAttempt.memberships.map((m) => m.userId)).toEqual([memberWinnerId]);
+
+    // P0-3 & P1-2: Odporność na dryf zegara NTP (+15s) przy tworzeniu/cofaniu zaproszenia oraz bezkontowe odrzucenie (userId = null)
+    const driftFutureNow = new Date(Date.now() + 15_000);
+    const driftTokenSha256 = randomBytes(32).toString('hex');
+    const driftInv = await storeA.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: adminId,
+      tenantId: invTenantId,
+      tokenSha256: driftTokenSha256,
+      inviteeEmail: 'ntp-drift@syntetyczny.example',
+      intendedRole: 'tenant_member',
+      reason: 'Test odporności na dryf zegara NTP',
+      expiresAt: new Date(Date.now() + 3_600_000),
+      now: driftFutureNow,
+    });
+    expect(driftInv.ok).toBe(true);
+    if (!driftInv.ok) {
+      throw new Error('Oczekiwano sukcesu utworzenia zaproszenia przy dryfie zegara.');
+    }
+
+    const driftRevoke = await storeB.revokeTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: adminId,
+      tenantId: invTenantId,
+      invitationId: driftInv.invitation.invitationId,
+      reason: 'Cofnięcie zaproszenia przy dryfie zegara NTP',
+      now: driftFutureNow,
+    });
+    expect(driftRevoke.ok).toBe(true);
+
+    const accountlessRejectTokenSha256 = randomBytes(32).toString('hex');
+    const accountlessInv = await storeA.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: adminId,
+      tenantId: invTenantId,
+      tokenSha256: accountlessRejectTokenSha256,
+      inviteeEmail: 'bezkontowy.odrzucajacy@syntetyczny.example',
+      intendedRole: 'tenant_member',
+      reason: 'Zaproszenie do testu bezkontowego odrzucenia',
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
+    expect(accountlessInv.ok).toBe(true);
+
+    const accountlessReject = await storeB.rejectTenantInvitation({
+      operationId: randomUUID(),
+      tokenSha256: accountlessRejectTokenSha256,
+      issuer: ISSUER,
+      subject: 's4-pg-accountless-reject-sub',
+      reason: 'Odrzucenie zaproszenia bez zakładania konta w aplikacji',
+    });
+    expect(accountlessReject.ok).toBe(true);
+    if (accountlessReject.ok) {
+      expect(accountlessReject.userId).toBeNull();
+      expect(accountlessReject.invitation.status).toBe('rejected');
+    }
+
+    const accountlessRows = await owner.client<{ readonly cnt: string }[]>`
+      SELECT count(*)::text AS cnt FROM user_oidc_identity WHERE subject = 's4-pg-accountless-reject-sub'
+    `;
+    expect(accountlessRows[0]!.cnt).toBe('0');
   });
 });
