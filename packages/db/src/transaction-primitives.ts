@@ -304,7 +304,7 @@ export async function lockCompanyActionFactsInTx(
     .select({ id: legalEntity.id })
     .from(legalEntity)
     .where(and(eq(legalEntity.tenantId, canonicalTenantId), eq(legalEntity.id, canonicalEntityId)))
-    .for('share');
+    .for(query.action === 'write' ? 'update' : 'share');
 
   if (!entityRow) {
     const now = await readTransactionClockNow(tx);

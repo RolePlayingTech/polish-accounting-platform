@@ -15,6 +15,7 @@ import {
 import {
   AccessMutationResponseSchema,
   CompanyDocumentItemSchema,
+  CompanyOverviewResponseSchema,
   DocumentsListResponseSchema,
   GetMyCompaniesResponseSchema,
   IssueSandboxTokenResponseSchema,
@@ -515,35 +516,48 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
         },
       );
 
-      // Czekamy aż transakcja na Instancji A wykona INSERT w tx i zatrzyma się przed COMMIT
+      // Czekamy aż transakcja na Instancji A wykona INSERT w tx i zatrzyma się przed COMMIT (trzymając FOR UPDATE na legal_entity)
       await enteredHookPromise;
 
-      // W trakcie wstrzymanej transakcji odczytujemy listę dokumentów na Instancji A i Instancji B:
-      // żadna instancja NIE MOŻE widzieć niezatwierdzonego dokumentu!
-      const midDocsA = DocumentsListResponseSchema.parse(
-        await (
-          await fetch(
-            `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
-            { headers: headersA },
-          )
-        ).json(),
-      );
-      const midDocsB = DocumentsListResponseSchema.parse(
-        await (
-          await fetch(
-            `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
-            { headers: headersB },
-          )
-        ).json(),
-      );
+      // 1. Bezpośredni odczyt MVCC w PostgreSQL potwierdza brak zatwierdzonego wiersza przed COMMIT
+      const uncommittedDbRows = await owner!.client<{ id: string }[]>`
+        SELECT id
+        FROM ${owner!.client(dataSchema)}.accounting_document
+        WHERE tenant_id = ${TENANT_1_ID}::uuid
+          AND legal_entity_id = ${COMPANY_JDG_KPIR_ID}::uuid
+          AND document_number = ${rolledBackDocNumber}
+      `;
+      expect(uncommittedDbRows).toHaveLength(0);
+
+      // 2. Współdzielona pamięć RAM obu instancji nie zawiera niezatwierdzonego dokumentu przed COMMIT
       expect(
-        midDocsA.documents.some((d) => d.document.documentNumber === rolledBackDocNumber),
+        serviceA.store
+          .getCompany(TENANT_1_ID as never, COMPANY_JDG_KPIR_ID as never)
+          ?.documents.some((d) => d.document.documentNumber === rolledBackDocNumber) ?? false,
       ).toBe(false);
-      expect(
-        midDocsB.documents.some((d) => d.document.documentNumber === rolledBackDocNumber),
-      ).toBe(false);
-      expect(midDocsA.documents).toHaveLength(beforeDocsA.documents.length);
-      expect(midDocsB.documents).toHaveLength(beforeDocsA.documents.length);
+
+      // 3. Równoległe odczyty HTTP uruchomione na Instancji A i Instancji B w trakcie wstrzymanego zapisu
+      // czekają na zwolnienie blokady FOR UPDATE na legal_entity i po ROLLBACK zwracają czysty stan sprzed mutacji
+      let midReadAResolvedWhilePaused = false;
+      let midReadBResolvedWhilePaused = false;
+      const midDocsAPromise = fetch(
+        `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+        { headers: headersA },
+      ).then(async (res) => {
+        midReadAResolvedWhilePaused = true;
+        return DocumentsListResponseSchema.parse(await res.json());
+      });
+      const midDocsBPromise = fetch(
+        `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+        { headers: headersB },
+      ).then(async (res) => {
+        midReadBResolvedWhilePaused = true;
+        return DocumentsListResponseSchema.parse(await res.json());
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      expect(midReadAResolvedWhilePaused).toBe(false);
+      expect(midReadBResolvedWhilePaused).toBe(false);
 
       // Przerywamy transakcję przed COMMIT, wymuszając ROLLBACK
       releaseAndAbortHook(
@@ -553,8 +567,20 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
         ),
       );
 
-      const writeRes = await writeDonePromise;
+      const [writeRes, midDocsA, midDocsB] = await Promise.all([
+        writeDonePromise,
+        midDocsAPromise,
+        midDocsBPromise,
+      ]);
       expect(writeRes.status).toBe(409);
+      expect(
+        midDocsA.documents.some((d) => d.document.documentNumber === rolledBackDocNumber),
+      ).toBe(false);
+      expect(
+        midDocsB.documents.some((d) => d.document.documentNumber === rolledBackDocNumber),
+      ).toBe(false);
+      expect(midDocsA.documents).toHaveLength(beforeDocsA.documents.length);
+      expect(midDocsB.documents).toHaveLength(beforeDocsA.documents.length);
     } finally {
       serviceA.beforeCommitHook = undefined;
     }
@@ -921,6 +947,208 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       },
     );
     expect(martaReplayAfterRevokeRes.status).toBe(403);
+  });
+
+  it('ADV-79-05: wielozapytaniowe odczyty hydracji (hydrateSingleCompanyFromScope) pod READ COMMITTED zachowują pełną spójność międzytabelową podczas współbieżnego księgowania (FOR SHARE vs FOR UPDATE na legal_entity)', async () => {
+    const runtimeEnv = {
+      NODE_ENV: 'test',
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: runtimeUrl,
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_KEY_ID: keyId,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
+    };
+
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
+    openApps.add(appA);
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
+    openApps.add(appB);
+
+    const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
+    const headersB = await issuePersonaHeaders(urlB, 'jan-testowy');
+
+    const serviceA = appA.get<PostgresBackedWorkspaceService>(ACCOUNTING_WORKSPACE_SERVICE);
+    const serviceB = appB.get<PostgresBackedWorkspaceService>(ACCOUNTING_WORKSPACE_SERVICE);
+
+    // (a) Dwa równoległe wielozapytaniowe odczyty (action='read') zakładają kompatybilne blokady FOR SHARE na legal_entity
+    // i nie blokują się wzajemnie (oba jednocześnie docierają do midReadHydrationHook).
+    let concurrentReadersInMidHydration = 0;
+    let resolveBothReadersArrived!: () => void;
+    const bothReadersArrivedPromise = new Promise<void>((resolve) => {
+      resolveBothReadersArrived = resolve;
+    });
+    const onReaderMidHydration = async (info: { readonly legalEntityId: string }) => {
+      if (info.legalEntityId === COMPANY_JDG_KPIR_ID) {
+        concurrentReadersInMidHydration += 1;
+        if (concurrentReadersInMidHydration >= 2) {
+          resolveBothReadersArrived();
+        }
+        await bothReadersArrivedPromise;
+      }
+    };
+
+    serviceA.midReadHydrationHook = onReaderMidHydration;
+    serviceB.midReadHydrationHook = onReaderMidHydration;
+    try {
+      const [overviewRes1, overviewRes2] = await Promise.all([
+        fetch(
+          `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/overview?period=2026-03`,
+          { headers: headersA },
+        ),
+        fetch(
+          `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/overview?period=2026-03`,
+          { headers: headersB },
+        ),
+      ]);
+      expect(overviewRes1.status).toBe(200);
+      expect(overviewRes2.status).toBe(200);
+      expect(concurrentReadersInMidHydration).toBe(2);
+    } finally {
+      serviceA.midReadHydrationHook = undefined;
+      serviceB.midReadHydrationHook = undefined;
+    }
+
+    // (b) Wielozapytaniowy odczyt (hydrateSingleCompanyFromScope na Instancji B) wstrzymany w połowie (po odczycie accounting_document,
+    // a przed odczytem kpir_entry, vat_register_entry i settlement_item) w trakcie współbieżnego approve-and-post na Instancji A.
+    const draftDocNum = 'FV/ADV-79/READ-CONSISTENCY/2026/03/01';
+    const draftCreateRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: headersA,
+        body: JSON.stringify({
+          documentNumber: draftDocNum,
+          direction: 'purchase',
+          issueDate: '2026-03-30',
+          dueDate: '2026-04-13',
+          counterpartyName: 'Kontrahent Spójności Wielozapytaniowego Odczytu Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+          suggestedCategory: 'uslugi_obce',
+          lines: [
+            {
+              description:
+                'Usługa chmurowa testująca brak rozjazdu międzytabelowego pod READ COMMITTED',
+              netGrosze: 200_000,
+              vatRate: '23',
+            },
+          ],
+        }),
+      },
+    );
+    expect(draftCreateRes.status).toBe(201);
+    const createdDraft = CompanyDocumentItemSchema.parse(await draftCreateRes.json());
+
+    const baselineOverview = CompanyOverviewResponseSchema.parse(
+      await (
+        await fetch(
+          `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/overview?period=2026-03`,
+          { headers: headersB },
+        )
+      ).json(),
+    );
+
+    let notifyReaderAtMidpoint!: () => void;
+    const readerAtMidpointPromise = new Promise<void>((resolve) => {
+      notifyReaderAtMidpoint = resolve;
+    });
+    let releaseReaderFromMidpoint!: () => void;
+    const releaseReaderFromMidpointPromise = new Promise<void>((resolve) => {
+      releaseReaderFromMidpoint = resolve;
+    });
+
+    let hookTriggered = false;
+    serviceB.midReadHydrationHook = async (info) => {
+      if (!hookTriggered && info.legalEntityId === COMPANY_JDG_KPIR_ID) {
+        hookTriggered = true;
+        notifyReaderAtMidpoint();
+        await releaseReaderFromMidpointPromise;
+      }
+    };
+
+    try {
+      // 1. Instancja B rozpoczyna wielozapytaniowy odczyt overview i zatrzymuje się po listAccountingDocuments() (widząc jeszcze status='draft')
+      const midReadOverviewPromise = fetch(
+        `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/overview?period=2026-03`,
+        { headers: headersB },
+      ).then(async (res) => ({
+        status: res.status,
+        body: CompanyOverviewResponseSchema.parse(await res.json()),
+      }));
+
+      await readerAtMidpointPromise;
+
+      // 2. W trakcie gdy Instancja B jest w połowie hydracji (przed listKpirEntries/listVatRegisterEntries/listSettlementItems),
+      // Instancja A wysyła approve-and-post dla tego dokumentu. Dzięki blokadzie FOR SHARE (read) vs FOR UPDATE (write)
+      // na legal_entity, zapis na Instancji A NIE MOŻE zatwierdzić zmian w połowie odczytu Instancji B.
+      let writerCommittedWhileReaderInFlight = false;
+      const postPromise = fetch(
+        `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents/${createdDraft.documentId}/approve-and-post`,
+        {
+          method: 'POST',
+          headers: headersA,
+          body: JSON.stringify({}),
+        },
+      ).then(async (res) => {
+        writerCommittedWhileReaderInFlight = true;
+        return {
+          status: res.status,
+          body: (await res.json()) as { document?: { status?: string } },
+        };
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(writerCommittedWhileReaderInFlight).toBe(false);
+
+      // 3. Zwalniamy wstrzymany odczyt na Instancji B — musi zwrócić 100% spójny snapshot sprzed księgowania
+      // (brak rozjazdu, w którym dokument jest 'draft' w pendingApprovals, a expensesKupGrosze/unpaidPayablesGrosze/unpaidInvoices zawierają już zaksięgowane kwoty!).
+      releaseReaderFromMidpoint();
+
+      const [midReadResult, postResult] = await Promise.all([midReadOverviewPromise, postPromise]);
+      expect(midReadResult.status).toBe(200);
+      expect(postResult.status).toBe(200);
+      expect(postResult.body.document?.status).toBe('posted');
+
+      expect(midReadResult.body.pendingApprovals.aiDocumentProposalsCount).toBe(
+        baselineOverview.pendingApprovals.aiDocumentProposalsCount,
+      );
+      expect(midReadResult.body.kpis.expensesKupGrosze).toBe(
+        baselineOverview.kpis.expensesKupGrosze,
+      );
+      expect(midReadResult.body.kpis.unpaidPayablesGrosze).toBe(
+        baselineOverview.kpis.unpaidPayablesGrosze,
+      );
+      expect(
+        midReadResult.body.unpaidInvoices.some((inv) => inv.documentNumber === draftDocNum),
+      ).toBe(false);
+    } finally {
+      serviceB.midReadHydrationHook = undefined;
+    }
+
+    // 4. Kolejny odczyt na Instancji B po zakończeniu zapisu widzi kompletny, spójny stan po COMMIT we wszystkich tabelach
+    const afterPostOverview = CompanyOverviewResponseSchema.parse(
+      await (
+        await fetch(
+          `${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/overview?period=2026-03`,
+          { headers: headersB },
+        )
+      ).json(),
+    );
+    expect(afterPostOverview.pendingApprovals.aiDocumentProposalsCount).toBe(
+      baselineOverview.pendingApprovals.aiDocumentProposalsCount - 1,
+    );
+    expect(afterPostOverview.kpis.expensesKupGrosze).toBe(
+      baselineOverview.kpis.expensesKupGrosze + 200_000,
+    );
+    expect(afterPostOverview.kpis.unpaidPayablesGrosze).toBe(
+      baselineOverview.kpis.unpaidPayablesGrosze + 246_000,
+    );
+    expect(
+      afterPostOverview.unpaidInvoices.some((inv) => inv.documentNumber === draftDocNum),
+    ).toBe(true);
   });
 
   it('ADV-80-01: 20 równoczesnych prób utworzenia firmy o tym samym NIP na dwóch instancjach tworzy dokładnie 1 kompletną firmę, a pozostałe kończą się 409 bez sierot w DB', async () => {

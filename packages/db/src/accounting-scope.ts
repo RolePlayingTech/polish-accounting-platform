@@ -580,7 +580,8 @@ export function createPostgresAccountingScope(
             eq(legalEntity.tenantId, context.tenantId),
             eq(legalEntity.id, context.legalEntityId),
           ),
-        );
+        )
+        .for(context.action === 'write' ? 'update' : 'share');
       assertActive();
       return deepFreeze(row ?? null);
     },

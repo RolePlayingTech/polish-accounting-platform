@@ -239,6 +239,21 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     | undefined;
 
   /**
+   * Test-only hook invoked inside the active PostgreSQL read transaction during multi-statement
+   * company hydration (`hydrateSingleCompanyFromScope`), right after `accounting_document` rows
+   * are read and before child ledger/register/settlement tables (`kpir_entry`, `vat_register_entry`,
+   * `settlement_item`, etc.) are read.
+   */
+  public midReadHydrationHook:
+    | ((info: {
+        readonly tenantId: string;
+        readonly legalEntityId: string;
+        readonly documentsCount: number;
+        readonly postedDocumentsCount: number;
+      }) => Promise<void> | void)
+    | undefined;
+
+  /**
    * Test-only hook invoked inside the active PostgreSQL provisioning transaction after
    * `legal_entity`, `entity_profile_version`, `company_access_grant`, `company_tax_settings`,
    * `ledger_account` and `notification_preference` are inserted, immediately before `COMMIT`.
@@ -545,6 +560,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
                   rawTenantId: ctx.tenantId,
                   rawLegalEntityId: ctx.legalEntityId,
                   action,
+                  onMidHydrationHook: action === 'read' ? this.midReadHydrationHook : undefined,
                 })
               ).txWorkspace;
 

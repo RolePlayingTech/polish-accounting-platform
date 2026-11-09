@@ -28,6 +28,9 @@ TIMEOUT_SEC=300
 SCOPE="auto"
 REPORT_JSON=""
 REPORT_MD=""
+REVIEW_EVIDENCE_JSON=""
+OWNER_APPROVAL_JSON=""
+ALLOW_TECHNICAL_PASS_ONLY=0
 
 usage() {
   cat <<'EOF'
@@ -38,8 +41,18 @@ Użycie:
     [--port 55432] \
     [--scope auto|docs|db-api|adversarial|full] \
     [--timeout 300] \
+    [--review-evidence-json <dowod-review.json>] \
+    [--owner-approval-json <zgoda-wlasciciela.json>] \
+    [--allow-technical-pass-only] \
     [--report-json <ścieżka.json>] \
     [--report-md <ścieżka.md>]
+
+Kody wyjścia:
+  0  READY_FOR_MERGE (wszystkie sprawdzenia techniczne PASS oraz spełnione wymagania governance:
+     weryfikowalny dowód niezależnego review i/lub zgody właściciela dla bieżącego SHA/drzewa).
+  2  TECHNICAL_PASS_PENDING_GOVERNANCE (sprawdzenia techniczne PASS, ale brak zweryfikowanego
+     dowodu niezależnego review lub wymaganej zgody właściciela — ZAKAZ MERGE).
+  1  TECHNICAL_FAIL (błąd preflight, typów, testów lub sprzątania zasobów).
 
 Zakresy (--scope):
   auto         Wyznacza zakres na podstawie zmienionych plików względem origin/main (domyślny).
@@ -75,6 +88,20 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "[pap-qa] BŁĄD: --timeout wymaga liczby sekund." >&2; exit 2; }
       TIMEOUT_SEC="$2"
       shift 2
+      ;;
+    --review-evidence-json)
+      [[ $# -ge 2 ]] || { echo "[pap-qa] BŁĄD: --review-evidence-json wymaga ścieżki pliku JSON." >&2; exit 2; }
+      REVIEW_EVIDENCE_JSON="$2"
+      shift 2
+      ;;
+    --owner-approval-json)
+      [[ $# -ge 2 ]] || { echo "[pap-qa] BŁĄD: --owner-approval-json wymaga ścieżki pliku JSON." >&2; exit 2; }
+      OWNER_APPROVAL_JSON="$2"
+      shift 2
+      ;;
+    --allow-technical-pass-only)
+      ALLOW_TECHNICAL_PASS_ONLY=1
+      shift
       ;;
     --report-json)
       [[ $# -ge 2 ]] || { echo "[pap-qa] BŁĄD: --report-json wymaga ścieżki pliku." >&2; exit 2; }
@@ -150,6 +177,7 @@ if (( PREFLIGHT_ONLY == 1 )); then
 fi
 
 HEAD_SHA="$(git rev-parse HEAD)"
+TREE_SHA="$(git rev-parse 'HEAD^{tree}')"
 BASE_SHA="$(git rev-parse --verify -q origin/main || git rev-parse HEAD)"
 HOSTNAME_VAL="$(hostname 2>/dev/null || printf 'unknown-host')"
 NODE_VER="$(node -v 2>/dev/null || printf 'unknown')"
@@ -265,13 +293,18 @@ run_typecheck_and_lint() {
   run_bounded_host_cmd corepack pnpm exec turbo run lint --concurrency=1
 }
 
+run_unit_tests() {
+  run_bounded_host_cmd corepack pnpm exec vitest run test/qa-gate.test.ts test/hetzner-ephemeral-pg18.test.ts
+  run_bounded_host_cmd corepack pnpm exec turbo run test --concurrency=1
+}
+
 if (( NEED_CODE_CHECKS == 1 )); then
   if ! run_step "typecheck_and_lint" "pnpm typecheck && pnpm lint" "local" \
     run_typecheck_and_lint; then
     OVERALL_RC=1
   fi
   if ! run_step "unit_tests" "pnpm test" "local" \
-    run_bounded_host_cmd corepack pnpm exec turbo run test --concurrency=1; then
+    run_unit_tests; then
     OVERALL_RC=1
   fi
 else
@@ -355,9 +388,29 @@ fi
 REPORT_RC=0
 node -e '
   import { readFileSync, writeFileSync } from "node:fs";
-  import { formatEvidenceReportMarkdown, validateEvidenceReport } from "./scripts/qa/verification-matrix.mjs";
+  import {
+    formatEvidenceReportMarkdown,
+    validateEvidenceReport,
+    validateIndependentReviewEvidence,
+    validateOwnerApprovalEvidence,
+  } from "./scripts/qa/verification-matrix.mjs";
 
-  const [checksFile, preflightJsonPath, headSha, baseSha, hostName, nodeVer, cleanupStr, reportJsonPath, reportMdPath] = process.argv.slice(1);
+  const [
+    checksFile,
+    preflightJsonPath,
+    headSha,
+    treeSha,
+    baseSha,
+    hostName,
+    nodeVer,
+    cleanupStr,
+    reviewEvidencePath,
+    ownerApprovalPath,
+    allowTechnicalPassOnlyStr,
+    reportJsonPath,
+    reportMdPath,
+  ] = process.argv.slice(1);
+
   const checks = readFileSync(checksFile, "utf8")
     .split(/\r?\n/)
     .filter(Boolean)
@@ -366,18 +419,38 @@ node -e '
   const preflight = JSON.parse(readFileSync(preflightJsonPath, "utf8"));
   const cleanupVerified = cleanupStr === "true" ? true : cleanupStr === "false" ? false : null;
 
+  const independentReview = reviewEvidencePath
+    ? JSON.parse(readFileSync(reviewEvidencePath, "utf8"))
+    : null;
+  const ownerApproval = ownerApprovalPath
+    ? JSON.parse(readFileSync(ownerApprovalPath, "utf8"))
+    : null;
+
+  const reviewCheck = validateIndependentReviewEvidence(independentReview, {
+    expectedHeadSha: headSha,
+    expectedTreeSha: treeSha,
+  });
+  const ownerCheck = validateOwnerApprovalEvidence(ownerApproval, {
+    expectedHeadSha: headSha,
+    expectedTreeSha: treeSha,
+  });
+
   const report = {
     generatedAt: new Date().toISOString(),
     headSha,
+    treeSha,
     baseSha,
     environment: `${hostName} (Node ${nodeVer})`,
     changedFiles: preflight.changedFiles.length > 0 ? preflight.changedFiles : ["README.md"],
     cleanupVerified,
-    independentReviewStatus: process.env.PAP_INDEPENDENT_REVIEW_STATUS || "PENDING",
+    independentReview,
+    independentReviewStatus: reviewCheck.status,
+    ownerApproval,
+    ownerApprovalStatus: ownerCheck.status,
     checks,
   };
 
-  const validation = validateEvidenceReport(report, headSha);
+  const validation = validateEvidenceReport(report, headSha, { expectedTreeSha: treeSha });
   const fullReport = { ...report, validation };
   const markdown = formatEvidenceReportMarkdown(report);
 
@@ -392,10 +465,25 @@ node -e '
   if (!validation.technicalChecksValid) {
     process.exit(1);
   }
-' "${CHECKS_FILE}" "${INITIAL_PREFLIGHT_JSON}" "${HEAD_SHA}" "${BASE_SHA}" "${HOSTNAME_VAL}" "${NODE_VER}" "${CLEANUP_VERIFIED}" "${REPORT_JSON}" "${REPORT_MD}" || REPORT_RC=$?
+  if (!validation.governanceValid) {
+    if (allowTechnicalPassOnlyStr === "1") {
+      console.error(
+        "[pap-qa] UWAGA: gateStatus=TECHNICAL_PASS_PENDING_GOVERNANCE (kod wyjścia 0 wymuszony wyłącznie przez --allow-technical-pass-only; ZAKAZ MERGE przed dostarczeniem weryfikowalnego dowodu review/właściciela)."
+      );
+      process.exit(0);
+    }
+    console.error(
+      "[pap-qa] BLOKADA GOVERNANCE: Sprawdzenia techniczne zakończone sukcesem (PASS), ale wymagania governance (niezależny review / zgoda właściciela) są niespełnione (kod wyjścia 2 — ZAKAZ MERGE)."
+    );
+    process.exit(2);
+  }
+' "${CHECKS_FILE}" "${INITIAL_PREFLIGHT_JSON}" "${HEAD_SHA}" "${TREE_SHA}" "${BASE_SHA}" "${HOSTNAME_VAL}" "${NODE_VER}" "${CLEANUP_VERIFIED}" "${REVIEW_EVIDENCE_JSON}" "${OWNER_APPROVAL_JSON}" "${ALLOW_TECHNICAL_PASS_ONLY}" "${REPORT_JSON}" "${REPORT_MD}" || REPORT_RC=$?
 
+if (( OVERALL_RC != 0 )); then
+  exit 1
+fi
 if (( REPORT_RC != 0 )); then
-  OVERALL_RC=1
+  exit "${REPORT_RC}"
 fi
 
-exit "${OVERALL_RC}"
+exit 0

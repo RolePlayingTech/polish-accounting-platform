@@ -2,7 +2,7 @@
 // Mapuje zmienione ścieżki plików na powierzchnie ryzyka (a)-(e), wymagane testy (w tym jawnie
 // @pap/db test:integration ORAZ @pap/api test:integration) oraz bramki decyzji Merge-to-Main vs Release GO.
 
-export const VERIFICATION_MATRIX_VERSION = '2026-11-08.1';
+export const VERIFICATION_MATRIX_VERSION = '2026-11-09.1';
 
 export const FORBIDDEN_BRANCH_NAMES = Object.freeze([
   'HEAD',
@@ -33,7 +33,9 @@ export const RISK_SURFACES = Object.freeze({
     negativeScenarios: [
       'Dwie instancje API ładują tę samą firmę F, a następnie naprzemiennie zapisują i czytają bez restartu (#79)',
       'Wstrzymana transakcja i potwierdzony ROLLBACK nigdy nie ujawniają niezatwierdzonego stanu czytelnikom (#79)',
+      'Spójność wielozapytaniowych odczytów firmy podczas równoległych zatwierdzeń pod READ COMMITTED bez mieszanego snapshotu (#79)',
       '20 równoległych żądań utworzenia firmy o tym samym NIP -> dokładnie 1 sukces (201) i przewidywalne 409 bez częściowego stanu (#80)',
+      'Ograniczenie UNIQUE (tenant_id, nip) odrzuca duplikaty przy tworzeniu i aktualizacji NIP istniejącej firmy (#80)',
       'Utrata potwierdzenia COMMIT -> fail-closed transaction_outcome_unknown (503) i bezpieczne ponowienie z tym samym kluczem idempotencji',
       'Powtórzenie tego samego klucza idempotencji z innym payloadem -> 409 Conflict',
       'Brak fallbacku do uprzywilejowanego PAP_MIGRATOR_DATABASE_URL w runtime API',
@@ -459,19 +461,211 @@ export function validateCiWorkflowRemainsDisabled(ciYamlContent) {
   return { valid: true };
 }
 
+const GIT_SHA40_REGEX = /^[0-9a-f]{40}$/;
+
+function isValidIsoTimestamp(value) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return false;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed);
+}
+
+/**
+ * Waliduje ustrukturyzowany, niemodyfikowalny dowód niezależnego review (Issue #85).
+ * Zwykła flaga tekstowa/zmienna środowiskowa bez powiązania z dokładnym commit SHA lub tree SHA
+ * jest odrzucana, aby żaden automatyczny konsument nie pomylił sukcesu technicznego z zatwierdzeniem merge.
+ */
+export function validateIndependentReviewEvidence(review, options = {}) {
+  const errors = [];
+  const expectedHeadSha = options.expectedHeadSha;
+  const expectedTreeSha = options.expectedTreeSha;
+  const authorId = options.authorId;
+
+  if (!review || typeof review !== 'object') {
+    return {
+      valid: false,
+      status: 'PENDING',
+      errors: [
+        'Brak weryfikowalnego obiektu dowodu niezależnego review (independentReview). Zwykła flaga tekstowa nie wystarcza.',
+      ],
+    };
+  }
+
+  if (review.status !== 'APPROVED') {
+    errors.push(
+      `Status niezależnego review musi wynosić 'APPROVED' (aktualnie: '${review.status ?? 'PENDING'}').`,
+    );
+  }
+
+  const reviewerId = typeof review.reviewerId === 'string' ? review.reviewerId.trim() : '';
+  if (reviewerId.length < 3) {
+    errors.push('Brak identyfikatora niezależnego recenzenta (independentReview.reviewerId).');
+  } else if (typeof authorId === 'string' && authorId.trim().length > 0 && reviewerId === authorId.trim()) {
+    errors.push(
+      `Niezależny recenzent (${reviewerId}) nie może być tożsamy z autorem zmiany (${authorId.trim()}).`,
+    );
+  }
+
+  const hasValidHeadSha =
+    typeof review.reviewedHeadSha === 'string' && GIT_SHA40_REGEX.test(review.reviewedHeadSha);
+  const hasValidTreeSha =
+    typeof review.reviewedTreeSha === 'string' && GIT_SHA40_REGEX.test(review.reviewedTreeSha);
+
+  if (!hasValidHeadSha && !hasValidTreeSha) {
+    errors.push(
+      'Dowód niezależnego review musi zawierać dokładny 40-znakowy skrót reviewedHeadSha lub reviewedTreeSha.',
+    );
+  } else {
+    const headMatches =
+      Boolean(expectedHeadSha) && hasValidHeadSha && review.reviewedHeadSha === expectedHeadSha;
+    const treeMatches =
+      Boolean(expectedTreeSha) && hasValidTreeSha && review.reviewedTreeSha === expectedTreeSha;
+
+    if (expectedHeadSha || expectedTreeSha) {
+      if (hasValidTreeSha && expectedTreeSha && treeMatches) {
+        // Równoważność drzewa źródłowego (git rev-parse HEAD^{tree}) po rebase/merge bez zmiany bajtów kodu
+      } else if (expectedHeadSha && (!hasValidHeadSha || !headMatches)) {
+        errors.push(
+          `Niezgodność SHA niezależnego review: dowód dotyczy commit=${review.reviewedHeadSha ?? 'brak'} / tree=${review.reviewedTreeSha ?? 'brak'}, a bieżący stan to commit=${expectedHeadSha ?? 'brak'} / tree=${expectedTreeSha ?? 'brak'}.`,
+        );
+      }
+    }
+  }
+
+  if (!isValidIsoTimestamp(review.reviewedAt)) {
+    errors.push(
+      'Brak poprawnego znacznika czasu ISO-8601 w dowodzie niezależnego review (independentReview.reviewedAt).',
+    );
+  }
+
+  if (!Number.isInteger(review.unresolvedFindingsCount) || review.unresolvedFindingsCount !== 0) {
+    errors.push(
+      `Niezależny review musi mieć unresolvedFindingsCount === 0 (aktualnie: ${String(review.unresolvedFindingsCount)}).`,
+    );
+  }
+
+  if (typeof review.summary !== 'string' || review.summary.trim().length < 10) {
+    errors.push(
+      'Dowód niezależnego review musi zawierać zwięzłe podsumowanie weryfikacji (independentReview.summary).',
+    );
+  }
+
+  if (typeof review.evidenceUri !== 'string' || review.evidenceUri.trim().length < 5) {
+    errors.push(
+      'Dowód niezależnego review musi wskazywać identyfikator/URI śladu review (independentReview.evidenceUri).',
+    );
+  }
+
+  return {
+    valid: errors.length === 0,
+    status: errors.length === 0 ? 'APPROVED' : 'PENDING',
+    errors,
+  };
+}
+
+/**
+ * Waliduje ustrukturyzowany dowód zgody właściciela projektu dla zmian migracji DB lub polityki/infrastruktury.
+ */
+export function validateOwnerApprovalEvidence(approval, options = {}) {
+  const errors = [];
+  const expectedHeadSha = options.expectedHeadSha;
+  const expectedTreeSha = options.expectedTreeSha;
+
+  if (!approval || typeof approval !== 'object') {
+    return {
+      valid: false,
+      status: 'PENDING',
+      errors: [
+        'Brak weryfikowalnego obiektu zgody właściciela (ownerApproval) wymaganego dla migracji DB lub zmian polityki/infrastruktury.',
+      ],
+    };
+  }
+
+  if (approval.status !== 'APPROVED') {
+    errors.push(
+      `Status zgody właściciela musi wynosić 'APPROVED' (aktualnie: '${approval.status ?? 'PENDING'}').`,
+    );
+  }
+
+  if (typeof approval.approverId !== 'string' || approval.approverId.trim().length < 2) {
+    errors.push('Brak identyfikatora właściciela w dowodzie zgody (ownerApproval.approverId).');
+  }
+
+  if (approval.scope !== 'internal_merge') {
+    errors.push(
+      `Zakres zgody właściciela (ownerApproval.scope) musi jawnie wynosić 'internal_merge' (odrębnie od zgody na deploy/migrację stagingu).`,
+    );
+  }
+
+  const hasValidHeadSha =
+    typeof approval.approvedHeadSha === 'string' && GIT_SHA40_REGEX.test(approval.approvedHeadSha);
+  const hasValidTreeSha =
+    typeof approval.approvedTreeSha === 'string' && GIT_SHA40_REGEX.test(approval.approvedTreeSha);
+
+  if (!hasValidHeadSha && !hasValidTreeSha) {
+    errors.push(
+      'Dowód zgody właściciela musi zawierać dokładny 40-znakowy skrót approvedHeadSha lub approvedTreeSha.',
+    );
+  } else {
+    const headMatches =
+      Boolean(expectedHeadSha) && hasValidHeadSha && approval.approvedHeadSha === expectedHeadSha;
+    const treeMatches =
+      Boolean(expectedTreeSha) && hasValidTreeSha && approval.approvedTreeSha === expectedTreeSha;
+
+    if (expectedHeadSha || expectedTreeSha) {
+      if (hasValidTreeSha && expectedTreeSha && treeMatches) {
+        // Równoważność drzewa źródłowego
+      } else if (expectedHeadSha && (!hasValidHeadSha || !headMatches)) {
+        errors.push(
+          `Niezgodność SHA zgody właściciela: dowód dotyczy commit=${approval.approvedHeadSha ?? 'brak'} / tree=${approval.approvedTreeSha ?? 'brak'}, a bieżący stan to commit=${expectedHeadSha ?? 'brak'} / tree=${expectedTreeSha ?? 'brak'}.`,
+        );
+      }
+    }
+  }
+
+  if (!isValidIsoTimestamp(approval.approvedAt)) {
+    errors.push(
+      'Brak poprawnego znacznika czasu ISO-8601 w dowodzie zgody właściciela (ownerApproval.approvedAt).',
+    );
+  }
+
+  if (typeof approval.evidenceUri !== 'string' || approval.evidenceUri.trim().length < 5) {
+    errors.push(
+      'Dowód zgody właściciela musi wskazywać URI/komentarz decyzji (ownerApproval.evidenceUri).',
+    );
+  }
+
+  return {
+    valid: errors.length === 0,
+    status: errors.length === 0 ? 'APPROVED' : 'PENDING',
+    errors,
+  };
+}
+
 /**
  * Waliduje raport dowodowy QA przed oznaczeniem PR jako gotowego do przeglądu/merge.
- * Zasada: żaden niewykonany test (NOT RUN) dla obowiązkowej bramki nie jest równoważny PASS.
+ * Zasada:
+ * 1) Żaden niewykonany test (NOT RUN) dla obowiązkowej bramki nie jest równoważny PASS.
+ * 2) Sukces samych testów technicznych bez spełnienia wymogów governance (weryfikowalny
+ *    niezależny review lub zgoda właściciela) zwraca gateStatus = 'TECHNICAL_PASS_PENDING_GOVERNANCE',
+ *    mergeReady = false i recommendedExitCode = 2, aby żaden automat nie uznał go za zgodę na merge.
  */
-export function validateEvidenceReport(report, expectedHeadSha) {
+export function validateEvidenceReport(report, expectedHeadSha, options = {}) {
   const technicalErrors = [];
   const approvalErrors = [];
 
   if (!report || typeof report !== 'object') {
     return {
       valid: false,
+      mergeReady: false,
       technicalChecksValid: false,
+      governanceValid: false,
+      gateStatus: 'TECHNICAL_FAIL',
       mergeVerdict: 'NO-GO (DRAFT)',
+      recommendedExitCode: 1,
+      technicalErrors: ['Brak obiektu raportu QA.'],
+      approvalErrors: [],
       errors: ['Brak obiektu raportu QA.'],
     };
   }
@@ -515,27 +709,72 @@ export function validateEvidenceReport(report, expectedHeadSha) {
     );
   }
 
-  if (classification.requiresIndependentReview && report.independentReviewStatus !== 'APPROVED') {
-    approvalErrors.push(
-      `Zmiana wysokiego ryzyka wymaga niezależnego review (aktualny status: ${report.independentReviewStatus ?? 'PENDING'}).`,
-    );
+  const effectiveHeadSha = expectedHeadSha ?? report.headSha;
+  const effectiveTreeSha = options.expectedTreeSha ?? report.treeSha;
+
+  if (classification.requiresIndependentReview) {
+    const reviewValidation = validateIndependentReviewEvidence(report.independentReview, {
+      expectedHeadSha: effectiveHeadSha,
+      expectedTreeSha: effectiveTreeSha,
+      authorId: report.authorId,
+    });
+    if (!reviewValidation.valid) {
+      if (report.independentReviewStatus === 'APPROVED' && !report.independentReview) {
+        approvalErrors.push(
+          'Niezależny review ma status APPROVED bez weryfikowalnego dowodu (wymagany obiekt independentReview powiązany z dokładnym commit SHA lub tree SHA, identyfikatorem recenzenta, znacznikiem czasu, unresolvedFindingsCount=0 oraz URI dowodu).',
+        );
+      } else {
+        approvalErrors.push(...reviewValidation.errors);
+      }
+    }
   }
 
-  if (classification.requiresOwnerApproval && report.ownerApprovalStatus !== 'APPROVED') {
-    approvalErrors.push(
-      `Zmiana migracji DB lub polityki/infrastruktury wymaga osobnej zgody właściciela (aktualny status: ${report.ownerApprovalStatus ?? 'PENDING'}).`,
-    );
+  if (classification.requiresOwnerApproval) {
+    const ownerValidation = validateOwnerApprovalEvidence(report.ownerApproval, {
+      expectedHeadSha: effectiveHeadSha,
+      expectedTreeSha: effectiveTreeSha,
+    });
+    if (!ownerValidation.valid) {
+      if (report.ownerApprovalStatus === 'APPROVED' && !report.ownerApproval) {
+        approvalErrors.push(
+          'Zgoda właściciela ma status APPROVED bez weryfikowalnego dowodu (wymagany obiekt ownerApproval powiązany z dokładnym commit SHA lub tree SHA, zakresem internal_merge oraz URI dowodu).',
+        );
+      } else {
+        approvalErrors.push(...ownerValidation.errors);
+      }
+    }
   }
 
   const errors = [...technicalErrors, ...approvalErrors];
   const technicalChecksValid = technicalErrors.length === 0;
-  const valid = errors.length === 0;
+  const governanceValid = approvalErrors.length === 0;
+  const valid = technicalChecksValid && governanceValid;
+
+  let gateStatus = 'READY_FOR_MERGE';
+  let mergeVerdict = 'READY FOR MERGE';
+  let recommendedExitCode = 0;
+
+  if (!technicalChecksValid) {
+    gateStatus = 'TECHNICAL_FAIL';
+    mergeVerdict = 'NO-GO (KEEP DRAFT)';
+    recommendedExitCode = 1;
+  } else if (!governanceValid) {
+    gateStatus = 'TECHNICAL_PASS_PENDING_GOVERNANCE';
+    mergeVerdict = 'NO-GO (TECHNICAL PASS — PENDING GOVERNANCE APPROVAL)';
+    recommendedExitCode = 2;
+  }
 
   return {
     valid,
+    mergeReady: valid,
     technicalChecksValid,
-    mergeVerdict: valid ? 'READY FOR MERGE' : 'NO-GO (KEEP DRAFT)',
+    governanceValid,
+    gateStatus,
+    mergeVerdict,
+    recommendedExitCode,
     classification,
+    technicalErrors,
+    approvalErrors,
     errors,
   };
 }
@@ -544,21 +783,42 @@ export function validateEvidenceReport(report, expectedHeadSha) {
  * Generuje zwięzłą tabelę Markdown do sekcji weryfikacji i handoffu w opisie PR.
  */
 export function formatEvidenceReportMarkdown(report) {
-  const validation = validateEvidenceReport(report, report.headSha);
+  const validation = validateEvidenceReport(report, report.headSha, {
+    expectedTreeSha: report.treeSha,
+  });
   const { classification } = validation;
+
+  const reviewCheck = validateIndependentReviewEvidence(report.independentReview, {
+    expectedHeadSha: report.headSha,
+    expectedTreeSha: report.treeSha,
+    authorId: report.authorId,
+  });
+  const reviewDisplay = reviewCheck.valid
+    ? `APPROVED (recenzent: ${report.independentReview.reviewerId}, commit/tree: ${(report.independentReview.reviewedHeadSha ?? report.independentReview.reviewedTreeSha).slice(0, 12)}, URI: ${report.independentReview.evidenceUri})`
+    : `PENDING (brak zweryfikowanego dowodu dla bieżącego SHA)`;
+
+  const ownerCheck = validateOwnerApprovalEvidence(report.ownerApproval, {
+    expectedHeadSha: report.headSha,
+    expectedTreeSha: report.treeSha,
+  });
+  const ownerDisplay = ownerCheck.valid
+    ? `APPROVED (właściciel: ${report.ownerApproval.approverId}, zakres: ${report.ownerApproval.scope}, URI: ${report.ownerApproval.evidenceUri})`
+    : `PENDING (wymagana osobna zgoda właściciela)`;
 
   const lines = [
     `### Bramka Jakości QA (macierz \`${VERIFICATION_MATRIX_VERSION}\`)`,
     '',
     `- **HEAD SHA:** \`${report.headSha ?? 'nieznany'}\``,
+    ...(report.treeSha ? [`- **Git Tree SHA (\`HEAD^{tree}\`):** \`${report.treeSha}\``] : []),
     `- **Baza (\`origin/main\`):** \`${report.baseSha ?? 'nieznana'}\``,
     `- **Powierzchnie ryzyka:** ${classification.surfaces.map((s) => `\`${s}\``).join(', ')} (poziom: **\`${classification.riskLevel}\`**)`,
     `- **Środowisko wykonawcze:** \`${report.environment ?? 'lokalne / Hetzner'}\``,
     `- **Sprzątanie zasobów efemerycznych:** \`${report.cleanupVerified === true ? 'VERIFIED (0 pozostałości)' : report.cleanupVerified === false ? 'FAILED' : 'NOT APPLICABLE'}\``,
-    `- **Niezależny review:** \`${report.independentReviewStatus ?? 'PENDING'}\``,
+    `- **Niezależny review:** \`${reviewDisplay}\``,
     ...(classification.requiresOwnerApproval
-      ? [`- **Zgoda właściciela (migracja/infra):** \`${report.ownerApprovalStatus ?? 'PENDING'}\``]
+      ? [`- **Zgoda właściciela (migracja/infra):** \`${ownerDisplay}\``]
       : []),
+    `- **Status bramki:** \`${validation.gateStatus}\` (kod wyjścia: \`${validation.recommendedExitCode}\`)`,
     `- **Werdykt bramki Merge-to-Main:** **\`${validation.mergeVerdict}\`** _(nie stanowi zgody na deploy produkcyjny/stagingowy)_`,
     '',
     '| ID sprawdzenia | Polecenie | Środowisko | Status | Czas |',

@@ -561,18 +561,27 @@ export interface HydratedCompanyFromScopeResult {
   readonly outboxEntries: readonly NotificationOutboxEntry[];
 }
 
+export interface MidHydrationHookInfo {
+  readonly tenantId: string;
+  readonly legalEntityId: string;
+  readonly documentsCount: number;
+  readonly postedDocumentsCount: number;
+}
+
 export async function hydrateSingleCompanyFromScope(
   scope: PostgresAccountingScope,
   rawTenantId: string,
   rawLegalEntityId: string,
   extraUserIds: readonly string[] = [],
+  onMidHydrationHook?: ((info: MidHydrationHookInfo) => Promise<void> | void) | undefined,
 ): Promise<HydratedCompanyFromScopeResult | null> {
+  // ADR-010 Sekcja 3: korzeń firmy (legal_entity) blokowany jako pierwszy (FOR SHARE przy read, FOR UPDATE przy write),
+  // co serializuje wielozapytaniowy odczyt hydracji względem współbieżnych transakcji zapisu pod READ COMMITTED.
+  const entitySummary = await scope.getLegalEntitySummary();
   const settings = await scope.getCompanyTaxSettings();
   if (!settings) {
     return null;
   }
-
-  const entitySummary = await scope.getLegalEntitySummary();
   const latestProfileVersion =
     typeof scope.getLatestEntityProfileVersion === 'function'
       ? await scope.getLatestEntityProfileVersion()
@@ -678,6 +687,15 @@ export async function hydrateSingleCompanyFromScope(
   }
 
   const docById = new Map(documents.map((d) => [d.documentId, d]));
+
+  if (onMidHydrationHook) {
+    await onMidHydrationHook({
+      tenantId: rawTenantId,
+      legalEntityId: rawLegalEntityId,
+      documentsCount: documents.length,
+      postedDocumentsCount: documents.filter((d) => d.status === 'posted').length,
+    });
+  }
 
   const kpirRows = await scope.listKpirEntries();
   const kpirEntries = kpirRows
@@ -972,6 +990,7 @@ export async function createTransactionIsolatedWorkspaceFromScope(params: {
   readonly rawTenantId: string;
   readonly rawLegalEntityId: string;
   readonly action: 'read' | 'write';
+  readonly onMidHydrationHook?: ((info: MidHydrationHookInfo) => Promise<void> | void) | undefined;
 }): Promise<{
   readonly txWorkspace: AccountingWorkspaceService;
   readonly hydrated: HydratedCompanyFromScopeResult | null;
@@ -980,7 +999,13 @@ export async function createTransactionIsolatedWorkspaceFromScope(params: {
   const leId = parseLegalEntityId(params.rawLegalEntityId);
   const uId = parseUserId(params.actor.userId);
 
-  const hydrated = await hydrateSingleCompanyFromScope(params.scope, tId, leId, [uId]);
+  const hydrated = await hydrateSingleCompanyFromScope(
+    params.scope,
+    tId,
+    leId,
+    [uId],
+    params.onMidHydrationHook,
+  );
   const txStore = new InMemoryAccountingWorkspaceStore();
   const txWorkspace = new AccountingWorkspaceService({
     store: txStore,

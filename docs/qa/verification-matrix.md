@@ -17,7 +17,7 @@
 
 ---
 
-## 2. Macierz powierzchni ryzyka (`2026-11-08.1`)
+## 2. Macierz powierzchni ryzyka (`2026-11-09.1`)
 
 Implementacja maszynowa znajduje się w [`scripts/qa/verification-matrix.mjs`](../../scripts/qa/verification-matrix.mjs).
 
@@ -61,11 +61,31 @@ pnpm qa:preflight
 # 2. Izolowany preflight zasobów i cgroups v2 na serwerze Hetzner (wyłącznie odczytowy)
 scripts/qa/run-hetzner-qa.sh --preflight-only --port 55432 --work-root /mnt/HC_Volume_<ID>/pap-ci-ephemeral
 
-# 3. Pełne uruchomienie izolowanej bramki QA na Hetznerze z generowaniem raportu JSON i Markdown
+# 3. Uruchomienie testów technicznych na Hetznerze przed uzyskaniem zatwierdzenia review (kod wyjścia 0 z jawnym statusem mergeReady=false)
 PAP_ALLOW_HETZNER_EPHEMERAL_PG=1 scripts/qa/run-hetzner-qa.sh \
   --work-root /mnt/HC_Volume_<ID>/pap-ci-ephemeral \
   --port 55432 \
-  --scope db-api \
+  --scope full \
+  --allow-technical-pass-only \
+  --report-json /tmp/qa-report.json \
+  --report-md /tmp/qa-report.md
+
+# 4. Pełna weryfikacja bramki merge z weryfikowalnym dowodem niezależnego review (kod wyjścia 0 wyłącznie przy READY_FOR_MERGE; kod 2 przy braku dowodu governance)
+PAP_ALLOW_HETZNER_EPHEMERAL_PG=1 scripts/qa/run-hetzner-qa.sh \
+  --work-root /mnt/HC_Volume_<ID>/pap-ci-ephemeral \
+  --port 55432 \
+  --scope full \
+  --review-evidence-json /tmp/independent-review.json \
   --report-json /tmp/qa-report.json \
   --report-md /tmp/qa-report.md
 ```
+
+---
+
+## 6. Weryfikowalne dowody Governance i kody wyjścia (`2026-11-09.1`)
+
+Bramka QA nie akceptuje samodeklarowanych zmiennych środowiskowych (`PAP_INDEPENDENT_REVIEW_STATUS` zostało usunięte). Konsumenci automatyczni rozróżniają wynik za pomocą kodu wyjścia oraz pól `mergeReady`, `gateStatus` i `recommendedExitCode` w raporcie JSON:
+
+- **Kod wyjścia `0` (`READY_FOR_MERGE`):** wszystkie wymagane testy techniczne mają status `PASS`, sprzątanie zasobów `cleanupVerified === true`, a wymagane dowody governance (`independentReview` oraz — dla migracji/infra — `ownerApproval`) są kryptograficznie powiązane z `HEAD SHA` lub `HEAD^{tree}`, wystawione przez podmiot różny od autora (`reviewerId !== authorId`) i mają `unresolvedFindingsCount === 0`.
+- **Kod wyjścia `2` (`TECHNICAL_PASS_PENDING_GOVERNANCE`):** wszystkie testy techniczne przeszły (`technicalChecksValid === true`), lecz brakuje weryfikowalnego dowodu niezależnego przeglądu lub zgody właściciela (`governanceValid === false`, `mergeReady === false`, werdykt `NO-GO (TECHNICAL PASS — PENDING GOVERNANCE APPROVAL)`). Flaga `--allow-technical-pass-only` służy wyłącznie do uruchomień przed review i nadal zapisuje `mergeReady: false` w raporcie.
+- **Kod wyjścia `1` (`TECHNICAL_FAIL`):** przynajmniej jeden wymagany test techniczny ma status `FAIL` lub `NOT RUN`, wystąpił błąd sprzątania albo niezgodność SHA (`NO-GO (KEEP DRAFT)`).
