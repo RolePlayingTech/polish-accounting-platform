@@ -644,7 +644,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
           body: JSON.stringify({
             displayName: 'Firma Druga Tajna Sp. z o.o.',
             companyName: 'Firma Druga Tajna Sp. z o.o.',
-            nip: '7010001454',
+            nip: '5261040828',
             address: 'ul. Świętokrzyska 10, 00-002 Warszawa',
             legalForm: 'sp_z_o_o',
             profileCode: 'spzoo_pelne_ksiegi',
