@@ -1591,6 +1591,15 @@ export const OidcCallbackQuerySchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
+    if (val.error && val.code) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['code'],
+        message:
+          'Callback OIDC nie może zawierać jednocześnie kodu autoryzacyjnego (code) oraz błędu dostawcy (error).',
+      });
+      return;
+    }
     if (!val.error && (!val.code || !val.state)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -1646,7 +1655,8 @@ export const UpdateSessionContextRequestSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['tenantId'],
-        message: 'Wymagane jest podanie co najmniej jednego pola kontekstu (tenantId, legalEntityId lub period).',
+        message:
+          'Wymagane jest podanie co najmniej jednego pola kontekstu (tenantId, legalEntityId lub period).',
       });
     }
   });
@@ -1662,6 +1672,7 @@ export const BootstrapOwnerRequestSchema = z
     tenantId: UuidSelectorSchema.optional(),
     userId: UuidSelectorSchema.optional(),
     initialCompany: CreateCompanyRequestSchema.optional(),
+    reason: z.string().min(3).max(400),
     operationId: UuidSelectorSchema.optional(),
   })
   .strict();
@@ -1681,6 +1692,7 @@ export const BootstrapOwnerResponseSchema = z
     role: z.literal('tenant_owner'),
     legalEntityId: UuidSelectorSchema.nullable(),
     operationId: UuidSelectorSchema,
+    auditEventId: z.string().min(1),
     occurredAt: IsoUtcTimestampSchema,
   })
   .strict();
@@ -1700,7 +1712,23 @@ export const InvitationCompanyGrantDraftSchema = z
     legalEntityId: UuidSelectorSchema,
     actions: z.array(z.enum(['read', 'write'])).min(1).max(2),
   })
-  .strict();
+  .strict()
+  .superRefine((val, ctx) => {
+    if (new Set(val.actions).size !== val.actions.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['actions'],
+        message: 'Lista akcji uprawnień do firmy nie może zawierać duplikatów.',
+      });
+    }
+    if (val.actions.includes('write') && !val.actions.includes('read')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['actions'],
+        message: 'Uprawnienie zapisu (write) do firmy wymaga jednoczesnego uprawnienia odczytu (read).',
+      });
+    }
+  });
 export type InvitationCompanyGrantDraft = z.infer<typeof InvitationCompanyGrantDraftSchema>;
 
 export const CreateTenantInvitationRequestSchema = z
@@ -1709,10 +1737,23 @@ export const CreateTenantInvitationRequestSchema = z
     inviteeDisplayName: z.string().min(2).max(160).optional(),
     intendedRole: TenantMemberRoleSchema,
     initialCompanyGrants: z.array(InvitationCompanyGrantDraftSchema).max(50).optional(),
-    expiresInHours: z.number().int().min(1).max(720).optional(),
+    expiresInHours: z.number().int().min(1).max(336).optional(),
+    reason: z.string().min(3).max(400),
     operationId: UuidSelectorSchema.optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((val, ctx) => {
+    if (val.initialCompanyGrants) {
+      const ids = val.initialCompanyGrants.map((g) => g.legalEntityId);
+      if (new Set(ids).size !== ids.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['initialCompanyGrants'],
+          message: 'Lista initialCompanyGrants nie może zawierać zduplikowanego legalEntityId.',
+        });
+      }
+    }
+  });
 export type CreateTenantInvitationRequest = z.infer<typeof CreateTenantInvitationRequestSchema>;
 
 export const TenantInvitationItemSchema = z
@@ -1777,7 +1818,7 @@ export type AcceptTenantInvitationResponse = z.infer<typeof AcceptTenantInvitati
 
 export const RevokeTenantInvitationRequestSchema = z
   .object({
-    reason: z.string().min(3).max(400).optional(),
+    reason: z.string().min(3).max(400),
     operationId: UuidSelectorSchema.optional(),
   })
   .strict();

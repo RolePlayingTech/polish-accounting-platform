@@ -256,9 +256,7 @@ describe('@pap/contracts/api schemas', () => {
     expect(RuntimeModeSchema.parse('PRODUCTION')).toBe('PRODUCTION');
     expect(() => RuntimeModeSchema.parse('STAGING')).toThrow();
 
-    expect(AuthSessionStateCodeSchema.parse('no_organization_membership')).toBe(
-      'no_organization_membership',
-    );
+    expect(AuthSessionStateCodeSchema.parse('no_tenant_membership')).toBe('no_tenant_membership');
 
     const discovery = OidcDiscoveryDocumentSchema.parse({
       issuer: 'https://id.ksiegowosc.roleplayingtech.com/realms/pap',
@@ -270,8 +268,10 @@ describe('@pap/contracts/api schemas', () => {
         'https://id.ksiegowosc.roleplayingtech.com/realms/pap/protocol/openid-connect/logout',
       jwks_uri: 'https://id.ksiegowosc.roleplayingtech.com/realms/pap/protocol/openid-connect/certs',
       response_types_supported: ['code'],
+      grant_types_supported: ['authorization_code', 'refresh_token'],
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: ['RS256', 'ES256'],
+      token_endpoint_auth_methods_supported: ['client_secret_basic', 'none'],
       code_challenge_methods_supported: ['S256'],
       scopes_supported: ['openid', 'profile', 'email'],
     });
@@ -283,13 +283,19 @@ describe('@pap/contracts/api schemas', () => {
     expect(() => SafeRelativeRedirectPathSchema.parse('//evil.example/phish')).toThrow();
     expect(() => SafeRelativeRedirectPathSchema.parse('https://evil.example/phish')).toThrow();
     expect(() => SafeRelativeRedirectPathSchema.parse('/\\evil.example')).toThrow();
+    expect(() => SafeRelativeRedirectPathSchema.parse('/calendar\u0000')).toThrow();
 
     const authReq = OidcAuthorizeRequestSchema.parse({
       returnTo: '/calendar',
-      period: '2026-03',
-      prompt: 'login',
+      invitationToken: 'pap_inv_0123456789abcdef0123456789abcdef',
     });
     expect(authReq.returnTo).toBe('/calendar');
+    expect(() =>
+      OidcAuthorizeRequestSchema.parse({
+        returnTo: '/calendar',
+        unknownField: 'rejected',
+      }),
+    ).toThrow();
 
     const authRes = OidcAuthorizeResponseSchema.parse({
       authorizationUrl:
@@ -316,37 +322,35 @@ describe('@pap/contracts/api schemas', () => {
       OidcCallbackQuerySchema.parse({
         state: 'only-state-without-code-or-error',
       }),
-    ).toThrow(/code i state/);
+    ).toThrow(/pary \(code, state\)/);
 
-    const sessionView = AuthenticatedSessionViewSchema.parse({
-      authenticated: true,
-      stateCode: 'authenticated',
-      runtimeMode: 'PRODUCTION',
-      sandboxPersonaLoginAllowed: false,
-      actor: {
-        userId: '00000000-0000-4000-8000-000000000901',
-        issuer: 'https://id.ksiegowosc.roleplayingtech.com/realms/pap',
-        subject: 'oidc-sub-owner-01',
-        displayName: 'Grzegorz Właściciel',
-        email: 'owner@ksiegowosc.example.pl',
-      },
-      activeContext: {
-        tenantId: '11111111-1111-4111-8111-111111111100',
-        legalEntityId: '11111111-1111-4111-8111-111111111101',
-        period: '2026-03',
-        role: 'tenant_owner',
-        tenantRole: 'owner',
-        canRead: true,
-        canWrite: true,
-      },
+    expect(() =>
+      OidcCallbackQuerySchema.parse({
+        code: 'auth-code-xyz',
+        state: 'state-token-1234567890123456',
+        error: 'access_denied',
+      }),
+    ).toThrow(/jednocześnie kodu autoryzacyjnego/);
+
+    const validSessionViewPayload = {
+      state: 'authenticated' as const,
+      authMethod: 'oidc' as const,
+      userId: '00000000-0000-4000-8000-000000000901',
+      issuer: 'https://id.ksiegowosc.roleplayingtech.com/realms/pap',
+      subject: 'oidc-sub-owner-01',
+      displayName: 'Grzegorz Właściciel',
+      email: 'owner@ksiegowosc.example.pl',
+      tenantId: '11111111-1111-4111-8111-111111111100',
+      legalEntityId: '11111111-1111-4111-8111-111111111101',
+      period: '2026-03',
       memberships: [
         {
           tenantId: '11111111-1111-4111-8111-111111111100',
-          tenantSlug: 'kancelaria-glowna',
           tenantName: 'Kancelaria Główna Sp. z o.o.',
-          role: 'tenant_owner',
-          tenantRole: 'owner',
-          status: 'active',
+          role: 'tenant_owner' as const,
+          status: 'active' as const,
+          validFrom: '2026-03-01T00:00:00.000Z',
+          validUntil: null,
         },
       ],
       companies: [
@@ -355,18 +359,35 @@ describe('@pap/contracts/api schemas', () => {
           legalEntityId: '11111111-1111-4111-8111-111111111101',
           displayName: 'Kancelaria Główna Sp. z o.o.',
           nip: '5250001003',
-          legalForm: 'sp_z_oo',
-          taxRegime: 'cit_standard',
-          vatStatus: 'czynny',
-          zusStage: 'nie_dotyczy',
-          role: 'tenant_owner',
+          legalForm: 'sp_z_o_o' as const,
+          taxRegime: 'cit_klasyczny' as const,
+          vatStatus: 'czynny' as const,
+          zusStage: 'pelny_zus' as const,
+          role: 'tenant_owner' as const,
           canRead: true,
           canWrite: true,
         },
       ],
       sessionExpiresAt: '2026-03-20T21:00:00.000Z',
-    });
-    expect(sessionView.authenticated).toBe(true);
+      accessTokenExpiresAt: '2026-03-20T13:15:00.000Z',
+    };
+
+    const sessionView = AuthenticatedSessionViewSchema.parse(validSessionViewPayload);
+    expect(sessionView.state).toBe('authenticated');
+
+    expect(() =>
+      AuthenticatedSessionViewSchema.parse({
+        ...validSessionViewPayload,
+        accessToken: 'raw-jwt-must-never-leak',
+      }),
+    ).toThrow();
+
+    expect(() =>
+      AuthenticatedSessionViewSchema.parse({
+        ...validSessionViewPayload,
+        refreshToken: 'raw-refresh-token-must-never-leak',
+      }),
+    ).toThrow();
 
     expect(
       UpdateSessionContextRequestSchema.parse({
@@ -376,7 +397,7 @@ describe('@pap/contracts/api schemas', () => {
     ).toBe('11111111-1111-4111-8111-111111111100');
 
     expect(() => UpdateSessionContextRequestSchema.parse({})).toThrow(
-      /co najmniej jedno pole kontekstu/,
+      /co najmniej jednego pola kontekstu/,
     );
   });
 
@@ -386,85 +407,155 @@ describe('@pap/contracts/api schemas', () => {
       subject: 'oidc-sub-owner-01',
       email: 'owner@ksiegowosc.example.pl',
       displayName: 'Grzegorz Właściciel',
-      tenantSlug: 'kancelaria-glowna',
       tenantName: 'Kancelaria Główna Sp. z o.o.',
       initialCompany: {
         displayName: 'Kancelaria Główna Sp. z o.o.',
         nip: '5250001003',
-        legalForm: 'sp_z_oo',
-        taxRegime: 'cit_standard',
+        legalForm: 'sp_z_o_o',
+        taxRegime: 'cit_klasyczny',
         vatStatus: 'czynny',
-        zusStage: 'nie_dotyczy',
+        zusStage: 'pelny_zus',
       },
       reason: 'Jednorazowy bootstrap pierwszego właściciela platformy i tenanta (#83)',
+      operationId: '22222222-2222-4222-8222-222222222201',
     });
-    expect(bootstrapReq.tenantSlug).toBe('kancelaria-glowna');
+    expect(bootstrapReq.tenantName).toBe('Kancelaria Główna Sp. z o.o.');
+
+    expect(() =>
+      BootstrapOwnerRequestSchema.parse({
+        issuer: bootstrapReq.issuer,
+        subject: bootstrapReq.subject,
+        email: bootstrapReq.email,
+        displayName: bootstrapReq.displayName,
+        tenantName: bootstrapReq.tenantName,
+      }),
+    ).toThrow();
 
     const bootstrapRes = BootstrapOwnerResponseSchema.parse({
-      bootstrapped: true,
+      ok: true,
       idempotentReplay: false,
       userId: '00000000-0000-4000-8000-000000000901',
       issuer: bootstrapReq.issuer,
       subject: bootstrapReq.subject,
+      displayName: bootstrapReq.displayName,
+      email: bootstrapReq.email,
       tenantId: '11111111-1111-4111-8111-111111111100',
-      tenantSlug: bootstrapReq.tenantSlug,
       tenantName: bootstrapReq.tenantName,
+      role: 'tenant_owner',
       legalEntityId: '11111111-1111-4111-8111-111111111101',
-      auditLogId: '33333333-3333-4333-8333-333333333301',
-      bootstrappedAt: '2026-03-20T12:00:00.000Z',
+      operationId: '22222222-2222-4222-8222-222222222201',
+      auditEventId: '33333333-3333-4333-8333-333333333301',
+      occurredAt: '2026-03-20T12:00:00.000Z',
     });
-    expect(bootstrapRes.bootstrapped).toBe(true);
+    expect(bootstrapRes.ok).toBe(true);
 
     const inviteReq = CreateTenantInvitationRequestSchema.parse({
-      invitedEmail: 'ksiegowa@biuro.example.pl',
-      invitedRole: 'accountant',
-      companyGrants: [
+      inviteeEmail: 'ksiegowa@biuro.example.pl',
+      inviteeDisplayName: 'Marta Księgowa',
+      intendedRole: 'tenant_member',
+      initialCompanyGrants: [
         {
           legalEntityId: '11111111-1111-4111-8111-111111111101',
-          canRead: true,
-          canWrite: true,
+          actions: ['read', 'write'],
         },
       ],
       expiresInHours: 48,
       reason: 'Zaproszenie księgowej prowadzącej do obsługi spółki',
     });
-    expect(inviteReq.invitedRole).toBe('accountant');
+    expect(inviteReq.intendedRole).toBe('tenant_member');
 
     expect(() =>
       CreateTenantInvitationRequestSchema.parse({
-        invitedEmail: 'bad-email',
-        invitedRole: 'accountant',
-        companyGrants: [],
-        reason: 'Za krótki email',
+        inviteeEmail: 'bad-email',
+        intendedRole: 'tenant_member',
+        reason: 'Błędny format adresu e-mail',
       }),
     ).toThrow();
+
+    expect(() =>
+      CreateTenantInvitationRequestSchema.parse({
+        inviteeEmail: 'ksiegowa@biuro.example.pl',
+        intendedRole: 'tenant_member',
+        expiresInHours: 337,
+        reason: 'Przekroczony maksymalny czas ważności 336h',
+      }),
+    ).toThrow();
+
+    expect(() =>
+      CreateTenantInvitationRequestSchema.parse({
+        inviteeEmail: 'ksiegowa@biuro.example.pl',
+        intendedRole: 'tenant_member',
+        initialCompanyGrants: [
+          {
+            legalEntityId: '11111111-1111-4111-8111-111111111101',
+            actions: ['write'],
+          },
+        ],
+        reason: 'Brak read przy write',
+      }),
+    ).toThrow(/wymaga jednoczesnego uprawnienia odczytu/);
+
+    expect(() =>
+      CreateTenantInvitationRequestSchema.parse({
+        inviteeEmail: 'ksiegowa@biuro.example.pl',
+        intendedRole: 'tenant_member',
+        initialCompanyGrants: [
+          {
+            legalEntityId: '11111111-1111-4111-8111-111111111101',
+            actions: ['read', 'read'],
+          },
+        ],
+        reason: 'Duplikat akcji',
+      }),
+    ).toThrow(/duplikatów/);
+
+    expect(() =>
+      CreateTenantInvitationRequestSchema.parse({
+        inviteeEmail: 'ksiegowa@biuro.example.pl',
+        intendedRole: 'tenant_member',
+        initialCompanyGrants: [
+          {
+            legalEntityId: '11111111-1111-4111-8111-111111111101',
+            actions: ['read'],
+          },
+          {
+            legalEntityId: '11111111-1111-4111-8111-111111111101',
+            actions: ['read', 'write'],
+          },
+        ],
+        reason: 'Duplikat legalEntityId',
+      }),
+    ).toThrow(/zduplikowanego legalEntityId/);
 
     const invitationItem = {
       invitationId: '44444444-4444-4444-8444-444444444401',
       tenantId: '11111111-1111-4111-8111-111111111100',
       tenantName: 'Kancelaria Główna Sp. z o.o.',
-      invitedEmail: 'ksiegowa@biuro.example.pl',
-      invitedRole: 'accountant' as const,
-      invitedTenantRole: 'accountant' as const,
-      status: 'pending' as const,
-      companyGrants: [
+      inviteeMaskedEmail: 'ks***@biuro.example.pl',
+      inviteeDisplayName: 'Marta Księgowa',
+      intendedRole: 'tenant_member' as const,
+      initialCompanyGrants: [
         {
           legalEntityId: '11111111-1111-4111-8111-111111111101',
-          canRead: true,
-          canWrite: true,
+          actions: ['read', 'write'] as ('read' | 'write')[],
         },
       ],
+      status: 'pending' as const,
       invitedByUserId: '00000000-0000-4000-8000-000000000901',
-      acceptedByUserId: null,
+      invitedByDisplayName: 'Grzegorz Właściciel',
       createdAt: '2026-03-20T12:00:00.000Z',
       expiresAt: '2026-03-22T12:00:00.000Z',
-      respondedAt: null,
+      acceptedAt: null,
+      acceptedByUserId: null,
+      revokedAt: null,
+      rejectedAt: null,
     };
 
     const createInviteRes = CreateTenantInvitationResponseSchema.parse({
       invitation: invitationItem,
       invitationToken: 'pap_inv_0123456789abcdef0123456789abcdef',
-      auditLogId: '33333333-3333-4333-8333-333333333302',
+      acceptPath: '/login/invitation?token=pap_inv_0123456789abcdef0123456789abcdef',
+      auditEventId: '33333333-3333-4333-8333-333333333302',
     });
     expect(createInviteRes.invitation.status).toBe('pending');
 
@@ -476,25 +567,28 @@ describe('@pap/contracts/api schemas', () => {
 
     const acceptReq = AcceptTenantInvitationRequestSchema.parse({
       invitationToken: 'pap_inv_0123456789abcdef0123456789abcdef',
+      displayName: 'Marta Księgowa',
     });
     expect(acceptReq.invitationToken).toContain('pap_inv_');
 
     const acceptRes = AcceptTenantInvitationResponseSchema.parse({
+      ok: true,
       invitation: {
         ...invitationItem,
         status: 'accepted',
         acceptedByUserId: '00000000-0000-4000-8000-000000000902',
-        respondedAt: '2026-03-20T12:15:00.000Z',
+        acceptedAt: '2026-03-20T12:15:00.000Z',
       },
       membership: {
         tenantId: '11111111-1111-4111-8111-111111111100',
-        tenantSlug: 'kancelaria-glowna',
         tenantName: 'Kancelaria Główna Sp. z o.o.',
-        role: 'accountant',
-        tenantRole: 'accountant',
+        role: 'tenant_member',
         status: 'active',
+        validFrom: '2026-03-20T12:15:00.000Z',
+        validUntil: null,
       },
-      auditLogId: '33333333-3333-4333-8333-333333333303',
+      grantedCompanyIds: ['11111111-1111-4111-8111-111111111101'],
+      auditEventId: '33333333-3333-4333-8333-333333333303',
     });
     expect(acceptRes.invitation.status).toBe('accepted');
 
@@ -502,14 +596,16 @@ describe('@pap/contracts/api schemas', () => {
       reason: 'Błędnie wskazany adres e-mail księgowej',
     });
     expect(revokeReq.reason).toContain('adres e-mail');
+    expect(() => RevokeTenantInvitationRequestSchema.parse({})).toThrow();
 
     const revokeRes = RevokeTenantInvitationResponseSchema.parse({
+      ok: true,
       invitation: {
         ...invitationItem,
         status: 'revoked',
-        respondedAt: '2026-03-20T12:20:00.000Z',
+        revokedAt: '2026-03-20T12:20:00.000Z',
       },
-      auditLogId: '33333333-3333-4333-8333-333333333304',
+      auditEventId: '33333333-3333-4333-8333-333333333304',
     });
     expect(revokeRes.invitation.status).toBe('revoked');
 
@@ -520,12 +616,13 @@ describe('@pap/contracts/api schemas', () => {
     expect(rejectReq.invitationToken).toContain('pap_inv_');
 
     const rejectRes = RejectTenantInvitationResponseSchema.parse({
+      ok: true,
       invitation: {
         ...invitationItem,
         status: 'rejected',
-        respondedAt: '2026-03-20T12:25:00.000Z',
+        rejectedAt: '2026-03-20T12:25:00.000Z',
       },
-      auditLogId: '33333333-3333-4333-8333-333333333305',
+      auditEventId: '33333333-3333-4333-8333-333333333305',
     });
     expect(rejectRes.invitation.status).toBe('rejected');
   });
