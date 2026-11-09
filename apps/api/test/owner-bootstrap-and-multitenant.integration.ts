@@ -250,7 +250,7 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
         }),
       ).rejects.toThrow('Symulowana awaria');
     } finally {
-      await rtFault.close();
+      await rtFault.close?.();
     }
 
     const [orphanCheck] = await owner!.client`
