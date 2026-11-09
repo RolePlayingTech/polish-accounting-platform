@@ -910,6 +910,7 @@ BEGIN
       OR char_length(display_name_val) > 160
       OR char_length(email_val) < 3
       OR char_length(email_val) > 254
+      OR position('@' IN email_val) < 2
     THEN
       RETURN jsonb_build_object('ok', false, 'reason', 'invalid_identity_input');
     END IF;

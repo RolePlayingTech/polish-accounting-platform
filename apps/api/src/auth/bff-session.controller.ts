@@ -12,7 +12,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
-import { SafeEmailAddressSchema } from '@pap/contracts';
+import { SafeEmailAddressSchema } from '@pap/contracts/notifications';
 import type {
   IdentityLifecycleStorePort,
   WebBffSessionRecord,

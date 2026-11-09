@@ -3,7 +3,6 @@ import {
   AuthenticatedSessionViewSchema,
   BootstrapOwnerRequestSchema,
   BootstrapOwnerResponseSchema,
-  SafeEmailAddressSchema,
   TaxPeriodMonthSchema,
   type AccessibleCompanyItem,
   type AuthenticatedSessionView,
@@ -11,6 +10,7 @@ import {
   type BootstrapOwnerResponse,
   type TenantMembershipSummaryContract,
 } from '@pap/contracts';
+import { SafeEmailAddressSchema } from '@pap/contracts/notifications';
 import { tenantId as parseTenantId, userId as parseUserId } from '@pap/domain';
 import { DEMO_DEFAULT_PERIOD } from './demo-seed.js';
 import type { AccountingWorkspaceStorePort } from './accounting-workspace.js';

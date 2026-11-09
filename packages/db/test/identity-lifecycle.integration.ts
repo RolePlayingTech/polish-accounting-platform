@@ -326,7 +326,7 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
     if (!dirAlpha.ok) {
       throw new Error('Oczekiwano aktywnego katalogu dla userAlpha.');
     }
-    expect(dirAlpha.profile?.displayName).toBe('Anna Kolizja Pierwsza');
+    expect(dirAlpha.profile?.displayName).toBe('Anna Kolizja Pierwsza Zaktualizowana');
     expect(dirAlpha.memberships).toEqual([
       expect.objectContaining({
         tenantId: tenantTwo,

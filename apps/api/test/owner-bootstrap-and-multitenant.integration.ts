@@ -15,6 +15,7 @@ import {
   connectDatabase,
   provisionDatabaseContextKey,
 } from '@pap/db';
+import { userId as parseUserId } from '@pap/domain';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import {
@@ -402,13 +403,13 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
 
     const identityStore = new PostgresUserIdentityStore(owner!.db);
     await identityStore.provisionUserWithOidcIdentity({
-      userId: unassignedUserId as ReturnType<typeof import('@pap/domain').userId>,
+      userId: parseUserId(unassignedUserId),
       identityId: randomUUID(),
       issuer: idp!.issuer,
       subject: 'unassigned-oidc-sub-tomasz',
     });
     await identityStore.provisionUserWithOidcIdentity({
-      userId: collisionUserId as ReturnType<typeof import('@pap/domain').userId>,
+      userId: parseUserId(collisionUserId),
       identityId: randomUUID(),
       issuer: idp!.issuer,
       subject: 'collision-oidc-sub-outsider',
@@ -581,7 +582,7 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
     try {
       const crossIssuerSameSubjectId = randomUUID();
       await identityStore.provisionUserWithOidcIdentity({
-        userId: crossIssuerSameSubjectId as ReturnType<typeof import('@pap/domain').userId>,
+        userId: parseUserId(crossIssuerSameSubjectId),
         identityId: randomUUID(),
         issuer: idp2.issuer,
         subject: 'owner-oidc-sub-katarzyna',
@@ -597,20 +598,20 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
       // Wstrzykujemy rekordy Katarzyny i Tomasza (z idp1) do pamięci podręcznej instIdp2, aby bezpośrednio przetestować ochronę w workspace.store!
       const idp2Workspace = instIdp2.app.get<WorkspaceRuntimePort>(ACCOUNTING_WORKSPACE_SERVICE);
       idp2Workspace.store.upsertUser({
-        id: bootstrapped.userId as ReturnType<typeof import('@pap/domain').userId>,
+        userId: parseUserId(bootstrapped.userId),
         issuer: idp!.issuer,
         subject: 'owner-oidc-sub-katarzyna',
         displayName: 'Katarzyna Właścicielka',
         email: 'katarzyna.wlascicielka@syntetyczne-biuro.example',
-        status: 'active',
+        active: true,
       });
       idp2Workspace.store.upsertUser({
-        id: unassignedUserId as ReturnType<typeof import('@pap/domain').userId>,
+        userId: parseUserId(unassignedUserId),
         issuer: idp!.issuer,
         subject: 'unassigned-oidc-sub-tomasz',
         displayName: 'Tomasz Pierwszy IdP1',
         email: 'tomasz.idp1@syntetyczne-biuro.example',
-        status: 'active',
+        active: true,
       });
 
       const idp2TokenSameSub = idp2.issueDirectAccessToken({
@@ -646,7 +647,7 @@ describe('Wave 2 Slice 3 — Jednorazowy bootstrap właściciela (CLI + atomowo�
         reasonCode: 'identity_not_provisioned',
       });
 
-      expect(idp2Workspace.store.getUser(unassignedUserId)?.status).toBe('active');
+      expect(idp2Workspace.store.getUserById(parseUserId(unassignedUserId))?.active).toBe(true);
       const stillActiveOwnerRes = await fetch(`${inst1.baseUrl}/api/v1/me/session`, {
         headers: { Authorization: `Bearer ${ownerToken}` },
       });
