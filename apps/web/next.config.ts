@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
         headers: [
           {
             key: 'Referrer-Policy',
-            value: 'no-referrer',
+            value: 'same-origin',
           },
           {
             key: 'X-Content-Type-Options',

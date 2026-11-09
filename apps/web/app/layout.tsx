@@ -11,7 +11,7 @@ export const metadata: Metadata = {
   },
   description:
     'Polska platforma księgowa i edukacyjna (KPiR, Ryczałt, Pełne księgi UoR, VAT, KSeF FA(3), ZUS, Kalendarz podatkowy, MCP oraz Akademia Polskiej Księgowości). Dane syntetyczne.',
-  referrer: 'no-referrer',
+  referrer: 'same-origin',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

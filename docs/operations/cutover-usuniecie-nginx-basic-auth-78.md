@@ -65,7 +65,7 @@ Usuń wyłącznie dyrektywy `auth_basic` oraz `auth_basic_user_file`, zachowują
    server_name ksiegowosc.roleplayingtech.com;
 
    # Certyfikaty TLS, HSTS i nagłówki bezpieczeństwa pozostają bez zmian
-+  add_header Referrer-Policy "no-referrer" always;
++  add_header Referrer-Policy "same-origin" always;
 -  auth_basic "Polish Accounting Platform — Staging";
 -  auth_basic_user_file /etc/nginx/.htpasswd-ksiegowosc;
 

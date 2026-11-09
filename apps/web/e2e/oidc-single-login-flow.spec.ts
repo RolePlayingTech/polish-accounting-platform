@@ -234,7 +234,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       // 6. Drugi niezależny kontekst przeglądarki (Ewa Księgowa): logowanie z linku zaproszenia i akceptacja
       const accountantPage = await accountantContext.newPage();
       const inviteLoginResp = await accountantPage.goto(acceptPath!);
-      expect(inviteLoginResp?.headers()['referrer-policy']).toBe('no-referrer');
+      expect(inviteLoginResp?.headers()['referrer-policy']).toBe('same-origin');
       await expect(
         accountantPage.getByText('Wykryto jednorazowe zaproszenie do organizacji'),
       ).toBeVisible();
