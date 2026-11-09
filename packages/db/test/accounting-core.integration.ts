@@ -1091,11 +1091,12 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
 
     // 2. Próba aktualizacji NIP podmiotu entityA3 na NIP zajęty już przez entityA1 (5261040828) w tym samym tenancie
     // zostaje odrzucona przez PostgreSQL ograniczeniem UNIQUE company_tax_settings_tenant_nip_unique (23505)
-    await expectDatabaseError(
-      runAsActor(
-        { subject: 'actor-a', tenant: tenantA, entity: entityA3, action: 'write' },
-        async (scope) =>
-          scope.upsertCompanyTaxSettings({
+    let caughtTaxNipConflict: unknown = null;
+    const conflictTaxSettings = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA3, action: 'write' },
+      async (scope) => {
+        try {
+          return await scope.upsertCompanyTaxSettings({
             nip: nipA1,
             legalForm: 'sp_z_o_o',
             taxRegime: 'cit_klasyczny',
@@ -1103,24 +1104,35 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
             zusStage: 'brak_sp_zoo',
             ksefMode: 'mandatory_2026_feb',
             addressSummary: 'ul. Konfliktowa 3, 00-003 Warszawa',
-          }),
-      ),
-      '23505',
+          });
+        } catch (err) {
+          caughtTaxNipConflict = err;
+          throw err;
+        }
+      },
     );
+    expect(conflictTaxSettings.allowed).toBe(false);
+    await expectDatabaseError(Promise.reject(caughtTaxNipConflict), '23505');
 
     // 3. Próba aktualizacji NIP w aktywnej wersji entity_profile_version podmiotu entityA3 na nipA1
     // zostaje odrzucona przez częściowy indeks unikalny entity_profile_version_active_tenant_nip_uidx (23505)
-    await expectDatabaseError(
-      runAsActor(
-        { subject: 'actor-a', tenant: tenantA, entity: entityA3, action: 'write' },
-        async (scope) =>
-          scope.upsertEntityProfileVersion({
+    let caughtProfileNipConflict: unknown = null;
+    const conflictProfileVersion = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA3, action: 'write' },
+      async (scope) => {
+        try {
+          return await scope.upsertEntityProfileVersion({
             profileCode: 'spzoo_pelne_ksiegi',
             profileJson: { nip: nipA1, displayName: 'Próba podmiany NIP w profilu' },
-          }),
-      ),
-      '23505',
+          });
+        } catch (err) {
+          caughtProfileNipConflict = err;
+          throw err;
+        }
+      },
     );
+    expect(conflictProfileVersion.allowed).toBe(false);
+    await expectDatabaseError(Promise.reject(caughtProfileNipConflict), '23505');
 
     // 4. Natomiast podmiot w INNYM tenancie (tenantB / entityB1) może legalnie użyć tego samego 10-cyfrowego NIP (nipA1)
     const savedB1SameNip = await runAsActor(

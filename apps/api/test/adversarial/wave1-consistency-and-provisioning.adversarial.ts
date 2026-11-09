@@ -1519,7 +1519,7 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
 
     // 2. Utworzenie nowej firmy z unikalnym NIP (1132191233 — poprawny modulo-11: 1*6+1*5+3*7+2*2+1*3+9*4+1*5+2*6+3*7 = 6+5+21+4+3+36+5+12+21 = 113 % 11 = 3)
     const targetNip = '1132191233';
-    const existingDemoNip = '5261040828'; // NIP firmy COMPANY_JDG_KPIR_ID w TENANT_1_ID
+    const existingDemoNip = '5250001003'; // NIP firmy COMPANY_JDG_KPIR_ID w TENANT_1_ID
 
     const createRes = await fetch(`${urlA}/api/v1/tenants/${TENANT_1_ID}/companies`, {
       method: 'POST',

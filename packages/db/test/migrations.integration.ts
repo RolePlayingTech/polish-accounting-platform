@@ -229,7 +229,18 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', ()
         migrationErr = err;
       }
       expect(migrationErr).not.toBeNull();
-      const errText = JSON.stringify(migrationErr) + String(migrationErr);
+      const errCause = (
+        migrationErr as {
+          message?: string;
+          cause?: { code?: string; message?: string; detail?: string };
+        }
+      )?.cause;
+      const errText = [
+        String(migrationErr),
+        errCause?.code ?? '',
+        errCause?.message ?? '',
+        errCause?.detail ?? '',
+      ].join(' | ');
       expect(errText).toContain('23505');
       expect(errText).toContain(tenantId);
       expect(errText).toContain(entityA);
