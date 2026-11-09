@@ -14,6 +14,7 @@ import {
   USER_IDENTITY_RESOLVER,
 } from './auth/company-access.guard.js';
 import { JwtBearerAuthGuard } from './auth/jwt-bearer.guard.js';
+import { BffSessionController } from './auth/bff-session.controller.js';
 import { SandboxOidcController } from './auth/sandbox-oidc.controller.js';
 import { SandboxOidcService } from './auth/sandbox-oidc.service.js';
 import { CompaniesAccessController } from './controllers/companies-access.controller.js';
@@ -27,6 +28,7 @@ import {
   ACCOUNTING_WORKSPACE_SERVICE,
   API_RUNTIME_ENV,
   PAP_MCP_GATEWAY,
+  WEB_SESSION_STORE_PORT,
   createApiRuntimeServicesAsync,
   type ApiRuntimeServices,
 } from './runtime/workspace-runtime.js';
@@ -97,6 +99,11 @@ function buildRuntimeProviders(
       useFactory: (rt: ApiRuntimeServices) => rt.securityAudit,
       inject: [API_RUNTIME_SERVICES],
     },
+    {
+      provide: WEB_SESSION_STORE_PORT,
+      useFactory: (rt: ApiRuntimeServices) => rt.webSessionStore,
+      inject: [API_RUNTIME_SERVICES],
+    },
     ApiRuntimeShutdownHook,
     JwtBearerAuthGuard,
     RemoteMcpFastifyRegistrar,
@@ -111,6 +118,7 @@ const API_CONTROLLERS = [
   HealthController,
   SystemStatusController,
   SandboxOidcController,
+  BffSessionController,
   CompaniesAccessController,
   DocumentsBooksController,
   OperationsAutomationController,

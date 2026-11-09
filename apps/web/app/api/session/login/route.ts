@@ -3,6 +3,7 @@ import {
   assertSameOriginMutation,
   sanitizeInternalRedirect,
 } from '../../../../lib/request-security';
+import { isSyntheticPersonaLoginAllowed } from '../../../../lib/runtime-mode';
 import { PersonaIdSchema, writeSessionToResponse } from '../../../../lib/session';
 import {
   DEFAULT_ACCOUNTING_PERIOD,
@@ -14,6 +15,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const csrfError = assertSameOriginMutation(request);
   if (csrfError) {
     return csrfError;
+  }
+
+  if (!isSyntheticPersonaLoginAllowed()) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reasonCode: 'synthetic_persona_disabled',
+        error:
+          'Syntetyczne persony testowe są wyłączone poza lokalnym trybem deweloperskim (LOCAL_DEV). Zaloguj się przez OIDC.',
+      },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    );
   }
 
   const contentType = request.headers.get('content-type') ?? '';

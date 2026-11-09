@@ -14,3 +14,4 @@ export type {
 export * from './demo-seed.js';
 export * from './document-import-parsers.js';
 export * from './accounting-workspace.js';
+export * from './web-session-store.js';

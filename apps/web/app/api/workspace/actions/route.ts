@@ -6,8 +6,12 @@ import type {
   VatDeductionMode,
   VatRateCode,
 } from '@pap/domain';
+import { OidcServiceUnavailableError } from '../../../../lib/oidc-client';
 import { assertSameOriginMutation } from '../../../../lib/request-security';
-import { readServerSession, writeSessionToResponse } from '../../../../lib/session';
+import {
+  persistUpdatedSessionContext,
+  readServerSessionOrThrowUnavailable,
+} from '../../../../lib/session';
 import {
   MAX_WORKSPACE_IMPORT_BYTES,
   WorkspaceAccessError,
@@ -40,13 +44,35 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return csrfError;
   }
 
-  const session = await readServerSession();
+  let session;
+  try {
+    session = await readServerSessionOrThrowUnavailable();
+  } catch (err) {
+    if (err instanceof OidcServiceUnavailableError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reasonCode: 'auth_service_unavailable',
+          error: err.message,
+        },
+        { status: 503 },
+      );
+    }
+    return NextResponse.json(
+      {
+        ok: false,
+        reasonCode: 'auth_service_unavailable',
+        error: 'Usługa sesji BFF jest chwilowo niedostępna (tryb fail-closed).',
+      },
+      { status: 503 },
+    );
+  }
   if (!session) {
     return NextResponse.json(
       {
         ok: false,
         reasonCode: 'unauthenticated',
-        error: 'Sesja nieaktywna — zaloguj się jako jedna z person testowych na /login.',
+        error: 'Sesja nieaktywna — zaloguj się ponownie na /login.',
       },
       { status: 401 },
     );
@@ -123,13 +149,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           company: created,
         });
         if (switchImmediately) {
-          writeSessionToResponse(res, {
-            oidcToken: session.oidcToken,
-            context: {
-              ...session.context,
-              tenantId: created.tenantId,
-              legalEntityId: created.legalEntityId,
-            },
+          await persistUpdatedSessionContext(res, session, {
+            ...session.context,
+            tenantId: created.tenantId,
+            legalEntityId: created.legalEntityId,
           });
         }
         return res;
@@ -364,6 +387,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         );
     }
   } catch (err) {
+    if (err instanceof OidcServiceUnavailableError) {
+      return NextResponse.json(
+        { ok: false, reasonCode: 'auth_service_unavailable', error: err.message },
+        { status: 503 },
+      );
+    }
     if (err instanceof WorkspaceAccessError) {
       return NextResponse.json(
         { ok: false, reasonCode: err.reasonCode, error: err.message },

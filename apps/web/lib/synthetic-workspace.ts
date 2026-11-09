@@ -1807,8 +1807,56 @@ function assertValidSessionIdentity(session: ActiveWebSession | null): ActiveWeb
     throw new WorkspaceAccessError(
       401,
       'unauthenticated',
-      'Sesja wygasła lub użytkownik nie jest zalogowany. Wybierz personę testową na ekranie logowania.',
+      'Sesja wygasła lub użytkownik nie jest zalogowany. Zaloguj się ponownie na ekranie logowania.',
     );
+  }
+
+  if (session.authMethod === 'oidc') {
+    const token = session.oidcToken.trim();
+    if (
+      token.length < 16 ||
+      token.startsWith('pap_synth_oidc_') ||
+      SYNTHETIC_PERSONAS.some((other) => other.syntheticOidcToken === token)
+    ) {
+      throw new WorkspaceAccessError(
+        401,
+        'session_token_mismatch',
+        'Token uwierzytelniania nie odpowiada aktywnej sesji OIDC — zaloguj się ponownie.',
+      );
+    }
+
+    if (!STRICT_UUID_REGEX.test(session.context.userId)) {
+      throw new WorkspaceAccessError(
+        401,
+        'invalid_session_context',
+        'Kontekst sesji BFF zawiera nieprawidłowy identyfikator użytkownika UUID — zaloguj się ponownie.',
+      );
+    }
+
+    if (
+      session.hasTenantMembership === false ||
+      !session.context.tenantId ||
+      !session.context.legalEntityId
+    ) {
+      throw new WorkspaceAccessError(
+        403,
+        'no_tenant_membership',
+        'Twoje konto OIDC zostało uwierzytelnione, ale nie posiada jeszcze przypisanej organizacji ani podmiotu prawnego.',
+      );
+    }
+
+    if (
+      !STRICT_UUID_REGEX.test(session.context.tenantId) ||
+      !STRICT_UUID_REGEX.test(session.context.legalEntityId)
+    ) {
+      throw new WorkspaceAccessError(
+        401,
+        'invalid_session_context',
+        'Kontekst sesji BFF zawiera nieprawidłowy identyfikator UUID — zaloguj się ponownie.',
+      );
+    }
+
+    return session;
   }
 
   if (
@@ -1926,7 +1974,7 @@ export async function verifySessionAccess(
       tenantId: targetTenantId,
       legalEntityId: targetLegalEntityId,
       actorName: session.context.displayName,
-      actorRole: session.context.personaId,
+      actorRole: session.context.personaId ?? session.context.roleSummaryPl,
       channel: 'UI',
       actionCode: `ACCESS_DENIED_${decision.reason.toUpperCase()}`,
       summaryPl: `Odmowa dostępu (${action}) dla aktora ${session.context.displayName}: ${decision.reason}.`,
@@ -2506,7 +2554,7 @@ export async function getCompaniesManagementSnapshot(session: ActiveWebSession):
       tenantId: activeCompany.tenantId,
       legalEntityId: activeCompany.legalEntityId,
       actorName: ev.actorDisplayLabel,
-      actorRole: session.context.personaId,
+      actorRole: session.context.personaId ?? session.context.roleSummaryPl,
       channel: ev.channel === 'mcp' ? 'MCP' : ev.channel === 'accounting' ? 'UI' : 'API',
       actionCode:
         ev.outcome === 'deny'
@@ -3154,7 +3202,7 @@ function appendAudit(
     tenantId: company.tenantId,
     legalEntityId: company.legalEntityId,
     actorName: session.context.displayName,
-    actorRole: session.context.personaId,
+    actorRole: session.context.personaId ?? session.context.roleSummaryPl,
     channel,
     actionCode,
     summaryPl,

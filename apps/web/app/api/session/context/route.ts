@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { OidcServiceUnavailableError } from '../../../../lib/oidc-client';
 import { assertSameOriginMutation } from '../../../../lib/request-security';
 import {
-  readServerSession,
-  writeSessionToResponse,
+  persistUpdatedSessionContext,
+  readServerSessionOrThrowUnavailable,
   type SessionContext,
 } from '../../../../lib/session';
 import { WorkspaceAccessError, verifySessionAccess } from '../../../../lib/synthetic-workspace';
@@ -27,13 +28,36 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return csrfError;
   }
 
-  const session = await readServerSession();
+  let session;
+  try {
+    session = await readServerSessionOrThrowUnavailable();
+  } catch (err) {
+    if (err instanceof OidcServiceUnavailableError) {
+      return NextResponse.json(
+        {
+          ok: false,
+          reasonCode: 'auth_service_unavailable',
+          error: err.message,
+        },
+        { status: 503, headers: { 'Cache-Control': 'no-store' } },
+      );
+    }
+    return NextResponse.json(
+      {
+        ok: false,
+        reasonCode: 'auth_service_unavailable',
+        error: 'Usługa sesji BFF jest chwilowo niedostępna (tryb fail-closed).',
+      },
+      { status: 503, headers: { 'Cache-Control': 'no-store' } },
+    );
+  }
+
   if (!session) {
     return NextResponse.json(
       {
         ok: false,
         reasonCode: 'unauthenticated',
-        error: 'Brak aktywnej sesji BFF. Zaloguj się do środowiska testowego.',
+        error: 'Brak aktywnej sesji BFF. Zaloguj się ponownie.',
       },
       { status: 401 },
     );
@@ -82,12 +106,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       context: updatedContext,
       companyName: company.companyName,
     });
-    writeSessionToResponse(response, {
-      oidcToken: session.oidcToken,
-      context: updatedContext,
-    });
+    await persistUpdatedSessionContext(response, session, updatedContext);
     return response;
   } catch (err) {
+    if (err instanceof OidcServiceUnavailableError) {
+      return NextResponse.json(
+        { ok: false, reasonCode: 'auth_service_unavailable', error: err.message },
+        { status: 503 },
+      );
+    }
     if (err instanceof WorkspaceAccessError) {
       return NextResponse.json(
         { ok: false, reasonCode: err.reasonCode, error: err.message },
