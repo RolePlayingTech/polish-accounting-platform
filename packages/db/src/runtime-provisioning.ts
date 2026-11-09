@@ -79,6 +79,70 @@ CREATE TABLE IF NOT EXISTS pap_bff_session (
 CREATE INDEX IF NOT EXISTS pap_bff_session_user_idx ON pap_bff_session (user_id);
 CREATE INDEX IF NOT EXISTS pap_bff_session_expires_idx ON pap_bff_session (expires_at);
 
+CREATE TABLE IF NOT EXISTS pap_user_profile (
+  user_id uuid PRIMARY KEY REFERENCES app_user(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  display_name text NOT NULL,
+  email text NOT NULL,
+  created_at timestamptz(3) NOT NULL DEFAULT date_trunc('milliseconds', clock_timestamp()),
+  updated_at timestamptz(3) NOT NULL DEFAULT date_trunc('milliseconds', clock_timestamp()),
+  CONSTRAINT pap_user_profile_display_name_check CHECK (
+    btrim(display_name) <> '' AND char_length(display_name) <= 160
+  ),
+  CONSTRAINT pap_user_profile_email_check CHECK (
+    btrim(email) <> '' AND char_length(email) <= 254
+  ),
+  CONSTRAINT pap_user_profile_time_check CHECK (
+    isfinite(created_at) AND isfinite(updated_at) AND updated_at >= created_at
+  )
+);
+
+CREATE TABLE IF NOT EXISTS pap_identity_lifecycle_event (
+  id uuid PRIMARY KEY,
+  operation_id uuid NOT NULL UNIQUE,
+  kind text NOT NULL,
+  actor_user_id uuid REFERENCES app_user(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  target_user_id uuid REFERENCES app_user(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  tenant_id uuid REFERENCES tenant(id) ON DELETE RESTRICT ON UPDATE RESTRICT,
+  invitation_id uuid,
+  issuer text,
+  subject text,
+  reason text NOT NULL,
+  request_key text NOT NULL,
+  receipt jsonb NOT NULL,
+  occurred_at timestamptz(3) NOT NULL,
+  transaction_id text NOT NULL DEFAULT pg_current_xact_id()::text,
+  CONSTRAINT pap_identity_lifecycle_event_kind_check CHECK (
+    kind IN (
+      'bootstrap_owner',
+      'provision_unassigned_user',
+      'create_invitation',
+      'accept_invitation',
+      'reject_invitation',
+      'revoke_invitation'
+    )
+  ),
+  CONSTRAINT pap_identity_lifecycle_event_reason_check CHECK (
+    btrim(reason) <> '' AND char_length(reason) <= 400
+  ),
+  CONSTRAINT pap_identity_lifecycle_event_request_key_check CHECK (
+    btrim(request_key) <> ''
+  ),
+  CONSTRAINT pap_identity_lifecycle_event_receipt_check CHECK (
+    jsonb_typeof(receipt) = 'object'
+  ),
+  CONSTRAINT pap_identity_lifecycle_event_time_check CHECK (
+    isfinite(occurred_at)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS pap_identity_lifecycle_tenant_idx
+  ON pap_identity_lifecycle_event (tenant_id, occurred_at);
+
+DROP TRIGGER IF EXISTS pap_identity_lifecycle_append_only ON pap_identity_lifecycle_event;
+CREATE TRIGGER pap_identity_lifecycle_append_only
+  BEFORE UPDATE OR DELETE ON pap_identity_lifecycle_event
+  FOR EACH ROW EXECUTE FUNCTION protect_access_management_event();
+
 CREATE OR REPLACE FUNCTION pap_bff_session_op(cmd jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -597,14 +661,379 @@ EXCEPTION WHEN invalid_text_representation THEN
 END;
 $fn$;
 
+CREATE OR REPLACE FUNCTION pap_wave2_identity_op(cmd jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET timezone = 'UTC'
+SET datestyle = 'ISO, YMD'
+AS $fn$
+DECLARE
+  c jsonb := pap_context();
+  signed_cmd jsonb;
+  op_kind text;
+  now_ts timestamptz(3);
+  op_id uuid;
+  issuer_val text;
+  subject_val text;
+  display_name_val text;
+  email_val text;
+  tenant_name_val text;
+  reason_val text;
+  canonical_req_json jsonb;
+  prev_event pap_identity_lifecycle_event%ROWTYPE;
+  ident_row user_oidc_identity%ROWTYPE;
+  user_row app_user%ROWTYPE;
+  prof_row pap_user_profile%ROWTYPE;
+  resolved_user_id uuid;
+  resolved_tenant_id uuid;
+  initial_entity_id uuid;
+  audit_event_id uuid;
+  receipt_json jsonb;
+  memberships_json jsonb;
+  profile_json jsonb;
+BEGIN
+  IF c IS NULL
+    OR c->>'purpose' IS DISTINCT FROM 'identity_lifecycle'
+    OR jsonb_typeof(c->'command') IS DISTINCT FROM 'object'
+    OR cmd IS NULL
+    OR jsonb_typeof(cmd) IS DISTINCT FROM 'object'
+  THEN
+    RAISE EXCEPTION 'Brak autoryzowanego kontekstu cyklu życia tożsamości' USING ERRCODE = '42501';
+  END IF;
+
+  signed_cmd := c->'command';
+  op_kind := cmd->>'kind';
+  IF op_kind IS NULL OR signed_cmd IS DISTINCT FROM cmd THEN
+    RAISE EXCEPTION 'Niezgodność podpisanej komendy cyklu życia tożsamości' USING ERRCODE = '42501';
+  END IF;
+
+  now_ts := COALESCE(
+    (cmd->>'nowIso')::timestamptz(3),
+    date_trunc('milliseconds', clock_timestamp())::timestamptz(3)
+  );
+  IF NOT isfinite(now_ts) THEN
+    RETURN jsonb_build_object('ok', false, 'reason', 'invalid_bootstrap_input');
+  END IF;
+
+  IF op_kind = 'bootstrap_initial_owner' THEN
+    PERFORM pg_advisory_xact_lock(hashtext('pap:wave2:bootstrap_initial_owner'));
+
+    IF (cmd->>'operationId') IS NULL
+      OR (cmd->>'issuer') IS NULL
+      OR (cmd->>'subject') IS NULL
+    THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'invalid_bootstrap_input');
+    END IF;
+
+    op_id := (cmd->>'operationId')::uuid;
+    issuer_val := btrim(cmd->>'issuer');
+    subject_val := btrim(cmd->>'subject');
+    display_name_val := btrim(COALESCE(cmd->>'displayName', ''));
+    email_val := lower(btrim(COALESCE(cmd->>'email', '')));
+    tenant_name_val := btrim(COALESCE(cmd->>'tenantName', ''));
+    reason_val := btrim(COALESCE(cmd->>'reason', ''));
+
+    IF op_id IS NULL
+      OR issuer_val = ''
+      OR issuer_val IS DISTINCT FROM (cmd->>'issuer')
+      OR char_length(issuer_val) > 512
+      OR subject_val = ''
+      OR subject_val IS DISTINCT FROM (cmd->>'subject')
+      OR char_length(subject_val) > 256
+      OR char_length(display_name_val) < 2
+      OR char_length(display_name_val) > 160
+      OR char_length(email_val) < 3
+      OR char_length(email_val) > 254
+      OR position('@' IN email_val) < 2
+      OR char_length(tenant_name_val) < 2
+      OR char_length(tenant_name_val) > 240
+      OR char_length(reason_val) < 3
+      OR char_length(reason_val) > 400
+    THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'invalid_bootstrap_input');
+    END IF;
+
+    canonical_req_json := cmd - ARRAY['nowIso', 'initialLegalEntityId'];
+
+    SELECT * INTO prev_event
+    FROM pap_identity_lifecycle_event
+    WHERE operation_id = op_id;
+
+    IF FOUND THEN
+      IF prev_event.kind <> 'bootstrap_owner'
+        OR prev_event.request_key::jsonb IS DISTINCT FROM canonical_req_json
+      THEN
+        RETURN jsonb_build_object('ok', false, 'reason', 'operation_conflict');
+      END IF;
+      RETURN jsonb_build_object(
+        'ok', true,
+        'idempotentReplay', true,
+        'receipt', prev_event.receipt
+      );
+    END IF;
+
+    IF EXISTS (
+      SELECT 1
+      FROM pap_identity_lifecycle_event
+      WHERE kind = 'bootstrap_owner'
+    ) OR EXISTS (
+      SELECT 1
+      FROM tenant_membership m
+      JOIN app_user u ON u.id = m.user_id
+      WHERE m.role = 'tenant_owner'
+        AND m.status = 'active'
+        AND m.valid_from <= now_ts
+        AND (m.valid_until IS NULL OR m.valid_until > now_ts)
+        AND u.status = 'active'
+        AND u.disabled_at IS NULL
+    ) THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'owner_already_bootstrapped');
+    END IF;
+
+    SELECT * INTO ident_row
+    FROM user_oidc_identity
+    WHERE issuer = issuer_val
+      AND subject = subject_val
+    FOR UPDATE;
+
+    IF FOUND THEN
+      IF ident_row.status <> 'active' OR ident_row.revoked_at IS NOT NULL THEN
+        RETURN jsonb_build_object('ok', false, 'reason', 'identity_revoked');
+      END IF;
+      SELECT * INTO user_row
+      FROM app_user
+      WHERE id = ident_row.user_id
+      FOR UPDATE;
+      IF NOT FOUND OR user_row.status <> 'active' OR user_row.disabled_at IS NOT NULL THEN
+        RETURN jsonb_build_object('ok', false, 'reason', 'user_disabled');
+      END IF;
+      IF (cmd->>'userId') IS NOT NULL AND (cmd->>'userId')::uuid <> ident_row.user_id THEN
+        RETURN jsonb_build_object('ok', false, 'reason', 'identity_already_linked');
+      END IF;
+      resolved_user_id := ident_row.user_id;
+    ELSE
+      resolved_user_id := COALESCE((cmd->>'userId')::uuid, gen_random_uuid());
+      IF EXISTS (SELECT 1 FROM app_user WHERE id = resolved_user_id) THEN
+        RETURN jsonb_build_object('ok', false, 'reason', 'user_already_exists');
+      END IF;
+
+      INSERT INTO app_user (id, status, created_at, disabled_at)
+      VALUES (resolved_user_id, 'active', now_ts, NULL);
+
+      INSERT INTO user_oidc_identity (id, user_id, issuer, subject, status, linked_at, revoked_at)
+      VALUES (gen_random_uuid(), resolved_user_id, issuer_val, subject_val, 'active', now_ts, NULL);
+    END IF;
+
+    INSERT INTO pap_user_profile (user_id, display_name, email, created_at, updated_at)
+    VALUES (resolved_user_id, display_name_val, email_val, now_ts, now_ts)
+    ON CONFLICT (user_id) DO UPDATE
+      SET display_name = EXCLUDED.display_name,
+          email = EXCLUDED.email,
+          updated_at = GREATEST(pap_user_profile.created_at, EXCLUDED.updated_at);
+
+    resolved_tenant_id := COALESCE((cmd->>'tenantId')::uuid, gen_random_uuid());
+    IF EXISTS (SELECT 1 FROM tenant WHERE id = resolved_tenant_id) THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'tenant_already_exists');
+    END IF;
+
+    INSERT INTO tenant (id, name, created_at)
+    VALUES (resolved_tenant_id, tenant_name_val, now_ts);
+
+    INSERT INTO tenant_membership (tenant_id, user_id, role, status, valid_from, valid_until)
+    VALUES (resolved_tenant_id, resolved_user_id, 'tenant_owner', 'active', now_ts, NULL);
+
+    audit_event_id := gen_random_uuid();
+    initial_entity_id := (cmd->>'initialLegalEntityId')::uuid;
+
+    receipt_json := jsonb_build_object(
+      'userId', resolved_user_id,
+      'issuer', issuer_val,
+      'subject', subject_val,
+      'displayName', display_name_val,
+      'email', email_val,
+      'tenantId', resolved_tenant_id,
+      'tenantName', tenant_name_val,
+      'role', 'tenant_owner',
+      'legalEntityId', initial_entity_id,
+      'operationId', op_id,
+      'auditEventId', audit_event_id,
+      'occurredAt', to_char(now_ts, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+    );
+
+    INSERT INTO pap_identity_lifecycle_event (
+      id,
+      operation_id,
+      kind,
+      actor_user_id,
+      target_user_id,
+      tenant_id,
+      invitation_id,
+      issuer,
+      subject,
+      reason,
+      request_key,
+      receipt,
+      occurred_at
+    ) VALUES (
+      audit_event_id,
+      op_id,
+      'bootstrap_owner',
+      resolved_user_id,
+      resolved_user_id,
+      resolved_tenant_id,
+      NULL,
+      issuer_val,
+      subject_val,
+      reason_val,
+      canonical_req_json::text,
+      receipt_json,
+      now_ts
+    );
+
+    RETURN jsonb_build_object(
+      'ok', true,
+      'idempotentReplay', false,
+      'receipt', receipt_json
+    );
+
+  ELSIF op_kind = 'upsert_user_profile' THEN
+    IF (cmd->>'userId') IS NULL THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'invalid_identity_input');
+    END IF;
+    resolved_user_id := (cmd->>'userId')::uuid;
+    display_name_val := btrim(COALESCE(cmd->>'displayName', ''));
+    email_val := lower(btrim(COALESCE(cmd->>'email', '')));
+
+    IF resolved_user_id IS NULL
+      OR display_name_val = ''
+      OR char_length(display_name_val) > 160
+      OR char_length(email_val) < 3
+      OR char_length(email_val) > 254
+      OR position('@' IN email_val) < 2
+    THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'invalid_identity_input');
+    END IF;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM app_user u
+      WHERE u.id = resolved_user_id
+        AND u.status = 'active'
+        AND u.disabled_at IS NULL
+    ) THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'user_inactive_or_missing');
+    END IF;
+
+    INSERT INTO pap_user_profile (user_id, display_name, email, created_at, updated_at)
+    VALUES (resolved_user_id, display_name_val, email_val, now_ts, now_ts)
+    ON CONFLICT (user_id) DO UPDATE
+      SET display_name = EXCLUDED.display_name,
+          email = CASE
+            WHEN EXCLUDED.email LIKE '%.invalid' AND pap_user_profile.email NOT LIKE '%.invalid'
+              THEN pap_user_profile.email
+            ELSE EXCLUDED.email
+          END,
+          updated_at = GREATEST(pap_user_profile.created_at, EXCLUDED.updated_at)
+    RETURNING * INTO prof_row;
+
+    RETURN jsonb_build_object(
+      'ok', true,
+      'profile', jsonb_build_object(
+        'userId', prof_row.user_id,
+        'displayName', prof_row.display_name,
+        'email', prof_row.email,
+        'createdAt', to_char(prof_row.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'updatedAt', to_char(prof_row.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      )
+    );
+
+  ELSIF op_kind = 'get_actor_session_directory' THEN
+    IF (cmd->>'userId') IS NULL THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'invalid_identity_input');
+    END IF;
+    resolved_user_id := (cmd->>'userId')::uuid;
+
+    IF NOT EXISTS (
+      SELECT 1 FROM app_user u
+      WHERE u.id = resolved_user_id
+        AND u.status = 'active'
+        AND u.disabled_at IS NULL
+    ) THEN
+      RETURN jsonb_build_object('ok', false, 'reason', 'user_inactive_or_missing');
+    END IF;
+
+    SELECT * INTO prof_row
+    FROM pap_user_profile
+    WHERE user_id = resolved_user_id;
+
+    IF FOUND THEN
+      profile_json := jsonb_build_object(
+        'userId', prof_row.user_id,
+        'displayName', prof_row.display_name,
+        'email', prof_row.email,
+        'createdAt', to_char(prof_row.created_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+        'updatedAt', to_char(prof_row.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      );
+    ELSE
+      profile_json := NULL;
+    END IF;
+
+    SELECT COALESCE(
+      jsonb_agg(
+        jsonb_build_object(
+          'tenantId', m.tenant_id,
+          'tenantName', t.name,
+          'role', m.role,
+          'status', CASE
+            WHEN m.status = 'active'
+              AND m.valid_from <= now_ts
+              AND (m.valid_until IS NULL OR m.valid_until > now_ts)
+            THEN 'active'
+            ELSE 'revoked'
+          END,
+          'validFrom', to_char(m.valid_from, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+          'validUntil', CASE
+            WHEN m.valid_until IS NULL THEN NULL
+            ELSE to_char(m.valid_until, 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+          END
+        )
+        ORDER BY t.created_at, t.id
+      ),
+      '[]'::jsonb
+    )
+    INTO memberships_json
+    FROM tenant_membership m
+    JOIN tenant t ON t.id = m.tenant_id
+    WHERE m.user_id = resolved_user_id;
+
+    RETURN jsonb_build_object(
+      'ok', true,
+      'userId', resolved_user_id,
+      'profile', profile_json,
+      'memberships', memberships_json
+    );
+  ELSE
+    RAISE EXCEPTION 'Nieobsługiwana operacja cyklu życia tożsamości' USING ERRCODE = '42501';
+  END IF;
+EXCEPTION WHEN invalid_text_representation THEN
+  RETURN jsonb_build_object('ok', false, 'reason', 'invalid_bootstrap_input');
+END;
+$fn$;
+
 DO $$
 DECLARE
   runtime_name text := current_setting('pap.provision_runtime_role');
   data_schema text := current_schema();
   t text;
+  fn_sig text;
   column_record record;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['pap_oidc_auth_state', 'pap_bff_session']
+  FOREACH t IN ARRAY ARRAY[
+    'pap_oidc_auth_state',
+    'pap_bff_session',
+    'pap_user_profile',
+    'pap_identity_lifecycle_event'
+  ]
   LOOP
     EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', data_schema, t);
     EXECUTE format('ALTER TABLE %I.%I FORCE ROW LEVEL SECURITY', data_schema, t);
@@ -636,17 +1065,22 @@ BEGIN
     END LOOP;
   END LOOP;
 
-  EXECUTE format(
-    'ALTER FUNCTION %I.pap_bff_session_op(jsonb) SET search_path = pg_catalog, %I, pg_temp',
-    data_schema,
-    data_schema
-  );
-  EXECUTE format('REVOKE ALL ON FUNCTION %I.pap_bff_session_op(jsonb) FROM PUBLIC', data_schema);
-  EXECUTE format(
-    'GRANT EXECUTE ON FUNCTION %I.pap_bff_session_op(jsonb) TO %I',
-    data_schema,
-    runtime_name
-  );
+  FOREACH fn_sig IN ARRAY ARRAY['pap_bff_session_op(jsonb)', 'pap_wave2_identity_op(jsonb)']
+  LOOP
+    EXECUTE format(
+      'ALTER FUNCTION %I.%s SET search_path = pg_catalog, %I, pg_temp',
+      data_schema,
+      fn_sig,
+      data_schema
+    );
+    EXECUTE format('REVOKE ALL ON FUNCTION %I.%s FROM PUBLIC', data_schema, fn_sig);
+    EXECUTE format(
+      'GRANT EXECUTE ON FUNCTION %I.%s TO %I',
+      data_schema,
+      fn_sig,
+      runtime_name
+    );
+  END LOOP;
 END;
 $$;
 `;

@@ -388,6 +388,7 @@ export type AuditLogEntry = CompanyAuditItemContract & {
 
 export interface WorkspaceUserRecord {
   readonly userId: UserId;
+  readonly issuer?: string | undefined;
   readonly subject: string;
   readonly displayName: string;
   readonly email: string;
@@ -453,10 +454,12 @@ export interface WorkspaceHumanChallenge {
 
 export interface AccountingWorkspaceStorePort {
   getUserById(userId: UserId): WorkspaceUserRecord | null;
-  getUserBySubject(subject: string): WorkspaceUserRecord | null;
+  getUserBySubject(subject: string, issuer?: string): WorkspaceUserRecord | null;
+  upsertUser(record: WorkspaceUserRecord): void;
   listUsers(): readonly WorkspaceUserRecord[];
   getMembership(tenantId: TenantId, userId: UserId): TenantMembership | null;
   listTenantMemberships(tenantId: TenantId): readonly TenantMembership[];
+  listMembershipsForUser(userId: UserId): readonly TenantMembership[];
   upsertMembership(membership: TenantMembership): void;
   listGrantsForCompany(
     tenantId: TenantId,
@@ -808,7 +811,22 @@ export class InMemoryAccountingWorkspaceStore implements AccountingWorkspaceStor
     return this.users.get(uId) ?? null;
   }
 
-  getUserBySubject(subject: string): WorkspaceUserRecord | null {
+  getUserBySubject(subject: string, issuer?: string): WorkspaceUserRecord | null {
+    if (issuer !== undefined) {
+      let legacyWithoutIssuer: WorkspaceUserRecord | null = null;
+      for (const u of this.users.values()) {
+        if (u.subject !== subject) {
+          continue;
+        }
+        if (u.issuer === issuer) {
+          return u;
+        }
+        if (u.issuer === undefined && legacyWithoutIssuer === null) {
+          legacyWithoutIssuer = u;
+        }
+      }
+      return legacyWithoutIssuer;
+    }
     for (const u of this.users.values()) {
       if (u.subject === subject) {
         return u;
@@ -833,6 +851,16 @@ export class InMemoryAccountingWorkspaceStore implements AccountingWorkspaceStor
     const out: TenantMembership[] = [];
     for (const m of this.memberships.values()) {
       if (m.tenantId === tId) {
+        out.push(m);
+      }
+    }
+    return out;
+  }
+
+  listMembershipsForUser(uId: UserId): readonly TenantMembership[] {
+    const out: TenantMembership[] = [];
+    for (const m of this.memberships.values()) {
+      if (m.userId === uId) {
         out.push(m);
       }
     }

@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  Optional,
   SetMetadata,
   UnauthorizedException,
   type CanActivate,
@@ -13,6 +14,9 @@ import { randomUUID } from 'node:crypto';
 import {
   InMemoryAccountingWorkspaceStore,
   auditIdentifier,
+  normalizeSessionDisplayName,
+  normalizeSessionSafeEmail,
+  type IdentityLifecycleStorePort,
   type OidcAccessTokenVerifier,
   type SecurityAuditRecorder,
   type UserIdentityResolver,
@@ -22,6 +26,7 @@ import { userId as parseUserId } from '@pap/domain';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import {
   ACCOUNTING_WORKSPACE_SERVICE,
+  IDENTITY_LIFECYCLE_STORE_PORT,
   type WorkspaceRuntimePort,
 } from '../runtime/workspace-runtime.js';
 import {
@@ -153,6 +158,9 @@ export class JwtBearerAuthGuard implements CanActivate {
     private readonly identityResolver: UserIdentityResolver,
     @Inject(SECURITY_AUDIT_RECORDER)
     private readonly securityAudit: SecurityAuditRecorder,
+    @Optional()
+    @Inject(IDENTITY_LIFECYCLE_STORE_PORT)
+    private readonly identityLifecycleStore?: IdentityLifecycleStorePort,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -221,11 +229,22 @@ export class JwtBearerAuthGuard implements CanActivate {
 
     const { identity } = verified;
     const dbResolved = await this.identityResolver.resolveVerifiedIdentity(identity);
-    const storeUserBySubject = this.workspace.store.getUserBySubject(identity.subject);
 
     if (!dbResolved) {
-      if (storeUserBySubject) {
+      const storeUserBySubject = this.workspace.store.getUserBySubject(
+        identity.subject,
+        identity.issuer,
+      );
+      const isExactSameIssuerMatch =
+        storeUserBySubject !== null && storeUserBySubject.issuer === identity.issuer;
+      const isLegacyInactiveMatch =
+        storeUserBySubject !== null &&
+        storeUserBySubject.issuer === undefined &&
+        !storeUserBySubject.active;
+
+      if (storeUserBySubject && (isExactSameIssuerMatch || isLegacyInactiveMatch)) {
         if (
+          isExactSameIssuerMatch &&
           storeUserBySubject.active &&
           this.workspace.store instanceof InMemoryAccountingWorkspaceStore
         ) {
@@ -251,8 +270,7 @@ export class JwtBearerAuthGuard implements CanActivate {
       });
     }
 
-    const storeUser =
-      this.workspace.store.getUserById(dbResolved.userId) ?? storeUserBySubject ?? null;
+    const storeUser = this.workspace.store.getUserById(dbResolved.userId);
     if (storeUser && !storeUser.active) {
       await this.recordDenial(requestId, params, 'authentication_failed');
       throw new ForbiddenException({
@@ -263,11 +281,22 @@ export class JwtBearerAuthGuard implements CanActivate {
       });
     }
 
+    let persistedProfile: { readonly displayName: string; readonly email: string } | null = null;
+    if (!storeUser && this.identityLifecycleStore) {
+      const dir = await this.identityLifecycleStore
+        .getActorSessionDirectory(dbResolved.userId)
+        .catch(() => null);
+      if (dir && dir.ok && dir.profile) {
+        persistedProfile = dir.profile;
+      }
+    }
+
     const resolvedUser = storeUser ?? {
       userId: dbResolved.userId,
+      issuer: identity.issuer,
       subject: identity.subject,
-      displayName: identity.subject,
-      email: 'uzytkownik@pap.example',
+      displayName: normalizeSessionDisplayName(persistedProfile?.displayName, identity.subject),
+      email: normalizeSessionSafeEmail(persistedProfile?.email),
       active: true,
     };
     if (!storeUser && this.workspace.store instanceof InMemoryAccountingWorkspaceStore) {

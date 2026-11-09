@@ -238,7 +238,7 @@ describe('Persystencja PostgreSQL 18.6 w @pap/api pod FORCE RLS i security_decis
         AND c.relkind = 'r'
       ORDER BY c.relname
     `;
-    expect(rlsTables.length).toBe(29);
+    expect(rlsTables.length).toBe(31);
     expect(rlsTables.every((t) => t.relrowsecurity && t.relforcerowsecurity)).toBe(true);
   });
 

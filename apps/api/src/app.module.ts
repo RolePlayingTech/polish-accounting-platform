@@ -21,12 +21,15 @@ import { CompaniesAccessController } from './controllers/companies-access.contro
 import { DocumentsBooksController } from './controllers/documents-books.controller.js';
 import { EducationRulesController } from './controllers/education-rules.controller.js';
 import { OperationsAutomationController } from './controllers/operations-automation.controller.js';
+import { SessionIdentityController } from './controllers/session-identity.controller.js';
 import { AccountingWorkspaceExceptionFilter } from './filters/workspace-exception.filter.js';
 import { HealthController } from './health.controller.js';
 import { RemoteMcpFastifyRegistrar } from './mcp/remote-mcp.registrar.js';
 import {
   ACCOUNTING_WORKSPACE_SERVICE,
   API_RUNTIME_ENV,
+  IDENTITY_LIFECYCLE_STORE_PORT,
+  OWNER_BOOTSTRAP_PORT,
   PAP_MCP_GATEWAY,
   WEB_SESSION_STORE_PORT,
   createApiRuntimeServicesAsync,
@@ -104,6 +107,16 @@ function buildRuntimeProviders(
       useFactory: (rt: ApiRuntimeServices) => rt.webSessionStore,
       inject: [API_RUNTIME_SERVICES],
     },
+    {
+      provide: IDENTITY_LIFECYCLE_STORE_PORT,
+      useFactory: (rt: ApiRuntimeServices) => rt.identityLifecycleStore,
+      inject: [API_RUNTIME_SERVICES],
+    },
+    {
+      provide: OWNER_BOOTSTRAP_PORT,
+      useFactory: (rt: ApiRuntimeServices) => rt.ownerBootstrap,
+      inject: [API_RUNTIME_SERVICES],
+    },
     ApiRuntimeShutdownHook,
     JwtBearerAuthGuard,
     RemoteMcpFastifyRegistrar,
@@ -119,6 +132,7 @@ const API_CONTROLLERS = [
   SystemStatusController,
   SandboxOidcController,
   BffSessionController,
+  SessionIdentityController,
   CompaniesAccessController,
   DocumentsBooksController,
   OperationsAutomationController,
