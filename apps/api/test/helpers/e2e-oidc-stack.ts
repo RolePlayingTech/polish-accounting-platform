@@ -71,7 +71,7 @@ async function main(): Promise<void> {
           () => undefined,
         );
       }
-      await ownerDb.close().catch(() => undefined);
+      await ownerDb.client.end({ timeout: 2 }).catch(() => undefined);
     }
     process.exit(exitCode);
   };
@@ -147,12 +147,12 @@ async function main(): Promise<void> {
       await applySqlMigrationsToSchema(ownerDb.client);
 
       const runtimeUser = new URL(runtimeUrl).username;
-      await configureRuntimePrivileges(ownerDb.client, dataSchema, runtimeUser);
-      await provisionDatabaseContextKey(ownerDb.client, {
+      await provisionDatabaseContextKey(ownerDb.db, {
         keyId,
-        secretHex: keyHex,
+        keyHex,
         runtimeRole: runtimeUser,
       });
+      await configureRuntimePrivileges(ownerDb.db, runtimeUser);
 
       baseApiEnv['PAP_DATABASE_ENV'] = 'test';
       baseApiEnv['DATABASE_URL'] = runtimeUrl;

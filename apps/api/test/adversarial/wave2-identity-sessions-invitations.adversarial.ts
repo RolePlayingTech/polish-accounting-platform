@@ -200,12 +200,12 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
     await applySqlMigrationsToSchema(owner.client);
 
     const runtimeUser = new URL(runtimeUrl).username;
-    await configureRuntimePrivileges(owner.client, dataSchema, runtimeUser);
-    await provisionDatabaseContextKey(owner.client, {
+    await provisionDatabaseContextKey(owner.db, {
       keyId,
-      secretHex: keyHex,
+      keyHex,
       runtimeRole: runtimeUser,
     });
+    await configureRuntimePrivileges(owner.db, runtimeUser);
 
     idpA = await startIsolatedOidcIdp({
       clientId: 'pap-web',
@@ -232,7 +232,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
           () => undefined,
         );
       }
-      await owner.close();
+      await owner.client.end({ timeout: 2 }).catch(() => undefined);
     }
   }, 60_000);
 
@@ -550,12 +550,12 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
     try {
       await applySqlMigrationsToSchema(subMigrator.client);
       const runtimeUser = new URL(runtimeUrl).username;
-      await configureRuntimePrivileges(subMigrator.client, subSchema, runtimeUser);
-      await provisionDatabaseContextKey(subMigrator.client, {
+      await provisionDatabaseContextKey(subMigrator.db, {
         keyId,
-        secretHex: keyHex,
+        keyHex,
         runtimeRole: runtimeUser,
       });
+      await configureRuntimePrivileges(subMigrator.db, runtimeUser);
 
       idpA!.registerUser({
         subject: 'adv-s4-owner',
@@ -861,7 +861,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
       await owner!.client`DROP SCHEMA IF EXISTS ${owner!.client(subSchema)} CASCADE`.catch(
         () => undefined,
       );
-      await subMigrator.close().catch(() => undefined);
+      await subMigrator.client.end({ timeout: 2 }).catch(() => undefined);
     }
   }, 120_000);
 });
