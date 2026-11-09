@@ -35,6 +35,7 @@ import {
   type PostgresCompanyActionScopeDriver,
 } from './company-operation-probe.js';
 import {
+  appUser,
   companyAccessGrant,
   entityProfileVersion,
   legalEntity,
@@ -2708,6 +2709,17 @@ export async function listTenantCompanyGrantsForAdminFacts(
       actorUserId: canonicalActorId,
       tenantId: canonicalTenantId,
     });
+    const [actorUserRow] = await tx
+      .select()
+      .from(appUser)
+      .where(eq(appUser.id, canonicalActorId));
+    if (!actorUserRow || actorUserRow.status !== 'active' || actorUserRow.disabledAt !== null) {
+      return deepFreeze({
+        memberships: [],
+        grants: [],
+      });
+    }
+
     const [actorMembership] = await tx
       .select()
       .from(tenantMembership)
@@ -2734,30 +2746,6 @@ export async function listTenantCompanyGrantsForAdminFacts(
     }
 
     const memberships: (typeof tenantMembership.$inferSelect)[] = [];
-    for (const candidateUserId of candidateIds) {
-      if (candidateUserId === canonicalActorId && actorMembership) {
-        memberships.push(actorMembership);
-        continue;
-      }
-      await signer.apply(tx, {
-        purpose: 'facts',
-        actorUserId: candidateUserId,
-        tenantId: canonicalTenantId,
-      });
-      const [mRow] = await tx
-        .select()
-        .from(tenantMembership)
-        .where(
-          and(
-            eq(tenantMembership.tenantId, canonicalTenantId),
-            eq(tenantMembership.userId, candidateUserId),
-          ),
-        );
-      if (mRow) {
-        memberships.push(mRow);
-      }
-    }
-
     const grantsByGrantId = new Map<string, CompanyAccessGrantRecord>();
     for (const targetUserId of candidateIds) {
       await signer.apply(tx, {
@@ -2773,6 +2761,23 @@ export async function listTenantCompanyGrantsForAdminFacts(
           grantId: '00000000-0000-4000-8000-000000000000',
         },
       });
+      if (targetUserId === canonicalActorId && actorMembership) {
+        memberships.push(actorMembership);
+      } else {
+        const [mRow] = await tx
+          .select()
+          .from(tenantMembership)
+          .where(
+            and(
+              eq(tenantMembership.tenantId, canonicalTenantId),
+              eq(tenantMembership.userId, targetUserId),
+            ),
+          );
+        if (mRow) {
+          memberships.push(mRow);
+        }
+      }
+
       const rows = await tx
         .select()
         .from(companyAccessGrant)

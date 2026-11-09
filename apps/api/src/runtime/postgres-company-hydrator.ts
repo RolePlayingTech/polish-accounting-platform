@@ -1398,57 +1398,70 @@ export async function discoverAndHydrateMissingCompaniesForTenants(
       }
     }
   } else {
-    for (const rawTenantId of Array.from(tenantSet)) {
-      const tId = parseTenantId(rawTenantId);
-      const discovered = await listTenantCompanyGrantsForAdminFacts(
-        runtime.connection.db,
-        runtime.signer,
-        {
-          tenantId: tId,
-          candidateUserIds,
-        },
-      );
+    const explicitActorIds = Array.from(
+      new Set<string>(
+        extraCandidateUserIds.length > 0
+          ? extraCandidateUserIds
+          : store.listUsers().map((u) => u.userId),
+      ),
+    );
+    if (explicitActorIds.length > 0) {
+      for (const rawTenantId of Array.from(tenantSet)) {
+        const tId = parseTenantId(rawTenantId);
+        for (const actorUserId of explicitActorIds) {
+          const discovered = await listTenantCompanyGrantsForAdminFacts(
+            runtime.connection.db,
+            runtime.signer,
+            {
+              actorUserId,
+              tenantId: tId,
+              candidateUserIds,
+            },
+          );
 
-      for (const mRow of discovered.memberships) {
-        store.upsertMembership({
-          ...mRow,
-          tenantId: parseTenantId(mRow.tenantId),
-          userId: parseUserId(mRow.userId),
-        });
-      }
+          for (const mRow of discovered.memberships) {
+            store.upsertMembership({
+              ...mRow,
+              tenantId: parseTenantId(mRow.tenantId),
+              userId: parseUserId(mRow.userId),
+            });
+          }
 
-      const seenGrantIds = new Set<string>();
-      const discoveredUserIds = new Set<string>(discovered.memberships.map((m) => m.userId));
-      for (const gRow of discovered.grants) {
-        seenGrantIds.add(gRow.grantId);
-        discoveredUserIds.add(gRow.userId);
-        store.upsertGrant({
-          grantId: gRow.grantId,
-          tenantId: parseTenantId(gRow.tenantId),
-          userId: parseUserId(gRow.userId),
-          legalEntityId: parseLegalEntityId(gRow.legalEntityId),
-          action: gRow.action,
-          validFrom: gRow.validFrom,
-          validUntil: gRow.validUntil,
-          revokedAt: gRow.revokedAt,
-        });
-        enqueue(gRow.tenantId, gRow.legalEntityId);
-      }
+          const seenGrantIds = new Set<string>();
+          const discoveredUserIds = new Set<string>(discovered.memberships.map((m) => m.userId));
+          for (const gRow of discovered.grants) {
+            seenGrantIds.add(gRow.grantId);
+            discoveredUserIds.add(gRow.userId);
+            store.upsertGrant({
+              grantId: gRow.grantId,
+              tenantId: parseTenantId(gRow.tenantId),
+              userId: parseUserId(gRow.userId),
+              legalEntityId: parseLegalEntityId(gRow.legalEntityId),
+              action: gRow.action,
+              validFrom: gRow.validFrom,
+              validUntil: gRow.validUntil,
+              revokedAt: gRow.revokedAt,
+            });
+            enqueue(gRow.tenantId, gRow.legalEntityId);
+          }
 
-      if (discovered.grants.length > 0) {
-        const now = new Date();
-        for (const comp of store.listCompaniesForTenant(tId)) {
-          for (const cached of store.listGrantsForCompany(tId, comp.legalEntityId)) {
-            if (
-              discoveredUserIds.has(cached.userId) &&
-              cached.revokedAt === null &&
-              !seenGrantIds.has(cached.grantId)
-            ) {
-              store.upsertGrant({
-                ...cached,
-                revokedAt: now,
-              });
+          if (discovered.grants.length > 0) {
+            const now = new Date();
+            for (const comp of store.listCompaniesForTenant(tId)) {
+              for (const cached of store.listGrantsForCompany(tId, comp.legalEntityId)) {
+                if (
+                  discoveredUserIds.has(cached.userId) &&
+                  cached.revokedAt === null &&
+                  !seenGrantIds.has(cached.grantId)
+                ) {
+                  store.upsertGrant({
+                    ...cached,
+                    revokedAt: now,
+                  });
+                }
+              }
             }
+            break;
           }
         }
       }

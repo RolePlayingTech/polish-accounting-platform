@@ -602,5 +602,23 @@ describe('Wave 2 Slice 3 — PostgresIdentityLifecycleStore (FORCE RLS, jednoraz
       SELECT count(*)::text AS cnt FROM user_oidc_identity WHERE subject = 's4-pg-accountless-reject-sub'
     `;
     expect(accountlessRows[0]!.cnt).toBe('0');
+
+    // P1-NEW-1: Wyłączony app_user (status = 'disabled') z aktywnym wierszem tenant_membership nie może odczytać członkostw ani grantów kandydatów
+    await owner.client`
+      UPDATE app_user SET status = 'disabled', disabled_at = clock_timestamp() WHERE id = ${adminId}::uuid
+    `;
+    const disabledAdminFactsAttempt = await listTenantCompanyGrantsForAdminFacts(
+      runtimeConnA.db,
+      signer,
+      {
+        actorUserId: adminId,
+        tenantId: invTenantId,
+        candidateUserIds: [adminId, memberWinnerId],
+      },
+    );
+    expect(disabledAdminFactsAttempt).toEqual({
+      memberships: [],
+      grants: [],
+    });
   });
 });
