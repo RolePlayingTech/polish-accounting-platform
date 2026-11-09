@@ -47,7 +47,7 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', ()
     const { client: sql, db, dataSchema } = database;
     try {
       const migrations = readMigrationFiles({ migrationsFolder });
-      expect(migrations).toHaveLength(9);
+      expect(migrations).toHaveLength(10);
       expect(
         readFileSync(new URL('../drizzle/0000_technical-baseline.sql', import.meta.url), 'utf8'),
       ).toContain('SELECT 1;');
@@ -132,7 +132,7 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', ()
       // Usuwamy wyłącznie własną tabelę konfliktową; ponowienie stosuje cały łańcuch.
       await sql`DROP TABLE tenant`;
       await applyMigrations(db, dataSchema);
-      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(9);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(10);
     } finally {
       await database.cleanup();
     }
@@ -180,6 +180,81 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', ()
     } finally {
       await database.cleanup();
       // Wyłącznie losowy katalog utworzony przez ten test, z kontrolą przed rekurencją.
+      if (folder.startsWith(prefix)) await rm(folder, { recursive: true });
+    }
+  }, 30_000);
+
+  it('0009 wykrywa istniejące duplikaty (tenant_id, nip) w preflight bez wycieku NIP i przechodzi po ich rozwiązaniu', async () => {
+    const database = await createTestDatabase();
+    const prefix = join(tmpdir(), 'pap-0009-dup-');
+    const folder = await mkdtemp(prefix);
+    const { client: sql, db, dataSchema } = database;
+    try {
+      await mkdir(join(folder, 'meta'));
+      const journal = JSON.parse(
+        readFileSync(join(migrationsFolder, 'meta', '_journal.json'), 'utf8'),
+      );
+      await writeFile(
+        join(folder, 'meta', '_journal.json'),
+        JSON.stringify({ ...journal, entries: journal.entries.slice(0, 9) }),
+      );
+      for (const entry of journal.entries.slice(0, 9)) {
+        const name = `${entry.tag}.sql`;
+        await writeFile(join(folder, name), readFileSync(join(migrationsFolder, name)));
+      }
+      await migrate(db, { migrationsFolder: folder, migrationsSchema: dataSchema });
+
+      const tenantId = '00000000-0000-4000-8000-000000000901';
+      const userId = '00000000-0000-4000-8000-000000000902';
+      const entityA = '00000000-0000-4000-8000-000000000903';
+      const entityB = '00000000-0000-4000-8000-000000000904';
+      const duplicateNip = '5261040828';
+
+      await sql`INSERT INTO tenant (id, name) VALUES (${tenantId}, 'Tenant z duplikatem NIP sprzed 0009')`;
+      await sql`INSERT INTO app_user (id, status) VALUES (${userId}, 'active')`;
+      await sql`INSERT INTO legal_entity (id, tenant_id, display_name) VALUES (${entityA}, ${tenantId}, 'Podmiot A'), (${entityB}, ${tenantId}, 'Podmiot B')`;
+      await sql`
+        INSERT INTO company_tax_settings (
+          id, tenant_id, legal_entity_id, nip, legal_form, tax_regime, vat_status,
+          zus_stage, ksef_mode, address_summary, small_taxpayer, voluntary_sickness_insurance, updated_by
+        ) VALUES
+          ('00000000-0000-4000-8000-000000000905', ${tenantId}, ${entityA}, ${duplicateNip}, 'jdg', 'kpir_skala', 'czynny', 'duzy_zus', 'mandatory_2026_apr', 'Warszawa', true, true, ${userId}),
+          ('00000000-0000-4000-8000-000000000906', ${tenantId}, ${entityB}, ${duplicateNip}, 'jdg', 'kpir_skala', 'czynny', 'duzy_zus', 'mandatory_2026_apr', 'Kraków', true, true, ${userId})
+      `;
+
+      let migrationErr: unknown = null;
+      try {
+        await applyMigrations(db, dataSchema);
+      } catch (err) {
+        migrationErr = err;
+      }
+      expect(migrationErr).not.toBeNull();
+      const errText = JSON.stringify(migrationErr) + String(migrationErr);
+      expect(errText).toContain('23505');
+      expect(errText).toContain(tenantId);
+      expect(errText).toContain(entityA);
+      expect(errText).toContain(entityB);
+      expect(errText).not.toContain(duplicateNip);
+
+      // Po korekcie duplikatu migracja 0009 przechodzi i zakłada ograniczenie UNIQUE (tenant_id, nip).
+      await sql`
+        UPDATE company_tax_settings
+        SET nip = '5213017228'
+        WHERE tenant_id = ${tenantId} AND legal_entity_id = ${entityB}
+      `;
+      await applyMigrations(db, dataSchema);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(10);
+
+      await expectDatabaseError(
+        sql`
+          UPDATE company_tax_settings
+          SET nip = ${duplicateNip}
+          WHERE tenant_id = ${tenantId} AND legal_entity_id = ${entityB}
+        `,
+        '23505',
+      );
+    } finally {
+      await database.cleanup();
       if (folder.startsWith(prefix)) await rm(folder, { recursive: true });
     }
   }, 30_000);

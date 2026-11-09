@@ -5,6 +5,7 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
   AccountingWorkspaceConflictError,
+  AccountingWorkspaceService,
   COMPANY_JDG_KPIR_ID,
   COMPANY_SPZOO_ID,
   DEMO_USER_MARTA_ID,
@@ -1473,5 +1474,142 @@ describe('Adversarial Wave 1 Regression Suite (#79 spójność multi-instance, #
       ).json(),
     );
     expect(listAAfterRetry.companies.filter((c) => c.nip === rollbackNip)).toHaveLength(1);
+  });
+
+  it('ADV-80-03: schemat PostgreSQL wymusza UNIQUE (tenant_id, nip) przy tworzeniu oraz próbach aktualizacji NIP (400 dla pola nip w PUT /settings, 409 duplicate_company_nip i ROLLBACK przy kolizji NIP w DB)', async () => {
+    const runtimeEnv = {
+      NODE_ENV: 'test',
+      PAP_DATABASE_ENV: 'test',
+      DATABASE_URL: runtimeUrl,
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_KEY_ID: keyId,
+      PAP_DB_CONTEXT_KEY_HEX: keyHex,
+      PAP_SEED_SYNTHETIC_DEMO: 'false',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SANDBOX_OIDC_SEED: 'pap-adv-79-oidc-seed-2026',
+    };
+
+    const { app: appA, baseUrl: urlA } = await bootApiInstance(runtimeEnv);
+    openApps.add(appA);
+    const { app: appB, baseUrl: urlB } = await bootApiInstance(runtimeEnv);
+    openApps.add(appB);
+
+    const headersA = await issuePersonaHeaders(urlA, 'jan-testowy');
+    const headersB = await issuePersonaHeaders(urlB, 'jan-testowy');
+
+    // 1. Weryfikacja obecności ograniczenia UNIQUE i częściowego indeksu unikalnego w katalogu PostgreSQL
+    const uniqueConstraints = await owner!.client<{ conname: string }[]>`
+      SELECT c.conname
+      FROM pg_constraint c
+      JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE n.nspname = ${dataSchema}
+        AND c.conname = 'company_tax_settings_tenant_nip_unique'
+        AND c.contype = 'u'
+    `;
+    expect(uniqueConstraints).toHaveLength(1);
+
+    const uniqueIndexes = await owner!.client<{ indexname: string }[]>`
+      SELECT indexname
+      FROM pg_indexes
+      WHERE schemaname = ${dataSchema}
+        AND indexname = 'entity_profile_version_active_tenant_nip_uidx'
+    `;
+    expect(uniqueIndexes).toHaveLength(1);
+
+    // 2. Utworzenie nowej firmy z unikalnym NIP (1132191233 — poprawny modulo-11: 1*6+1*5+3*7+2*2+1*3+9*4+1*5+2*6+3*7 = 6+5+21+4+3+36+5+12+21 = 113 % 11 = 3)
+    const targetNip = '1132191233';
+    const existingDemoNip = '5261040828'; // NIP firmy COMPANY_JDG_KPIR_ID w TENANT_1_ID
+
+    const createRes = await fetch(`${urlA}/api/v1/tenants/${TENANT_1_ID}/companies`, {
+      method: 'POST',
+      headers: headersA,
+      body: JSON.stringify({
+        displayName: 'Firma Testująca Aktualizację NIP Sp. z o.o.',
+        nip: targetNip,
+        legalForm: 'sp_z_o_o',
+        taxRegime: 'cit_klasyczny',
+        vatStatus: 'czynny',
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const createdBody = (await createRes.json()) as {
+      company: { legalEntityId: string; nip: string; displayName: string };
+    };
+    const targetEntityId = createdBody.company.legalEntityId;
+    expect(createdBody.company.nip).toBe(targetNip);
+
+    // 3. Próba przekazania pola `nip` w PUT /settings jest odrzucana na wejściu (400 Bad Request, .strict())
+    const strictPutRes = await fetch(
+      `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${targetEntityId}/settings`,
+      {
+        method: 'PUT',
+        headers: headersA,
+        body: JSON.stringify({
+          displayName: 'Próba Zmiany NIP Przez REST',
+          nip: existingDemoNip,
+        }),
+      },
+    );
+    expect(strictPutRes.status).toBe(400);
+
+    // 4. Symulacja mutacji NIP w warstwie domenowej przed zapisem do PostgreSQL (test wymuszenia 23505 -> 409 Conflict)
+    const origUpdateSettings = AccountingWorkspaceService.prototype.updateCompanySettings;
+    AccountingWorkspaceService.prototype.updateCompanySettings = function (
+      actor,
+      rawTenantId,
+      rawLegalEntityId,
+      rawRequest,
+    ) {
+      const res = origUpdateSettings.call(this, actor, rawTenantId, rawLegalEntityId, rawRequest);
+      if (rawLegalEntityId === targetEntityId) {
+        const comp = this.store.getCompany(
+          rawTenantId as ReturnType<typeof this.store.listAllCompanies>[number]['tenantId'],
+          rawLegalEntityId as ReturnType<
+            typeof this.store.listAllCompanies
+          >[number]['legalEntityId'],
+        );
+        if (comp) {
+          comp.nip = existingDemoNip;
+          comp.taxProfile = { ...comp.taxProfile, nip: existingDemoNip };
+        }
+      }
+      return res;
+    };
+
+    try {
+      const duplicateNipUpdateRes = await fetch(
+        `${urlA}/api/v1/tenants/${TENANT_1_ID}/companies/${targetEntityId}/settings`,
+        {
+          method: 'PUT',
+          headers: headersA,
+          body: JSON.stringify({
+            displayName: 'Nazwa Która Musi Zostać Wycofana Przy Kolizji NIP',
+          }),
+        },
+      );
+      expect(duplicateNipUpdateRes.status).toBe(409);
+      const conflictPayload = (await duplicateNipUpdateRes.json()) as { reasonCode?: string };
+      expect(conflictPayload.reasonCode).toBe('duplicate_company_nip');
+    } finally {
+      AccountingWorkspaceService.prototype.updateCompanySettings = origUpdateSettings;
+    }
+
+    // 5. Po wycofaniu transakcji (ROLLBACK) w PostgreSQL i na obu instancjach API pozostaje pierwotny NIP i nazwa
+    const [dbTaxRow] = await owner!.client<{ nip: string }[]>`
+      SELECT nip
+      FROM ${owner!.client(dataSchema)}.company_tax_settings
+      WHERE tenant_id = ${TENANT_1_ID}::uuid
+        AND legal_entity_id = ${targetEntityId}::uuid
+    `;
+    expect(dbTaxRow?.nip).toBe(targetNip);
+
+    const settingsOnB = await (
+      await fetch(`${urlB}/api/v1/tenants/${TENANT_1_ID}/companies/${targetEntityId}/settings`, {
+        headers: headersB,
+      })
+    ).json();
+    expect(settingsOnB.company.nip).toBe(targetNip);
+    expect(settingsOnB.company.displayName).toBe('Firma Testująca Aktualizację NIP Sp. z o.o.');
   });
 });

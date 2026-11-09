@@ -2808,7 +2808,7 @@ export type ProvisionCompanyInPostgresResult =
       readonly reason: ProvisionCompanyDeniedReason;
     };
 
-function isDuplicateCompanyNipRollbackError(error: unknown): boolean {
+export function isDuplicateCompanyNipRollbackError(error: unknown): boolean {
   let current: unknown =
     error instanceof ConfirmedTransactionRollbackError ? error.cause : error;
   for (let depth = 0; depth < 4 && typeof current === 'object' && current !== null; depth += 1) {
@@ -2823,8 +2823,11 @@ function isDuplicateCompanyNipRollbackError(error: unknown): boolean {
       rec.code === '23505' &&
       (rec.constraint_name === 'company_tax_settings_tenant_nip_unique' ||
         rec.constraint === 'company_tax_settings_tenant_nip_unique' ||
+        rec.constraint_name === 'entity_profile_version_active_tenant_nip_uidx' ||
+        rec.constraint === 'entity_profile_version_active_tenant_nip_uidx' ||
         (typeof rec.message === 'string' &&
-          rec.message.includes('company_tax_settings_tenant_nip_unique')))
+          (rec.message.includes('company_tax_settings_tenant_nip_unique') ||
+            rec.message.includes('entity_profile_version_active_tenant_nip_uidx'))))
     ) {
       return true;
     }

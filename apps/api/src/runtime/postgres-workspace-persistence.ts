@@ -90,6 +90,7 @@ import type {
 import type { PapMcpGateway } from '@pap/application/mcp-gateway';
 import {
   discoverActorAccessibleEntities,
+  isDuplicateCompanyNipRollbackError,
   provisionCompanyInPostgres,
   type PostgresAccountingScope,
 } from '@pap/db';
@@ -617,6 +618,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     );
 
     if (capturedDomainError !== null) {
+      if (isDuplicateCompanyNipRollbackError(capturedDomainError)) {
+        throw new AccountingWorkspaceConflictError(
+          'duplicate_company_nip',
+          'W tej organizacji istnieje już podmiot z tym numerem NIP.',
+        );
+      }
       throw capturedDomainError;
     }
     if (!txRes.allowed) {
