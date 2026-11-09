@@ -128,6 +128,7 @@ export default defineConfig([
                 'createPostgresCompanyActionScope',
                 'createPostgresAccountingScope',
                 'PostgresWebSessionStore',
+                'PostgresIdentityLifecycleStore',
               ],
               message:
                 'Kontrolery, guardy i serwisy HTTP nie mogą bezpośrednio importować signera kontekstu ani adaptera UnitOfWork/transakcji; wstrzykuj porty przez composition root.',

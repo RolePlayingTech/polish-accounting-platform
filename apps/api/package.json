@@ -24,6 +24,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "dev:container": "tsx watch src/main.ts",
+    "bootstrap:owner": "tsx src/cli/bootstrap-owner.ts",
     "build": "tsc -b",
     "start": "node dist/main.js",
     "lint": "eslint src test vitest.integration.config.ts vitest.adversarial.config.ts",

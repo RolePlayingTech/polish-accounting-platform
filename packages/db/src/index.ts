@@ -123,3 +123,8 @@ export {
   type PostgresSecurityServices,
 } from './runtime-security.js';
 export { PostgresWebSessionStore } from './web-session-store.js';
+export {
+  PostgresIdentityLifecycleStore,
+  type BootstrapInitialCompanyInTxOptions,
+  type BootstrapInitialOwnerWithCompanyResult,
+} from './identity-lifecycle.js';

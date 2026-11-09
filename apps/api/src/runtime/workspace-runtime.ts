@@ -1,6 +1,10 @@
 import {
   AccountingWorkspaceService,
+  InMemoryIdentityLifecycleStore,
   InMemoryWebSessionStore,
+  TENANT_1_ID,
+  TENANT_2_ID,
+  type IdentityLifecycleStorePort,
   type OidcAccessTokenVerifier,
   type SecurityAuditRecorder,
   type TenantAuthorizationDataSource,
@@ -8,10 +12,20 @@ import {
   type WebSessionStorePort,
 } from '@pap/application';
 import type { PapMcpGateway } from '@pap/application/mcp-gateway';
-import { DatabaseConfigError, PostgresWebSessionStore } from '@pap/db';
+import {
+  DatabaseConfigError,
+  PostgresIdentityLifecycleStore,
+  PostgresWebSessionStore,
+} from '@pap/db';
 import { JwksOidcAccessTokenVerifier } from '../auth/jwks-oidc-token-verifier.js';
 import { loadOidcVerifierConfig } from '../auth/oidc-config.js';
 import { SandboxOidcService } from '../auth/sandbox-oidc.service.js';
+import {
+  OwnerBootstrapError,
+  RuntimeOwnerBootstrapService,
+  type OwnerBootstrapFailureReason,
+  type OwnerBootstrapPort,
+} from './owner-bootstrap-runtime.js';
 import { hydrateWorkspaceFromPostgres } from './postgres-company-hydrator.js';
 import { seedSyntheticDemoToPostgres } from './postgres-demo-seed.js';
 import { connectPostgresRuntime, hasConfiguredDatabaseUrl } from './postgres-runtime-config.js';
@@ -22,11 +36,18 @@ import {
 
 export type { WorkspaceRuntimePort } from './postgres-workspace-persistence.js';
 export { seedSyntheticDemoToPostgres } from './postgres-demo-seed.js';
+export {
+  OwnerBootstrapError,
+  type OwnerBootstrapFailureReason,
+  type OwnerBootstrapPort,
+};
 
 export const ACCOUNTING_WORKSPACE_SERVICE = Symbol('ACCOUNTING_WORKSPACE_SERVICE');
 export const PAP_MCP_GATEWAY = Symbol('PAP_MCP_GATEWAY');
 export const API_RUNTIME_ENV = Symbol('API_RUNTIME_ENV');
 export const WEB_SESSION_STORE_PORT = Symbol('WEB_SESSION_STORE_PORT');
+export const IDENTITY_LIFECYCLE_STORE_PORT = Symbol('IDENTITY_LIFECYCLE_STORE_PORT');
+export const OWNER_BOOTSTRAP_PORT = Symbol('OWNER_BOOTSTRAP_PORT');
 
 export interface ApiRuntimeServices {
   readonly sandboxOidc: SandboxOidcService;
@@ -37,6 +58,8 @@ export interface ApiRuntimeServices {
   readonly authorizationDataSource: TenantAuthorizationDataSource;
   readonly securityAudit: SecurityAuditRecorder;
   readonly webSessionStore: WebSessionStorePort;
+  readonly identityLifecycleStore: IdentityLifecycleStorePort;
+  readonly ownerBootstrap: OwnerBootstrapPort;
   readonly persistenceMode: 'in_memory' | 'postgres';
   readonly close?: () => Promise<void>;
 }
@@ -79,11 +102,26 @@ export function createApiRuntimeServices(
   }
 
   const sandboxOidc = new SandboxOidcService(env);
-  const workspace = new AccountingWorkspaceService({ seedDemoData: true });
+  const seedDemoData = env.PAP_SEED_SYNTHETIC_DEMO !== 'false';
+  const workspace = new AccountingWorkspaceService({ seedDemoData });
   const oidcVerifier = buildOidcVerifier(env, sandboxOidc);
   const mcpDomainPort = workspace.createWorkspaceMcpDomainPort();
   const mcpGateway = workspace.createBoundMcpGateway(oidcVerifier);
   const webSessionStore = new InMemoryWebSessionStore();
+  const identityLifecycleStore = new InMemoryIdentityLifecycleStore({
+    workspaceStore: workspace.store,
+    initialTenantNames: seedDemoData
+      ? {
+          [TENANT_1_ID]: 'Biuro Rachunkowe Alfa (Demo)',
+          [TENANT_2_ID]: 'Kancelaria Podatkowa Beta (Demo)',
+        }
+      : undefined,
+  });
+  const ownerBootstrap = new RuntimeOwnerBootstrapService({
+    lifecycleStore: identityLifecycleStore,
+    workspace,
+    innerWorkspace: workspace,
+  });
 
   return {
     sandboxOidc,
@@ -94,6 +132,8 @@ export function createApiRuntimeServices(
     authorizationDataSource: mcpDomainPort,
     securityAudit: mcpDomainPort,
     webSessionStore,
+    identityLifecycleStore,
+    ownerBootstrap,
     persistenceMode: 'in_memory',
   };
 }
@@ -127,6 +167,16 @@ export async function createApiRuntimeServicesAsync(
     });
     const mcpGateway = workspace.createBoundMcpGateway();
     const webSessionStore = new PostgresWebSessionStore(pgRuntime.connection.db, pgRuntime.signer);
+    const identityLifecycleStore = new PostgresIdentityLifecycleStore(
+      pgRuntime.connection.db,
+      pgRuntime.signer,
+    );
+    const ownerBootstrap = new RuntimeOwnerBootstrapService({
+      lifecycleStore: identityLifecycleStore,
+      workspace,
+      innerWorkspace,
+      pgRuntime,
+    });
 
     return {
       sandboxOidc,
@@ -137,6 +187,8 @@ export async function createApiRuntimeServicesAsync(
       authorizationDataSource: pgRuntime.securityServices.authorizationDataSource,
       securityAudit: pgRuntime.securityServices.securityAudit,
       webSessionStore,
+      identityLifecycleStore,
+      ownerBootstrap,
       persistenceMode: 'postgres',
       close: () => pgRuntime.close(),
     };

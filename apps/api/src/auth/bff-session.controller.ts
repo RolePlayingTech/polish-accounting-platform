@@ -5,15 +5,24 @@ import {
   Header,
   HttpCode,
   Inject,
+  Optional,
   Post,
   Req,
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { createHash, createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
-import type { WebBffSessionRecord, WebSessionStorePort } from '@pap/application';
+import type {
+  IdentityLifecycleStorePort,
+  WebBffSessionRecord,
+  WebSessionStorePort,
+} from '@pap/application';
 import type { FastifyRequest } from 'fastify';
-import { API_RUNTIME_ENV, WEB_SESSION_STORE_PORT } from '../runtime/workspace-runtime.js';
+import {
+  API_RUNTIME_ENV,
+  IDENTITY_LIFECYCLE_STORE_PORT,
+  WEB_SESSION_STORE_PORT,
+} from '../runtime/workspace-runtime.js';
 
 const DETERMINISTIC_TEST_BFF_SECRET =
   'pap-vitest-deterministic-bff-secret-key-min-32-chars!!' as const;
@@ -148,6 +157,9 @@ export class BffSessionController {
     private readonly sessionStore: WebSessionStorePort,
     @Inject(API_RUNTIME_ENV)
     private readonly env: Readonly<Record<string, string | undefined>>,
+    @Optional()
+    @Inject(IDENTITY_LIFECYCLE_STORE_PORT)
+    private readonly identityLifecycleStore?: IdentityLifecycleStorePort,
   ) {}
 
   private assertInternalBffAuth(request: FastifyRequest, body: unknown): void {
@@ -338,6 +350,14 @@ export class BffSessionController {
       });
       if (!res.ok) {
         return res;
+      }
+      if (this.identityLifecycleStore) {
+        await this.identityLifecycleStore.upsertUserProfile({
+          userId: res.session.userId,
+          displayName: res.session.displayName,
+          email: res.session.email,
+          now,
+        });
       }
       return {
         ok: true,

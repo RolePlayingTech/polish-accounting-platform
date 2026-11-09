@@ -14,7 +14,8 @@ export interface DatabaseSecurityContext {
     | 'audit'
     | 'access_event'
     | 'provision_company'
-    | 'bff_session';
+    | 'bff_session'
+    | 'identity_lifecycle';
   readonly auditEvent?: Readonly<Record<string, unknown>>;
   readonly accessEvent?: Readonly<Record<string, unknown>>;
   readonly actorUserId?: string;
