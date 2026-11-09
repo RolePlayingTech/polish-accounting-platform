@@ -1345,7 +1345,13 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     });
     if (!resolvedInvitee.ok) {
       this.restoreSnapshot(snapshot);
-      return { ok: false, reason: resolvedInvitee.reason };
+      return {
+        ok: false,
+        reason:
+          resolvedInvitee.reason === 'invalid_identity_input'
+            ? 'invalid_invitation_input'
+            : resolvedInvitee.reason,
+      };
     }
 
     const inviteeId = parseUserId(resolvedInvitee.userId);
@@ -1563,7 +1569,13 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     });
     if (!resolvedActor.ok) {
       this.restoreSnapshot(snapshot);
-      return { ok: false, reason: resolvedActor.reason };
+      return {
+        ok: false,
+        reason:
+          resolvedActor.reason === 'invalid_identity_input'
+            ? 'invalid_invitation_input'
+            : resolvedActor.reason,
+      };
     }
 
     stored.status = 'rejected';

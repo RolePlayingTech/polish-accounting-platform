@@ -2263,12 +2263,21 @@ export class AccountingWorkspaceService {
     rawTargetUserId: string,
     rawRequest?: { readonly operationId?: string | undefined; readonly reason?: string | undefined },
   ): AccessMutationResponse {
-    const tId = this.parseTenantOnly(rawTenantId);
+    let tId: TenantId;
+    try {
+      tId = parseTenantId(rawTenantId);
+    } catch {
+      throw new AccountingWorkspaceValidationError(
+        400,
+        'invalid_tenant_id',
+        'Niepoprawny identyfikator organizacji (tenantId).',
+      );
+    }
     let uId: UserId;
     let targetUserId: UserId;
     try {
-      uId = userId(actor.userId);
-      targetUserId = userId(rawTargetUserId);
+      uId = parseUserId(actor.userId);
+      targetUserId = parseUserId(rawTargetUserId);
     } catch {
       throw new AccountingWorkspaceValidationError(
         400,
