@@ -3,16 +3,15 @@ import {
   AuthenticatedSessionViewSchema,
   BootstrapOwnerRequestSchema,
   BootstrapOwnerResponseSchema,
-  DEMO_DEFAULT_PERIOD,
   TaxPeriodMonthSchema,
   type AccessibleCompanyItem,
   type AuthenticatedSessionView,
   type BootstrapOwnerRequest,
   type BootstrapOwnerResponse,
-  type TenantMemberRole,
   type TenantMembershipSummaryContract,
 } from '@pap/contracts';
 import { tenantId as parseTenantId, userId as parseUserId } from '@pap/domain';
+import { DEMO_DEFAULT_PERIOD } from './demo-seed.js';
 import type { AccountingWorkspaceStorePort } from './accounting-workspace.js';
 
 export interface UserProfileRecord {
@@ -371,7 +370,7 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       return {
         tenantId: m.tenantId,
         tenantName: resolvedTenantName,
-        role: m.role as TenantMemberRole,
+        role: m.role as TenantMembershipSummaryContract['role'],
         status: isEffectiveActive ? 'active' : 'revoked',
         validFrom: m.validFrom.toISOString(),
         validUntil: m.validUntil ? m.validUntil.toISOString() : null,

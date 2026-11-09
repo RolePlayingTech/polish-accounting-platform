@@ -454,9 +454,11 @@ export interface WorkspaceHumanChallenge {
 export interface AccountingWorkspaceStorePort {
   getUserById(userId: UserId): WorkspaceUserRecord | null;
   getUserBySubject(subject: string): WorkspaceUserRecord | null;
+  upsertUser(record: WorkspaceUserRecord): void;
   listUsers(): readonly WorkspaceUserRecord[];
   getMembership(tenantId: TenantId, userId: UserId): TenantMembership | null;
   listTenantMemberships(tenantId: TenantId): readonly TenantMembership[];
+  listMembershipsForUser(userId: UserId): readonly TenantMembership[];
   upsertMembership(membership: TenantMembership): void;
   listGrantsForCompany(
     tenantId: TenantId,
@@ -833,6 +835,16 @@ export class InMemoryAccountingWorkspaceStore implements AccountingWorkspaceStor
     const out: TenantMembership[] = [];
     for (const m of this.memberships.values()) {
       if (m.tenantId === tId) {
+        out.push(m);
+      }
+    }
+    return out;
+  }
+
+  listMembershipsForUser(uId: UserId): readonly TenantMembership[] {
+    const out: TenantMembership[] = [];
+    for (const m of this.memberships.values()) {
+      if (m.userId === uId) {
         out.push(m);
       }
     }
