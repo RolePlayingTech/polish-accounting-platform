@@ -140,7 +140,7 @@ async function main(): Promise<void> {
       const runtimeUrl = process.env['PAP_EPHEMERAL_RUNTIME_DATABASE_URL']!.trim();
       const keyId = 'pap-e2e-oidc-ctx';
       const keyHex = randomBytes(32).toString('hex');
-      dataSchema = `pap_e2e_oidc_${randomUUID().replaceAll('-', '')}`;
+      dataSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
 
       ownerDb = connectDatabase(process.env, dataSchema, { roleScope: 'migrator' });
       await ownerDb.client`CREATE SCHEMA ${ownerDb.client(dataSchema)}`;

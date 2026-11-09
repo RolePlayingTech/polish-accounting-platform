@@ -193,7 +193,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
       );
     }
 
-    dataSchema = `pap_adv_w2_${randomUUID().replaceAll('-', '')}`;
+    dataSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
     owner = connectDatabase(process.env, dataSchema, { roleScope: 'migrator' });
     await owner.client`CREATE SCHEMA ${owner.client(dataSchema)}`;
     schemaCreated = true;
@@ -544,7 +544,7 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
 
   it('ADV-83-03 & ADV-83-04: granice eskalacji tenant_admin, 10x wyścig single-use zaproszenia bez sierot app_user, natychmiastowe cofanie między instancjami + unieważnianie sesji BFF oraz blokada piaskownicy', async () => {
     // Osobny schemat dla izolowanego scenariusza zaproszeń i cofania
-    const subSchema = `pap_adv_w2_inv_${randomUUID().replaceAll('-', '')}`;
+    const subSchema = `pap_test_${randomUUID().replaceAll('-', '')}`;
     await owner!.client`CREATE SCHEMA ${owner!.client(subSchema)}`;
     const subMigrator = connectDatabase(process.env, subSchema, { roleScope: 'migrator' });
     try {
