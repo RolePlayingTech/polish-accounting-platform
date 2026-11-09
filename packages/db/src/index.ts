@@ -61,6 +61,7 @@ export {
   createPostgresAccountingScope,
   listTenantCompanyGrantsForAdminFacts,
   provisionCompanyInPostgres,
+  isDuplicateCompanyNipRollbackError,
   discoverActorAccessibleEntities,
   type PostgresAccountingScope,
   type ListTenantCompanyGrantsForAdminFactsInput,

@@ -58,8 +58,9 @@ describe('Kontrakt plików migracji', () => {
     const foundation = readJson('0006_snapshot.json');
     const accounting = readJson('0007_snapshot.json');
     const provisioning = readJson('0008_snapshot.json');
+    const tenantNipUniqueness = readJson('0009_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(9);
+    expect(migrations).toHaveLength(10);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
@@ -70,6 +71,15 @@ describe('Kontrakt plików migracji', () => {
     expect(foundation.prevId).toBe(audit.id);
     expect(accounting.prevId).toBe(foundation.id);
     expect(provisioning.prevId).toBe(accounting.id);
+    expect(tenantNipUniqueness.prevId).toBe(provisioning.id);
+    expect(
+      tenantNipUniqueness.tables['public.company_tax_settings'].uniqueConstraints
+        .company_tax_settings_tenant_nip_unique,
+    ).toEqual({
+      name: 'company_tax_settings_tenant_nip_unique',
+      nullsNotDistinct: false,
+      columns: ['tenant_id', 'nip'],
+    });
     expect(provisioning.tables['public.entity_profile_version'].columns.profile_json).toBeDefined();
     expect(
       foundation.tables['public.access_management_event'].columns.transaction_id,
@@ -98,6 +108,7 @@ describe('Kontrakt plików migracji', () => {
       '0006_security-foundation',
       '0007_accounting-core',
       '0008_runtime-company-provisioning',
+      '0009_company-tenant-nip-uniqueness',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -121,6 +132,7 @@ describe('Kontrakt plików migracji', () => {
       '0006_security-foundation.sql',
       '0007_accounting-core.sql',
       '0008_runtime-company-provisioning.sql',
+      '0009_company-tenant-nip-uniqueness.sql',
     ]) {
       const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
       expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
@@ -310,6 +322,31 @@ describe('Kontrakt plików migracji', () => {
     expect(runtimePrivileges).toContain('GRANT SELECT, INSERT ON %I.%I TO %I');
     for (const tableName of accountingCoreTables) {
       expect(runtimePrivileges).toContain(`'${tableName}'`);
+    }
+  });
+
+  it('0009 wymusza bazodanową unikalność (tenant_id, nip) z preflight wykrywaniem duplikatów bez wycieku NIP', () => {
+    const migration = readFileSync(
+      new URL('../drizzle/0009_company-tenant-nip-uniqueness.sql', import.meta.url),
+      'utf8',
+    );
+    const statements = migration.split('--> statement-breakpoint');
+    for (const stmt of statements) {
+      expect(stmt.trim().length).toBeGreaterThan(0);
+    }
+    for (const fragment of [
+      "SET LOCAL lock_timeout = '5s';",
+      "SET LOCAL statement_timeout = '30s';",
+      'LOCK TABLE company_tax_settings, entity_profile_version IN ACCESS EXCLUSIVE MODE;',
+      'GROUP BY cts.tenant_id, cts.nip',
+      "GROUP BY epv.tenant_id, btrim(epv.profile_json->>'nip')",
+      "USING ERRCODE = '23505'",
+      'ALTER TABLE "company_tax_settings" ADD CONSTRAINT "company_tax_settings_tenant_nip_unique" UNIQUE ("tenant_id", "nip");',
+      'CREATE UNIQUE INDEX "entity_profile_version_active_tenant_nip_uidx" ON "entity_profile_version"',
+      'RESET lock_timeout;',
+      'RESET statement_timeout;',
+    ]) {
+      expect(migration).toContain(fragment);
     }
   });
 });

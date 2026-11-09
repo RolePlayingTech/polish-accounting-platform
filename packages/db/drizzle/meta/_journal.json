@@ -64,6 +64,13 @@
       "when": 1793881800000,
       "tag": "0008_runtime-company-provisioning",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793968200000,
+      "tag": "0009_company-tenant-nip-uniqueness",
+      "breakpoints": true
     }
   ]
 }

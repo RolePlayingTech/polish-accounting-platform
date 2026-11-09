@@ -56,6 +56,7 @@ export const companyTaxSettings = pgTable(
       table.id,
     ),
     unique('company_tax_settings_entity_unique').on(table.tenantId, table.legalEntityId),
+    unique('company_tax_settings_tenant_nip_unique').on(table.tenantId, table.nip),
     foreignKey({
       name: 'company_tax_settings_entity_fk',
       columns: [table.tenantId, table.legalEntityId],

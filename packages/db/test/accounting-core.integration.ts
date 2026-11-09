@@ -1050,4 +1050,107 @@ describe('0007 Accounting Core — RLS, ACL, audyt atomowy, append-only i Postgr
       category_code: 'pozostale_wydatki_kpir',
     });
   });
+
+  it('0009 wymusza na poziomie schematu PostgreSQL unikalność (tenant_id, nip) przy tworzeniu i aktualizacji NIP, dopuszczając ten sam NIP w innym tenancie', async () => {
+    const entityA3 = legalEntityId(id(304));
+    const nipA1 = '5260250995';
+    const nipA3 = '5213017228';
+
+    await owner.client`
+      INSERT INTO legal_entity(id, tenant_id, display_name)
+      VALUES (${entityA3}, ${tenantA}, 'Druga Firma w Tenancie A')
+    `;
+    await owner.client`
+      INSERT INTO entity_profile_version(id, tenant_id, legal_entity_id, profile_code, valid_from, profile_json)
+      VALUES
+        (${id(701)}, ${tenantA}, ${entityA1}, 'jdg_kpir_liniowy', '2026-01-01T00:00:00.000Z', ${JSON.stringify({ nip: nipA1, displayName: 'JDG Programista A1' })}::jsonb),
+        (${id(702)}, ${tenantA}, ${entityA3}, 'spzoo_pelne_ksiegi', '2026-01-01T00:00:00.000Z', ${JSON.stringify({ nip: nipA3, displayName: 'Druga Firma w Tenancie A' })}::jsonb)
+    `;
+    await owner.client`
+      INSERT INTO company_access_grant(grant_id, tenant_id, user_id, legal_entity_id, action, valid_from)
+      VALUES
+        (${id(505)}, ${tenantA}, ${actorA}, ${entityA3}, 'read', '2026-01-01'),
+        (${id(506)}, ${tenantA}, ${actorA}, ${entityA3}, 'write', '2026-01-01')
+    `;
+
+    // 1. Zapis początkowych ustawień dla entityA3 z unikalnym nipA3 przechodzi
+    const savedA3 = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA3, action: 'write' },
+      async (scope) =>
+        scope.upsertCompanyTaxSettings({
+          nip: nipA3,
+          legalForm: 'sp_z_o_o',
+          taxRegime: 'cit_klasyczny',
+          vatStatus: 'czynny',
+          zusStage: 'brak_sp_zoo',
+          ksefMode: 'mandatory_2026_feb',
+          addressSummary: 'ul. Unikalna 3, 00-003 Warszawa',
+        }),
+    );
+    expect(savedA3.allowed).toBe(true);
+
+    // 2. Próba aktualizacji NIP podmiotu entityA3 na NIP zajęty już przez entityA1 (5261040828) w tym samym tenancie
+    // zostaje odrzucona przez PostgreSQL ograniczeniem UNIQUE company_tax_settings_tenant_nip_unique (23505)
+    let caughtTaxNipConflict: unknown = null;
+    const conflictTaxSettings = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA3, action: 'write' },
+      async (scope) => {
+        try {
+          return await scope.upsertCompanyTaxSettings({
+            nip: nipA1,
+            legalForm: 'sp_z_o_o',
+            taxRegime: 'cit_klasyczny',
+            vatStatus: 'czynny',
+            zusStage: 'brak_sp_zoo',
+            ksefMode: 'mandatory_2026_feb',
+            addressSummary: 'ul. Konfliktowa 3, 00-003 Warszawa',
+          });
+        } catch (err) {
+          caughtTaxNipConflict = err;
+          throw err;
+        }
+      },
+    );
+    expect(conflictTaxSettings.allowed).toBe(false);
+    await expectDatabaseError(Promise.reject(caughtTaxNipConflict), '23505');
+
+    // 3. Próba aktualizacji NIP w aktywnej wersji entity_profile_version podmiotu entityA3 na nipA1
+    // zostaje odrzucona przez częściowy indeks unikalny entity_profile_version_active_tenant_nip_uidx (23505)
+    let caughtProfileNipConflict: unknown = null;
+    const conflictProfileVersion = await runAsActor(
+      { subject: 'actor-a', tenant: tenantA, entity: entityA3, action: 'write' },
+      async (scope) => {
+        try {
+          return await scope.upsertEntityProfileVersion({
+            profileCode: 'spzoo_pelne_ksiegi',
+            profileJson: { nip: nipA1, displayName: 'Próba podmiany NIP w profilu' },
+          });
+        } catch (err) {
+          caughtProfileNipConflict = err;
+          throw err;
+        }
+      },
+    );
+    expect(conflictProfileVersion.allowed).toBe(false);
+    await expectDatabaseError(Promise.reject(caughtProfileNipConflict), '23505');
+
+    // 4. Natomiast podmiot w INNYM tenancie (tenantB / entityB1) może legalnie użyć tego samego 10-cyfrowego NIP (nipA1)
+    const savedB1SameNip = await runAsActor(
+      { subject: 'actor-b', tenant: tenantB, entity: entityB1, action: 'write' },
+      async (scope) =>
+        scope.upsertCompanyTaxSettings({
+          nip: nipA1,
+          legalForm: 'jdg',
+          taxRegime: 'kpir_skala',
+          vatStatus: 'czynny',
+          zusStage: 'duzy_zus',
+          ksefMode: 'mandatory_2026_apr',
+          addressSummary: 'ul. Inny Tenant 1, 30-001 Kraków',
+        }),
+    );
+    expect(savedB1SameNip.allowed).toBe(true);
+    if (savedB1SameNip.allowed) {
+      expect(savedB1SameNip.data.nip).toBe(nipA1);
+    }
+  });
 });
