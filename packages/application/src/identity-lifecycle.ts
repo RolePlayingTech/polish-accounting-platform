@@ -1335,6 +1335,96 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       return { ok: false, reason: 'inviter_authority_revoked' };
     }
 
+    if (
+      issuer !== input.issuer ||
+      subject !== input.subject
+    ) {
+      return { ok: false, reason: 'invalid_invitation_input' };
+    }
+
+    const existingInviteeUserIdStr = existingIdentity?.userId ?? existingStoreUser?.userId ?? null;
+    if (existingInviteeUserIdStr) {
+      const existingInviteeId = parseUserId(existingInviteeUserIdStr);
+      if (existingInviteeId === inviterId) {
+        return { ok: false, reason: 'self_invitation_acceptance_forbidden' };
+      }
+
+      const existingMembership = this.#workspaceStore.getMembership(tenantId, existingInviteeId);
+      if (
+        existingMembership &&
+        existingMembership.status === 'active' &&
+        existingMembership.validFrom.getTime() <= now.getTime() &&
+        (existingMembership.validUntil === null ||
+          existingMembership.validUntil.getTime() > now.getTime())
+      ) {
+        return { ok: false, reason: 'already_tenant_member' };
+      }
+      if (existingMembership && existingMembership.role !== stored.intendedRole) {
+        return { ok: false, reason: 'membership_role_change_not_supported' };
+      }
+    }
+
+    const candidateInviteeId = existingInviteeUserIdStr
+      ? parseUserId(existingInviteeUserIdStr)
+      : parseUserId(randomUUID());
+    const candidateTargetMembership = {
+      tenantId,
+      userId: candidateInviteeId,
+      role: stored.intendedRole,
+      status: 'active' as const,
+      validFrom: now,
+      validUntil: inviterMembership.validUntil,
+    };
+
+    const inviterGrants = this.#workspaceStore.listGrantsForUser(inviterId);
+    const grantsToWrite: Array<{
+      readonly legalEntityId: ReturnType<typeof parseLegalEntityId>;
+      readonly action: 'read' | 'write';
+      readonly validUntil: Date | null;
+    }> = [];
+
+    for (const grantSpec of stored.initialCompanyGrants) {
+      const leId = parseLegalEntityId(grantSpec.legalEntityId);
+      if (!this.#workspaceStore.getCompany(tenantId, leId)) {
+        return { ok: false, reason: 'grant_scope_not_delegable' };
+      }
+      for (const action of grantSpec.actions) {
+        const boundedUntil = computeDelegatedGrantValidUntil({
+          actorRole: inviterMembership.role,
+          actorMembershipUntil: inviterMembership.validUntil,
+          actorGrants: inviterGrants,
+          tenantId,
+          legalEntityId: leId,
+          action,
+          now,
+        });
+        const decision = decideAccessManagementAuthorization({
+          actorUserId: inviterId,
+          targetUserId: candidateInviteeId,
+          tenantId,
+          commandKind: 'grant',
+          actorMembership: inviterMembership,
+          actorGrants: inviterGrants,
+          targetMembership: candidateTargetMembership,
+          grantScope: {
+            legalEntityId: leId,
+            action,
+            validFrom: now,
+            validUntil: boundedUntil,
+          },
+          now,
+        });
+        if (!decision.allowed) {
+          return { ok: false, reason: 'inviter_authority_revoked' };
+        }
+        grantsToWrite.push({
+          legalEntityId: leId,
+          action,
+          validUntil: boundedUntil,
+        });
+      }
+    }
+
     const snapshot = this.captureSnapshot();
     const resolvedInvitee = await this.provisionOrResolveOidcUser({
       issuer,
@@ -1355,27 +1445,6 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
     }
 
     const inviteeId = parseUserId(resolvedInvitee.userId);
-    if (inviteeId === inviterId) {
-      this.restoreSnapshot(snapshot);
-      return { ok: false, reason: 'self_invitation_acceptance_forbidden' };
-    }
-
-    const existingMembership = this.#workspaceStore.getMembership(tenantId, inviteeId);
-    if (
-      existingMembership &&
-      existingMembership.status === 'active' &&
-      existingMembership.validFrom.getTime() <= now.getTime() &&
-      (existingMembership.validUntil === null ||
-        existingMembership.validUntil.getTime() > now.getTime())
-    ) {
-      this.restoreSnapshot(snapshot);
-      return { ok: false, reason: 'already_tenant_member' };
-    }
-    if (existingMembership && existingMembership.role !== stored.intendedRole) {
-      this.restoreSnapshot(snapshot);
-      return { ok: false, reason: 'membership_role_change_not_supported' };
-    }
-
     const targetMembership = {
       tenantId,
       userId: inviteeId,
@@ -1384,57 +1453,6 @@ export class InMemoryIdentityLifecycleStore implements IdentityLifecycleStorePor
       validFrom: now,
       validUntil: inviterMembership.validUntil,
     };
-
-    const inviterGrants = this.#workspaceStore.listGrantsForUser(inviterId);
-    const grantsToWrite: Array<{
-      readonly legalEntityId: ReturnType<typeof parseLegalEntityId>;
-      readonly action: 'read' | 'write';
-      readonly validUntil: Date | null;
-    }> = [];
-
-    for (const grantSpec of stored.initialCompanyGrants) {
-      const leId = parseLegalEntityId(grantSpec.legalEntityId);
-      if (!this.#workspaceStore.getCompany(tenantId, leId)) {
-        this.restoreSnapshot(snapshot);
-        return { ok: false, reason: 'grant_scope_not_delegable' };
-      }
-      for (const action of grantSpec.actions) {
-        const boundedUntil = computeDelegatedGrantValidUntil({
-          actorRole: inviterMembership.role,
-          actorMembershipUntil: inviterMembership.validUntil,
-          actorGrants: inviterGrants,
-          tenantId,
-          legalEntityId: leId,
-          action,
-          now,
-        });
-        const decision = decideAccessManagementAuthorization({
-          actorUserId: inviterId,
-          targetUserId: inviteeId,
-          tenantId,
-          commandKind: 'grant',
-          actorMembership: inviterMembership,
-          actorGrants: inviterGrants,
-          targetMembership,
-          grantScope: {
-            legalEntityId: leId,
-            action,
-            validFrom: now,
-            validUntil: boundedUntil,
-          },
-          now,
-        });
-        if (!decision.allowed) {
-          this.restoreSnapshot(snapshot);
-          return { ok: false, reason: 'inviter_authority_revoked' };
-        }
-        grantsToWrite.push({
-          legalEntityId: leId,
-          action,
-          validUntil: boundedUntil,
-        });
-      }
-    }
 
     this.#workspaceStore.upsertMembership(targetMembership);
     const grantedEntitySet = new Set<string>();
