@@ -1,9 +1,13 @@
 import { randomUUID } from 'node:crypto';
+import { legalEntityId, tenantId, userId } from '@pap/domain';
 import { describe, expect, it } from 'vitest';
 import {
   InMemoryAccountingWorkspaceStore,
   InMemoryIdentityLifecycleStore,
   buildAuthenticatedSessionView,
+  generateOpaqueInvitationToken,
+  hashInvitationTokenSha256,
+  maskInvitationEmail,
   toBootstrapOwnerResponse,
   validateBootstrapOwnerRequest,
 } from '../src/index.js';
@@ -257,5 +261,173 @@ describe('Wave 2 Slice 3 — identity-lifecycle (warstwa aplikacji)', () => {
     expect(unassignedView.tenantId).toBeNull();
     expect(unassignedView.legalEntityId).toBeNull();
     expect(unassignedView.companies).toEqual([]);
+  });
+
+  it('Wave 2 Slice 4 — egzekwuje haszowanie SHA-256 tokenów zaproszeń, maskowanie e-maili, granice delegacji ról i firm oraz ochronę TOCTOU przy akceptacji', async () => {
+    const generated = generateOpaqueInvitationToken();
+    expect(generated.rawToken.length).toBeGreaterThanOrEqual(40);
+    expect(generated.tokenSha256).toBe(hashInvitationTokenSha256(generated.rawToken));
+    expect(generated.tokenSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(maskInvitationEmail('Anna.Ksiegowa@Biuro.Example')).toBe('an***@biuro.example');
+    expect(maskInvitationEmail('a@biuro.example')).toBe('a***@biuro.example');
+
+    const workspaceStore = new InMemoryAccountingWorkspaceStore();
+    const lifecycle = new InMemoryIdentityLifecycleStore({ workspaceStore });
+    const now = new Date('2026-11-09T12:00:00.000Z');
+
+    const boot = await lifecycle.bootstrapInitialOwner({
+      operationId: randomUUID(),
+      issuer: 'https://idp.syntetyczny.example/realms/pap',
+      subject: 'owner-s4-unit',
+      displayName: 'Właściciel S4',
+      email: 'wlasciciel@syntetyczny.example',
+      tenantName: 'Biuro S4',
+      reason: 'Bootstrap pod testy zaproszeń',
+      now,
+    });
+    expect(boot.ok).toBe(true);
+    if (!boot.ok) {
+      throw new Error('Oczekiwano sukcesu bootstrapu.');
+    }
+
+    const tId = tenantId(boot.receipt.tenantId);
+    const comp1 = legalEntityId(randomUUID());
+    const comp2 = legalEntityId(randomUUID());
+    for (const [leId, nip] of [
+      [comp1, '5250002008'],
+      [comp2, '5213017228'],
+    ] as const) {
+      workspaceStore.saveCompany({
+        tenantId: tId,
+        legalEntityId: leId,
+        displayName: `Firma ${nip}`,
+        nip,
+        legalForm: 'jdg',
+        taxRegime: 'kpir_skala',
+        vatStatusSimple: 'czynny',
+        taxProfile: {
+          profileCode: 'jdg_kpir_skala',
+          legalForm: 'jdg',
+          taxRegime: 'kpir_skala',
+          vatStatus: 'czynny',
+          vatSettlementPeriod: 'monthly',
+          zusScheme: 'duzy_zus',
+          activityStartDate: '2026-01-01',
+        },
+        settingsHistory: [],
+        documents: [],
+        kpirEntries: [],
+        ryczaltEntries: [],
+        vatEntries: [],
+        journalEntries: [],
+        settlements: [],
+        bankTransactions: [],
+        reconciliationMatches: [],
+        paidObligationsByKey: new Map(),
+        explanationsById: new Map(),
+      });
+    }
+
+    // Delegacja roli tenant_owner jest zawsze zabroniona
+    const ownerRoleForbidden = await lifecycle.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: boot.receipt.userId,
+      tenantId: tId,
+      tokenSha256: generateOpaqueInvitationToken().tokenSha256,
+      inviteeEmail: 'kandydat@syntetyczny.example',
+      intendedRole: 'tenant_owner',
+      reason: 'Próba delegacji roli właściciela',
+      expiresAt: new Date('2026-11-12T12:00:00.000Z'),
+      now,
+    });
+    expect(ownerRoleForbidden).toEqual({
+      ok: false,
+      reason: 'target_role_not_delegable',
+    });
+
+    // Właściciel zaprasza administratora z grantem read wyłącznie do comp1
+    const adminToken = generateOpaqueInvitationToken();
+    const createAdminInv = await lifecycle.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: boot.receipt.userId,
+      tenantId: tId,
+      tokenSha256: adminToken.tokenSha256,
+      inviteeEmail: 'admin@syntetyczny.example',
+      intendedRole: 'tenant_admin',
+      initialCompanyGrants: [{ legalEntityId: comp1, actions: ['read'] }],
+      reason: 'Zaproszenie administratora z ograniczonym zakresem',
+      expiresAt: new Date('2026-11-12T12:00:00.000Z'),
+      now,
+    });
+    expect(createAdminInv.ok).toBe(true);
+
+    const acceptAdmin = await lifecycle.acceptTenantInvitation({
+      operationId: randomUUID(),
+      tokenSha256: adminToken.tokenSha256,
+      issuer: 'https://idp.syntetyczny.example/realms/pap',
+      subject: 'admin-s4-unit',
+      displayName: 'Piotr Admin',
+      email: 'admin@syntetyczny.example',
+      now,
+    });
+    expect(acceptAdmin.ok).toBe(true);
+    if (!acceptAdmin.ok) {
+      throw new Error('Oczekiwano akceptacji zaproszenia administratora.');
+    }
+
+    // Administrator nie może delegować comp2 (brak grantu)
+    const adminEscComp2 = await lifecycle.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: acceptAdmin.userId,
+      tenantId: tId,
+      tokenSha256: generateOpaqueInvitationToken().tokenSha256,
+      inviteeEmail: 'member@syntetyczny.example',
+      intendedRole: 'tenant_member',
+      initialCompanyGrants: [{ legalEntityId: comp2, actions: ['read'] }],
+      reason: 'Próba delegacji nieautoryzowanej firmy',
+      expiresAt: new Date('2026-11-12T12:00:00.000Z'),
+      now,
+    });
+    expect(adminEscComp2).toEqual({
+      ok: false,
+      reason: 'grant_scope_not_delegable',
+    });
+
+    // Administrator wystawia poprawne zaproszenie na comp1 read, po czym traci swój grant przed akceptacją (TOCTOU)
+    const memberToken = generateOpaqueInvitationToken();
+    const createMemberInv = await lifecycle.createTenantInvitation({
+      operationId: randomUUID(),
+      actorUserId: acceptAdmin.userId,
+      tenantId: tId,
+      tokenSha256: memberToken.tokenSha256,
+      inviteeEmail: 'member@syntetyczny.example',
+      intendedRole: 'tenant_member',
+      initialCompanyGrants: [{ legalEntityId: comp1, actions: ['read'] }],
+      reason: 'Zaproszenie członka przed cofnięciem grantu admina',
+      expiresAt: new Date('2026-11-12T12:00:00.000Z'),
+      now,
+    });
+    expect(createMemberInv.ok).toBe(true);
+
+    for (const g of workspaceStore.listGrantsForUser(userId(acceptAdmin.userId))) {
+      workspaceStore.upsertGrant({ ...g, revokedAt: new Date('2026-11-09T12:10:00.000Z') });
+    }
+
+    const acceptAfterToctou = await lifecycle.acceptTenantInvitation({
+      operationId: randomUUID(),
+      tokenSha256: memberToken.tokenSha256,
+      issuer: 'https://idp.syntetyczny.example/realms/pap',
+      subject: 'member-s4-unit',
+      displayName: 'Celina Member',
+      email: 'member@syntetyczny.example',
+      now: new Date('2026-11-09T12:15:00.000Z'),
+    });
+    expect(acceptAfterToctou).toEqual({
+      ok: false,
+      reason: 'inviter_authority_revoked',
+    });
+    expect(
+      workspaceStore.getUserBySubject('member-s4-unit', 'https://idp.syntetyczny.example/realms/pap'),
+    ).toBeNull();
   });
 });

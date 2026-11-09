@@ -19,7 +19,10 @@ import {
 } from '@pap/db';
 import { JwksOidcAccessTokenVerifier } from '../auth/jwks-oidc-token-verifier.js';
 import { loadOidcVerifierConfig } from '../auth/oidc-config.js';
-import { SandboxOidcService } from '../auth/sandbox-oidc.service.js';
+import {
+  SandboxOidcService,
+  resolveApiRuntimeMode,
+} from '../auth/sandbox-oidc.service.js';
 import {
   OwnerBootstrapError,
   RuntimeOwnerBootstrapService,
@@ -95,6 +98,8 @@ function buildOidcVerifier(
 export function createApiRuntimeServices(
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): ApiRuntimeServices {
+  const runtimeMode = resolveApiRuntimeMode(env);
+
   if (hasConfiguredDatabaseUrl(env)) {
     throw new DatabaseConfigError(
       'Skonfigurowano DATABASE_URL — użyj asynchronicznej fabryki createApiRuntimeServicesAsync, aby zweryfikować zabezpieczenia RLS i połączyć z PostgreSQL 18.6.',
@@ -102,7 +107,10 @@ export function createApiRuntimeServices(
   }
 
   const sandboxOidc = new SandboxOidcService(env);
-  const seedDemoData = env.PAP_SEED_SYNTHETIC_DEMO !== 'false';
+  const seedDemoData =
+    runtimeMode !== null && runtimeMode !== 'LOCAL_DEV'
+      ? false
+      : env.PAP_SEED_SYNTHETIC_DEMO !== 'false';
   const workspace = new AccountingWorkspaceService({ seedDemoData });
   const oidcVerifier = buildOidcVerifier(env, sandboxOidc);
   const mcpDomainPort = workspace.createWorkspaceMcpDomainPort();
@@ -145,12 +153,16 @@ export async function createApiRuntimeServicesAsync(
     return createApiRuntimeServices(env);
   }
 
+  const runtimeMode = resolveApiRuntimeMode(env);
   const sandboxOidc = new SandboxOidcService(env);
   const oidcVerifier = buildOidcVerifier(env, sandboxOidc);
   const pgRuntime = await connectPostgresRuntime(env);
 
   try {
-    if (env.PAP_SEED_SYNTHETIC_DEMO === 'true') {
+    if (
+      (runtimeMode === null || runtimeMode === 'LOCAL_DEV') &&
+      env.PAP_SEED_SYNTHETIC_DEMO === 'true'
+    ) {
       await seedSyntheticDemoToPostgres({
         runtime: pgRuntime,
         migratorDatabaseUrl: env.PAP_MIGRATOR_DATABASE_URL,
@@ -159,14 +171,15 @@ export async function createApiRuntimeServicesAsync(
     }
 
     const innerWorkspace = await hydrateWorkspaceFromPostgres(pgRuntime, sandboxOidc.getIssuer());
+    const webSessionStore = new PostgresWebSessionStore(pgRuntime.connection.db, pgRuntime.signer);
     const workspace = new PostgresBackedWorkspaceService({
       runtime: pgRuntime,
       innerWorkspace,
       oidcVerifier,
       sandboxIssuer: sandboxOidc.getIssuer(),
+      webSessionStore,
     });
     const mcpGateway = workspace.createBoundMcpGateway();
-    const webSessionStore = new PostgresWebSessionStore(pgRuntime.connection.db, pgRuntime.signer);
     const identityLifecycleStore = new PostgresIdentityLifecycleStore(
       pgRuntime.connection.db,
       pgRuntime.signer,

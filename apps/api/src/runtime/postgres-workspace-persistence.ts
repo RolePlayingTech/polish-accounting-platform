@@ -80,6 +80,7 @@ import {
   type AccountingWorkspaceStorePort,
   type ExecuteAuthorizedCompanyActionResult,
   type OidcAccessTokenVerifier,
+  type WebSessionStorePort,
   type WorkspaceActorContext,
 } from '@pap/application';
 import type {
@@ -91,6 +92,8 @@ import type { PapMcpGateway } from '@pap/application/mcp-gateway';
 import {
   discoverActorAccessibleEntities,
   isDuplicateCompanyNipRollbackError,
+  listTenantCompanyGrantsForAdminFacts,
+  listTenantMemberDirectoryFromPostgres,
   provisionCompanyInPostgres,
   type PostgresAccountingScope,
 } from '@pap/db';
@@ -172,6 +175,7 @@ type AsyncableWorkspaceMethodKeys =
   | 'getCompanyAccess'
   | 'grantCompanyAccess'
   | 'revokeCompanyAccess'
+  | 'revokeTenantMembership'
   | 'getAuditLog'
   | 'listDocuments'
   | 'createDocument'
@@ -203,6 +207,7 @@ type AsyncableWorkspaceMethodKeys =
 export type WorkspaceRuntimePort = {
   readonly store: AccountingWorkspaceStorePort;
   listSandboxPersonas: AccountingWorkspaceService['listSandboxPersonas'];
+  syncActorFromPostgres?: (userId: string, tenantId?: string) => Promise<void>;
 } & {
   [K in AsyncableWorkspaceMethodKeys]: (
     ...args: Parameters<AccountingWorkspaceService[K]>
@@ -213,6 +218,7 @@ export interface PostgresBackedWorkspaceServiceOptions {
   readonly innerWorkspace: AccountingWorkspaceService;
   readonly oidcVerifier: OidcAccessTokenVerifier;
   readonly sandboxIssuer: string;
+  readonly webSessionStore?: WebSessionStorePort | undefined;
 }
 
 export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
@@ -221,6 +227,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   private readonly innerWorkspace: AccountingWorkspaceService;
   private readonly oidcVerifier: OidcAccessTokenVerifier;
   private readonly sandboxIssuer: string;
+  private readonly webSessionStore: WebSessionStorePort | undefined;
   private readonly mutationMutex = new AsyncMutationMutex();
   private readonly boundGateways = new Set<PapMcpGateway>();
   private readonly inFlightBatchSync = new Map<string, Promise<boolean>>();
@@ -287,6 +294,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     this.store = options.innerWorkspace.store;
     this.oidcVerifier = options.oidcVerifier;
     this.sandboxIssuer = options.sandboxIssuer;
+    this.webSessionStore = options.webSessionStore;
 
     const origPortFactory = this.innerWorkspace.createWorkspaceMcpDomainPort.bind(
       this.innerWorkspace,
@@ -711,6 +719,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     userIdStr: string,
     tenantIdStr: string,
     legalEntityIdStr: string,
+    forceFresh = false,
   ): Promise<void> {
     let uId;
     let tId;
@@ -726,7 +735,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       throw err;
     }
 
-    const syncedBatch = await this.syncActorAccessibleGrantsBatch([uId], tId);
+    const syncedBatch = await this.syncActorAccessibleGrantsBatch([uId], tId, forceFresh);
     if (syncedBatch) {
       return;
     }
@@ -843,7 +852,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         actorUserIds,
         tenantIdFilter,
       ).catch(() => null);
-      if (!discovered || (discovered.memberships.length === 0 && discovered.grants.length === 0)) {
+      if (!discovered) {
         return false;
       }
       const seenUsers = new Set<string>();
@@ -883,20 +892,30 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         }
       }
       const now = new Date();
-      const candidateUserSet = new Set(actorUserIds.map((u) => parseUserId(u)));
-      const targetCompanies = tenantIdFilter
-        ? this.store.listCompaniesForTenant(parseTenantId(tenantIdFilter))
-        : this.store.listAllCompanies();
-      for (const comp of targetCompanies) {
-        for (const cached of this.store.listGrantsForCompany(comp.tenantId, comp.legalEntityId)) {
+      const canonicalTenantFilter = tenantIdFilter ? parseTenantId(tenantIdFilter) : undefined;
+      for (const rawUserId of actorUserIds) {
+        const uId = parseUserId(rawUserId);
+        for (const cachedMembership of this.store.listMembershipsForUser(uId)) {
+          if (canonicalTenantFilter && cachedMembership.tenantId !== canonicalTenantFilter) {
+            continue;
+          }
           if (
-            candidateUserSet.has(cached.userId) &&
-            seenUsers.has(`${comp.tenantId}:${cached.userId}`) &&
-            cached.revokedAt === null &&
-            !seenGrants.has(cached.grantId)
+            cachedMembership.status === 'active' &&
+            !seenUsers.has(`${cachedMembership.tenantId}:${cachedMembership.userId}`)
           ) {
+            this.store.upsertMembership({
+              ...cachedMembership,
+              status: 'revoked',
+            });
+          }
+        }
+        for (const cachedGrant of this.store.listGrantsForUser(uId)) {
+          if (canonicalTenantFilter && cachedGrant.tenantId !== canonicalTenantFilter) {
+            continue;
+          }
+          if (cachedGrant.revokedAt === null && !seenGrants.has(cachedGrant.grantId)) {
             this.store.upsertGrant({
-              ...cached,
+              ...cachedGrant,
               revokedAt: now,
             });
           }
@@ -1282,6 +1301,115 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     );
   }
 
+  private async syncTenantDirectoryAndGrantsFromPostgres(
+    rawTenantId: string,
+    actorUserId: string,
+    extraUserIds?: readonly string[],
+  ): Promise<boolean> {
+    const tId = parseTenantId(rawTenantId);
+    const directoryMembers = await listTenantMemberDirectoryFromPostgres(
+      this.runtime.connection.db,
+      this.runtime.signer,
+      {
+        actorUserId,
+        tenantId: tId,
+      },
+    ).catch(() => []);
+
+    if (directoryMembers.length === 0) {
+      return false;
+    }
+
+    for (const member of directoryMembers) {
+      const mUserId = parseUserId(member.userId);
+      const existing = this.store.getUserById(mUserId);
+      if (!existing || existing.displayName !== member.displayName || existing.active !== member.userActive) {
+        this.store.upsertUser({
+          userId: mUserId,
+          issuer: existing?.issuer,
+          subject: existing?.subject ?? mUserId,
+          displayName: member.displayName,
+          email: existing?.email ?? member.maskedEmail,
+          active: member.userActive,
+        });
+      }
+    }
+
+    const candidateUserIds = new Set<string>([actorUserId]);
+    for (const member of directoryMembers) {
+      candidateUserIds.add(member.userId);
+    }
+    for (const user of this.store.listUsers()) {
+      candidateUserIds.add(user.userId);
+    }
+    for (const m of this.store.listTenantMemberships(tId)) {
+      candidateUserIds.add(m.userId);
+    }
+    if (extraUserIds) {
+      for (const extraId of extraUserIds) {
+        candidateUserIds.add(extraId);
+      }
+    }
+
+    const adminDiscovery = await listTenantCompanyGrantsForAdminFacts(
+      this.runtime.connection.db,
+      this.runtime.signer,
+      {
+        actorUserId,
+        tenantId: tId,
+        candidateUserIds: [...candidateUserIds],
+      },
+    ).catch(() => null);
+
+    if (adminDiscovery) {
+      for (const m of adminDiscovery.memberships) {
+        this.store.upsertMembership({
+          ...m,
+          tenantId: parseTenantId(m.tenantId),
+          userId: parseUserId(m.userId),
+        });
+      }
+      if (adminDiscovery.grants.length > 0) {
+        const seenGrantIds = new Set<string>();
+        for (const g of adminDiscovery.grants) {
+          seenGrantIds.add(g.grantId);
+          this.store.upsertGrant({
+            grantId: g.grantId,
+            tenantId: parseTenantId(g.tenantId),
+            userId: parseUserId(g.userId),
+            legalEntityId: parseLegalEntityId(g.legalEntityId),
+            action: g.action,
+            validFrom: g.validFrom,
+            validUntil: g.validUntil,
+            revokedAt: g.revokedAt,
+          });
+        }
+        const now = new Date();
+        for (const rawCandidate of candidateUserIds) {
+          let uId: ReturnType<typeof parseUserId>;
+          try {
+            uId = parseUserId(rawCandidate);
+          } catch {
+            continue;
+          }
+          for (const cachedGrant of this.store.listGrantsForUser(uId)) {
+            if (
+              cachedGrant.tenantId === tId &&
+              cachedGrant.revokedAt === null &&
+              !seenGrantIds.has(cachedGrant.grantId)
+            ) {
+              this.store.upsertGrant({
+                ...cachedGrant,
+                revokedAt: now,
+              });
+            }
+          }
+        }
+      }
+    }
+    return true;
+  }
+
   getCompanyAccess(
     actor: WorkspaceActorContext,
     tenantId: string,
@@ -1293,20 +1421,49 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       legalEntityId,
       'read',
       async (_scope, txWorkspace) => {
-        const allUserIds = this.store.listUsers().map((u) => u.userId);
-        const syncedBatch = await this.syncActorAccessibleGrantsBatch(allUserIds, tenantId, true);
-        if (!syncedBatch) {
-          for (const user of this.store.listUsers()) {
-            await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
-          }
-        }
+        const isAdminSync = await this.syncTenantDirectoryAndGrantsFromPostgres(
+          tenantId,
+          actor.userId,
+        );
         const tId = parseTenantId(tenantId);
         const leId = parseLegalEntityId(legalEntityId);
-        for (const m of this.store.listTenantMemberships(tId)) {
-          txWorkspace.store.upsertMembership(m);
-        }
-        for (const g of this.store.listGrantsForCompany(tId, leId)) {
-          txWorkspace.store.upsertGrant(g);
+        const actorId = parseUserId(actor.userId);
+        if (isAdminSync) {
+          const allUserIds = this.store.listUsers().map((u) => u.userId);
+          const syncedBatch = await this.syncActorAccessibleGrantsBatch(
+            allUserIds,
+            tenantId,
+            true,
+          );
+          if (!syncedBatch) {
+            for (const user of this.store.listUsers()) {
+              await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
+            }
+          }
+          for (const user of this.store.listUsers()) {
+            txWorkspace.store.upsertUser(user);
+          }
+          for (const m of this.store.listTenantMemberships(tId)) {
+            txWorkspace.store.upsertMembership(m);
+          }
+          for (const g of this.store.listGrantsForCompany(tId, leId)) {
+            txWorkspace.store.upsertGrant(g);
+          }
+        } else {
+          await this.syncCompanyGrantsIntoMemory(actor.userId, tenantId, legalEntityId, true);
+          const actorUser = this.store.getUserById(actorId);
+          if (actorUser) {
+            txWorkspace.store.upsertUser(actorUser);
+          }
+          const actorMembership = this.store.getMembership(tId, actorId);
+          if (actorMembership) {
+            txWorkspace.store.upsertMembership(actorMembership);
+          }
+          for (const g of this.store.listGrantsForCompany(tId, leId)) {
+            if (g.userId === actorId) {
+              txWorkspace.store.upsertGrant(g);
+            }
+          }
         }
         return txWorkspace.getCompanyAccess(actor, tenantId, legalEntityId);
       },
@@ -1382,7 +1539,146 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         );
       }
 
-      await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId);
+      await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId, true);
+      return AccessMutationResponseSchema.parse({
+        ok: true,
+        receipt: result.receipt,
+      });
+    });
+  }
+
+  async syncActorFromPostgres(userId: string, tenantId?: string): Promise<void> {
+    await this.syncActorAccessibleGrantsBatch([userId], tenantId, true);
+  }
+
+  private async revokeUserSessionsFailClosed(userId: string, now?: Date): Promise<void> {
+    if (!this.webSessionStore) {
+      return;
+    }
+    try {
+      await this.webSessionStore.revokeAllSessionsForUser({ userId, now });
+    } catch {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        error: 'service_unavailable',
+        reasonCode: 'auth_service_unavailable',
+        message: 'Magazyn sesji BFF jest chwilowo niedostępny podczas cofania dostępu (fail-closed).',
+      });
+    }
+  }
+
+  async revokeTenantMembership(
+    actor: WorkspaceActorContext,
+    rawTenantId: string,
+    rawTargetUserId: string,
+    rawRequest?: { readonly operationId?: string | undefined; readonly reason?: string | undefined },
+  ): Promise<AccessMutationResponse> {
+    return this.runAtomicMutation(async () => {
+      const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      let operationId: string;
+      if (rawRequest?.operationId !== undefined) {
+        const trimmedOpId = rawRequest.operationId.trim();
+        if (!UUID_RE.test(trimmedOpId)) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_operation_id',
+            'Identyfikator operacji (operationId) musi być poprawnym UUID.',
+          );
+        }
+        operationId = trimmedOpId.toLowerCase();
+      } else if (actor.idempotencyKey && UUID_RE.test(actor.idempotencyKey.trim())) {
+        operationId = actor.idempotencyKey.trim().toLowerCase();
+      } else {
+        operationId = randomUUID();
+      }
+
+      let tId: ReturnType<typeof parseTenantId>;
+      let targetUserId: ReturnType<typeof parseUserId>;
+      try {
+        tId = parseTenantId(rawTenantId);
+        targetUserId = parseUserId(rawTargetUserId);
+      } catch (err) {
+        if (err instanceof InvalidIdentifierError) {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_command',
+            'Niepoprawny identyfikator organizacji (tenantId) lub użytkownika (userId).',
+          );
+        }
+        throw err;
+      }
+
+      const { rawBearerToken, verifier } = this.resolveVerifierAndTokenForActor(actor);
+      const result = await manageAccess(
+        {
+          kind: 'revoke_membership',
+          operationId,
+          tenantId: tId,
+          userId: targetUserId,
+        },
+        {
+          store: this.runtime.accessManagementStore,
+          actors: createOidcAccessManagementActorSource(rawBearerToken, {
+            verifier,
+            identityResolver: this.runtime.securityServices.identityResolver,
+          }),
+          authorizer: createTenantAccessManagementAuthorizer(undefined),
+        },
+      );
+
+      if (!result.ok) {
+        if (result.reason === 'invalid_command') {
+          throw new AccountingWorkspaceValidationError(
+            400,
+            'invalid_command',
+            'Niepoprawna komenda cofnięcia członkostwa w organizacji.',
+          );
+        }
+        if (result.reason === 'operation_conflict') {
+          throw new AccountingWorkspaceConflictError(
+            'operation_conflict',
+            'Konflikt idempotencji operacji administracyjnej cofnięcia członkostwa.',
+          );
+        }
+        if (
+          result.reason === 'access_management_unavailable' ||
+          result.reason === 'authorization_audit_unavailable' ||
+          result.reason === 'transaction_outcome_unknown'
+        ) {
+          throw new ServiceUnavailableException({
+            statusCode: 503,
+            error: 'service_unavailable',
+            reasonCode: result.reason,
+            message: 'Podsystem zarządzania dostępem PostgreSQL jest niedostępny (fail-closed).',
+          });
+        }
+        throw new AccountingWorkspaceAccessError(
+          403,
+          result.reason,
+          'Odmowa cofnięcia członkostwa użytkownika w bieżącej organizacji.',
+        );
+      }
+
+      const revokedAt = new Date(result.receipt.occurredAt);
+      await this.revokeUserSessionsFailClosed(targetUserId, revokedAt);
+
+      const cachedMembership = this.store.getMembership(tId, targetUserId);
+      if (cachedMembership) {
+        this.store.upsertMembership({
+          ...cachedMembership,
+          status: 'revoked',
+        });
+      }
+      for (const g of this.store.listGrantsForUser(targetUserId)) {
+        if (g.tenantId === tId && g.revokedAt === null) {
+          this.store.upsertGrant({
+            ...g,
+            revokedAt,
+          });
+        }
+      }
+      await this.syncActorAccessibleGrantsBatch([targetUserId], tId, true);
+
       return AccessMutationResponseSchema.parse({
         ok: true,
         receipt: result.receipt,
@@ -1401,6 +1697,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       const parsed = RevokeCompanyAccessRequestSchema.parse(req);
       const tId = parseTenantId(tenantId);
       const leId = parseLegalEntityId(legalEntityId);
+
+      await this.syncTenantDirectoryAndGrantsFromPostgres(
+        tId,
+        actor.userId,
+        parsed.targetUserId ? [parsed.targetUserId] : undefined,
+      );
 
       const candidateUserIds = new Set<string>(this.store.listUsers().map((u) => u.userId));
       for (const m of this.store.listTenantMemberships(tId)) {
@@ -1485,13 +1787,16 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         );
       }
 
+      const revokedAt = new Date(result.receipt.occurredAt);
+      await this.revokeUserSessionsFailClosed(targetUserId, revokedAt);
+
       if (matchedGrant && matchedGrant.revokedAt === null) {
         this.store.upsertGrant({
           ...matchedGrant,
-          revokedAt: new Date(result.receipt.occurredAt),
+          revokedAt,
         });
       }
-      await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId);
+      await this.syncCompanyGrantsIntoMemory(targetUserId, tId, leId, true);
 
       return AccessMutationResponseSchema.parse({
         ok: true,

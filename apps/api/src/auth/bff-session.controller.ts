@@ -13,17 +13,23 @@ import {
 } from '@nestjs/common';
 import { createHash, createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { SafeEmailAddressSchema } from '@pap/contracts/notifications';
-import type {
-  IdentityLifecycleStorePort,
-  WebBffSessionRecord,
-  WebSessionStorePort,
+import {
+  InMemoryAccountingWorkspaceStore,
+  type IdentityLifecycleStorePort,
+  type OidcAccessTokenVerifier,
+  type WebBffSessionRecord,
+  type WebSessionStorePort,
 } from '@pap/application';
+import { userId as parseUserId } from '@pap/domain';
 import type { FastifyRequest } from 'fastify';
 import {
+  ACCOUNTING_WORKSPACE_SERVICE,
   API_RUNTIME_ENV,
   IDENTITY_LIFECYCLE_STORE_PORT,
   WEB_SESSION_STORE_PORT,
+  type WorkspaceRuntimePort,
 } from '../runtime/workspace-runtime.js';
+import { OIDC_ACCESS_TOKEN_VERIFIER } from './company-access.guard.js';
 
 const DETERMINISTIC_TEST_BFF_SECRET =
   'pap-vitest-deterministic-bff-secret-key-min-32-chars!!' as const;
@@ -161,6 +167,12 @@ export class BffSessionController {
     @Optional()
     @Inject(IDENTITY_LIFECYCLE_STORE_PORT)
     private readonly identityLifecycleStore?: IdentityLifecycleStorePort,
+    @Optional()
+    @Inject(OIDC_ACCESS_TOKEN_VERIFIER)
+    private readonly oidcVerifier?: OidcAccessTokenVerifier,
+    @Optional()
+    @Inject(ACCOUNTING_WORKSPACE_SERVICE)
+    private readonly workspace?: WorkspaceRuntimePort,
   ) {}
 
   private assertInternalBffAuth(request: FastifyRequest, body: unknown): void {
@@ -356,6 +368,8 @@ export class BffSessionController {
       if (
         this.identityLifecycleStore &&
         !normalizedEmail.endsWith('.invalid') &&
+        !normalizedEmail.includes('***@') &&
+        normalizedEmail !== 'uzytkownik@pap.example' &&
         SafeEmailAddressSchema.safeParse(normalizedEmail).success
       ) {
         await this.identityLifecycleStore.upsertUserProfile({
@@ -520,5 +534,92 @@ export class BffSessionController {
         now,
       }),
     );
+  }
+
+  @Post('/identity/ensure')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  async ensureOidcIdentity(
+    @Req() request: FastifyRequest,
+    @Body() rawBody: unknown,
+  ) {
+    const body = (typeof rawBody === 'object' && rawBody !== null ? rawBody : {}) as Record<
+      string,
+      unknown
+    >;
+    this.assertInternalBffAuth(request, body);
+
+    if (!this.identityLifecycleStore || !this.oidcVerifier) {
+      throw new ServiceUnavailableException({
+        statusCode: 503,
+        error: 'service_unavailable',
+        reasonCode: 'auth_service_unavailable',
+        message: 'Usługa rejestracji tożsamości OIDC jest chwilowo niedostępna (tryb fail-closed).',
+      });
+    }
+
+    const rawAccessToken = typeof body['accessToken'] === 'string' ? body['accessToken'].trim() : '';
+    if (!rawAccessToken) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'bad_request',
+        reasonCode: 'invalid_bff_session_payload',
+        message: 'Brak wymaganego pola accessToken w żądaniu rejestracji tożsamości OIDC.',
+      });
+    }
+
+    const verified = await this.oidcVerifier.verifyAccessToken(rawAccessToken);
+    if (!verified.ok) {
+      throw new UnauthorizedException({
+        statusCode: 401,
+        error: 'unauthorized',
+        reasonCode: verified.reason,
+        message: 'Weryfikacja kryptograficzna tokena dostępowego OIDC zakończyła się odmową.',
+      });
+    }
+
+    const now = this.parseAllowedTestNow(body['now']);
+    const displayName =
+      typeof body['displayName'] === 'string' && body['displayName'].trim().length > 0
+        ? body['displayName'].trim()
+        : undefined;
+    const email =
+      typeof body['email'] === 'string' && body['email'].trim().length > 0
+        ? body['email'].trim().toLowerCase()
+        : undefined;
+
+    return this.runStoreOperation(async () => {
+      const provisioned = await this.identityLifecycleStore!.provisionOrResolveOidcUser({
+        issuer: verified.identity.issuer,
+        subject: verified.identity.subject,
+        displayName,
+        email,
+        now,
+      });
+
+      if (!provisioned.ok) {
+        return provisioned;
+      }
+
+      if (this.workspace?.store instanceof InMemoryAccountingWorkspaceStore) {
+        this.workspace.store.upsertUser({
+          userId: parseUserId(provisioned.userId),
+          issuer: verified.identity.issuer,
+          subject: verified.identity.subject,
+          displayName: provisioned.profile.displayName,
+          email: provisioned.profile.email,
+          active: true,
+        });
+      }
+
+      return {
+        ok: true as const,
+        userId: provisioned.userId,
+        issuer: verified.identity.issuer,
+        subject: verified.identity.subject,
+        created: provisioned.created,
+        profile: provisioned.profile,
+      };
+    });
   }
 }
