@@ -122,3 +122,4 @@ export {
   createPostgresSecurityServices,
   type PostgresSecurityServices,
 } from './runtime-security.js';
+export { PostgresWebSessionStore } from './web-session-store.js';

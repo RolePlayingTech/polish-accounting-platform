@@ -30,6 +30,10 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     NOT has_schema_privilege('public', 'CREATE') AND
     NOT has_table_privilege('security_context_key', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
     NOT has_any_column_privilege('security_context_key', 'SELECT,INSERT,UPDATE,REFERENCES') AND
+    NOT has_table_privilege('pap_oidc_auth_state', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('pap_oidc_auth_state', 'SELECT,INSERT,UPDATE,REFERENCES') AND
+    NOT has_table_privilege('pap_bff_session', 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND
+    NOT has_any_column_privilege('pap_bff_session', 'SELECT,INSERT,UPDATE,REFERENCES') AND
     NOT has_table_privilege('security_decision_event', 'SELECT,UPDATE,DELETE,TRUNCATE') AND
     NOT has_any_column_privilege('security_decision_event', 'SELECT,UPDATE,REFERENCES') AND
     NOT has_any_column_privilege('access_management_event', 'INSERT,UPDATE') AND
@@ -42,7 +46,8 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
     has_function_privilege('pap_execute_access()', 'EXECUTE') AND
     has_function_privilege('pap_provision_company()', 'EXECUTE') AND
     has_function_privilege('pap_list_actor_accessible_entities()', 'EXECUTE') AND
-    (SELECT count(*) = 27 AND bool_and(
+    has_function_privilege('pap_bff_session_op(jsonb)', 'EXECUTE') AND
+    (SELECT count(*) = 29 AND bool_and(
         c.relrowsecurity
         AND c.relforcerowsecurity
         AND c.relowner <> r.oid
@@ -57,7 +62,7 @@ export async function assertRuntimeDatabaseSecurity(db: Pick<Database, 'execute'
           'vat_register_entry','ledger_account','journal_entry','journal_line',
           'settlement_item','bank_statement_import','bank_transaction','tax_obligation_item',
           'mcp_prepared_proposal','notification_preference','notification_outbox',
-          'sandbox_mailbox_message'
+          'sandbox_mailbox_message','pap_oidc_auth_state','pap_bff_session'
         )) AND
     NOT EXISTS (
       SELECT 1 FROM pg_class c

@@ -1538,6 +1538,7 @@ export const RuntimeModeSchema = z.enum([
   'PRODUCTION',
 ]);
 export type RuntimeModeContract = z.infer<typeof RuntimeModeSchema>;
+export type RuntimeMode = RuntimeModeContract;
 
 export const AuthSessionStateCodeSchema = z.enum([
   'authenticated',

@@ -1,12 +1,14 @@
 import {
   AccountingWorkspaceService,
+  InMemoryWebSessionStore,
   type OidcAccessTokenVerifier,
   type SecurityAuditRecorder,
   type TenantAuthorizationDataSource,
   type UserIdentityResolver,
+  type WebSessionStorePort,
 } from '@pap/application';
 import type { PapMcpGateway } from '@pap/application/mcp-gateway';
-import { DatabaseConfigError } from '@pap/db';
+import { DatabaseConfigError, PostgresWebSessionStore } from '@pap/db';
 import { JwksOidcAccessTokenVerifier } from '../auth/jwks-oidc-token-verifier.js';
 import { loadOidcVerifierConfig } from '../auth/oidc-config.js';
 import { SandboxOidcService } from '../auth/sandbox-oidc.service.js';
@@ -24,6 +26,7 @@ export { seedSyntheticDemoToPostgres } from './postgres-demo-seed.js';
 export const ACCOUNTING_WORKSPACE_SERVICE = Symbol('ACCOUNTING_WORKSPACE_SERVICE');
 export const PAP_MCP_GATEWAY = Symbol('PAP_MCP_GATEWAY');
 export const API_RUNTIME_ENV = Symbol('API_RUNTIME_ENV');
+export const WEB_SESSION_STORE_PORT = Symbol('WEB_SESSION_STORE_PORT');
 
 export interface ApiRuntimeServices {
   readonly sandboxOidc: SandboxOidcService;
@@ -33,6 +36,7 @@ export interface ApiRuntimeServices {
   readonly identityResolver: UserIdentityResolver;
   readonly authorizationDataSource: TenantAuthorizationDataSource;
   readonly securityAudit: SecurityAuditRecorder;
+  readonly webSessionStore: WebSessionStorePort;
   readonly persistenceMode: 'in_memory' | 'postgres';
   readonly close?: () => Promise<void>;
 }
@@ -79,6 +83,7 @@ export function createApiRuntimeServices(
   const oidcVerifier = buildOidcVerifier(env, sandboxOidc);
   const mcpDomainPort = workspace.createWorkspaceMcpDomainPort();
   const mcpGateway = workspace.createBoundMcpGateway(oidcVerifier);
+  const webSessionStore = new InMemoryWebSessionStore();
 
   return {
     sandboxOidc,
@@ -88,6 +93,7 @@ export function createApiRuntimeServices(
     identityResolver: mcpDomainPort,
     authorizationDataSource: mcpDomainPort,
     securityAudit: mcpDomainPort,
+    webSessionStore,
     persistenceMode: 'in_memory',
   };
 }
@@ -120,6 +126,7 @@ export async function createApiRuntimeServicesAsync(
       sandboxIssuer: sandboxOidc.getIssuer(),
     });
     const mcpGateway = workspace.createBoundMcpGateway();
+    const webSessionStore = new PostgresWebSessionStore(pgRuntime.connection.db, pgRuntime.signer);
 
     return {
       sandboxOidc,
@@ -129,6 +136,7 @@ export async function createApiRuntimeServicesAsync(
       identityResolver: pgRuntime.securityServices.identityResolver,
       authorizationDataSource: pgRuntime.securityServices.authorizationDataSource,
       securityAudit: pgRuntime.securityServices.securityAudit,
+      webSessionStore,
       persistenceMode: 'postgres',
       close: () => pgRuntime.close(),
     };

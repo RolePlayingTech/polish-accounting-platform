@@ -30,7 +30,7 @@ export interface McpWorkbenchProps {
   activeCompany: CompanyProfileRecord;
   period: string;
   canWrite: boolean;
-  personaId: PersonaId;
+  personaId?: PersonaId | undefined;
   personaDisplayName: string;
   proposals: readonly McpPendingProposalRecord[];
   mcpHelp: FieldHelpInfo;
@@ -136,8 +136,7 @@ export function McpWorkbench({
     http: {
       title: 'Własny klient Streamable HTTP (curl / SDK)',
       code: [
-        `# 1. Pobierz osobny token delegowany dla klienta MCP z lokalnego dostawcy OIDC:`,
-        `#    POST http://127.0.0.1:4000/api/v1/oidc/token {"personaId":"${personaId}"}`,
+        `# 1. Pobierz osobny token delegowany OIDC dla klienta MCP${personaId ? ` (lokalnie np. persona ${personaId})` : ''}:`,
         `curl -X POST ${endpointUrl} \\`,
         `  -H "Content-Type: application/json" \\`,
         `  -H "Accept: application/json, text/event-stream" \\`,
