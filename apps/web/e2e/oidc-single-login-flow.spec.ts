@@ -25,8 +25,11 @@ async function startOidcE2eStack(): Promise<{
     process.execPath,
     ['--import', 'tsx', resolve(repositoryRoot, 'apps/api/test/helpers/e2e-oidc-stack.ts')],
     {
-      cwd: repositoryRoot,
-      env: { ...process.env },
+      cwd: resolve(repositoryRoot, 'apps/api'),
+      env: {
+        ...process.env,
+        TSX_TSCONFIG_PATH: resolve(repositoryRoot, 'apps/api/test/tsconfig.json'),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   );
