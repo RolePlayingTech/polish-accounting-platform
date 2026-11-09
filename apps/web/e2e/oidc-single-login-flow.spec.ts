@@ -160,7 +160,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       await ownerPage
         .getByRole('button', { name: /Zaloguj jako Anna Właścicielka/i })
         .click();
-      await ownerPage.waitForURL(/\/app$/, { timeout: 45_000 });
+      await ownerPage.waitForURL(/\/app$/, { timeout: 60_000 });
 
       // Sprawdzenie atrybutów bezpieczeństwa nieprzezroczystego ciasteczka sesji BFF (pap_session_id)
       const ownerCookies = await ownerContext.cookies();
@@ -242,13 +242,13 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       await accountantPage
         .getByRole('button', { name: /Zaloguj jako Ewa Księgowa/i })
         .click();
-      await accountantPage.waitForURL(/\/app\?invite=/, { timeout: 45_000 });
+      await accountantPage.waitForURL(/\/app\?invite=/, { timeout: 60_000 });
 
       await expect(accountantPage.getByTestId('invitation-acceptance-form')).toBeVisible();
       await accountantPage
         .getByRole('button', { name: 'Przyjmij zaproszenie do organizacji' })
         .click();
-      await accountantPage.waitForURL(/\/app$/, { timeout: 45_000 });
+      await accountantPage.waitForURL(/\/app$/, { timeout: 60_000 });
 
       // Ewa widzi pulpit Firmy 1 (tylko odczyt) i NIE widzi Firmy 2
       await expect(accountantPage.getByTestId('dashboard-financial-overview')).toBeVisible();

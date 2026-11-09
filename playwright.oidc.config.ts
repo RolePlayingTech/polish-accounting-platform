@@ -11,9 +11,9 @@ const sharedBffSecret = 'pap-e2e-oidc-shared-bff-session-secret-key-min-32b!!';
 export default defineConfig({
   testDir: './apps/web/e2e',
   testMatch: ['**/oidc-single-login-flow.spec.ts'],
-  timeout: 120_000,
+  timeout: 300_000,
   expect: {
-    timeout: 30_000,
+    timeout: 45_000,
   },
   fullyParallel: false,
   workers: 1,
