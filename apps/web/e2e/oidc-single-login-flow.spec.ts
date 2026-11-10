@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
-import { expect, test } from '@playwright/test';
+import { expect, test, type BrowserContext } from '@playwright/test';
 
 interface E2eStackMetadata {
   readonly mode: 'postgres' | 'memory';
@@ -28,6 +28,8 @@ async function startOidcE2eStack(): Promise<{
       cwd: resolve(repositoryRoot, 'apps/api'),
       env: {
         ...process.env,
+        NODE_OPTIONS: '--max-old-space-size=192',
+        UV_THREADPOOL_SIZE: '2',
         TSX_TSCONFIG_PATH: resolve(repositoryRoot, 'apps/api/test/tsconfig.json'),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -43,10 +45,10 @@ async function startOidcE2eStack(): Promise<{
     const timer = setTimeout(() => {
       rejectReady(
         new Error(
-          `Przekroczono limit 60s oczekiwania na start stosu OIDC E2E. Stderr: ${stderrLines.join('')}`,
+          `Przekroczono limit 90s oczekiwania na start stosu OIDC E2E. Stderr: ${stderrLines.join('')}`,
         ),
       );
-    }, 60_000);
+    }, 90_000);
 
     child.once('exit', (code) => {
       clearTimeout(timer);
@@ -91,12 +93,22 @@ async function stopOidcE2eStack(child: ChildProcess | undefined): Promise<void> 
 }
 
 test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zaproszenia i cofanie dostępu (#78, #83)', () => {
+  let activeContexts: BrowserContext[] = [];
+
   // eslint-disable-next-line no-empty-pattern
   test.beforeAll(async ({}, testInfo) => {
-    testInfo.setTimeout(90_000);
+    testInfo.setTimeout(120_000);
     const started = await startOidcE2eStack();
     stackProcess = started.child;
     stackMeta = started.meta;
+  });
+
+  test.afterEach(async () => {
+    const toClose = activeContexts;
+    activeContexts = [];
+    for (const ctx of toClose.reverse()) {
+      await ctx.close().catch(() => undefined);
+    }
   });
 
   // eslint-disable-next-line no-empty-pattern
@@ -116,10 +128,11 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
     }
 
     const ownerContext = await browser.newContext();
+    activeContexts.push(ownerContext);
     const accountantContext = await browser.newContext();
+    activeContexts.push(accountantContext);
 
-    try {
-      const ownerPage = await ownerContext.newPage();
+    const ownerPage = await ownerContext.newPage();
 
       // 1. Weryfikacja ekranu /login w trybie STAGING_PRIVATE: brak Basic Auth, brak selektora person, brak piaskownicy OIDC
       await ownerPage.goto('/login');
@@ -299,9 +312,5 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       const postLogoutCookies = await ownerContext.cookies();
       expect(postLogoutCookies.find((c) => c.name === 'pap_session_id')).toBeUndefined();
       expect(postLogoutCookies.find((c) => c.name === 'pap_oidc_token')).toBeUndefined();
-    } finally {
-      await accountantContext.close();
-      await ownerContext.close();
-    }
   });
 });

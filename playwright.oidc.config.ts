@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { defineConfig } from '@playwright/test';
 
@@ -7,13 +8,17 @@ const browserBaseUrl = `http://localhost:${String(webPort)}`;
 const apiPortA = 41_608;
 const oidcIdpPort = 42_608;
 const sharedBffSecret = 'pap-e2e-oidc-shared-bff-session-secret-key-min-32b!!';
+const useNextStart =
+  process.env['PAP_PLAYWRIGHT_USE_NEXT_START'] === 'true' &&
+  existsSync(resolve(process.cwd(), 'apps/web/.next/BUILD_ID'));
+const nextMode = useNextStart ? 'start' : 'dev';
 
 export default defineConfig({
   testDir: './apps/web/e2e',
   testMatch: ['**/oidc-single-login-flow.spec.ts'],
-  timeout: 300_000,
+  timeout: 240_000,
   expect: {
-    timeout: 45_000,
+    timeout: 30_000,
   },
   fullyParallel: false,
   workers: 1,
@@ -21,17 +26,20 @@ export default defineConfig({
   use: {
     baseURL: browserBaseUrl,
     browserName: 'chromium',
+    actionTimeout: 30_000,
+    navigationTimeout: 45_000,
     launchOptions: {
       args: ['--host-resolver-rules=MAP localhost 127.0.0.1'],
     },
   },
   webServer: {
-    command: `"${process.execPath}" node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port ${String(webPort)}`,
+    command: `"${process.execPath}" node_modules/next/dist/bin/next ${nextMode} --hostname 127.0.0.1 --port ${String(webPort)}`,
     cwd: resolve(process.cwd(), 'apps/web'),
     url: webBindUrl,
     timeout: 120_000,
     reuseExistingServer: false,
     env: {
+      NODE_OPTIONS: '--max-old-space-size=192',
       PAP_RUNTIME_MODE: 'STAGING_PRIVATE',
       API_BASE_URL: `http://127.0.0.1:${String(apiPortA)}`,
       PAP_WEB_SESSION_SECRET: sharedBffSecret,

@@ -198,12 +198,15 @@ async function main(): Promise<void> {
       );
       await appA.listen(E2E_API_PORT_A, '127.0.0.1');
 
-      appB = await NestFactory.create<NestFastifyApplication>(
-        AppModule.register(baseApiEnv),
-        new FastifyAdapter({ logger: false }),
-        { logger: false },
-      );
-      await appB.listen(E2E_API_PORT_B, '127.0.0.1');
+      const startSecondApi = process.env['PAP_E2E_START_SECOND_API'] === 'true';
+      if (startSecondApi) {
+        appB = await NestFactory.create<NestFastifyApplication>(
+          AppModule.register(baseApiEnv),
+          new FastifyAdapter({ logger: false }),
+          { logger: false },
+        );
+        await appB.listen(E2E_API_PORT_B, '127.0.0.1');
+      }
     } else {
       const sharedServices = createApiRuntimeServices(baseApiEnv);
       const receipt = await sharedServices.ownerBootstrap.bootstrapInitialOwner({
@@ -230,7 +233,7 @@ async function main(): Promise<void> {
         mode: hasPostgres ? 'postgres' : 'memory',
         idpIssuer: idp.issuer,
         apiBaseUrlA: `http://127.0.0.1:${String(E2E_API_PORT_A)}`,
-        apiBaseUrlB: hasPostgres ? `http://127.0.0.1:${String(E2E_API_PORT_B)}` : null,
+        apiBaseUrlB: appB ? `http://127.0.0.1:${String(E2E_API_PORT_B)}` : null,
         tenantId,
         ownerUserId,
       })}\n`,

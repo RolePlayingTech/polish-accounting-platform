@@ -4,6 +4,8 @@ import { RuntimeModeProvider } from '../components/runtime-mode-provider';
 import { isSyntheticPersonaLoginAllowed } from '../lib/runtime-mode';
 import './globals.css';
 
+export const dynamic = 'force-dynamic';
+
 export const metadata: Metadata = {
   title: {
     default: 'Polish Accounting Platform — Księga Współczesna',
