@@ -29,7 +29,11 @@ export default defineConfig({
     actionTimeout: 30_000,
     navigationTimeout: 45_000,
     launchOptions: {
-      args: ['--host-resolver-rules=MAP localhost 127.0.0.1'],
+      args: [
+        '--host-resolver-rules=MAP localhost 127.0.0.1',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
     },
   },
   webServer: {
@@ -37,9 +41,9 @@ export default defineConfig({
     cwd: resolve(process.cwd(), 'apps/web'),
     url: webBindUrl,
     timeout: 120_000,
-    reuseExistingServer: false,
+    reuseExistingServer: process.env['PAP_REUSE_EXISTING_WEB_SERVER'] === 'true',
     env: {
-      NODE_OPTIONS: '--max-old-space-size=192',
+      NODE_OPTIONS: useNextStart ? '--max-old-space-size=192' : '--max-old-space-size=448',
       PAP_RUNTIME_MODE: 'STAGING_PRIVATE',
       API_BASE_URL: `http://127.0.0.1:${String(apiPortA)}`,
       PAP_WEB_SESSION_SECRET: sharedBffSecret,

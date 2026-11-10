@@ -107,7 +107,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
     const toClose = activeContexts;
     activeContexts = [];
     for (const ctx of toClose.reverse()) {
-      await ctx.close().catch(() => undefined);
+      await Promise.race([ctx.close().catch(() => undefined), delay(5_000)]);
     }
   });
 
@@ -135,7 +135,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
     const ownerPage = await ownerContext.newPage();
 
       // 1. Weryfikacja ekranu /login w trybie STAGING_PRIVATE: brak Basic Auth, brak selektora person, brak piaskownicy OIDC
-      await ownerPage.goto('/login');
+      await ownerPage.goto('/login', { waitUntil: 'domcontentloaded' });
       await expect(
         ownerPage.getByRole('heading', { name: 'Zaloguj się do Polish Accounting Platform' }),
       ).toBeVisible();
@@ -196,7 +196,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       await expect(ownerPage.getByText('Aktor: Anna Właścicielka')).toBeVisible();
 
       // 5. Przejście do /app/companies, utworzenie drugiej firmy (Firma 2 — tajna dla księgowej) i wystawienie zaproszenia tylko do Firmy 1 (read)
-      await ownerPage.goto('/app/companies');
+      await ownerPage.goto('/app/companies', { waitUntil: 'domcontentloaded' });
       await ownerPage.getByLabel(/Pełna nazwa firmy/i).fill('Spółka Beta Tajna E2E');
       await ownerPage
         .getByRole('button', { name: 'Utwórz podmiot i przełącz kontekst' })
@@ -246,7 +246,9 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
 
       // 6. Drugi niezależny kontekst przeglądarki (Ewa Księgowa): logowanie z linku zaproszenia i akceptacja
       const accountantPage = await accountantContext.newPage();
-      const inviteLoginResp = await accountantPage.goto(acceptPath!);
+      const inviteLoginResp = await accountantPage.goto(acceptPath!, {
+        waitUntil: 'domcontentloaded',
+      });
       expect(inviteLoginResp?.headers()['referrer-policy']).toBe('same-origin');
       await expect(
         accountantPage.getByText('Wykryto jednorazowe zaproszenie do organizacji'),
@@ -288,7 +290,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       expect(replayAccept.status()).toBe(409);
 
       // 7. Natychmiastowe cofnięcie członkostwa Ewy przez Właścicielkę i natychmiastowa utrata sesji BFF w Kontekście 2
-      await ownerPage.reload();
+      await ownerPage.reload({ waitUntil: 'domcontentloaded' });
       const invitationsCard = ownerPage.getByTestId('tenant-invitations-card');
       await invitationsCard.getByRole('button', { name: 'Cofnij członkostwo' }).click();
       await ownerPage
@@ -299,7 +301,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       ).toBeVisible();
 
       // Ewa odświeża /app — jej sesja BFF w PostgreSQL została natychmiast unieważniona, księgi Firmy 1 są niedostępne
-      await accountantPage.reload();
+      await accountantPage.reload({ waitUntil: 'domcontentloaded' });
       await expect(accountantPage.getByTestId('dashboard-financial-overview')).toHaveCount(0);
       await expect(
         accountantPage.getByRole('link', { name: 'Zaloguj się do aplikacji' }),

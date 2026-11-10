@@ -1410,36 +1410,52 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     return true;
   }
 
-  getCompanyAccess(
+  async getCompanyAccess(
     actor: WorkspaceActorContext,
     tenantId: string,
     legalEntityId: string,
   ): Promise<CompanyAccessResponse> {
+    let parsedIds: {
+      readonly tId: ReturnType<typeof parseTenantId>;
+      readonly leId: ReturnType<typeof parseLegalEntityId>;
+      readonly actorId: ReturnType<typeof parseUserId>;
+    } | null = null;
+    try {
+      parsedIds = {
+        tId: parseTenantId(tenantId),
+        leId: parseLegalEntityId(legalEntityId),
+        actorId: parseUserId(actor.userId),
+      };
+    } catch {
+      parsedIds = null;
+    }
+
+    let isAdminSync = false;
+    if (parsedIds) {
+      isAdminSync = await this.syncTenantDirectoryAndGrantsFromPostgres(tenantId, actor.userId);
+      if (isAdminSync) {
+        const allUserIds = this.store.listUsers().map((u) => u.userId);
+        const syncedBatch = await this.syncActorAccessibleGrantsBatch(allUserIds, tenantId, true);
+        if (!syncedBatch) {
+          for (const user of this.store.listUsers()) {
+            await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
+          }
+        }
+      } else {
+        await this.syncCompanyGrantsIntoMemory(actor.userId, tenantId, legalEntityId, true);
+      }
+    }
+
     return this.runCompanyOperation(
       actor,
       tenantId,
       legalEntityId,
       'read',
-      async (_scope, txWorkspace) => {
-        const isAdminSync = await this.syncTenantDirectoryAndGrantsFromPostgres(
-          tenantId,
-          actor.userId,
-        );
-        const tId = parseTenantId(tenantId);
-        const leId = parseLegalEntityId(legalEntityId);
-        const actorId = parseUserId(actor.userId);
+      (_scope, txWorkspace) => {
+        const tId = parsedIds?.tId ?? parseTenantId(tenantId);
+        const leId = parsedIds?.leId ?? parseLegalEntityId(legalEntityId);
+        const actorId = parsedIds?.actorId ?? parseUserId(actor.userId);
         if (isAdminSync) {
-          const allUserIds = this.store.listUsers().map((u) => u.userId);
-          const syncedBatch = await this.syncActorAccessibleGrantsBatch(
-            allUserIds,
-            tenantId,
-            true,
-          );
-          if (!syncedBatch) {
-            for (const user of this.store.listUsers()) {
-              await this.syncCompanyGrantsIntoMemory(user.userId, tenantId, legalEntityId);
-            }
-          }
           for (const user of this.store.listUsers()) {
             txWorkspace.store.upsertUser(user);
           }
@@ -1450,7 +1466,6 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
             txWorkspace.store.upsertGrant(g);
           }
         } else {
-          await this.syncCompanyGrantsIntoMemory(actor.userId, tenantId, legalEntityId, true);
           const actorUser = this.store.getUserById(actorId);
           if (actorUser) {
             txWorkspace.store.upsertUser(actorUser);
