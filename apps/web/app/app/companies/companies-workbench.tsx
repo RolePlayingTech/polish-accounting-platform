@@ -19,13 +19,13 @@ import {
   type LegalBasisInfo,
 } from '@pap/ui';
 import { AlertBanner, Button, NipInput, TaxRegimeSelector } from '../../../components/ui-controls';
-import type { TenantDirectoryMemberSummary } from '../../../lib/synthetic-workspace';
 import {
   COMPANY_JDG_KPIR_ID,
   TENANT_1_ID,
   type AuditLogEntryRecord,
   type CompanyProfileRecord,
   type CompanyUserGrantRecord,
+  type TenantDirectoryMemberSummary,
 } from '../../../lib/workspace-types';
 
 export interface CompaniesWorkbenchProps {

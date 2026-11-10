@@ -146,7 +146,10 @@ async function main(): Promise<void> {
       await ownerDb.client`CREATE SCHEMA ${ownerDb.client(dataSchema)}`;
       await applySqlMigrationsToSchema(ownerDb.client);
 
-      const runtimeUser = new URL(runtimeUrl).username;
+      const runtimeUser = new URL(runtimeUrl).username as
+        | 'pap_test_app'
+        | 'pap_local_app'
+        | 'pap_staging_app';
       await provisionDatabaseContextKey(ownerDb.db, {
         keyId,
         keyHex,

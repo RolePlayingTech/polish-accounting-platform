@@ -199,7 +199,10 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
     schemaCreated = true;
     await applySqlMigrationsToSchema(owner.client);
 
-    const runtimeUser = new URL(runtimeUrl).username;
+    const runtimeUser = new URL(runtimeUrl).username as
+      | 'pap_test_app'
+      | 'pap_local_app'
+      | 'pap_staging_app';
     await provisionDatabaseContextKey(owner.db, {
       keyId,
       keyHex,
@@ -553,7 +556,10 @@ describe('Adversarial Wave 2 Regression Suite (#83 tożsamość OIDC + sesje BFF
     await owner!.client`DROP SCHEMA IF EXISTS ${owner!.client(dataSchema)} CASCADE`;
     await owner!.client`CREATE SCHEMA ${owner!.client(dataSchema)}`;
     await applySqlMigrationsToSchema(owner!.client);
-    const runtimeUser = new URL(runtimeUrl).username;
+    const runtimeUser = new URL(runtimeUrl).username as
+      | 'pap_test_app'
+      | 'pap_local_app'
+      | 'pap_staging_app';
     await provisionDatabaseContextKey(owner!.db, {
       keyId,
       keyHex,

@@ -514,3 +514,11 @@ export interface NotificationOutboxSnapshot {
   readonly preferences: NotificationPrefsState;
   readonly outbox: readonly NotificationOutboxEntry[];
 }
+
+export interface TenantDirectoryMemberSummary {
+  readonly userId: string;
+  readonly displayName: string;
+  readonly maskedEmail: string;
+  readonly tenantRole: 'tenant_owner' | 'tenant_admin' | 'tenant_member';
+  readonly status: 'active' | 'revoked';
+}

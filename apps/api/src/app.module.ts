@@ -56,18 +56,24 @@ class ApiRuntimeShutdownHook implements OnApplicationShutdown {
 
 function buildRuntimeProviders(
   explicitEnv?: Readonly<Record<string, string | undefined>>,
+  preconfiguredServices?: ApiRuntimeServices,
 ): Provider[] {
   return [
     {
       provide: API_RUNTIME_ENV,
       useFactory: () => explicitEnv ?? process.env,
     },
-    {
-      provide: API_RUNTIME_SERVICES,
-      useFactory: (runtimeEnv: Readonly<Record<string, string | undefined>>) =>
-        createApiRuntimeServicesAsync(runtimeEnv),
-      inject: [API_RUNTIME_ENV],
-    },
+    preconfiguredServices
+      ? {
+          provide: API_RUNTIME_SERVICES,
+          useValue: preconfiguredServices,
+        }
+      : {
+          provide: API_RUNTIME_SERVICES,
+          useFactory: (runtimeEnv: Readonly<Record<string, string | undefined>>) =>
+            createApiRuntimeServicesAsync(runtimeEnv),
+          inject: [API_RUNTIME_ENV],
+        },
     {
       provide: SandboxOidcService,
       useFactory: (rt: ApiRuntimeServices) => rt.sandboxOidc,
@@ -146,11 +152,14 @@ const API_CONTROLLERS = [
   providers: buildRuntimeProviders(),
 })
 export class AppModule {
-  static register(env?: Readonly<Record<string, string | undefined>>): DynamicModule {
+  static register(
+    env?: Readonly<Record<string, string | undefined>>,
+    preconfiguredServices?: ApiRuntimeServices,
+  ): DynamicModule {
     return {
       module: AppModule,
       controllers: API_CONTROLLERS,
-      providers: buildRuntimeProviders(env),
+      providers: buildRuntimeProviders(env, preconfiguredServices),
     };
   }
 }

@@ -93,6 +93,7 @@ import {
   type NotificationOutboxEntry,
   type NotificationPrefsState,
   type PublicPersonaSummary,
+  type TenantDirectoryMemberSummary,
   type ReminderStage,
   type SyntheticPersonaDefinition,
   type WorkspaceDocumentRecord,
@@ -2493,13 +2494,7 @@ export async function getDashboardSnapshot(session: ActiveWebSession): Promise<D
   };
 }
 
-export interface TenantDirectoryMemberSummary {
-  readonly userId: string;
-  readonly displayName: string;
-  readonly maskedEmail: string;
-  readonly tenantRole: 'tenant_owner' | 'tenant_admin' | 'tenant_member';
-  readonly status: 'active' | 'revoked';
-}
+export type { TenantDirectoryMemberSummary };
 
 export async function getAuthenticatedSessionOverview(
   session: ActiveWebSession,
