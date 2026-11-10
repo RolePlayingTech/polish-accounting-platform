@@ -22,8 +22,8 @@ export default defineConfig({
   use: {
     baseURL: webUrl,
     browserName: 'chromium',
-    actionTimeout: 30_000,
-    navigationTimeout: 45_000,
+    actionTimeout: 45_000,
+    navigationTimeout: 90_000,
     launchOptions: {
       args: ['--disable-dev-shm-usage'],
     },

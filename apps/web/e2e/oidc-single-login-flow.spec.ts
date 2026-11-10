@@ -296,7 +296,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       expect(replayAccept.status()).toBe(409);
 
       // 7. Natychmiastowe cofnięcie członkostwa Ewy przez Właścicielkę i natychmiastowa utrata sesji BFF w Kontekście 2
-      await ownerPage.reload({ waitUntil: 'domcontentloaded' });
+      await ownerPage.reload();
       const invitationsCard = ownerPage.getByTestId('tenant-invitations-card');
       await invitationsCard.getByRole('button', { name: 'Cofnij członkostwo' }).click();
       await ownerPage
@@ -307,7 +307,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       ).toBeVisible();
 
       // Ewa odświeża /app — jej sesja BFF w PostgreSQL została natychmiast unieważniona, księgi Firmy 1 są niedostępne
-      await accountantPage.reload({ waitUntil: 'domcontentloaded' });
+      await accountantPage.reload();
       await expect(accountantPage.getByTestId('dashboard-financial-overview')).toHaveCount(0);
       await expect(
         accountantPage.getByRole('link', { name: 'Zaloguj się do aplikacji' }),
