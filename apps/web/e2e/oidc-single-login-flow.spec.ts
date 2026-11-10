@@ -98,6 +98,11 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
   // eslint-disable-next-line no-empty-pattern
   test.beforeAll(async ({}, testInfo) => {
     testInfo.setTimeout(120_000);
+    const externalMeta = process.env['PAP_EXTERNAL_E2E_STACK_META']?.trim();
+    if (externalMeta) {
+      stackMeta = JSON.parse(externalMeta) as E2eStackMetadata;
+      return;
+    }
     const started = await startOidcE2eStack();
     stackProcess = started.child;
     stackMeta = started.meta;
@@ -226,6 +231,7 @@ test.describe('Pojedyncze logowanie OIDC + PKCE, bootstrap właściciela, zapros
       ).toBeVisible();
 
       const inviteForm = ownerPage.getByTestId('create-invitation-form');
+      await expect(inviteForm.getByText(/Kancelaria Alfa E2E JDG/)).toBeVisible();
       await inviteForm
         .getByLabel('Adres e-mail zapraszanej osoby')
         .fill('ewa.ksiegowa@syntetyczny.example');

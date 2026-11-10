@@ -25,7 +25,7 @@ export default defineConfig({
     actionTimeout: 30_000,
     navigationTimeout: 45_000,
     launchOptions: {
-      args: ['--disable-dev-shm-usage', '--disable-gpu'],
+      args: ['--disable-dev-shm-usage'],
     },
   },
   webServer: {
