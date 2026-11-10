@@ -21,9 +21,12 @@ import {
   approveAndPostDocumentMutation,
   createCompanyMutation,
   createOrImportDocumentMutation,
+  createTenantInvitationMutation,
   importAndReconcileBankStatementMutation,
   manageCompanyGrantMutation,
   manageMcpProposalMutation,
+  revokeTenantInvitationMutation,
+  revokeTenantMembershipMutation,
   toggleObligationPaidMutation,
   updateCompanyTaxSettingsMutation,
   updateNotificationPrefsAndDispatchMutation,
@@ -189,6 +192,68 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         await manageCompanyGrantMutation(session, {
           op: 'revoke',
           grantId: str(payload['grantId']),
+        });
+        return NextResponse.json({ ok: true });
+      }
+
+      case 'create_invitation': {
+        const rawIntendedRole = str(payload['intendedRole']);
+        const intendedRole: 'tenant_admin' | 'tenant_member' =
+          rawIntendedRole === 'tenant_admin' ? 'tenant_admin' : 'tenant_member';
+        const rawGrants = Array.isArray(payload['initialCompanyGrants'])
+          ? payload['initialCompanyGrants']
+          : [];
+        const initialCompanyGrants: {
+          legalEntityId: string;
+          actions: ('read' | 'write')[];
+        }[] = [];
+        for (const item of rawGrants) {
+          if (item && typeof item === 'object') {
+            const rec = item as Record<string, unknown>;
+            const leId = str(rec['legalEntityId']).trim();
+            const acts = Array.isArray(rec['actions']) ? rec['actions'] : ['read'];
+            if (leId) {
+              initialCompanyGrants.push({
+                legalEntityId: leId,
+                actions: acts.includes('write') ? ['read', 'write'] : ['read'],
+              });
+            }
+          }
+        }
+        const created = await createTenantInvitationMutation(session, {
+          inviteeEmail: str(payload['inviteeEmail']),
+          ...(str(payload['inviteeDisplayName']).trim()
+            ? { inviteeDisplayName: str(payload['inviteeDisplayName']).trim() }
+            : {}),
+          intendedRole,
+          ...(initialCompanyGrants.length > 0 ? { initialCompanyGrants } : {}),
+          reason:
+            str(payload['reason']).trim() || 'Zaproszenie współpracownika do organizacji w PAP',
+        });
+        return NextResponse.json({
+          ok: true,
+          invitation: created.invitation,
+          invitationToken: created.invitationToken,
+          acceptPath: created.acceptPath,
+        });
+      }
+
+      case 'revoke_invitation': {
+        const revoked = await revokeTenantInvitationMutation(session, {
+          invitationId: str(payload['invitationId']),
+          reason:
+            str(payload['reason']).trim() ||
+            'Cofnięcie oczekującego zaproszenia przez administratora organizacji',
+        });
+        return NextResponse.json({ ok: true, invitation: revoked.invitation });
+      }
+
+      case 'revoke_membership': {
+        await revokeTenantMembershipMutation(session, {
+          targetUserId: str(payload['targetUserId']),
+          reason:
+            str(payload['reason']).trim() ||
+            'Natychmiastowe cofnięcie członkostwa w organizacji i dostępu do podmiotów',
         });
         return NextResponse.json({ ok: true });
       }

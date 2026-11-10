@@ -143,7 +143,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         status: 401,
         reasonCode: 'oidc_provider_denied',
         messagePl: 'Logowanie u dostawcy tożsamości OIDC zostało anulowane lub odrzucone.',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'oidc_denied_or_cancelled',
       });
     }
 
@@ -160,7 +160,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         status: 400,
         reasonCode: 'invalid_callback_parameters',
         messagePl: 'Brak wymaganych parametrów zwrotnych OIDC (code oraz state).',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -177,7 +177,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         reasonCode: 'invalid_oidc_flow_binding',
         messagePl:
           'Niezgodność stanu bezpieczeństwa przepływu OIDC (brak lub błędne wiązanie przeglądarki ze state).',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -213,7 +213,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           consumed.reason === 'state_already_consumed'
             ? 'Wykryto ponowne użycie jednorazowego stanu OIDC (replay) — żądanie odrzucone.'
             : 'Sesja logowania OIDC wygasła lub stan jest nieprawidłowy. Rozpocznij logowanie ponownie.',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -240,7 +240,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         status: 401,
         reasonCode: 'redirect_uri_or_issuer_mismatch',
         messagePl: 'Niezgodność wystawcy OIDC lub adresu zwrotnego redirect_uri.',
-        loginAuthState: 'session_expired_or_invalid',
+        loginAuthState: 'invalid_callback_state',
       });
     }
 
@@ -352,12 +352,93 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const primaryCompany = companies[0] ?? null;
 
+    let sessionTenantId: string | null = primaryCompany?.tenantId ?? null;
+    let sessionProfileEmail: string | undefined;
+    if (!primaryCompany || !exchanged.claims.email) {
+      const meSessionResp = await papBffFetch<{
+        readonly state: string;
+        readonly userId: string;
+        readonly issuer: string;
+        readonly subject: string;
+        readonly email: string;
+        readonly tenantId: string | null;
+        readonly memberships: readonly {
+          readonly tenantId: string;
+          readonly status: string;
+        }[];
+      }>('/api/v1/me/session', {
+        method: 'GET',
+        bearerToken: exchanged.accessToken,
+      });
+
+      if (meSessionResp.kind === 'unavailable' || meSessionResp.kind === 'server_error') {
+        throw new OidcServiceUnavailableError(
+          'Usługa sesji i tożsamości rdzenia API jest chwilowo niedostępna (tryb fail-closed).',
+        );
+      }
+      if (meSessionResp.kind === 'unauthorized') {
+        return buildCallbackFailureResponse({
+          prefersJson,
+          trustedOrigin,
+          status: 401,
+          reasonCode: 'access_token_rejected',
+          messagePl: 'Weryfikacja tokena dostępowego OIDC w rdzeniu API zakończyła się odmową.',
+          loginAuthState: 'session_expired_or_invalid',
+        });
+      }
+      if (meSessionResp.kind === 'forbidden') {
+        return buildCallbackFailureResponse({
+          prefersJson,
+          trustedOrigin,
+          status: 403,
+          reasonCode: meSessionResp.reasonCode ?? 'forbidden',
+          messagePl:
+            meSessionResp.message ??
+            'Twoja tożsamość OIDC nie posiada aktywnego dostępu do platformy księgowej.',
+          loginAuthState: 'insufficient_permissions',
+        });
+      }
+      if (meSessionResp.kind === 'ok') {
+        if (
+          meSessionResp.data.userId !== resolvedActor.userId ||
+          meSessionResp.data.issuer !== exchanged.claims.issuer ||
+          meSessionResp.data.subject !== exchanged.claims.subject
+        ) {
+          return buildCallbackFailureResponse({
+            prefersJson,
+            trustedOrigin,
+            status: 401,
+            reasonCode: 'token_actor_mismatch',
+            messagePl:
+              'Niezgodność tożsamości (issuer, subject) między id_token a widokiem sesji API.',
+            loginAuthState: 'session_expired_or_invalid',
+          });
+        }
+        if (!sessionTenantId && meSessionResp.data.state === 'authenticated') {
+          const activeMembership = meSessionResp.data.memberships.find(
+            (m) => m.status === 'active',
+          );
+          sessionTenantId = meSessionResp.data.tenantId ?? activeMembership?.tenantId ?? null;
+        }
+        if (
+          typeof meSessionResp.data.email === 'string' &&
+          !meSessionResp.data.email.includes('***@') &&
+          !meSessionResp.data.email.endsWith('@oidc.invalid')
+        ) {
+          sessionProfileEmail = meSessionResp.data.email;
+        }
+      }
+    }
+
     const displayName =
       exchanged.claims.displayName ??
       (resolvedActor.displayName && resolvedActor.displayName !== exchanged.claims.subject
         ? resolvedActor.displayName
-        : (exchanged.claims.email ?? resolvedActor.displayName ?? 'Użytkownik OIDC'));
-    const email = exchanged.claims.email ?? 'brak-adresu@oidc.invalid';
+        : (exchanged.claims.email ??
+          sessionProfileEmail ??
+          resolvedActor.displayName ??
+          'Użytkownik OIDC'));
+    const email = exchanged.claims.email ?? sessionProfileEmail ?? 'brak-adresu@oidc.invalid';
 
     const { sessionId, sessionIdHash } = generateOpaqueSessionId();
     const tokenBundle: StoredBffTokenBundle = {
@@ -379,7 +460,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       subject: exchanged.claims.subject,
       displayName,
       email,
-      tenantId: primaryCompany?.tenantId ?? null,
+      tenantId: sessionTenantId,
       legalEntityId: primaryCompany?.legalEntityId ?? null,
       period: DEFAULT_ACCOUNTING_PERIOD,
       encryptedTokens,
@@ -409,8 +490,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
             userId: resolvedActor.userId,
             displayName,
             email,
-            hasTenantMembership: Boolean(primaryCompany),
-            tenantId: primaryCompany?.tenantId ?? null,
+            hasTenantMembership: Boolean(sessionTenantId),
+            tenantId: sessionTenantId,
             legalEntityId: primaryCompany?.legalEntityId ?? null,
           },
         },

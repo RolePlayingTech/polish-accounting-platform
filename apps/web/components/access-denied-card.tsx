@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Card, StatusBadge } from '@pap/ui';
 import type { CompanyProfileRecord } from '../lib/workspace-types';
+import { useAllowSyntheticLogin } from './runtime-mode-provider';
 import { AlertBanner, Button } from './ui-controls';
 
 export interface WorkspaceAccessDeniedCardProps {
@@ -12,14 +13,18 @@ export interface WorkspaceAccessDeniedCardProps {
   reasonCode?: string;
   messagePl: string;
   accessibleCompanies?: readonly CompanyProfileRecord[];
+  allowSyntheticLogin?: boolean;
 }
 
 export function WorkspaceAccessDeniedCard({
   accessibleCompanies = [],
+  allowSyntheticLogin,
   messagePl,
   reasonCode,
   statusCode = 403,
 }: WorkspaceAccessDeniedCardProps) {
+  const contextAllowSyntheticLogin = useAllowSyntheticLogin();
+  const effectiveAllowSyntheticLogin = allowSyntheticLogin ?? contextAllowSyntheticLogin;
   const router = useRouter();
   const [switchingEntityId, setSwitchingEntityId] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
@@ -135,7 +140,9 @@ export function WorkspaceAccessDeniedCard({
             href="/login"
             className="inline-flex min-h-10 items-center rounded-md border border-[#858177] bg-white px-4 py-2 text-xs font-medium text-[#191c1a] hover:bg-[#f4f2ec] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
           >
-            Zmień personę OIDC (/login)
+            {effectiveAllowSyntheticLogin
+              ? 'Zmień personę OIDC (/login)'
+              : 'Przejdź do logowania (/login)'}
           </Link>
         </div>
       </div>

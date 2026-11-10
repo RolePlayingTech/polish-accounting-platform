@@ -3,10 +3,26 @@ import { ACADEMY_ALL_LESSONS, ACADEMY_MODULES } from '@pap/domain/academy';
 import { POLISH_LEGAL_RULES_REGISTRY } from '@pap/domain';
 import { Card, MoneyAmount, StatusBadge } from '@pap/ui';
 import { AcademyDisclaimerBanner } from '../components/ui-controls';
+import { isSyntheticPersonaLoginAllowed, resolveWebRuntimeMode } from '../lib/runtime-mode';
 import { readServerSession } from '../lib/session';
 
 export default async function ProductHomePage() {
   const session = await readServerSession();
+  const allowPersonas = isSyntheticPersonaLoginAllowed();
+  const runtimeMode = resolveWebRuntimeMode();
+  const primaryLoginLabel = allowPersonas
+    ? 'Zaloguj się do środowiska testowego'
+    : 'Zaloguj się';
+  const heroLoginLabel = session
+    ? 'Otwórz pulpit księgowy (/app)'
+    : allowPersonas
+      ? 'Zaloguj się do środowiska testowego (3 persony OIDC)'
+      : 'Zaloguj się do aplikacji';
+  const envBadgeLabel = allowPersonas
+    ? 'Środowisko syntetyczne — brak prawdziwych rozliczeń'
+    : runtimeMode === 'PRODUCTION' || runtimeMode === 'PUBLIC_DEMO'
+      ? 'Bezpieczne logowanie OIDC + PKCE'
+      : 'Prywatne środowisko testowe — dane syntetyczne';
 
   return (
     <div className="min-h-screen bg-[#faf9f5] text-[#191c1a]">
@@ -49,9 +65,7 @@ export default async function ProductHomePage() {
               href={session ? '/app' : '/login'}
               className="inline-flex min-h-9 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-4 py-2 text-xs font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
             >
-              {session
-                ? `Kontynuuj jako ${session.context.displayName}`
-                : 'Zaloguj się do środowiska testowego'}
+              {session ? `Kontynuuj jako ${session.context.displayName}` : primaryLoginLabel}
             </Link>
           </nav>
         </div>
@@ -61,8 +75,8 @@ export default async function ProductHomePage() {
         <div className="rounded-2xl border border-[#e5e2d9] bg-white p-6 sm:p-10">
           <div className="flex flex-wrap items-center gap-2">
             <StatusBadge
-              tone="warning"
-              label="Środowisko syntetyczne — brak prawdziwych rozliczeń"
+              tone={allowPersonas ? 'warning' : 'info'}
+              label={envBadgeLabel}
             />
             <StatusBadge
               tone="legal"
@@ -85,10 +99,10 @@ export default async function ProductHomePage() {
 
           <div className="mt-6 flex flex-wrap items-center gap-3">
             <Link
-              href="/login"
+              href={session && !allowPersonas ? '/app' : '/login'}
               className="inline-flex min-h-11 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-5 py-2.5 text-sm font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
             >
-              Zaloguj się do środowiska testowego (3 persony OIDC)
+              {heroLoginLabel}
             </Link>
             <Link
               href="/academy"

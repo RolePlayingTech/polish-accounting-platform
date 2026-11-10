@@ -6,12 +6,14 @@ import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
+import { isSyntheticPersonaLoginAllowed } from '../../../lib/runtime-mode';
 import { readServerSession } from '../../../lib/session';
 import { getCompaniesManagementSnapshot } from '../../../lib/synthetic-workspace';
 import { CompaniesWorkbench } from './companies-workbench';
 
 export default async function CompaniesPage() {
   const session = await readServerSession();
+  const allowPersonas = isSyntheticPersonaLoginAllowed();
 
   if (!session) {
     return (
@@ -21,6 +23,7 @@ export default async function CompaniesPage() {
         pageTitle="Podmioty, profile podatkowe i dziennik audytu"
         sessionContext={null}
         activeCompany={null}
+        allowSyntheticLogin={allowPersonas}
       >
         <div className="space-y-6">
           <LoginRequiredCard
@@ -63,12 +66,17 @@ export default async function CompaniesPage() {
       sessionContext={session.context}
       activeCompany={snapshot.activeCompany}
       accessibleCompanies={snapshot.accessibleCompanies}
+      allowSyntheticLogin={allowPersonas}
     >
       <div className="space-y-6">
         <CompaniesWorkbench
           activeCompany={snapshot.activeCompany}
           accessibleCompanies={snapshot.accessibleCompanies}
           grants={snapshot.grants}
+          members={snapshot.members}
+          invitations={snapshot.invitations}
+          isOidcSession={session.authMethod === 'oidc'}
+          currentUserId={session.context.userId}
           auditLog={snapshot.auditLog}
           period={session.context.period}
           zusTotalGrosze={snapshot.zusPreview?.totalZusToPayGrosze ?? null}

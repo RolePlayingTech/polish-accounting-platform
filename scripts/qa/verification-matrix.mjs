@@ -55,6 +55,9 @@ export const RISK_SURFACES = Object.freeze({
       'Brak wycieku kontekstu pap.context przy reużyciu połączenia z puli dla innego tenanta',
       'Awaria zapisu security_decision_event przerywa transakcję i wycofuje efekt biznesowy',
       'Odrzucenie nagłówków spoofujących (x-user-id, x-tenant-id -> 401) i wygasłych/niepoprawnych tokenów JWT',
+      'Ochrona przepływu OAuth 2.0 + PKCE (S256) przed replayem state/code/refresh oraz wyścigiem rotacji sesji BFF (#83)',
+      '10x wyścig bootstrapInitialOwner i single-use zaproszeń SHA-256 bez osieroconych kont app_user oraz bez łączenia tożsamości po e-mailu (#83)',
+      'Granice delegacji tenant_admin, natychmiastowe unieważnianie sesji BFF przy cofnięciu dostępu oraz blokada piaskownicy PAP_RUNTIME_MODE poza LOCAL_DEV (#78, #83)',
     ],
   },
   money_legal_rules: {
@@ -180,8 +183,15 @@ export function classifyFilePath(rawPath) {
   // (b) OIDC / RLS / Tenant / Audyt
   if (
     path.startsWith('apps/api/src/auth/') ||
+    path === 'apps/api/src/controllers/session-identity.controller.ts' ||
+    path === 'apps/api/src/controllers/tenant-invitations.controller.ts' ||
+    path === 'apps/api/src/runtime/owner-bootstrap-runtime.ts' ||
     path === 'apps/web/lib/session.ts' ||
+    path === 'apps/web/lib/oidc-client.ts' ||
+    path === 'apps/web/lib/runtime-mode.ts' ||
     path === 'packages/application/src/oidc-authentication.ts' ||
+    path === 'packages/application/src/identity-lifecycle.ts' ||
+    path === 'packages/application/src/web-session-store.ts' ||
     path === 'packages/application/src/tenant-authorization.ts' ||
     path === 'packages/application/src/access-management.ts' ||
     path === 'packages/application/src/security-audit.ts' ||
@@ -191,6 +201,8 @@ export function classifyFilePath(rawPath) {
     path === 'packages/db/src/tenant-authorization.ts' ||
     path === 'packages/db/src/access-management.ts' ||
     path === 'packages/db/src/user-identity.ts' ||
+    path === 'packages/db/src/identity-lifecycle.ts' ||
+    path === 'packages/db/src/web-session-store.ts' ||
     path === 'packages/db/src/transactional-unit-of-work.ts' ||
     path === 'packages/db/src/transaction-primitives.ts' ||
     path.startsWith('packages/db/drizzle/') ||

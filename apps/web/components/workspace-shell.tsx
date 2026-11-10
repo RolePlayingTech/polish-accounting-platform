@@ -13,6 +13,7 @@ import {
 } from '@pap/ui';
 import type { SessionContext } from '../lib/session';
 import { AVAILABLE_PERIODS, type CompanyProfileRecord } from '../lib/workspace-types';
+import { useAllowSyntheticLogin } from './runtime-mode-provider';
 
 export const WORKSPACE_NAV_SECTIONS: readonly NavSection[] = [
   {
@@ -76,6 +77,7 @@ export interface WorkspaceShellProps {
   activeCompany: CompanyProfileRecord | null;
   accessibleCompanies?: readonly CompanyProfileRecord[];
   offlineDemoMode?: boolean;
+  allowSyntheticLogin?: boolean;
   children: ReactNode;
 }
 
@@ -83,6 +85,7 @@ export function WorkspaceShell({
   accessibleCompanies = [],
   activeCompany,
   activeHref,
+  allowSyntheticLogin,
   children,
   offlineDemoMode,
   pageActions,
@@ -92,6 +95,8 @@ export function WorkspaceShell({
   sessionContext,
   surface = 'app',
 }: WorkspaceShellProps) {
+  const contextAllowSyntheticLogin = useAllowSyntheticLogin();
+  const effectiveAllowSyntheticLogin = allowSyntheticLogin ?? contextAllowSyntheticLogin;
   const router = useRouter();
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
@@ -176,6 +181,9 @@ export function WorkspaceShell({
     }
   }
 
+  const spansMultipleTenants =
+    new Set(mergedAccessibleCompanies.map((comp) => comp.tenantId)).size > 1;
+
   const contextHeader =
     sessionContext && effectiveActiveCompany ? (
       <div className="space-y-0">
@@ -189,7 +197,7 @@ export function WorkspaceShell({
             void handleContextChange({ period: nextPeriod });
           }}
           dataFreshnessLabel={`Aktor: ${sessionContext.displayName}`}
-          dataMode="synthetic"
+          dataMode={sessionContext.personaId ? 'synthetic' : 'staging'}
           actions={
             <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
               <div
@@ -221,7 +229,9 @@ export function WorkspaceShell({
                 >
                   {mergedAccessibleCompanies.map((comp) => (
                     <option key={comp.legalEntityId} value={comp.legalEntityId}>
-                      {comp.shortName}
+                      {spansMultipleTenants
+                        ? `${comp.shortName} · Org. ${comp.tenantId.slice(0, 8)}`
+                        : comp.shortName}
                     </option>
                   ))}
                 </select>
@@ -267,10 +277,44 @@ export function WorkspaceShell({
           </div>
         ) : null}
       </div>
+    ) : sessionContext ? (
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e2d9] bg-white px-4 py-3 sm:px-6">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <StatusBadge size="sm" tone="info" label="Sesja OIDC aktywna" />
+          <span className="text-xs font-medium text-[#191c1a]">
+            Aktor: {sessionContext.displayName}
+          </span>
+          <span className="text-xs text-[#636b66]">({sessionContext.email})</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/academy"
+            className="inline-flex min-h-8 items-center rounded-md border border-[#858177] bg-white px-3 py-1 text-xs font-medium text-[#191c1a] hover:bg-[#f4f2ec] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+          >
+            Akademia Księgowości
+          </Link>
+          <form method="post" action="/api/session/logout">
+            <button
+              type="submit"
+              className="min-h-8 rounded-md border border-[#858177] bg-white px-3 py-1 text-xs font-medium text-[#191c1a] hover:bg-[#f4f2ec] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
+            >
+              Wyloguj
+            </button>
+          </form>
+        </div>
+      </div>
     ) : (
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#e5e2d9] bg-white px-4 py-3 sm:px-6">
         <div className="flex flex-wrap items-center gap-2.5">
-          <StatusBadge size="sm" tone="warning" label="Dane syntetyczne (środowisko testowe)" />
+          <StatusBadge
+            size="sm"
+            tone={effectiveAllowSyntheticLogin ? 'warning' : 'info'}
+            label={
+              effectiveAllowSyntheticLogin
+                ? 'Dane syntetyczne (środowisko testowe)'
+                : 'Brak aktywnej sesji aplikacji'
+            }
+          />
           <span className="text-xs text-[#464c48]">
             Tryb publiczny bez aktywnej sesji księgowej — Akademia dostępna bez logowania.
           </span>
@@ -286,7 +330,9 @@ export function WorkspaceShell({
             href="/login"
             className="inline-flex min-h-8 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-3 py-1 text-xs font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
           >
-            Zaloguj się do środowiska testowego
+            {effectiveAllowSyntheticLogin
+              ? 'Zaloguj się do środowiska testowego'
+              : 'Zaloguj się'}
           </Link>
         </div>
       </div>

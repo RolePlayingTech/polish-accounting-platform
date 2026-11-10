@@ -13,7 +13,7 @@
     "dev:container": "turbo run dev:container --filter=@pap/web",
     "dev:mcp": "pnpm --filter @pap/mcp dev",
     "build": "turbo run build",
-    "lint": "turbo run lint && eslint playwright.config.ts test",
+    "lint": "turbo run lint && eslint playwright.config.ts playwright.oidc.config.ts test",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test && pnpm test:arch",
     "test:integration": "pnpm --filter @pap/db test:integration",
@@ -26,7 +26,8 @@
     "db:generate": "pnpm --filter @pap/db db:generate",
     "db:migrate": "pnpm --filter @pap/db db:migrate",
     "test:e2e": "turbo run build && playwright test",
-    "format:check": "prettier --check \"apps/**/*.{ts,tsx,json,css,mjs}\" \"!apps/**/next-env.d.ts\" \"packages/**/*.{ts,tsx,json,css,mjs}\" \"test/**/*.{ts,tsx,json,mjs}\" \"*.json\" \"*.mjs\" \"*.yaml\" \"playwright.config.ts\" \"pnpm-lock.yaml\" \".github/workflows/ci.yml\"",
+    "test:e2e:oidc": "turbo run build && playwright test --config playwright.oidc.config.ts",
+    "format:check": "prettier --check \"apps/**/*.{ts,tsx,json,css,mjs}\" \"!apps/**/next-env.d.ts\" \"packages/**/*.{ts,tsx,json,css,mjs}\" \"test/**/*.{ts,tsx,json,mjs}\" \"*.json\" \"*.mjs\" \"*.yaml\" \"playwright.config.ts\" \"playwright.oidc.config.ts\" \"pnpm-lock.yaml\" \".github/workflows/ci.yml\"",
     "clean": "turbo run clean"
   },
   "devDependencies": {
