@@ -2,6 +2,8 @@
 
 ## Bieżący handoff — 23 listopada 2026 (nowa iteracja)
 
+**Wykonawcza misja Antigravity Swarm:** [#124](https://github.com/RolePlayingTech/polish-accounting-platform/issues/124) oraz [szczegółowy runbook wieloagentowy](docs/agents/swarm-mission-end-to-end-accounting-2026-11-23.md). Celem jest pełny, sprawdzony pilot księgowy JDG KPiR / ryczałt / sp. z o.o. z fakturowaniem, KSeF w test/demo, VAT/PIT/CIT/ZUS, bankiem, XSD JPK, MCP i QA; to nadal NIE jest zgoda na realne dane ani automatyczne wdrożenie.
+
 - **Punkt startowy agentów**: [harness stabilizacji / testów / refaktoru / UX](docs/agents/next-iteration-2026-11-23.md) oraz [plan współpracy klient–księgowa](docs/architecture/accountant-collaboration-v0.md). To dokumenty kierunkowe, nie dowód, że wdrożono funkcję lub ukończono testy.
 - **Docelowa wizja PAP**: [Epic #123](https://github.com/RolePlayingTech/polish-accounting-platform/issues/123), [pełny katalog modułów i poziomów wsparcia](docs/product/full-spectrum-capability-map.md), [modularność oraz droga do premium SaaS](docs/architecture/modularity-and-saas-growth.md), [kontrakt MCP-native](docs/agents/mcp-native-capability-contract.md). **Najbliższy etap nadal naprawia istniejący produkt; katalog nie jest poleceniem wdrożenia wszystkiego naraz.** Każdy podagent czyta tylko dokumentację swojej domeny, bez kopiowania całej wizji do każdego promptu.
 - Najpierw zachować integralność księgową i wyeliminować otwarte P0 z [#119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119) (szczególnie #106, #107, #108, #110, #118), potem UX i bezpieczne ekstrakcje z monolitów (#117). Panel księgowej (#121) zaczyna od kontraktów i izolacji, a nie od atrap UI. Produkcyjny SaaS i realne dane wymagają #100.
