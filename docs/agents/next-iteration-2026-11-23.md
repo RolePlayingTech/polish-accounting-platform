@@ -58,6 +58,8 @@ Cel stylu: istniejąca „Księga Współczesna”, czytelne kwoty i tabele, sp�
 
 **Fala E — współpraca z księgową, MVP projektowe:** #121 i [specyfikacja](../architecture/accountant-collaboration-v0.md). W tej iteracji wymagane są model uprawnień, granice modułu, makiety/przepływy i test plan; agent może wykonać mały działający pionowy wycinek konsultacji na **syntetycznej** bazie, jeśli nie zagraża to falom A/B. Prawdziwe wiadomości lub dostęp profesjonalisty wymagają faktycznego personelu, zgód, RODO, polityki retencji i #100. Prace nad panelem operatora #97 nie mogą odblokować dostępu do cudzej księgowości. Billing SaaS pozostaje projektem późniejszym z ADR-003.
 
+**Dodatkowa weryfikacja architektoniczna:** rozbieżność `docs/16-zasady-architektoniczne.md` („bez JS `number`”) z implementacją safe-integer groszy + `BigInt` w `packages/domain/src/money.ts` należy objąć kontrolą zakresu/precyzji i ADR w #117. To **nie jest potwierdzona usterka arytmetyczna**; nie konwertować całego systemu bez argumentacji i golden tests.
+
 ## 4. Matryca minimum do odbioru
 - 3 profile: JDG KPiR (skala i liniowy), JDG ryczałt, sp. z o.o. pełne księgi. Reżim i VAT status sterują formularzem, menu, akcjami API. Osobno przypadki czynny VAT i zwolnienie.
 - Testy P0 z #119: faktura z dwiema stawkami; nadwyżka VAT M→M+1; dwie operacje bankowe bez ID; przydział jednej wpłaty do dwóch faktur; brak dubla księgowego.
