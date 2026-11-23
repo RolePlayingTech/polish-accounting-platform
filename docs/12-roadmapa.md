@@ -1,5 +1,7 @@
 # 12. Roadmapa i status realizacji na gałęzi `main`
 
+> **Wizja rozwoju od 2026-11-23:** [Epic #123](https://github.com/RolePlayingTech/polish-accounting-platform/issues/123) i [pełny katalog capabilities](product/full-spectrum-capability-map.md) rozszerzają plan na JDG, spółki, kadry/płace, magazyn, aktywa, zaawansowane raporty, MCP-native, biura rachunkowe i docelowy SaaS. **H0→H3 to horyzonty zależności, nie daty ani status wdrożenia.** [Harness](agents/next-iteration-2026-11-23.md) i [architektura](architecture/modularity-and-saas-growth.md) prowadzą pierwszą, naprawczą iterację.
+
 > **Uwaga 2026-11-23:** statusy ukończenia niżej dokumentują historyczny zakres implementacji, **nie** znoszą otwartych błędów merytorycznych, UX, KSeF i bezpieczeństwa. Aktualne blokery i bramka GO/NO-GO: [audyt #119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119), [#100](https://github.com/RolePlayingTech/polish-accounting-platform/issues/100), [harness](agents/next-iteration-2026-11-23.md), [projekt współpracy z księgową #121](https://github.com/RolePlayingTech/polish-accounting-platform/issues/121). Każde „[x]” wymaga ponownego testu na końcowym SHA przed realnym użyciem.
 
 > **Stan aktualizacji: listopad 2026 r. (po scaleniu PR `#45`–`#52`).**  
