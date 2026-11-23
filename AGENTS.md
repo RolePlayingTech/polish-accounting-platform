@@ -1,5 +1,11 @@
 # Zasady dla agentów AI
 
+## Bieżący handoff — 23 listopada 2026 (nowa iteracja)
+
+- **Punkt startowy agentów**: [harness stabilizacji / testów / refaktoru / UX](docs/agents/next-iteration-2026-11-23.md) oraz [plan współpracy klient–księgowa](docs/architecture/accountant-collaboration-v0.md). To dokumenty kierunkowe, nie dowód, że wdrożono funkcję lub ukończono testy.
+- Najpierw zachować integralność księgową i wyeliminować otwarte P0 z [#119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119) (szczególnie #106, #107, #108, #110, #118), potem UX i bezpieczne ekstrakcje z monolitów (#117). Panel księgowej (#121) zaczyna od kontraktów i izolacji, a nie od atrap UI. Produkcyjny SaaS i realne dane wymagają #100.
+- Agent ma **dużą swobodę rozwiązania**, może proponować dodatkowe usprawnienia i samodzielnie planować równoległe, rozłączne PR-y, ale musi respektować poniższe polityki bezpieczeństwa, odrębne zgody na zmiany środowiska i jawne PASS/FAIL/NOT RUN.
+
 ## Decyzja właściciela 2026-10-30: proporcjonalny odbiór wewnętrzny
 
 Do czasu odrębnej decyzji o udostępnieniu komercyjnym obowiązuje [polityka wewnętrznych merge](docs/internal-development-merge-policy.md). Zastępuje wcześniejsze bezwzględne wymaganie pełnego CI i kompletnej macierzy testowej **przed każdym merge na potrzeby rozwoju wewnętrznego**. Nie znosi ochrony tenantów, RLS, sekretów, poprawności audytu ani obowiązku osobnej zgody na deploy, migracje i rzeczywiste operacje księgowe. W testach odróżniać `NOT RUN` od `PASS` i znane błędy od brakującej infrastruktury.
