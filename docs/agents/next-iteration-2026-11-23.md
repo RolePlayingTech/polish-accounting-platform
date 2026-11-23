@@ -7,6 +7,21 @@ Najpierw **własna, naprawdę użyteczna księgowość właściciela**, późnie
 
 Wybory projektowe i implementacyjne należą w dużej mierze do agenta: wolno zmieniać hierarchię ekranów, komponenty, podział modułów i szczegóły API, proponować lepsze rozwiązania, usuwać martwy kod i dopisywać brakujące zabezpieczenia. Nie trzeba pytać o każdy detal. Granice nienegocjowalne: poprawność księgowa, idempotencja, bezpieczeństwo, izolacja, pełny audyt, testowalność, zgodność z obowiązującymi ADR i zakaz nieautoryzowanego deployu/migracji. Nie tworzyć demonstracyjnych atrap funkcji wyglądających na działające.
 
+## 0A. Rozbudowana wizja produktu i zasada aktywnej selekcji kontekstu (Epic #123)
+
+**Pełny zakres biznesowy jest szerszy niż bieżąca iteracja napraw.** Wizja: kompleksowa polska księgowość od jednoosobowej JDG po spółki na pełnych księgach, pracowników, handel/magazyn, środki trwałe, waluty i rozliczenia transgraniczne, profesjonalne biuro rachunkowe oraz przyszła skala premium SaaS. Zobacz:
+- **[Mapa funkcjonalności i profili](../product/full-spectrum-capability-map.md)** — definicja modułów, stanu wdrożenia, legal profiles, horyzonty H0→H3, przykładowe scenariusze końca-do-końca;
+- **[Modularna architektura i SaaS growth](../architecture/modularity-and-saas-growth.md)** — boundaries, ownership danych, kanoniczna operacja finansowa, zero niezarządzanego długu, stopniowe skalowanie;
+- **[MCP-native kontrakt](mcp-native-capability-contract.md)** — discovery, parity UI/API/MCP, bezpieczne użycie agentów, prawdziwy klient MCP i bramki approval;
+- **[Panel i konsultacje księgowej](../architecture/accountant-collaboration-v0.md)** — realna współpraca i obsługa wielu klientów;
+- **[Epic #123](https://github.com/RolePlayingTech/polish-accounting-platform/issues/123)** — koordynacja dalszej wizji i odpowiedzialności.
+
+**Przeciążenie kontekstu jest błędem procesu.** Koordynator zna mapę i w razie potrzeby jej indeks; podagent czyta tylko odpowiedni kontekst, issue, kod, ADR i testy. Nie kopiować pełnej mapy do każdego promptu ani tworzyć równoległych „sources of truth”. Aktualna iteracja bez zmian: H0 integralność i P1, potem UX/refaktor, następnie ograniczony prototyp panelu księgowej. H1/H2/H3 to kierunek rozwoju i architektoniczne konsekwencje, **nie polecenie natychmiastowego zaimplementowania kilkudziesięciu modułów**.
+
+Każdy nowy moduł musi mieć jawnie: profile prawne/okresy, `planned/experimental/implemented/verified`, własność danych i zależności, identyfikator źródła/operacji księgowej, jeden application use case UI/API/MCP, model ról/approval, migracje/rollback, testy golden/reference/E2E/tenant/security, obserwowalność i plan ekspozycji w UI. Nie projektować „uniwersalnego full ERP” bez testowanego przypadku użycia; pozostawić adaptery do zewnętrznych systemów, kiedy jest to rozsądniejsze.
+
+**Wskazówka dla swarm:** przed dodaniem kolejnego pola/funkcji sprawdź, czy należy ono do istniejącego bounded context i czy nie dubluje rozliczenia VAT/KPiR/GL; zamiast rozrostu 6k-line serwisów wyodrębniaj moduły po ochronie golden testami. Autonomia dotyczy decyzji projektowych i realizacji, nie prawnych lub finansowych zgód użytkownika.
+
 ## 1. Obowiązkowe źródła prawdy — w tej kolejności
 1. `AGENTS.md`, `apps/web/AGENTS.md` (w tym lokalna dokumentacja Next), `docs/internal-development-merge-policy.md`, `docs/adr/010-granica-transakcji-i-idempotencja-fala1.md` i `docs/adr/011-tozsamosc-oidc-sesje-bff-i-cykl-zycia-uzytkownikow-fala2.md`.
 2. [Audyt integralności #119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119), [bramki realnej firmy #100](https://github.com/RolePlayingTech/polish-accounting-platform/issues/100), [refaktor #117](https://github.com/RolePlayingTech/polish-accounting-platform/issues/117), [panel księgowej #121](https://github.com/RolePlayingTech/polish-accounting-platform/issues/121), [panel operatora #97](https://github.com/RolePlayingTech/polish-accounting-platform/issues/97).
