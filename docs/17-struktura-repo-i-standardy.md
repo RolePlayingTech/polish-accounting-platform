@@ -1,5 +1,7 @@
 # 17. Docelowa struktura repozytorium i standardy implementacji
 
+> **Nota aktualności (2026-11-23):** sekcja „Aktualny szkielet” poniżej opisuje wcześniejszy etap i nie odzwierciedla pełnego stanu po PR #45–#96 (aktualny `main` ma migracje do `0009` i operacje księgowe). Do pracy nad kolejną iteracją stosuj [aktualny harness](agents/next-iteration-2026-11-23.md), repo `main` i [#119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119) zamiast traktować historyczny szkic jako stan wykonania.
+
 **Status:** kierunek architektury przyjęty dla [Issue #5](https://github.com/RolePlayingTech/polish-accounting-platform/issues/5). Część „Aktualny szkielet” opisuje kod, który istnieje. Pozostałe pakiety poniżej to plan, a nie deklaracja wdrożenia. Obowiązuje [ADR-002](adr/002-stos-technologiczny-i-wdrozenia.md).
 
 ## Aktualny szkielet
