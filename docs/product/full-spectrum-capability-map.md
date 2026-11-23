@@ -1,5 +1,7 @@
 # PAP — pełna mapa funkcjonalności produktu (product capability map)
 
+> **Wykonanie najbliższej dużej iteracji:** [#124](https://github.com/RolePlayingTech/polish-accounting-platform/issues/124) i [runbook dla Swarm](../agents/swarm-mission-end-to-end-accounting-2026-11-23.md). Ambitny, ale ograniczony do *zweryfikowanych* profili i oficjalnych testów KSeF/JPK; ta mapa pozostaje długofalowym katalogiem, nie checklistą do odhaczenia podczas jednego uruchomienia.
+
 **Stan:** strategiczny katalog i kontrakt rozwoju, nie deklaracja implementacji · **ostatni przegląd:** 2026-11-23 · [Epic #123](https://github.com/RolePlayingTech/polish-accounting-platform/issues/123) · [harness](../agents/next-iteration-2026-11-23.md) · [architektura](../architecture/modularity-and-saas-growth.md). Priorytety mogą być przestawiane po analizie użytkowników, prawa i zależności. Nie duplikować jako kilkudziesięciu pustych Issues.
 
 ## 1. Wizja i zasady produktu
