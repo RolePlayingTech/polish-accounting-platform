@@ -61,6 +61,9 @@ SourceDocument / ExternalEvent
 - External unknown outcome (timeout KSeF/bank) -> `pending_reconciliation` + odczyt statusu po external reference; **nie** zakładać porażki/sukcesu i bezmyślnie retry wysyłki.
 - VAT wielostawkowy i multi-line nie mogą zredukować się do jednej stawki przy approve/preview (#106). Idempotencja przy wielu kanałach (#110) i przelew bez podwójnego rozrachunku (#108) są invariantami.
 
+### Otwarte pytanie precyzji: kontrakt pieniędzy (zarejestrowane w #117)
+`docs/16-zasady-architektoniczne.md` wymaga `Decimal/numeric` i zakazuje JS `number` dla kwot, ale obecny `packages/domain/src/money.ts` korzysta z `number` **tylko jako bezpiecznych całkowitych groszy** (`Number.isSafeInteger`), a do działań pośrednich z `BigInt`. To nie dowodzi błędu, lecz jest sprzecznością między dokumentem a rzeczywistym kontraktem. Przed skalowaniem/wielowalutowością **wyjaśnić ADR**: typ i limity pieniędzy (np. branded safe integer cents vs BigInt/Decimal), reprezentacja JSON/REST/MCP/Drizzle/PG, poprawność sumowania i zaokrągleń oraz migracja kompatybilna. Dodać boundary/overflow/property tests. Nie wykonywać zbiorczej, ryzykownej konwersji bez testów P0 i planu.
+
 ## 4. Multi-tenant by design, bez „magicznego admina”
 - Klucz autoryzacji: aktor + tenantId + legalEntityId + akcja + zakres dat/okres + cel + effective grants; deny-by-default w application i PostgreSQL FORCE RLS w adapterze DB; UI gating tylko poprawia ergonomię.
 - Księgowa z biura może widzieć wiele *konkretnych* legal entities z różnych tenantów: aktywny engagement, osobna relacja, sprawdzenie per zapytanie; nie scalać ich baz ani kont.
