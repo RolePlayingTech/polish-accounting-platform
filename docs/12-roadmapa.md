@@ -1,5 +1,7 @@
 # 12. Roadmapa i status realizacji na gałęzi `main`
 
+> **Uwaga 2026-11-23:** statusy ukończenia niżej dokumentują historyczny zakres implementacji, **nie** znoszą otwartych błędów merytorycznych, UX, KSeF i bezpieczeństwa. Aktualne blokery i bramka GO/NO-GO: [audyt #119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119), [#100](https://github.com/RolePlayingTech/polish-accounting-platform/issues/100), [harness](agents/next-iteration-2026-11-23.md), [projekt współpracy z księgową #121](https://github.com/RolePlayingTech/polish-accounting-platform/issues/121). Każde „[x]” wymaga ponownego testu na końcowym SHA przed realnym użyciem.
+
 > **Stan aktualizacji: listopad 2026 r. (po scaleniu PR `#45`–`#52`).**  
 > Niniejszy dokument synchronizuje pierwotny plan etapowy z rzeczywistym kodem zaimplementowanym w monorepo. Zgodnie z zasadą uczciwości inżynieryjnej (`AGENTS.md` Zasada nr 9) precyzyjnie rozdziela funkcje **już wdrożone i przetestowane w kodzie** od integracji zewnętrznych i formalnych odbiorów, które **celowo pozostają poza bieżącym etapem testowym**.
 
