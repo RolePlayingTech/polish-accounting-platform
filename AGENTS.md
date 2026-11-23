@@ -2,9 +2,8 @@
 
 ## Bieżący handoff — 23 listopada 2026 (nowa iteracja)
 
-- **Punkt startowy agentów**:
+- **Punkt startowy agentów**: [harness stabilizacji / testów / refaktoru / UX](docs/agents/next-iteration-2026-11-23.md) oraz [plan współpracy klient–księgowa](docs/architecture/accountant-collaboration-v0.md). To dokumenty kierunkowe, nie dowód, że wdrożono funkcję lub ukończono testy.
 - **Docelowa wizja PAP**: [Epic #123](https://github.com/RolePlayingTech/polish-accounting-platform/issues/123), [pełny katalog modułów i poziomów wsparcia](docs/product/full-spectrum-capability-map.md), [modularność oraz droga do premium SaaS](docs/architecture/modularity-and-saas-growth.md), [kontrakt MCP-native](docs/agents/mcp-native-capability-contract.md). **Najbliższy etap nadal naprawia istniejący produkt; katalog nie jest poleceniem wdrożenia wszystkiego naraz.** Każdy podagent czyta tylko dokumentację swojej domeny, bez kopiowania całej wizji do każdego promptu.
- [harness stabilizacji / testów / refaktoru / UX](docs/agents/next-iteration-2026-11-23.md) oraz [plan współpracy klient–księgowa](docs/architecture/accountant-collaboration-v0.md). To dokumenty kierunkowe, nie dowód, że wdrożono funkcję lub ukończono testy.
 - Najpierw zachować integralność księgową i wyeliminować otwarte P0 z [#119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119) (szczególnie #106, #107, #108, #110, #118), potem UX i bezpieczne ekstrakcje z monolitów (#117). Panel księgowej (#121) zaczyna od kontraktów i izolacji, a nie od atrap UI. Produkcyjny SaaS i realne dane wymagają #100.
 - Agent ma **dużą swobodę rozwiązania**, może proponować dodatkowe usprawnienia i samodzielnie planować równoległe, rozłączne PR-y, ale musi respektować poniższe polityki bezpieczeństwa, odrębne zgody na zmiany środowiska i jawne PASS/FAIL/NOT RUN.
 
