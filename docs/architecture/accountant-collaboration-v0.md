@@ -1,5 +1,7 @@
 # Propozycja modułu współpracy z księgową — MVP v0
 
+> **Szerszy kontekst**: [Epic #123](https://github.com/RolePlayingTech/polish-accounting-platform/issues/123), [pełny katalog funkcji PAP](../product/full-spectrum-capability-map.md) i [modularne bounded contexts](modularity-and-saas-growth.md). Panel księgowej jest jednym modułem przyszłego systemu dla wielu typów firm; nie ma być specjalną ścieżką omijającą wspólne reguły finansowe i MCP.
+
 **Status:** koncepcja architektury i kryteria testowe, NIE wdrożony panel · **2026-11-23**. Główne zadanie: [#121](https://github.com/RolePlayingTech/polish-accounting-platform/issues/121). Zależności: [#6](https://github.com/RolePlayingTech/polish-accounting-platform/issues/6), [#97](https://github.com/RolePlayingTech/polish-accounting-platform/issues/97), [#99](https://github.com/RolePlayingTech/polish-accounting-platform/issues/99), [#100](https://github.com/RolePlayingTech/polish-accounting-platform/issues/100), [#116](https://github.com/RolePlayingTech/polish-accounting-platform/issues/116), [#117](https://github.com/RolePlayingTech/polish-accounting-platform/issues/117), ADR-003, ADR-011.
 
 ## 1. Problem i cel
