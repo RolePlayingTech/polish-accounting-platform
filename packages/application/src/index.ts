@@ -20,3 +20,4 @@ export * from './xsd/index.js';
 export * from './source-archive/index.js';
 export * from './jpk/index.js';
 export * from './ksef/index.js';
+export * from './statutory-filing-facade.js';

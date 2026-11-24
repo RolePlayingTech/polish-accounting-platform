@@ -35,6 +35,10 @@
     "./api": {
       "types": "./dist/api.d.ts",
       "import": "./dist/api.js"
+    },
+    "./statutory-ksef": {
+      "types": "./dist/statutory-ksef.d.ts",
+      "import": "./dist/statutory-ksef.js"
     }
   },
   "dependencies": {
