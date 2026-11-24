@@ -637,4 +637,88 @@ describe('Wave 2: Statutory JPK XSD exports, FA(3) & KSeF 2.0 Sandbox, WORM Arch
     expect(novCloseStatus.readyToClose).toBe(false);
     expect(novCloseStatus.status).toBe('reconciling');
   });
+
+  it('[P1-R2-1] exports JPK_V7M(3) XML for foreign/B2C noPolishNip sales (np -> K_11/P_11/BRAK) and purchases (NrDostawcy BRAK) without crashing prior/current VAT registers', async () => {
+    const sessionOct = makeOfflineSession({
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      period: '2026-10',
+    });
+    const sessionNov = makeOfflineSession({
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      period: '2026-11',
+    });
+
+    const foreignNpSales = await createOrImportDocumentMutation(sessionOct, {
+      mode: 'manual',
+      documentKind: 'sales',
+      direction: 'sales',
+      documentNumber: 'FV/NP/2026/10/01',
+      issueDate: '2026-10-12',
+      saleDate: '2026-10-12',
+      dueDate: '2026-10-26',
+      counterpartyName: 'Nordic Cloud Systems AB',
+      counterpartyNip: '',
+      noPolishNip: true,
+      description: 'Usługi doradztwa IT poza terytorium kraju (art. 28b VAT)',
+      netPln: '4000.00',
+      vatRate: 'np',
+    });
+    await approveAndPostDocumentMutation(sessionOct, {
+      documentId: foreignNpSales.documentId,
+      documentNumber: foreignNpSales.documentNumber,
+      counterpartyName: foreignNpSales.counterpartyName,
+      counterpartyNip: '',
+      noPolishNip: true,
+      issueDate: foreignNpSales.issueDate,
+      netPln: '4000.00',
+      vatPln: '0.00',
+      expenseQualification: 'none',
+      vatDeductionMode: 'full_100',
+    });
+
+    const foreignPurchase = await createOrImportDocumentMutation(sessionOct, {
+      mode: 'manual',
+      documentKind: 'purchase',
+      direction: 'purchase',
+      documentNumber: 'FZ/BRAK/2026/10/02',
+      issueDate: '2026-10-14',
+      saleDate: '2026-10-14',
+      dueDate: '2026-10-28',
+      counterpartyName: 'Dostawca Bez Polskiego NIP',
+      counterpartyNip: '',
+      noPolishNip: true,
+      description: 'Zakup materiałów pomocniczych',
+      netPln: '1000.00',
+      vatRate: '23',
+      expenseQualification: 'other_expenses_100_col13',
+      vatDeductionMode: 'full_100',
+    });
+    await approveAndPostDocumentMutation(sessionOct, {
+      documentId: foreignPurchase.documentId,
+      documentNumber: foreignPurchase.documentNumber,
+      counterpartyName: foreignPurchase.counterpartyName,
+      counterpartyNip: '',
+      noPolishNip: true,
+      issueDate: foreignPurchase.issueDate,
+      netPln: '1000.00',
+      vatPln: '230.00',
+      expenseQualification: 'other_expenses_100_col13',
+      vatDeductionMode: 'full_100',
+    });
+
+    const octV7 = await exportValidatedJpkXmlMutation(sessionOct, {
+      period: '2026-10',
+      structureCode: 'JPK_V7M(3)',
+      purpose: 1,
+    });
+    expect(octV7.xmlContent).toContain('<NrKontrahenta>BRAK</NrKontrahenta>');
+    expect(octV7.xmlContent).toContain('<K_11>4000.00</K_11>');
+    expect(octV7.xmlContent).toContain('<P_11>4000</P_11>');
+    expect(octV7.xmlContent).toContain('<NrDostawcy>BRAK</NrDostawcy>');
+
+    // Scanning priorPeriods (including 2026-10 with noPolishNip docs) in 2026-11 succeeds without throwing
+    const dash = await getDashboardSnapshot(sessionNov);
+    const vatNov = await buildVatRegistersForCompany(dash.activeCompany, '2026-11', sessionNov);
+    expect(vatNov.jpkSummary.period).toBe('2026-11');
+  });
 });

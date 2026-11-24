@@ -2296,7 +2296,8 @@ export async function buildVatRegistersForCompany(
     periodDocs: readonly WorkspaceDocumentRecord[],
   ): VatRegisterEntry[] =>
     periodDocs.flatMap((doc) => {
-      const safeNip = doc.counterpartyNip?.trim() || 'BrakID';
+      const rawNip = doc.counterpartyNip?.trim();
+      const validNip = rawNip && rawNip !== 'BrakID' ? rawNip : undefined;
       if (doc.lines && doc.lines.length > 1) {
         const groupedByRate = new Map<
           VatRateCode,
@@ -2323,7 +2324,7 @@ export async function buildVatRegistersForCompany(
             issueDate: doc.issueDate,
             documentNumber: doc.documentNumber,
             counterpartyName: doc.counterpartyName,
-            counterpartyNip: safeNip,
+            ...(validNip ? { counterpartyNip: validNip } : {}),
             vatRate: rate,
             netGrosze: bucket.netGrosze,
             vatTotalGrosze: bucket.vatGrosze,
@@ -2346,7 +2347,7 @@ export async function buildVatRegistersForCompany(
           issueDate: doc.issueDate,
           documentNumber: doc.documentNumber,
           counterpartyName: doc.counterpartyName,
-          counterpartyNip: safeNip,
+          ...(validNip ? { counterpartyNip: validNip } : {}),
           vatRate: doc.vatRate,
           netGrosze: doc.netGrosze,
           vatTotalGrosze: doc.vatGrosze,
@@ -3001,7 +3002,9 @@ function buildGroupedVatEntriesForDocument(params: {
       issueDate: params.issueDate,
       documentNumber: params.documentNumber,
       counterpartyName: params.counterpartyName,
-      counterpartyNip: params.counterpartyNip || 'BrakID',
+      ...(params.counterpartyNip && params.counterpartyNip !== 'BrakID'
+        ? { counterpartyNip: params.counterpartyNip }
+        : {}),
       vatRate,
       netGrosze: group.netGrosze,
       vatTotalGrosze: group.vatTotalGrosze,

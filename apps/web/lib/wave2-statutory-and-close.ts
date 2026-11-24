@@ -1250,7 +1250,8 @@ export async function exportValidatedJpkXmlMutation(
             : {}),
         })),
         purchaseRows: vat.purchaseEntries.map((p) => ({
-          supplierTin: p.counterpartyNip || 'BrakID',
+          supplierTin:
+            p.counterpartyNip && p.counterpartyNip !== 'BrakID' ? p.counterpartyNip : 'BRAK',
           supplierName: p.counterpartyName,
           documentNumber: p.documentNumber,
           purchaseDate: p.issueDate,
