@@ -88,12 +88,13 @@ export default async function VatAndJpkPage() {
 
   const isVatExempt = dash.activeCompany.vatStatus !== 'czynny';
   const exemptionEval = isVatExempt
-    ? evaluateVatExemptionLimit({
+    ? (vat.vatExemption ??
+      evaluateVatExemptionLimit({
         eventDate: `${session.context.period}-28`,
         activityStartDate: dash.activeCompany.activityStartDate,
         cumulativeNetSalesBeforeGrosze: dash.activeCompany.ytdPriorMonthsRevenueGrosze,
         currentTransactionNetGrosze: Math.max(0, dash.monthlyRevenueGrosze),
-      })
+      }))
     : null;
   const exemptionPercent = exemptionEval
     ? Math.min(
