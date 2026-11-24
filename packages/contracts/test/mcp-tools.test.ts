@@ -1,14 +1,26 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ConfirmBankReconciliationInputSchema,
   ConfirmPreparedProposalInputSchema,
+  GetAuditLineageInputSchema,
+  GetCompanyProfileInputSchema,
   GetMonthlyTaxObligationsInputSchema,
   IsoDateSchema,
   KsefReferenceNumberSchema,
   LegalBasisReferenceSchema,
+  ListAvailableCapabilitiesInputSchema,
   ListMyCompaniesInputSchema,
+  ListUnreconciledBankTransactionsInputSchema,
+  McpToolErrorCodeSchema,
   OfficialHttpsUrlSchema,
+  PolishNipSchema,
+  PrepareBankReconciliationInputSchema,
   PrepareInvoiceAndPostingProposalInputSchema,
+  PrepareMonthCloseInputSchema,
+  PreviewInvoicePostingInputSchema,
+  PreviewJpkExportInputSchema,
   UntrustedDocumentTextEnvelopeSchema,
+  isValidPolishNip,
 } from '../src/mcp-tools.js';
 
 describe('MCP tool contracts', () => {
@@ -73,6 +85,22 @@ describe('MCP tool contracts', () => {
         },
       }).success,
     ).toBe(false);
+
+    // [P1-1] Polish NIP modulo-11 checksum validation
+    expect(isValidPolishNip('5260250995')).toBe(true);
+    expect(isValidPolishNip('5260258904')).toBe(true);
+    expect(isValidPolishNip('5250001003')).toBe(true);
+    expect(PolishNipSchema.safeParse('5260250995').success).toBe(true);
+
+    for (const invalidNip of ['1234567890', '0000000000', '5260258901', '1000010000']) {
+      expect(isValidPolishNip(invalidNip)).toBe(false);
+      expect(
+        PrepareInvoiceAndPostingProposalInputSchema.safeParse({
+          ...valid,
+          invoice: { ...valid.invoice, counterpartyNip: invalidNip },
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('validates real UTC calendar dates in IsoDateSchema and rejects non-existent dates', () => {
@@ -177,5 +205,153 @@ describe('MCP tool contracts', () => {
       truncated: false,
     });
     expect(parsed.kind).toBe('untrusted_document_data');
+  });
+
+  it('validates #112 multi-rate lines, explicit VAT classification, correction fields, and new MCP capability schemas', () => {
+    const multiRateInput = {
+      tenantId: '11111111-1111-4111-8111-111111111111',
+      legalEntityId: '22222222-2222-4222-8222-222222222222',
+      idempotencyKey: '33333333-3333-4333-8333-333333333333',
+      invoice: {
+        direction: 'purchase' as const,
+        invoiceNumber: 'FV/2026/11/MULTI-01',
+        issueDate: '2026-11-05',
+        dueDate: '2026-11-19',
+        counterpartyNip: '5260250995',
+        counterpartyName: 'Dostawca Wielostawkowy Sp. z o.o.',
+        netAmountPln: '1500.00',
+        vatAmountPln: '270.00',
+        grossAmountPln: '1770.00',
+        expenseDescription: 'Licencja chmurowa + podręczniki techniczne',
+        suggestedCategory: 'uslugi_obce' as const,
+        lines: [
+          {
+            description: 'Licencja chmurowa 23%',
+            netAmountPln: '1000.00',
+            vatRate: '23' as const,
+            vatAmountPln: '230.00',
+            grossAmountPln: '1230.00',
+          },
+          {
+            description: 'Podręczniki techniczne 8%',
+            netAmountPln: '500.00',
+            vatRate: '8' as const,
+            vatAmountPln: '40.00',
+            grossAmountPln: '540.00',
+          },
+        ],
+      },
+    };
+    expect(PrepareInvoiceAndPostingProposalInputSchema.safeParse(multiRateInput).success).toBe(
+      true,
+    );
+
+    // Reject isCorrection=true without correctedDocumentNumber / correctionReason
+    expect(
+      PrepareInvoiceAndPostingProposalInputSchema.safeParse({
+        ...multiRateInput,
+        invoice: {
+          ...multiRateInput.invoice,
+          isCorrection: true,
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      PrepareInvoiceAndPostingProposalInputSchema.safeParse({
+        ...multiRateInput,
+        invoice: {
+          ...multiRateInput.invoice,
+          isCorrection: true,
+          correctedDocumentNumber: 'FV/2026/10/099',
+          correctionReason: 'Rabat potransakcyjny uzgodniony aneksem',
+        },
+      }).success,
+    ).toBe(true);
+
+    // Verify new error codes for #112 and capability hardening
+    for (const code of [
+      'vat_classification_required',
+      'invalid_vat_classification',
+      'capability_unsupported',
+      'rate_limit_exceeded',
+      'period_closed',
+      'agent_self_approval_forbidden',
+    ]) {
+      expect(McpToolErrorCodeSchema.safeParse(code).success).toBe(true);
+    }
+
+    // Verify strict schemas for the 9 modular MCP capability tools
+    expect(
+      GetCompanyProfileInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+      }).success,
+    ).toBe(true);
+    expect(
+      ListAvailableCapabilitiesInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        taxYear: 2026,
+      }).success,
+    ).toBe(true);
+    expect(
+      PreviewInvoicePostingInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        invoice: multiRateInput.invoice,
+      }).success,
+    ).toBe(true);
+    expect(
+      PreviewJpkExportInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        period: '2026-11',
+        schemaFamily: 'JPK_V7M',
+      }).success,
+    ).toBe(true);
+    expect(
+      ListUnreconciledBankTransactionsInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        period: '2026-11',
+      }).success,
+    ).toBe(true);
+    expect(
+      PrepareBankReconciliationInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        idempotencyKey: '33333333-3333-4333-8333-333333333333',
+        bankTransactionId: '44444444-4444-4444-8444-444444444444',
+        invoiceId: '55555555-5555-4555-8555-555555555555',
+        allocationGrossPln: '615.00',
+      }).success,
+    ).toBe(true);
+    expect(
+      ConfirmBankReconciliationInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        idempotencyKey: '33333333-3333-4333-8333-333333333333',
+        proposalId: '66666666-6666-4666-8666-666666666666',
+        expectedPayloadHash: 'a'.repeat(64),
+        confirmationCode: 'pap_hconf_valid_human_confirmation_token_1234',
+      }).success,
+    ).toBe(true);
+    expect(
+      PrepareMonthCloseInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        idempotencyKey: '33333333-3333-4333-8333-333333333333',
+        period: '2026-11',
+      }).success,
+    ).toBe(true);
+    expect(
+      GetAuditLineageInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        limit: 25,
+        outcomeFilter: 'deny',
+      }).success,
+    ).toBe(true);
   });
 });

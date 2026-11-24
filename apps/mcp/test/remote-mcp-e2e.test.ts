@@ -1,6 +1,8 @@
 import { createConnection } from 'node:net';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import type {
   OidcAccessTokenVerifier,
   TenantAuthorizationDataSource,
@@ -33,6 +35,7 @@ import {
   startPapMcpHttpServer,
   type RunningPapMcpHttpServer,
 } from '../src/http-server.js';
+import { validateLoopbackMcpUpstreamUrl } from '../src/stdio-bridge.js';
 
 const TENANT_A = mcpTenantId('11111111-1111-4111-8111-111111111111');
 const ENTITY_A = mcpLegalEntityId('22222222-2222-4222-8222-222222222222');
@@ -41,6 +44,7 @@ const ENTITY_B = mcpLegalEntityId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
 const USER_A = mcpUserId('33333333-3333-4333-8333-333333333333');
 
 const SECRET_ACCOUNTANT_TOKEN = 'pap-live-secret-bearer-token-do-not-log-987654';
+const SECRET_HUMAN_UI_TOKEN = 'pap-human-ui-reviewer-bearer-token-do-not-log-777888';
 const SECRET_NO_MCP_SCOPE_TOKEN = 'pap-token-without-mcp-read-scope-123456';
 
 function buildRemoteMcpTestStack() {
@@ -51,6 +55,23 @@ function buildRemoteMcpTestStack() {
     async verifyAccessToken(rawToken, options) {
       if (rawToken === SECRET_ACCOUNTANT_TOKEN) {
         const tokenScopes = ['pap:mcp:read', 'pap:mcp:prepare'];
+        for (const req of options?.requiredScopes ?? []) {
+          if (!tokenScopes.includes(req)) {
+            return { ok: false, reason: 'insufficient_scope' };
+          }
+        }
+        return {
+          ok: true,
+          identity: {
+            issuer: 'https://oidc.pap.local',
+            subject: 'oidc-sub-accountant-a',
+            scopes: tokenScopes,
+            expiresAt: new Date('2026-11-12T11:00:00Z'),
+          },
+        };
+      }
+      if (rawToken === SECRET_HUMAN_UI_TOKEN) {
+        const tokenScopes = ['pap:ui:full', 'pap:mcp:read', 'pap:mcp:prepare'];
         for (const req of options?.requiredScopes ?? []) {
           if (!tokenScopes.includes(req)) {
             return { ok: false, reason: 'insufficient_scope' };
@@ -375,14 +396,37 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
     expect(listed.tools.map((t) => t.name)).toEqual([
       'system_status',
       'list_my_companies',
+      'get_company_profile',
+      'list_available_capabilities',
       'list_unpaid_invoices',
+      'preview_invoice_posting',
+      'prepare_invoice_and_posting_proposal',
+      'confirm_prepared_proposal',
       'get_monthly_tax_obligations',
       'explain_accounting_item',
       'get_legal_basis',
+      'preview_jpk_export',
+      'list_unreconciled_bank_transactions',
+      'prepare_bank_reconciliation',
+      'confirm_bank_reconciliation_proposal',
       'get_month_close_checklist',
-      'prepare_invoice_and_posting_proposal',
-      'confirm_prepared_proposal',
+      'prepare_month_close',
+      'get_audit_lineage',
     ]);
+
+    const resourcesListed = await mcpClient.listResources();
+    expect(resourcesListed.resources.map((r) => r.uri)).toEqual([
+      'pap://system/status',
+      'pap://system/capabilities-catalog',
+      'pap://companies/mine',
+    ]);
+    const capCatalogRes = await mcpClient.readResource({
+      uri: 'pap://system/capabilities-catalog',
+    });
+    const capCatalogText =
+      'text' in capCatalogRes.contents[0]! ? capCatalogRes.contents[0]!.text : '{}';
+    const parsedCatalog = JSON.parse(capCatalogText) as { tools: unknown[] };
+    expect(parsedCatalog.tools).toHaveLength(18);
 
     // 1. list_my_companies
     const myCompaniesRes = await mcpClient.callTool({
@@ -526,9 +570,21 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       'human_confirmation_required',
     );
 
+    // Delegated MCP-only resource token (without 'openid' and without 'pap:ui:*') CANNOT self-issue challenge
+    const selfChallengeDenied = await stack.gateway.issueHumanConfirmationChallenge({
+      humanBearerToken: SECRET_ACCOUNTANT_TOKEN,
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A,
+      proposalId: parsedPrepare1.proposalId,
+    });
+    expect(selfChallengeDenied).toEqual({
+      ok: false,
+      reason: 'agent_self_approval_forbidden',
+    });
+
     // Out-of-band human reviewer approves in UI and issues one-time confirmationCode
     const humanChallenge = await stack.gateway.issueHumanConfirmationChallenge({
-      humanBearerToken: SECRET_ACCOUNTANT_TOKEN,
+      humanBearerToken: SECRET_HUMAN_UI_TOKEN,
       tenantId: TENANT_A,
       legalEntityId: ENTITY_A,
       proposalId: parsedPrepare1.proposalId,
@@ -721,5 +777,81 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
     expect(failClosedRes.status).toBe(503);
     const failClosedJson = (await failClosedRes.json()) as { error?: string };
     expect(failClosedJson.error).toBe('audit_unavailable');
+  });
+
+  it('connects real @modelcontextprotocol/client over child-process STDIO bridge (PAP_MCP_TRANSPORT=stdio-upstream) and blocks non-loopback SSRF upstream URLs', async () => {
+    // 1. SSRF / query-token / userinfo guardrails on validateLoopbackMcpUpstreamUrl
+    expect(validateLoopbackMcpUpstreamUrl('https://evil.example/mcp').ok).toBe(false);
+    expect(validateLoopbackMcpUpstreamUrl('http://169.254.169.254/mcp').ok).toBe(false);
+    expect(validateLoopbackMcpUpstreamUrl('http://127.0.0.1:4110/mcp?access_token=abc').ok).toBe(
+      false,
+    );
+    expect(validateLoopbackMcpUpstreamUrl('http://user:pass@127.0.0.1:4110/mcp').ok).toBe(false);
+    expect(validateLoopbackMcpUpstreamUrl('http://127.0.0.1:4110/admin').ok).toBe(false);
+    expect(validateLoopbackMcpUpstreamUrl('http://127.0.0.1:4110/api/v1/mcp').ok).toBe(true);
+
+    // 2. Spawn actual built apps/mcp/dist/main.js over OS pipes with StdioClientTransport
+    const stack = buildRemoteMcpTestStack();
+    runningServer = await startPapMcpHttpServer({
+      port: 0,
+      gateway: stack.gateway,
+      verifier: stack.verifier,
+      identityResolver: stack.identityResolver,
+    });
+
+    const mainEntryPath = fileURLToPath(new URL('../dist/main.js', import.meta.url));
+    const stdioTransport = new StdioClientTransport({
+      command: process.execPath,
+      args: [mainEntryPath],
+      stderr: 'pipe',
+      env: {
+        PATH: process.env['PATH'] ?? '',
+        PAP_MCP_TRANSPORT: 'stdio-upstream',
+        PAP_MCP_UPSTREAM_URL: runningServer.mcpUrl,
+        PAP_MCP_BEARER_TOKEN: SECRET_ACCOUNTANT_TOKEN,
+      },
+    });
+
+    mcpClient = new Client({ name: 'pap-stdio-e2e-client', version: '0.1.0' });
+    await mcpClient.connect(stdioTransport);
+
+    const stdioTools = await mcpClient.listTools();
+    expect(stdioTools.tools).toHaveLength(18);
+
+    const companiesViaStdio = await mcpClient.callTool({
+      name: 'list_my_companies',
+      arguments: {},
+    });
+    expect(companiesViaStdio.isError).not.toBe(true);
+    const parsedCompanies = ListMyCompaniesOutputSchema.parse(companiesViaStdio.structuredContent);
+    expect(parsedCompanies.companies).toHaveLength(1);
+    expect(parsedCompanies.companies[0]?.legalEntityId).toBe(ENTITY_A);
+
+    // #112 Zero-VAT invoice without explicit vatRate MUST fail closed over real STDIO MCP!
+    const zeroVatRejected = await mcpClient.callTool({
+      name: 'prepare_invoice_and_posting_proposal',
+      arguments: {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A,
+        idempotencyKey: '78787878-7878-4878-8878-787878787878',
+        invoice: {
+          direction: 'purchase',
+          invoiceNumber: 'FV/STDIO/ZERO-VAT/01',
+          issueDate: '2026-11-11',
+          dueDate: '2026-11-25',
+          counterpartyNip: '5260250995',
+          counterpartyName: 'Dostawca Bez Stawki',
+          netAmountPln: '400.00',
+          vatAmountPln: '0.00',
+          grossAmountPln: '400.00',
+          expenseDescription: 'Usługa bez podanej stawki VAT',
+          suggestedCategory: 'uslugi_obce',
+        },
+      },
+    });
+    expect(zeroVatRejected.isError).toBe(true);
+    expect(McpToolErrorEnvelopeSchema.parse(zeroVatRejected.structuredContent).errorCode).toBe(
+      'vat_classification_required',
+    );
   });
 });

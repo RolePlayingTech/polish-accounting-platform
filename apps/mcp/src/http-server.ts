@@ -754,9 +754,9 @@ export async function startPapMcpHttpServer(
     }
   });
 
-  server.headersTimeout = 15_000;
-  server.requestTimeout = 30_000;
-  server.keepAliveTimeout = 5_000;
+  server.keepAliveTimeout = 60_000;
+  server.headersTimeout = 65_000;
+  server.requestTimeout = 60_000;
 
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);

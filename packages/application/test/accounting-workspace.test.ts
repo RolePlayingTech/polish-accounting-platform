@@ -480,6 +480,17 @@ describe('AccountingWorkspaceService — end-to-end Polish accounting, authz, sa
             },
           };
         }
+        if (rawBearerToken === 'token-jan-human-ui') {
+          return {
+            ok: true,
+            identity: {
+              issuer: 'http://127.0.0.1:4000',
+              subject: DEMO_USER_JAN_ID,
+              scopes: ['pap:ui:full', 'pap:mcp:read', 'pap:mcp:prepare'],
+              expiresAt: new Date('2026-03-19T10:00:00.000Z'),
+            },
+          };
+        }
         return { ok: false, reason: 'invalid_signature' };
       },
     };
@@ -543,9 +554,21 @@ describe('AccountingWorkspaceService — end-to-end Polish accounting, authz, sa
       expect(invalidConfirm.error.errorCode).toBe('human_confirmation_required');
     }
 
-    // Człowiek pobiera jednorazowy kod zatwierdzenia i potwierdza propozycję
-    const challenge = await mcpGateway.issueHumanConfirmationChallenge({
+    // Delegowany token MCP bez zakresu UI nie może samodzielnie wystawić wyzwania zatwierdzenia człowieka
+    const mcpSelfChallenge = await mcpGateway.issueHumanConfirmationChallenge({
       humanBearerToken: 'token-jan-mcp',
+      proposalId: prepared.data.proposalId,
+      tenantId: TENANT_1_ID,
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+    });
+    expect(mcpSelfChallenge).toEqual({
+      ok: false,
+      reason: 'agent_self_approval_forbidden',
+    });
+
+    // Człowiek z sesją UI pobiera jednorazowy kod zatwierdzenia i potwierdza propozycję
+    const challenge = await mcpGateway.issueHumanConfirmationChallenge({
+      humanBearerToken: 'token-jan-human-ui',
       proposalId: prepared.data.proposalId,
       tenantId: TENANT_1_ID,
       legalEntityId: COMPANY_JDG_KPIR_ID,

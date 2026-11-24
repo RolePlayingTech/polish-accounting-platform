@@ -12,6 +12,10 @@
       "types": "./dist/mcp-gateway.d.ts",
       "import": "./dist/mcp-gateway.js"
     },
+    "./mcp": {
+      "types": "./dist/mcp/index.d.ts",
+      "import": "./dist/mcp/index.js"
+    },
     "./notifications-engine": {
       "types": "./dist/notifications-engine.d.ts",
       "import": "./dist/notifications-engine.js"
