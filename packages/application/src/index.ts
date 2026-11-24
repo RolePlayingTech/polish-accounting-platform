@@ -16,3 +16,7 @@ export * from './document-import-parsers.js';
 export * from './accounting-workspace.js';
 export * from './web-session-store.js';
 export * from './identity-lifecycle.js';
+export * from './xsd/index.js';
+export * from './source-archive/index.js';
+export * from './jpk/index.js';
+export * from './ksef/index.js';

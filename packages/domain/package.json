@@ -11,6 +11,18 @@
     "./academy": {
       "types": "./dist/academy/index.d.ts",
       "import": "./dist/academy/index.js"
+    },
+    "./tax-rules": {
+      "types": "./dist/tax-rules/index.d.ts",
+      "import": "./dist/tax-rules/index.js"
+    },
+    "./ksef": {
+      "types": "./dist/ksef/index.d.ts",
+      "import": "./dist/ksef/index.js"
+    },
+    "./jpk": {
+      "types": "./dist/jpk/index.d.ts",
+      "import": "./dist/jpk/index.js"
     }
   },
   "scripts": {

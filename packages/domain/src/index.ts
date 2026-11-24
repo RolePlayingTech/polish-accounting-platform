@@ -30,3 +30,6 @@ export * from './zus/index.js';
 export * from './full-ledger/index.js';
 export * from './tax-calendar/index.js';
 export * from './bank-reconciliation/index.js';
+export * from './tax-rules/index.js';
+export * from './ksef/index.js';
+export * from './jpk/index.js';
