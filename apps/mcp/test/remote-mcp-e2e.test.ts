@@ -404,6 +404,7 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       'confirm_prepared_proposal',
       'get_monthly_tax_obligations',
       'explain_accounting_item',
+      'explain_tax_calculation',
       'get_legal_basis',
       'preview_jpk_export',
       'list_unreconciled_bank_transactions',
@@ -411,7 +412,12 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       'confirm_bank_reconciliation_proposal',
       'get_month_close_checklist',
       'prepare_month_close',
+      'confirm_month_close_proposal',
       'get_audit_lineage',
+      'list_my_cases',
+      'get_consultation_case',
+      'create_consultation_draft',
+      'reply_to_consultation_case',
     ]);
 
     const resourcesListed = await mcpClient.listResources();
@@ -426,7 +432,7 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
     const capCatalogText =
       'text' in capCatalogRes.contents[0]! ? capCatalogRes.contents[0]!.text : '{}';
     const parsedCatalog = JSON.parse(capCatalogText) as { tools: unknown[] };
-    expect(parsedCatalog.tools).toHaveLength(18);
+    expect(parsedCatalog.tools).toHaveLength(24);
 
     // 1. list_my_companies
     const myCompaniesRes = await mcpClient.callTool({
@@ -816,7 +822,7 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
     await mcpClient.connect(stdioTransport);
 
     const stdioTools = await mcpClient.listTools();
-    expect(stdioTools.tools).toHaveLength(18);
+    expect(stdioTools.tools).toHaveLength(24);
 
     const companiesViaStdio = await mcpClient.callTool({
       name: 'list_my_companies',

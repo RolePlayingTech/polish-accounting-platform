@@ -10,14 +10,22 @@ import { SystemStatusSchema } from '@pap/contracts';
 import {
   ConfirmBankReconciliationInputSchema,
   ConfirmBankReconciliationOutputSchema,
+  ConfirmMonthCloseInputSchema,
+  ConfirmMonthCloseOutputSchema,
   ConfirmPreparedProposalInputSchema,
   ConfirmPreparedProposalOutputSchema,
+  CreateConsultationDraftInputSchema,
+  CreateConsultationDraftOutputSchema,
   ExplainAccountingItemInputSchema,
   ExplainAccountingItemOutputSchema,
+  ExplainTaxCalculationInputSchema,
+  ExplainTaxCalculationOutputSchema,
   GetAuditLineageInputSchema,
   GetAuditLineageOutputSchema,
   GetCompanyProfileInputSchema,
   GetCompanyProfileOutputSchema,
+  GetConsultationCaseInputSchema,
+  GetConsultationCaseOutputSchema,
   GetLegalBasisInputSchema,
   GetLegalBasisOutputSchema,
   GetMonthCloseChecklistInputSchema,
@@ -28,6 +36,8 @@ import {
   ListAvailableCapabilitiesOutputSchema,
   ListMyCompaniesInputSchema,
   ListMyCompaniesOutputSchema,
+  ListMyConsultationCasesInputSchema,
+  ListMyConsultationCasesOutputSchema,
   ListUnpaidInvoicesInputSchema,
   ListUnpaidInvoicesOutputSchema,
   ListUnreconciledBankTransactionsInputSchema,
@@ -43,6 +53,8 @@ import {
   PreviewInvoicePostingOutputSchema,
   PreviewJpkExportInputSchema,
   PreviewJpkExportOutputSchema,
+  ReplyToConsultationCaseInputSchema,
+  ReplyToConsultationCaseOutputSchema,
 } from '@pap/contracts/mcp-tools';
 import { z } from 'zod';
 
@@ -396,6 +408,22 @@ export function createPapMcpServer(
   );
 
   server.registerTool(
+    'explain_tax_calculation',
+    {
+      title: 'Wyjaśnienie wyliczenia podatków i ZUS za okres (naliczone vs opłacone)',
+      description:
+        'Wylicza deterministyczny ślad ZUS, PIT/ryczałtu/CIT oraz VAT dla profilu firmy i okresu RRRR-MM (#81: naliczone vs opłacone; nieopłacony ZUS nie pomniejsza podstawy opodatkowania).',
+      inputSchema: ExplainTaxCalculationInputSchema,
+      outputSchema: ExplainTaxCalculationOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.explainTaxCalculation(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
     'get_legal_basis',
     {
       title: 'Podstawa prawna obowiązku lub reguły',
@@ -519,7 +547,7 @@ export function createPapMcpServer(
     {
       title: 'Przygotuj paczkę kontrolną zamknięcia okresu (bez zamykania okresu)',
       description:
-        'Tworzy audytowaną paczkę zamknięcia miesiąca ze skrótem snapshotHash i listą blokad. Nigdy samodzielnie nie zamyka okresu rozliczeniowego.',
+        'Tworzy audytowaną paczkę zamknięcia miesiąca ze skrótem payloadHash i listą blokad. Nigdy samodzielnie nie zamyka okresu rozliczeniowego.',
       inputSchema: PrepareMonthCloseInputSchema,
       outputSchema: PrepareMonthCloseOutputSchema,
       annotations: {
@@ -536,6 +564,30 @@ export function createPapMcpServer(
   );
 
   server.registerTool(
+    'confirm_month_close_proposal',
+    {
+      title: 'Zatwierdź zamknięcie okresu sprawozdawczego (wymaga kodu potwierdzenia człowieka)',
+      description:
+        'Operacja krytyczna (#116): zamyka okres sprawozdawczy RRRR-MM wyłącznie z ważnym jednorazowym kodem potwierdzenia człowieka (confirmationCode), zgodnym expectedPayloadHash i czystą checklistą.',
+      inputSchema: ConfirmMonthCloseInputSchema,
+      outputSchema: ConfirmMonthCloseOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args, ctx) => {
+      const result = await gateway.confirmMonthCloseProposal(
+        extractCallContext(ctx, options),
+        args,
+      );
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
     'get_audit_lineage',
     {
       title: 'Ścieżka audytowa i pochodzenie operacji MCP (z redakcją sekretów i PII)',
@@ -547,6 +599,82 @@ export function createPapMcpServer(
     },
     async (args, ctx) => {
       const result = await gateway.getAuditLineage(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  // ── 6. Accountant–Client Consultations (#121 Stage A/B Synthetic Slice) ───
+
+  server.registerTool(
+    'list_my_cases',
+    {
+      title: 'Moje sprawy konsultacyjne i kolejka księgowej (#121 Etap A/B)',
+      description:
+        'Zwraca listę spraw konsultacyjnych klienta–księgowa objętych aktywnym, nieodwołanym grantem firmowym.',
+      inputSchema: ListMyConsultationCasesInputSchema,
+      outputSchema: ListMyConsultationCasesOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.listMyCases(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'get_consultation_case',
+    {
+      title: 'Szczegóły i historia wątku sprawy konsultacyjnej (#121 Etap A/B)',
+      description:
+        'Pobiera wątek wiadomości sprawy dla (tenantId, legalEntityId, caseId) z ochroną przed IDOR i natychmiastowym odcięciem po cofnięciu grantu.',
+      inputSchema: GetConsultationCaseInputSchema,
+      outputSchema: GetConsultationCaseOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.getConsultationCase(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'create_consultation_draft',
+    {
+      title: 'Utwórz sprawę konsultacyjną do księgowej (bez zapisu w księgach)',
+      description:
+        'Tworzy idempotentną sprawę konsultacyjną w wybranej firmie (#121 Etap A/B). Nigdy nie wykonuje auto-księgowania ani symulowanej odpowiedzi AI.',
+      inputSchema: CreateConsultationDraftInputSchema,
+      outputSchema: CreateConsultationDraftOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args, ctx) => {
+      const result = await gateway.createConsultationDraft(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'reply_to_consultation_case',
+    {
+      title: 'Odpowiedz w sprawie konsultacyjnej z kontrolą expectedVersion (#121 Etap A/B)',
+      description:
+        'Dodaje niemutowalną wiadomość do wątku sprawy z optymistyczną kontrolą wersji (expectedVersion) i idempotencją, bez jakiejkolwiek mutacji ksiąg.',
+      inputSchema: ReplyToConsultationCaseInputSchema,
+      outputSchema: ReplyToConsultationCaseOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args, ctx) => {
+      const result = await gateway.replyToConsultationCase(extractCallContext(ctx, options), args);
       return toCallToolResult(result);
     },
   );

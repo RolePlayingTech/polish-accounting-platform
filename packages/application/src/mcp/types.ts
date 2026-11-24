@@ -1,6 +1,7 @@
 import type {
   AccountingCalculationStep,
   ConfirmBankReconciliationOutput,
+  ConfirmMonthCloseOutput,
   ConfirmPreparedProposalOutput,
   LegalBasisReference,
   McpToolErrorEnvelope,
@@ -12,12 +13,29 @@ import type {
   ProposedAccountingPreview,
 } from '@pap/contracts/mcp-tools';
 import type {
+  CitPreferentialEligibilityAttestation,
   CompanyAccessGrant,
+  JpkEwpRowInput,
+  JpkKrPdJournalEntryInput,
+  JpkKrPdRpdSummaryInput,
+  JpkKrPdZois7AccountInput,
+  JpkPkpirRowInput,
+  JpkPolishAddress,
+  JpkStEwpAssetRowInput,
+  JpkStKrAssetRowInput,
+  JpkStPkpirAssetRowInput,
+  JpkTaxpayerSubject,
+  JpkV7PurchaseRowInput,
+  JpkV7SalesRowInput,
   LegalEntityId,
+  RyczaltEntry,
   TenantId,
   TenantMembership,
   UserId,
+  VerifiedTaxOrZusPayment,
+  ZusScheme,
 } from '@pap/domain';
+import type { AccountantConsultationService } from '../accountant-consultations/index.js';
 import type { OidcAccessTokenVerifier, UserIdentityResolver } from '../oidc-authentication.js';
 import type { SecurityAuditRecorder } from '../security-audit.js';
 import type { Clock, TenantAuthorizationDataSource } from '../tenant-authorization.js';
@@ -210,9 +228,13 @@ export interface StoredMonthCloseProposal {
   readonly period: string;
   readonly createdByUserId: UserId;
   readonly idempotencyKey: string;
-  readonly payloadHash: string;
+  payloadHash: string;
   readonly createdAtIso: string;
-  status: 'pending_human_approval';
+  readonly expiresAtMs: number;
+  readonly expiresAtIso: string;
+  status: 'pending_human_approval' | 'confirming' | 'confirmed' | 'rejected' | 'expired';
+  closedAtIso: string | null;
+  confirmedByUserId: UserId | null;
 }
 
 export interface StoredIdempotencyRecord<T> {
@@ -222,7 +244,7 @@ export interface StoredIdempotencyRecord<T> {
 
 export interface StoredHumanConfirmationChallenge {
   readonly challengeId: string;
-  readonly proposalKind: 'invoice_posting' | 'bank_reconciliation';
+  readonly proposalKind: 'invoice_posting' | 'bank_reconciliation' | 'month_close';
   readonly proposalId: string;
   readonly tenantId: TenantId;
   readonly legalEntityId: LegalEntityId;
@@ -232,6 +254,67 @@ export interface StoredHumanConfirmationChallenge {
   readonly expiresAtMs: number;
   consumingInFlight: boolean;
   consumedAtIso: string | null;
+}
+
+export interface McpJpkPeriodSourceData {
+  readonly taxOfficeCode: string;
+  readonly subject: JpkTaxpayerSubject;
+  readonly corporateAddress?: JpkPolishAddress | undefined;
+  readonly companyRegon?: string | undefined;
+  readonly vatSalesRows?: readonly JpkV7SalesRowInput[] | undefined;
+  readonly vatPurchaseRows?: readonly JpkV7PurchaseRowInput[] | undefined;
+  readonly priorExcessCarryoverPln?: number | undefined;
+  readonly quarterlyStartPriorExcessCarryoverPln?: number | undefined;
+  readonly quarterlyPriorMonthsCarryGrosze?:
+    | {
+        readonly exemptNetGrosze?: number;
+        readonly outsideCountryNetGrosze?: number;
+        readonly zeroDomesticNetGrosze?: number;
+        readonly net5Grosze?: number;
+        readonly vat5Grosze?: number;
+        readonly net8Grosze?: number;
+        readonly vat8Grosze?: number;
+        readonly net23Grosze?: number;
+        readonly vat23Grosze?: number;
+        readonly fixedAssetsNetGrosze?: number;
+        readonly fixedAssetsVatGrosze?: number;
+        readonly otherAcquisitionsNetGrosze?: number;
+        readonly otherAcquisitionsVatGrosze?: number;
+      }
+    | undefined;
+  readonly requestedRefundPln?: number | undefined;
+  readonly pkpirRows?: readonly JpkPkpirRowInput[] | undefined;
+  readonly openingInventoryGrosze?: number | undefined;
+  readonly closingInventoryGrosze?: number | undefined;
+  readonly ewpRows?: readonly JpkEwpRowInput[] | undefined;
+  readonly zois7Accounts?: readonly JpkKrPdZois7AccountInput[] | undefined;
+  readonly journalEntries?: readonly JpkKrPdJournalEntryInput[] | undefined;
+  readonly rpdSummary?: JpkKrPdRpdSummaryInput | undefined;
+  readonly stPkpirRows?: readonly JpkStPkpirAssetRowInput[] | undefined;
+  readonly stEwpRows?: readonly JpkStEwpAssetRowInput[] | undefined;
+  readonly stKrAssets?: readonly JpkStKrAssetRowInput[] | undefined;
+}
+
+export interface McpTaxCalculationSourceData {
+  readonly zusScheme: ZusScheme;
+  readonly voluntarySicknessInsurance: boolean;
+  readonly previousMonthIncomeForHealthGrosze: number;
+  readonly ytdRevenueGrosze: number;
+  readonly ytdTaxDeductibleCostsGrosze: number;
+  readonly previousPitOrCitAdvancesAccruedYtdGrosze?: number | undefined;
+  readonly ryczaltEntries: readonly RyczaltEntry[];
+  readonly socialZusAlreadyDeductedPriorMonthsYtdGrosze?: number | undefined;
+  readonly health50PctAlreadyDeductedPriorMonthsYtdGrosze?: number | undefined;
+  readonly verifiedPayments: readonly VerifiedTaxOrZusPayment[];
+  readonly smallTaxpayer?: boolean | undefined;
+  readonly citPreferentialEligibility?: CitPreferentialEligibilityAttestation | undefined;
+  readonly taxYearStartDate?: string | undefined;
+  readonly taxYearEndDate?: string | undefined;
+  readonly vatOutputGrosze?: number | undefined;
+  readonly vatDeductibleInputGrosze?: number | undefined;
+  readonly vatPriorCarryoverP39Grosze?: number | undefined;
+  readonly vatDueToPayP51Grosze?: number | undefined;
+  readonly vatNextCarryoverP62Grosze?: number | undefined;
 }
 
 export interface PapMcpDataSource {
@@ -276,11 +359,31 @@ export interface PapMcpDataSource {
     readonly reconciliationEntryId: string;
     readonly remainingInvoiceGrossAfterPln: string;
   }>;
+  applyConfirmedMonthClose?(params: {
+    readonly tenantId: TenantId;
+    readonly legalEntityId: LegalEntityId;
+    readonly period: string;
+    readonly confirmedByUserId: UserId;
+    readonly note?: string | undefined;
+  }): Promise<{
+    readonly closedAt?: string | undefined;
+    readonly closeEventId?: string | undefined;
+  } | void>;
   getVatPeriodPreviewSnapshot?(
     tenantId: TenantId,
     legalEntityId: LegalEntityId,
     period: string,
   ): Promise<VatPeriodPreviewSnapshot | null>;
+  getJpkPeriodSourceData?(
+    tenantId: TenantId,
+    legalEntityId: LegalEntityId,
+    period: string,
+  ): Promise<McpJpkPeriodSourceData | null>;
+  getTaxCalculationSourceData?(
+    tenantId: TenantId,
+    legalEntityId: LegalEntityId,
+    period: string,
+  ): Promise<McpTaxCalculationSourceData | null>;
   listCompanyAuditEvents?(
     tenantId: TenantId,
     legalEntityId: LegalEntityId,
@@ -297,6 +400,7 @@ export interface PapMcpGatewayDependencies {
   readonly identityResolver: UserIdentityResolver;
   readonly authorizationDataSource: TenantAuthorizationDataSource;
   readonly dataSource: PapMcpDataSource;
+  readonly consultationService?: AccountantConsultationService | undefined;
   readonly securityAudit?: SecurityAuditRecorder | undefined;
   readonly auditSink?: McpAuditSink | undefined;
   readonly clock?: Clock | undefined;
@@ -323,6 +427,10 @@ export interface PapMcpMutableState {
   >;
   readonly monthCloseProposalsById: Map<string, StoredMonthCloseProposal>;
   readonly monthCloseIdempotency: Map<string, StoredIdempotencyRecord<PrepareMonthCloseOutput>>;
+  readonly monthCloseConfirmIdempotency: Map<
+    string,
+    StoredIdempotencyRecord<ConfirmMonthCloseOutput>
+  >;
   readonly humanChallengesByProposal: Map<string, StoredHumanConfirmationChallenge>;
   readonly recordedAuditHistory: McpAuditEvent[];
 }

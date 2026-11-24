@@ -115,12 +115,12 @@ const PROMPT_INJECTION_RULES: readonly {
   {
     signal: 'unauthorized_tool_invocation',
     pattern:
-      /\b(?:call|invoke|execute|run|wywołaj|uruchom|wykonaj)\s+(?:tool|narzędzie|confirm_prepared_proposal|confirm_bank_reconciliation_proposal|prepare_[a-z0-9_]+|send_ksef|przelew|transfer)\b/i,
+      /\b(?:call|invoke|execute|run|wywołaj|uruchom|wykonaj)\s+(?:tool|narzędzie|confirm_prepared_proposal|confirm_bank_reconciliation_proposal|confirm_month_close_proposal|prepare_[a-z0-9_]+|send_ksef|przelew|transfer)\b/i,
   },
   {
     signal: 'policy_or_tenant_bypass',
     pattern:
-      /(?:wyślij\s+wszystkie\s+faktury|prześlij\s+dane|zatwierdź\s+automatycznie|zaksięguj\s+bez\s+zatwierdzenia|zmień\s+tenant|change\s+tenant_id|override\s+authorization|approved\s*=\s*true|bypass_approval|grant\s+pap:)/i,
+      /(?:wyślij\s+wszystkie\s+faktury|prześlij\s+dane|zatwierdź\s+automatycznie|zatwierdź\s+(?:bez\s+udziału\s+człowieka|VAT|natychmiast)|zaksięguj\s+(?:bez\s+zatwierdzenia|(?:tę\s+fakturę\s+)?natychmiast)|zmień\s+tenant|change\s+tenant_id|override\s+authorization|approved\s*=\s*true|bypass_approval|grant\s+pap:)/i,
   },
   {
     signal: 'xml_or_xxe_injection_attempt',

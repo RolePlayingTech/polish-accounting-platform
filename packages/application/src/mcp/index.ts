@@ -9,3 +9,5 @@ export * from './handlers/documents-invoicing-handlers.js';
 export * from './handlers/tax-handlers.js';
 export * from './handlers/bank-handlers.js';
 export * from './handlers/ledger-audit-handlers.js';
+export * from './handlers/consultations-handlers.js';
+export * from '../accountant-consultations/index.js';

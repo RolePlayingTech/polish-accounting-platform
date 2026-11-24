@@ -1,10 +1,12 @@
 import { z } from 'zod';
 import {
+  AccountingCalculationStepSchema,
   IsoDateSchema,
   IsoUtcTimestampSchema,
   LegalBasisReferenceSchema,
   McpScopeSchema,
   NonNegativePlnDecimalStringSchema,
+  OfficialHttpsUrlSchema,
   PlnDecimalStringSchema,
   PrepareInvoiceDraftPayloadSchema,
   ProposedAccountingPreviewSchema,
@@ -14,7 +16,7 @@ import {
   YearMonthSchema,
 } from './mcp-tools-core.js';
 
-export const MCP_CAPABILITY_CONTRACT_VERSION = '2026-11-24.1' as const;
+export const MCP_CAPABILITY_CONTRACT_VERSION = '2026-11-24.2' as const;
 
 export const McpCapabilityStatusSchema = z.enum(['supported', 'experimental', 'unsupported']);
 export type McpCapabilityStatus = z.infer<typeof McpCapabilityStatusSchema>;
@@ -27,6 +29,7 @@ export const McpToolFamilySchema = z.enum([
   'tax',
   'bank',
   'ledger',
+  'accountant',
   'reporting',
 ]);
 export type McpToolFamily = z.infer<typeof McpToolFamilySchema>;
@@ -179,7 +182,15 @@ export const PreviewInvoicePostingOutputSchema = z
 export type PreviewInvoicePostingOutput = z.infer<typeof PreviewInvoicePostingOutputSchema>;
 
 /** 12. preview_jpk_export */
-export const JpkSchemaFamilySchema = z.enum(['JPK_V7M', 'JPK_PKPIR', 'JPK_EWP', 'JPK_KR_PD']);
+export const JpkSchemaFamilySchema = z.enum([
+  'JPK_V7M',
+  'JPK_V7K',
+  'JPK_PKPIR',
+  'JPK_EWP',
+  'JPK_KR_PD',
+  'JPK_ST',
+  'JPK_ST_KR',
+]);
 export type JpkSchemaFamily = z.infer<typeof JpkSchemaFamilySchema>;
 
 export const PreviewJpkExportInputSchema = z
@@ -188,10 +199,34 @@ export const PreviewJpkExportInputSchema = z
     legalEntityId: UuidSelectorSchema,
     period: YearMonthSchema,
     schemaFamily: JpkSchemaFamilySchema.optional(),
+    purpose: z.union([z.literal(1), z.literal(2)]).optional(),
+    includeXml: z.boolean().optional(),
   })
   .strict();
 
 export type PreviewJpkExportInput = z.infer<typeof PreviewJpkExportInputSchema>;
+
+export const JpkXsdValidationIssueSchema = z
+  .object({
+    line: z.number().int().nonnegative(),
+    column: z.number().int().nonnegative(),
+    message: z.string().min(1).max(600),
+  })
+  .strict();
+
+export const JpkXsdValidationReportSchema = z
+  .object({
+    performed: z.boolean(),
+    valid: z.boolean(),
+    officialSchemaCode: z.string().min(1).max(40),
+    targetNamespace: z.string().min(1).max(240),
+    schemaSha256: Sha256HexSchema,
+    officialSourceUrl: OfficialHttpsUrlSchema,
+    issues: z.array(JpkXsdValidationIssueSchema),
+  })
+  .strict();
+
+export type JpkXsdValidationReport = z.infer<typeof JpkXsdValidationReportSchema>;
 
 export const PreviewJpkExportOutputSchema = z
   .object({
@@ -211,9 +246,15 @@ export const PreviewJpkExportOutputSchema = z
         deductibleInputVatPln: NonNegativePlnDecimalStringSchema,
         taxDuePln: NonNegativePlnDecimalStringSchema,
         excessCarryForwardPln: NonNegativePlnDecimalStringSchema,
+        priorExcessCarryoverP39Pln: NonNegativePlnDecimalStringSchema.optional(),
+        requestedRefundP54Pln: NonNegativePlnDecimalStringSchema.optional(),
         unverifiedProposalsBlockingCount: z.number().int().nonnegative(),
       })
       .strict(),
+    xsdValidation: JpkXsdValidationReportSchema,
+    xmlSha256Hex: Sha256HexSchema.nullable(),
+    xmlByteLength: z.number().int().nonnegative(),
+    xmlContent: z.string().nullable(),
     readinessWarningsPl: z.array(z.string().min(1).max(500)),
     legalBasis: LegalBasisReferenceSchema,
     disclaimerPl: z.string().min(1).max(800),
@@ -222,6 +263,74 @@ export const PreviewJpkExportOutputSchema = z
   .strict();
 
 export type PreviewJpkExportOutput = z.infer<typeof PreviewJpkExportOutputSchema>;
+
+/** 12b. explain_tax_calculation (#81 due-vs-paid & Profile A/B/C calculation trace) */
+export const CitPreferentialAttestationInputSchema = z
+  .object({
+    taxYearStartDate: IsoDateSchema,
+    taxYearEndDate: IsoDateSchema,
+    smallTaxpayerVerified: z.boolean(),
+    priorYearGrossSalesPln: NonNegativePlnDecimalStringSchema.optional(),
+    isFirstTaxYearNewEntityVerified: z.boolean(),
+    excludedRestructuringArt19Ust1aVerified: z.boolean(),
+    excludedTaxCapitalGroupOrSplitVerified: z.boolean(),
+  })
+  .strict();
+
+export const ExplainTaxCalculationInputSchema = z
+  .object({
+    tenantId: UuidSelectorSchema,
+    legalEntityId: UuidSelectorSchema,
+    period: YearMonthSchema,
+    simulationOnly: z.boolean().optional(),
+    simulatedPaidSocialZusPln: NonNegativePlnDecimalStringSchema.optional(),
+    simulatedPaidHealthZusPln: NonNegativePlnDecimalStringSchema.optional(),
+    requestPreferentialCit9Pct: z.boolean().optional(),
+    citPreferentialAttestation: CitPreferentialAttestationInputSchema.optional(),
+  })
+  .strict();
+
+export type ExplainTaxCalculationInput = z.infer<typeof ExplainTaxCalculationInputSchema>;
+
+export const ExplainTaxCalculationOutputSchema = z
+  .object({
+    tenantId: UuidSelectorSchema,
+    legalEntityId: UuidSelectorSchema,
+    period: YearMonthSchema,
+    profileCode: z.enum([
+      'jdg_kpir_skala',
+      'jdg_kpir_liniowy',
+      'jdg_ryczalt',
+      'spzoo_pelne_ksiegi',
+    ]),
+    mode: z.enum(['binding_verified_payments_only', 'what_if_simulation']),
+    bindingForDeclaration: z.boolean(),
+    dueVsPaidSummary: z
+      .object({
+        zusAccruedTotalPln: NonNegativePlnDecimalStringSchema,
+        zusConfirmedPaidTotalPln: NonNegativePlnDecimalStringSchema,
+        zusRemainingUnpaidPln: NonNegativePlnDecimalStringSchema,
+        unpaidZusExcludedFromTaxDeductionPln: NonNegativePlnDecimalStringSchema,
+        incomeTaxOrRyczaltAccruedPln: NonNegativePlnDecimalStringSchema,
+        incomeTaxOrRyczaltConfirmedPaidPln: NonNegativePlnDecimalStringSchema,
+        incomeTaxOrRyczaltRemainingUnpaidPln: NonNegativePlnDecimalStringSchema,
+        appliedCitRatePct: z.union([z.literal(9), z.literal(19)]).nullable(),
+        vatOutputPln: NonNegativePlnDecimalStringSchema,
+        vatDeductibleInputPln: NonNegativePlnDecimalStringSchema,
+        vatPriorCarryoverP39Pln: NonNegativePlnDecimalStringSchema,
+        vatDueToPayP51Pln: NonNegativePlnDecimalStringSchema,
+        vatNextCarryoverP62Pln: NonNegativePlnDecimalStringSchema,
+      })
+      .strict(),
+    summaryPl: z.string().min(1).max(1500),
+    warningsPl: z.array(z.string().min(1).max(600)),
+    calculationSteps: z.array(AccountingCalculationStepSchema).min(1),
+    appliedRules: z.array(LegalBasisReferenceSchema).min(1),
+    auditEventId: z.string().min(1),
+  })
+  .strict();
+
+export type ExplainTaxCalculationOutput = z.infer<typeof ExplainTaxCalculationOutputSchema>;
 
 /** 13. list_unreconciled_bank_transactions */
 export const ListUnreconciledBankTransactionsInputSchema = z
@@ -365,14 +474,21 @@ export const PrepareMonthCloseOutputSchema = z
     tenantId: UuidSelectorSchema,
     legalEntityId: UuidSelectorSchema,
     period: YearMonthSchema,
-    status: z.enum(['blocked_by_checklist', 'dry_run_ready', 'pending_human_approval']),
-    periodClosed: z.literal(false),
+    status: z.enum([
+      'blocked_by_checklist',
+      'dry_run_ready',
+      'pending_human_approval',
+      'confirmed',
+      'expired',
+    ]),
+    periodClosed: z.boolean(),
     readyToClose: z.boolean(),
     blockingItemsCount: z.number().int().nonnegative(),
     blockingReasonsPl: z.array(z.string().min(1).max(500)),
     idempotencyKey: UuidSelectorSchema,
     idempotentReplay: z.boolean(),
     payloadHash: Sha256HexSchema,
+    expiresAt: IsoUtcTimestampSchema.nullable().optional(),
     checklistSummary: z
       .object({
         missingDocumentsCount: z.number().int().nonnegative(),
@@ -386,6 +502,39 @@ export const PrepareMonthCloseOutputSchema = z
   .strict();
 
 export type PrepareMonthCloseOutput = z.infer<typeof PrepareMonthCloseOutputSchema>;
+
+/** 16b. confirm_month_close_proposal (#116 maker-checker period close) */
+export const ConfirmMonthCloseInputSchema = z
+  .object({
+    tenantId: UuidSelectorSchema,
+    legalEntityId: UuidSelectorSchema,
+    idempotencyKey: UuidSelectorSchema,
+    proposalId: UuidSelectorSchema,
+    expectedPayloadHash: Sha256HexSchema,
+    confirmationCode: z.string().min(16).max(256),
+    note: z.string().min(1).max(500).optional(),
+  })
+  .strict();
+
+export type ConfirmMonthCloseInput = z.infer<typeof ConfirmMonthCloseInputSchema>;
+
+export const ConfirmMonthCloseOutputSchema = z
+  .object({
+    proposalId: UuidSelectorSchema,
+    tenantId: UuidSelectorSchema,
+    legalEntityId: UuidSelectorSchema,
+    period: YearMonthSchema,
+    status: z.literal('confirmed'),
+    periodClosed: z.literal(true),
+    closedAt: IsoUtcTimestampSchema,
+    confirmedPayloadHash: Sha256HexSchema,
+    idempotencyKey: UuidSelectorSchema,
+    idempotentReplay: z.boolean(),
+    auditEventId: z.string().min(1),
+  })
+  .strict();
+
+export type ConfirmMonthCloseOutput = z.infer<typeof ConfirmMonthCloseOutputSchema>;
 
 /** 17. get_audit_lineage */
 export const GetAuditLineageInputSchema = z

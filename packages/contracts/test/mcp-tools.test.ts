@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   ConfirmBankReconciliationInputSchema,
+  ConfirmMonthCloseInputSchema,
   ConfirmPreparedProposalInputSchema,
+  CreateConsultationDraftInputSchema,
+  ExplainTaxCalculationInputSchema,
   GetAuditLineageInputSchema,
   GetCompanyProfileInputSchema,
+  GetConsultationCaseInputSchema,
   GetMonthlyTaxObligationsInputSchema,
   IsoDateSchema,
   KsefReferenceNumberSchema,
   LegalBasisReferenceSchema,
   ListAvailableCapabilitiesInputSchema,
   ListMyCompaniesInputSchema,
+  ListMyConsultationCasesInputSchema,
   ListUnreconciledBankTransactionsInputSchema,
   McpToolErrorCodeSchema,
   OfficialHttpsUrlSchema,
@@ -19,6 +24,7 @@ import {
   PrepareMonthCloseInputSchema,
   PreviewInvoicePostingInputSchema,
   PreviewJpkExportInputSchema,
+  ReplyToConsultationCaseInputSchema,
   UntrustedDocumentTextEnvelopeSchema,
   isValidPolishNip,
 } from '../src/mcp-tools.js';
@@ -351,6 +357,74 @@ describe('MCP tool contracts', () => {
         legalEntityId: '22222222-2222-4222-8222-222222222222',
         limit: 25,
         outcomeFilter: 'deny',
+      }).success,
+    ).toBe(true);
+
+    // Wave 2 schemas: JPK XSD families, explain_tax_calculation, confirm_month_close_proposal, #121 consultations
+    for (const code of ['checklist_blocked', 'conflict', 'xsd_validation_failed']) {
+      expect(McpToolErrorCodeSchema.safeParse(code).success).toBe(true);
+    }
+    expect(
+      PreviewJpkExportInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        period: '2026-03',
+        schemaFamily: 'JPK_KR_PD',
+        purpose: 1,
+        includeXml: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      ExplainTaxCalculationInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        period: '2026-03',
+        simulationOnly: true,
+        simulatedPaidSocialZusPln: '1788.29',
+      }).success,
+    ).toBe(true);
+    expect(
+      ConfirmMonthCloseInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        idempotencyKey: '33333333-3333-4333-8333-333333333333',
+        proposalId: '44444444-4444-4444-8444-444444444444',
+        expectedPayloadHash: 'b'.repeat(64),
+        confirmationCode: 'pap_hconf_valid_month_close_confirmation_token',
+      }).success,
+    ).toBe(true);
+    expect(
+      ListMyConsultationCasesInputSchema.safeParse({
+        roleView: 'accountant_queue',
+        statusFilter: 'waiting_for_accountant',
+      }).success,
+    ).toBe(true);
+    expect(
+      GetConsultationCaseInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        caseId: '77777777-7777-4777-8777-777777777777',
+      }).success,
+    ).toBe(true);
+    expect(
+      CreateConsultationDraftInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        idempotencyKey: '33333333-3333-4333-8333-333333333333',
+        caseType: 'document_review',
+        subject: 'Weryfikacja faktury za licencje chmurowe',
+        initialMessage: 'Proszę o potwierdzenie kwalifikacji VAT i KUP.',
+        taxPeriod: '2026-03',
+      }).success,
+    ).toBe(true);
+    expect(
+      ReplyToConsultationCaseInputSchema.safeParse({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: '22222222-2222-4222-8222-222222222222',
+        idempotencyKey: '33333333-3333-4333-8333-333333333333',
+        caseId: '77777777-7777-4777-8777-777777777777',
+        expectedVersion: 1,
+        message: 'Potwierdzam 100% KUP (kol. 13) oraz pełne odliczenie VAT 23%.',
       }).success,
     ).toBe(true);
   });

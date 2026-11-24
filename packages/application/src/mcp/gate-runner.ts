@@ -12,6 +12,7 @@ import {
   type TenantId,
   type UserId,
 } from '@pap/domain';
+import type { AccountantConsultationService } from '../accountant-consultations/index.js';
 import {
   authenticateOidcActor,
   authorizeAuthenticatedCompanyAction,
@@ -81,6 +82,7 @@ export interface McpGateEnvironment {
   readonly identityResolver: UserIdentityResolver;
   readonly authorizationDataSource: TenantAuthorizationDataSource;
   readonly dataSource: PapMcpDataSource;
+  readonly consultationService: AccountantConsultationService;
   readonly securityAudit: SecurityAuditRecorder;
   readonly auditSink: McpAuditSink;
   readonly clock: Clock;
