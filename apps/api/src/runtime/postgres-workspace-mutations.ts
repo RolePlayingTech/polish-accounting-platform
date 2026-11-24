@@ -6,14 +6,16 @@ import type {
 } from '@pap/contracts';
 import {
   AccountingWorkspaceConflictError,
+  type VatPeriodSettlementState,
   type WorkspaceCompanyState,
   type WorkspaceHumanChallenge,
   type WorkspaceStoredMcpProposal,
 } from '@pap/application';
+import type { BankReconciliationMatchContract } from '@pap/contracts/accounting';
 import type { PostgresAccountingScope } from '@pap/db';
 import {
   computeMcpProposalSealHash,
-  encodeBankMatchNotes,
+  encodeBankMatchesNotes,
   encodeBankTxExternalRef,
   encodePostedDocumentSnapshotInDescription,
   mapContractKsefMarkerToDb,
@@ -81,9 +83,10 @@ export async function persistApproveAndPostDocumentMutation(
     await persistDocumentItemToScope(scope, company, postedDoc);
   } else {
     const baseDesc = postedDoc.document.lines[0]?.description ?? postedDoc.document.documentNumber;
+    const explanationsSnapshot = buildExplanationMapSnapshot(company, postedDoc);
     const encodedDesc = encodePostedDocumentSnapshotInDescription(baseDesc, {
       documentItem: postedDoc,
-      explanations: buildExplanationMapSnapshot(company, postedDoc),
+      explanations: explanationsSnapshot,
     });
     const vehicleUsage: 'none' | 'mixed_50_75' | 'exclusive_100' =
       postedDoc.aiProposal.vatDeductionMode === 'vehicle_mixed_50' ||
@@ -107,6 +110,13 @@ export async function persistApproveAndPostDocumentMutation(
       description: encodedDesc,
       ksefReference: postedDoc.document.ksefReferenceNumber ?? null,
       ksefMarker: mapContractKsefMarkerToDb(postedDoc.document.ksefMarker),
+      aiProposalJson: {
+        ...postedDoc.aiProposal,
+        _papDocSnapshot: postedDoc,
+        _papEconomicOpKey: postedDoc.economicOperationKey ?? null,
+        _papEconomicSnapshotHash: postedDoc.economicSnapshotHash ?? null,
+        _papExplanations: explanationsSnapshot,
+      },
       ...(postedDoc.approvedAt ? { verifiedAt: new Date(postedDoc.approvedAt) } : {}),
     });
   }
@@ -119,42 +129,86 @@ export async function persistBankReconciliationMatchesAndSettlements(
   company: WorkspaceCompanyState,
   prevSettledById: ReadonlyMap<string, number>,
 ): Promise<void> {
-  for (const settlement of company.settlements) {
-    const prev = prevSettledById.get(settlement.settlementId) ?? 0;
-    const delta = settlement.settledGrosze - prev;
-    if (delta > 0) {
-      await scope.applySettlementPayment({
-        settlementId: settlement.settlementId,
-        paidAmountGrosze: delta,
-      });
-    }
+  const modifiedSettlements = company.settlements
+    .filter((s) => {
+      const prev = prevSettledById.get(s.settlementId) ?? 0;
+      return s.settledGrosze !== prev;
+    })
+    .slice()
+    .sort((a, b) => a.settlementId.localeCompare(b.settlementId));
+
+  for (const settlement of modifiedSettlements) {
+    const prevSettled = prevSettledById.get(settlement.settlementId) ?? 0;
+    const expectedPrevRemaining = Math.max(0, settlement.grossGrosze - prevSettled);
+    await scope.setSettlementRemainingBalance({
+      settlementId: settlement.settlementId,
+      remainingGrossGrosze: settlement.remainingGrosze,
+      expectedPreviousRemainingGrosze: expectedPrevRemaining,
+    });
   }
 
   const txByRawId = new Map(company.bankTransactions.map((t) => [t.transactionId, t]));
   const settlementByDocId = new Map(company.settlements.map((s) => [s.documentId, s]));
+  const matchesByTxId = new Map<string, BankReconciliationMatchContract[]>();
 
   for (const match of company.reconciliationMatches) {
-    const tx = txByRawId.get(match.transactionId);
-    if (!tx) {
-      continue;
+    const list = matchesByTxId.get(match.transactionId) ?? [];
+    list.push(match);
+    matchesByTxId.set(match.transactionId, list);
+  }
+
+  const orderedTxEntries = [...matchesByTxId.entries()]
+    .map(([rawTxId, txMatches]) => {
+      const tx = txByRawId.get(rawTxId);
+      const dbTxId = tx
+        ? toUuidOrDeterministic(
+            `bank-tx:${company.tenantId}:${company.legalEntityId}`,
+            tx.transactionId,
+          )
+        : '';
+      return { tx, txMatches, dbTxId };
+    })
+    .filter(
+      (
+        entry,
+      ): entry is {
+        tx: NonNullable<typeof entry.tx>;
+        txMatches: BankReconciliationMatchContract[];
+        dbTxId: string;
+      } => Boolean(entry.tx),
+    )
+    .sort((a, b) => a.dbTxId.localeCompare(b.dbTxId));
+
+  for (const { tx, txMatches, dbTxId } of orderedTxEntries) {
+    const totalSettled = txMatches.reduce((acc, m) => acc + m.settledAmountGrosze, 0);
+    if (totalSettled < 0 || totalSettled > tx.amountGrosze) {
+      throw new Error(
+        `Naruszenie niezmiennika alokacji bankowej: suma alokacji (${totalSettled} gr) przekracza kwotę transakcji (${tx.amountGrosze} gr).`,
+      );
     }
-    const dbTxId = toUuidOrDeterministic(
-      `bank-tx:${company.tenantId}:${company.legalEntityId}`,
-      tx.transactionId,
-    );
-    const clampedSettled = Math.max(0, Math.min(match.settledAmountGrosze, tx.amountGrosze));
-    const matchedDocId = match.matchedDocumentId ?? null;
+    const primaryMatch = txMatches[0]!;
+    const matchedDocId = totalSettled > 0 ? (primaryMatch.matchedDocumentId ?? null) : null;
     const matchedSettlementId = matchedDocId
       ? (settlementByDocId.get(matchedDocId)?.settlementId ?? null)
       : null;
+    const aggregateStatus: BankReconciliationMatchContract['status'] =
+      totalSettled === 0
+        ? primaryMatch.status === 'ambiguous_manual_review'
+          ? 'ambiguous_manual_review'
+          : 'unmatched'
+        : txMatches.length === 1
+          ? primaryMatch.status
+          : totalSettled === tx.amountGrosze
+            ? 'matched_exact'
+            : 'matched_partial';
 
     await scope.recordBankTransactionMatch({
       transactionId: dbTxId,
-      matchStatus: match.status,
+      matchStatus: aggregateStatus,
       matchedSettlementId,
       matchedDocumentId: matchedDocId,
-      settledAmountGrosze: clampedSettled,
-      matchNotes: encodeBankMatchNotes(match),
+      settledAmountGrosze: totalSettled,
+      matchNotes: encodeBankMatchesNotes(txMatches),
     });
   }
 }
@@ -313,9 +367,40 @@ export async function persistConfirmMcpProposalMutation(
     ...(proposal.confirmedAtIso ? { confirmedAt: new Date(proposal.confirmedAtIso) } : {}),
   });
   if (postedDoc) {
-    await persistDocumentItemToScope(scope, company, postedDoc);
-    await persistPostedDocumentChildrenToScope(scope, company, postedDoc);
+    await persistApproveAndPostDocumentMutation(scope, company, postedDoc);
   }
+}
+
+export async function persistVatPeriodSettlementMutation(
+  scope: PostgresAccountingScope,
+  company: WorkspaceCompanyState,
+  settlement: VatPeriodSettlementState,
+): Promise<void> {
+  const [yearStr, monthStr] = settlement.period.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const duePeriod =
+    month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`;
+  const dueDate = `${duePeriod}-25`;
+
+  await scope.upsertTaxObligation({
+    id: toUuidOrDeterministic(
+      `vat-settlement:${company.tenantId}:${company.legalEntityId}`,
+      settlement.period,
+    ),
+    period: settlement.period,
+    obligationCode: 'VAT_JPK_V7M_SETTLEMENT',
+    category: 'vat',
+    titlePl: `Rozliczenie deklaracyjne VAT JPK_V7M za ${settlement.period} (v${settlement.version})`,
+    statutoryDueDate: dueDate,
+    adjustedDueDate: dueDate,
+    estimatedAmountGrosze: settlement.taxDueP51Grosze,
+    status: 'upcoming',
+    legalBasisJson: {
+      _papVatPeriodSettlement: settlement,
+    },
+    paidAt: null,
+  });
 }
 
 export async function persistNotificationsStateMutation(

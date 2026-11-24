@@ -11,6 +11,7 @@ import {
   TENANT_1_ID,
   TENANT_2_ID,
   type AuditLogEntry,
+  type VatPeriodSettlementState,
   type WorkspaceActorContext,
   type WorkspaceCompanyState,
   type WorkspaceHumanChallenge,
@@ -53,7 +54,7 @@ import {
 } from '@pap/domain';
 import {
   INTERNAL_MCP_PROPOSAL_INDEX_CATEGORY,
-  decodeBankMatchNotes,
+  decodeBankMatchesNotes,
   decodeBankTxExternalRef,
   decodeCompanyMetaFromAddress,
   decodePostedDocumentSnapshotFromDescription,
@@ -105,7 +106,7 @@ function overlaySqlDocumentColumns(
             unit: firstLine?.unit ?? 'usł.',
             netGrosze,
             vatRate:
-              vatGrosze > 0
+              vatGrosze !== 0
                 ? firstLine?.vatRate && firstLine.vatRate !== 'zw' && firstLine.vatRate !== '0'
                   ? firstLine.vatRate
                   : '23'
@@ -235,7 +236,7 @@ function hydrateDocumentFromRecord(
           quantity: '1',
           unit: 'usł.',
           netGrosze,
-          vatRate: vatGrosze > 0 ? '23' : 'zw',
+          vatRate: vatGrosze !== 0 ? '23' : 'zw',
           vatGrosze,
           grossGrosze,
           annex15Item: false,
@@ -444,9 +445,9 @@ function hydrateBankFromRecords(rows: readonly BankTransactionRecord[]): {
       ...(ext.reference ? { rawReference: ext.reference } : {}),
     });
 
-    const decodedMatch = decodeBankMatchNotes(row.matchNotes);
-    if (decodedMatch) {
-      reconciliationMatches.push(decodedMatch);
+    const decodedMatches = decodeBankMatchesNotes(row.matchNotes);
+    if (decodedMatches && decodedMatches.length > 0) {
+      reconciliationMatches.push(...decodedMatches);
     } else if (row.matchStatus !== 'unmatched') {
       const settled = Number(row.settledAmountGrosze);
       reconciliationMatches.push({
@@ -775,7 +776,22 @@ export async function hydrateSingleCompanyFromScope(
 
   const obligationRows = await scope.listTaxObligations();
   const paidObligationsByKey = new Map<string, string>();
+  const vatPeriodSettlements = new Map<string, VatPeriodSettlementState>();
   for (const ob of obligationRows) {
+    if (ob.obligationCode === 'VAT_JPK_V7M_SETTLEMENT') {
+      const jsonObj = (ob.legalBasisJson ?? {}) as Record<string, unknown>;
+      const savedVatSettlement = jsonObj._papVatPeriodSettlement as
+        VatPeriodSettlementState | undefined;
+      if (
+        savedVatSettlement &&
+        typeof savedVatSettlement === 'object' &&
+        typeof savedVatSettlement.period === 'string' &&
+        typeof savedVatSettlement.version === 'number'
+      ) {
+        vatPeriodSettlements.set(savedVatSettlement.period, savedVatSettlement);
+      }
+      continue;
+    }
     if (ob.status === 'paid') {
       const paidIso = (ob.paidAt ?? ob.updatedAt).toISOString();
       paidObligationsByKey.set(`${ob.period}:${ob.obligationCode}`, paidIso);
@@ -928,6 +944,7 @@ export async function hydrateSingleCompanyFromScope(
       reconciliationMatches,
       paidObligationsByKey,
       explanationsById,
+      vatPeriodSettlements,
     },
     mcpProposals,
     mcpChallenges,

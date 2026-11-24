@@ -71,6 +71,13 @@
       "when": 1793968200000,
       "tag": "0009_company-tenant-nip-uniqueness",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1794054600000,
+      "tag": "0010_p0-financial-invariants",
+      "breakpoints": true
     }
   ]
 }

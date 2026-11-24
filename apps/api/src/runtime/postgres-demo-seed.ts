@@ -166,6 +166,8 @@ export async function persistDocumentItemToScope(
     aiProposalJson: {
       ...docItem.aiProposal,
       _papDocSnapshot: docItem,
+      _papEconomicOpKey: docItem.economicOperationKey ?? null,
+      _papEconomicSnapshotHash: docItem.economicSnapshotHash ?? null,
       _papExplanations: buildExplanationMapSnapshot(company, docItem),
     },
     ...(docItem.approvedAt ? { verifiedAt: new Date(docItem.approvedAt) } : {}),
@@ -182,12 +184,21 @@ export async function persistKpirEntryToScope(
     `kpir:${company.tenantId}:${company.legalEntityId}`,
     entry.id,
   );
-  const stornoTargetUuid = entry.correctedEntryId
-    ? toUuidOrDeterministic(
-        `kpir:${company.tenantId}:${company.legalEntityId}`,
-        entry.correctedEntryId,
-      )
-    : null;
+  const hasInSystemKpirTarget = Boolean(
+    entry.correctedEntryId &&
+    company.kpirEntries.some((e) => e.id === entry.correctedEntryId && e.id !== entry.id),
+  );
+  const candidateStornoTargetUuid =
+    hasInSystemKpirTarget && entry.correctedEntryId
+      ? toUuidOrDeterministic(
+          `kpir:${company.tenantId}:${company.legalEntityId}`,
+          entry.correctedEntryId,
+        )
+      : null;
+  const stornoTargetUuid =
+    candidateStornoTargetUuid && candidateStornoTargetUuid !== entryUuid
+      ? candidateStornoTargetUuid
+      : null;
   const itemExplanation = company.explanationsById.get(entry.id) ?? null;
   await scope.appendKpirEntry({
     id: entryUuid,
@@ -231,12 +242,19 @@ export async function persistRyczaltEntryToScope(
     `ryczalt:${company.tenantId}:${company.legalEntityId}`,
     entry.id,
   );
-  const correctedUuid = entry.correctedEntryId
-    ? toUuidOrDeterministic(
-        `ryczalt:${company.tenantId}:${company.legalEntityId}`,
-        entry.correctedEntryId,
-      )
-    : null;
+  const hasInSystemRyczaltTarget = Boolean(
+    entry.correctedEntryId &&
+    company.ryczaltEntries.some((e) => e.id === entry.correctedEntryId && e.id !== entry.id),
+  );
+  const candidateCorrectedUuid =
+    hasInSystemRyczaltTarget && entry.correctedEntryId
+      ? toUuidOrDeterministic(
+          `ryczalt:${company.tenantId}:${company.legalEntityId}`,
+          entry.correctedEntryId,
+        )
+      : null;
+  const correctedUuid =
+    candidateCorrectedUuid && candidateCorrectedUuid !== entryUuid ? candidateCorrectedUuid : null;
   const itemExplanation = company.explanationsById.get(entry.id) ?? null;
   await scope.appendRyczaltEntry({
     id: entryUuid,

@@ -59,8 +59,9 @@ describe('Kontrakt plików migracji', () => {
     const accounting = readJson('0007_snapshot.json');
     const provisioning = readJson('0008_snapshot.json');
     const tenantNipUniqueness = readJson('0009_snapshot.json');
+    const p0FinancialInvariants = readJson('0010_snapshot.json');
     const journal = readJson('_journal.json');
-    expect(migrations).toHaveLength(10);
+    expect(migrations).toHaveLength(11);
     expect(migrations[0]?.sql.join('')).toMatch(/SELECT 1;/);
     expect(baseline.tables).toEqual({});
     expect(schema.prevId).toBe(baseline.id);
@@ -72,6 +73,7 @@ describe('Kontrakt plików migracji', () => {
     expect(accounting.prevId).toBe(foundation.id);
     expect(provisioning.prevId).toBe(accounting.id);
     expect(tenantNipUniqueness.prevId).toBe(provisioning.id);
+    expect(p0FinancialInvariants.prevId).toBe(tenantNipUniqueness.id);
     expect(
       tenantNipUniqueness.tables['public.company_tax_settings'].uniqueConstraints
         .company_tax_settings_tenant_nip_unique,
@@ -109,6 +111,7 @@ describe('Kontrakt plików migracji', () => {
       '0007_accounting-core',
       '0008_runtime-company-provisioning',
       '0009_company-tenant-nip-uniqueness',
+      '0010_p0-financial-invariants',
     ]);
     expect(Object.keys(schema.tables).sort()).toEqual([
       'public.company_access_grant',
@@ -133,6 +136,7 @@ describe('Kontrakt plików migracji', () => {
       '0007_accounting-core.sql',
       '0008_runtime-company-provisioning.sql',
       '0009_company-tenant-nip-uniqueness.sql',
+      '0010_p0-financial-invariants.sql',
     ]) {
       const migration = readFileSync(new URL(`../drizzle/${fileName}`, import.meta.url), 'utf8');
       expect(migration).not.toMatch(/(?:"public"|\bpublic)\s*\./i);
@@ -343,6 +347,33 @@ describe('Kontrakt plików migracji', () => {
       "USING ERRCODE = '23505'",
       'ALTER TABLE "company_tax_settings" ADD CONSTRAINT "company_tax_settings_tenant_nip_unique" UNIQUE ("tenant_id", "nip");',
       'CREATE UNIQUE INDEX "entity_profile_version_active_tenant_nip_uidx" ON "entity_profile_version"',
+      'RESET lock_timeout;',
+      'RESET statement_timeout;',
+    ]) {
+      expect(migration).toContain(fragment);
+    }
+  });
+
+  it('0010 wymusza częściowe indeksy unikalności księgowań P0 z kontrolą preflight 23505 bez nowych tabel', () => {
+    const migration = readFileSync(
+      new URL('../drizzle/0010_p0-financial-invariants.sql', import.meta.url),
+      'utf8',
+    );
+    const statements = migration.split('--> statement-breakpoint');
+    for (const stmt of statements) {
+      expect(stmt.trim().length).toBeGreaterThan(0);
+    }
+    for (const fragment of [
+      "SET LOCAL lock_timeout = '5s';",
+      "SET LOCAL statement_timeout = '30s';",
+      'LOCK TABLE accounting_document, kpir_entry, ryczalt_entry, vat_register_entry, journal_entry, settlement_item IN ACCESS EXCLUSIVE MODE;',
+      "USING ERRCODE = '23505'",
+      'CREATE UNIQUE INDEX "kpir_entry_unique_document_posting_uidx"',
+      'CREATE UNIQUE INDEX "ryczalt_entry_unique_document_posting_uidx"',
+      'CREATE UNIQUE INDEX "journal_entry_unique_document_posting_uidx"',
+      'CREATE UNIQUE INDEX "settlement_item_unique_document_uidx"',
+      'CREATE UNIQUE INDEX "vat_register_entry_unique_doc_rate_uidx"',
+      'CREATE UNIQUE INDEX "accounting_document_economic_op_uidx"',
       'RESET lock_timeout;',
       'RESET statement_timeout;',
     ]) {

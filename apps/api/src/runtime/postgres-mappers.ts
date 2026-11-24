@@ -25,6 +25,7 @@ export const INTERNAL_COMMAND_RECEIPT_INDEX_CATEGORY = '__pap_command_receipt__'
 const META_MARKER = ' ##pap_meta:';
 const POSTED_DOC_MARKER = ' ##pap_posted:';
 const BANK_MATCH_MARKER = '##pap_match:';
+const BANK_MULTI_MATCH_MARKER = '##pap_matches:';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function isInternalIndexDocumentCategory(categoryCode: string): boolean {
@@ -271,6 +272,17 @@ export function encodeBankMatchNotes(match: BankReconciliationMatchContract): st
   return `${match.notes} ${BANK_MATCH_MARKER}${encoded}`;
 }
 
+export function encodeBankMatchesNotes(
+  matches: readonly BankReconciliationMatchContract[],
+): string {
+  if (matches.length === 1 && matches[0]) {
+    return encodeBankMatchNotes(matches[0]);
+  }
+  const summaryNote = matches.map((m) => m.notes).join(' | ');
+  const encoded = Buffer.from(JSON.stringify(matches), 'utf8').toString('base64');
+  return `${summaryNote} ${BANK_MULTI_MATCH_MARKER}${encoded}`;
+}
+
 export function decodeBankMatchNotes(
   matchNotes: string | null,
 ): BankReconciliationMatchContract | null {
@@ -289,4 +301,26 @@ export function decodeBankMatchNotes(
   } catch {
     return null;
   }
+}
+
+export function decodeBankMatchesNotes(
+  matchNotes: string | null,
+): BankReconciliationMatchContract[] | null {
+  if (!matchNotes) {
+    return null;
+  }
+  const multiIdx = matchNotes.indexOf(BANK_MULTI_MATCH_MARKER);
+  if (multiIdx >= 0) {
+    const encoded = matchNotes.slice(multiIdx + BANK_MULTI_MATCH_MARKER.length).trim();
+    try {
+      const parsed = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')) as unknown;
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed as BankReconciliationMatchContract[];
+      }
+    } catch {
+      return null;
+    }
+  }
+  const single = decodeBankMatchNotes(matchNotes);
+  return single ? [single] : null;
 }

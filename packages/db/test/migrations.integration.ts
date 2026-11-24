@@ -47,7 +47,7 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', ()
     const { client: sql, db, dataSchema } = database;
     try {
       const migrations = readMigrationFiles({ migrationsFolder });
-      expect(migrations).toHaveLength(10);
+      expect(migrations).toHaveLength(11);
       expect(
         readFileSync(new URL('../drizzle/0000_technical-baseline.sql', import.meta.url), 'utf8'),
       ).toContain('SELECT 1;');
@@ -132,7 +132,7 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', ()
       // Usuwamy wyłącznie własną tabelę konfliktową; ponowienie stosuje cały łańcuch.
       await sql`DROP TABLE tenant`;
       await applyMigrations(db, dataSchema);
-      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(10);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(11);
     } finally {
       await database.cleanup();
     }
@@ -254,7 +254,7 @@ describe('Migracje PostgreSQL 6A → 6B → 6D-R → 6D-2 → 6D-3 → C2-1', ()
         WHERE tenant_id = ${tenantId} AND legal_entity_id = ${entityB}
       `;
       await applyMigrations(db, dataSchema);
-      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(10);
+      expect(await sql`SELECT * FROM ${sql(dataSchema)}.__drizzle_migrations`).toHaveLength(11);
 
       await expectDatabaseError(
         sql`
