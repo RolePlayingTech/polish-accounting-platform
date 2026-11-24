@@ -20,6 +20,10 @@
       "types": "./dist/mcp-tools.d.ts",
       "import": "./dist/mcp-tools.js"
     },
+    "./mcp-capabilities": {
+      "types": "./dist/mcp-capabilities.d.ts",
+      "import": "./dist/mcp-capabilities.js"
+    },
     "./notifications": {
       "types": "./dist/notifications.d.ts",
       "import": "./dist/notifications.js"

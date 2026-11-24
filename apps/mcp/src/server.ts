@@ -1,28 +1,48 @@
 import { McpServer, type CallToolResult, type ServerContext } from '@modelcontextprotocol/server';
 import { getSystemStatus } from '@pap/application';
 import {
+  PAP_MCP_TOOL_DESCRIPTORS,
   resolveSafeRequestCorrelationId,
   type McpGatewayToolResult,
   type PapMcpGateway,
 } from '@pap/application/mcp-gateway';
 import { SystemStatusSchema } from '@pap/contracts';
 import {
+  ConfirmBankReconciliationInputSchema,
+  ConfirmBankReconciliationOutputSchema,
   ConfirmPreparedProposalInputSchema,
   ConfirmPreparedProposalOutputSchema,
   ExplainAccountingItemInputSchema,
   ExplainAccountingItemOutputSchema,
+  GetAuditLineageInputSchema,
+  GetAuditLineageOutputSchema,
+  GetCompanyProfileInputSchema,
+  GetCompanyProfileOutputSchema,
   GetLegalBasisInputSchema,
   GetLegalBasisOutputSchema,
   GetMonthCloseChecklistInputSchema,
   GetMonthCloseChecklistOutputSchema,
   GetMonthlyTaxObligationsInputSchema,
   GetMonthlyTaxObligationsOutputSchema,
+  ListAvailableCapabilitiesInputSchema,
+  ListAvailableCapabilitiesOutputSchema,
   ListMyCompaniesInputSchema,
   ListMyCompaniesOutputSchema,
   ListUnpaidInvoicesInputSchema,
   ListUnpaidInvoicesOutputSchema,
+  ListUnreconciledBankTransactionsInputSchema,
+  ListUnreconciledBankTransactionsOutputSchema,
+  MCP_CAPABILITY_CONTRACT_VERSION,
+  PrepareBankReconciliationInputSchema,
+  PrepareBankReconciliationOutputSchema,
   PrepareInvoiceAndPostingProposalInputSchema,
   PrepareInvoiceAndPostingProposalOutputSchema,
+  PrepareMonthCloseInputSchema,
+  PrepareMonthCloseOutputSchema,
+  PreviewInvoicePostingInputSchema,
+  PreviewInvoicePostingOutputSchema,
+  PreviewJpkExportInputSchema,
+  PreviewJpkExportOutputSchema,
 } from '@pap/contracts/mcp-tools';
 import { z } from 'zod';
 
@@ -46,6 +66,25 @@ export function createStatusServer(): McpServer {
         structuredContent: status,
       };
     },
+  );
+
+  server.registerResource(
+    'system_status_resource',
+    'pap://system/status',
+    {
+      title: 'Status techniczny platformy PAP',
+      description: 'Publiczny status techniczny aplikacji i dostępności modułów.',
+      mimeType: 'application/json',
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(getSystemStatus()),
+        },
+      ],
+    }),
   );
 
   return server;
@@ -103,6 +142,76 @@ export function createPapMcpServer(
     version: '0.1.0',
   });
 
+  // ── MCP Resources (read-only context & discovery) ──────────────────────────
+
+  server.registerResource(
+    'system_status_resource',
+    'pap://system/status',
+    {
+      title: 'Status techniczny platformy PAP',
+      description: 'Status techniczny aplikacji i dostępności modułów księgowych.',
+      mimeType: 'application/json',
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify(gateway.getSystemStatus()),
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    'capabilities_catalog_resource',
+    'pap://system/capabilities-catalog',
+    {
+      title: 'Wersjonowany katalog narzędzi i bramek bezpieczeństwa MCP',
+      description:
+        'Pełna specyfikacja narzędzi MCP, klasyfikacji ryzyka, wymaganych zakresów OIDC oraz bramek maker-checker.',
+      mimeType: 'application/json',
+    },
+    async (uri) => ({
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: 'application/json',
+          text: JSON.stringify({
+            contractVersion: MCP_CAPABILITY_CONTRACT_VERSION,
+            tools: PAP_MCP_TOOL_DESCRIPTORS,
+          }),
+        },
+      ],
+    }),
+  );
+
+  server.registerResource(
+    'my_companies_resource',
+    'pap://companies/mine',
+    {
+      title: 'Podmioty prawne dostępne dla bieżącego aktora OIDC',
+      description:
+        'Lista firm i profili podatkowych dostępnych na podstawie aktywnych grantów bieżącego użytkownika.',
+      mimeType: 'application/json',
+    },
+    async (uri, ctx) => {
+      const outcome = await gateway.listMyCompanies(extractCallContext(ctx, options), {});
+      const payload = outcome.ok ? outcome.data : outcome.error;
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: 'application/json',
+            text: JSON.stringify(payload),
+          },
+        ],
+      };
+    },
+  );
+
+  // ── 1. System & Company / Capability Discovery ─────────────────────────────
+
   server.registerTool(
     'system_status',
     {
@@ -139,6 +248,43 @@ export function createPapMcpServer(
   );
 
   server.registerTool(
+    'get_company_profile',
+    {
+      title: 'Profil podatkowy i status wsparcia firmy',
+      description:
+        'Zwraca profil prawno-podatkowy wybranej firmy, aktywne granty aktora oraz status wsparcia (supported/experimental/unsupported).',
+      inputSchema: GetCompanyProfileInputSchema,
+      outputSchema: GetCompanyProfileOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.getCompanyProfile(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'list_available_capabilities',
+    {
+      title: 'Dostępne możliwości i statusy wsparcia MCP dla firmy',
+      description:
+        'Zwraca macierz możliwości księgowych i podatkowych (supported/experimental/unsupported) oraz katalog narzędzi MCP dla wybranej firmy i roku podatkowego.',
+      inputSchema: ListAvailableCapabilitiesInputSchema,
+      outputSchema: ListAvailableCapabilitiesOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.listAvailableCapabilities(
+        extractCallContext(ctx, options),
+        args,
+      );
+      return toCallToolResult(result);
+    },
+  );
+
+  // ── 2. Documents, Invoices & Safe Posting Proposals ────────────────────────
+
+  server.registerTool(
     'list_unpaid_invoices',
     {
       title: 'Niezapłacone faktury',
@@ -153,6 +299,69 @@ export function createPapMcpServer(
       return toCallToolResult(result);
     },
   );
+
+  server.registerTool(
+    'preview_invoice_posting',
+    {
+      title: 'Symulacja kwalifikacji VAT i dekretacji faktury (tylko odczyt)',
+      description:
+        'Waliduje jawne stawki VAT i pozycje wielostawkowe (#112) oraz wylicza podgląd KUP/NKUP, VAT i skrót payloadHash bez tworzenia szkicu w bazie.',
+      inputSchema: PreviewInvoicePostingInputSchema,
+      outputSchema: PreviewInvoicePostingOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.previewInvoicePosting(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'prepare_invoice_and_posting_proposal',
+    {
+      title: 'Przygotuj bezpieczną propozycję faktury i dekretacji (bez księgowania)',
+      description:
+        'Tworzy audytowany, idempotentny szkic faktury i propozycji zaksięgowania ze statusem pending_human_approval. Wymaga jawnej kwalifikacji VAT przy 0 PLN / wielu stawkach (#112) i nigdy nie księguje bez zatwierdzenia człowieka.',
+      inputSchema: PrepareInvoiceAndPostingProposalInputSchema,
+      outputSchema: PrepareInvoiceAndPostingProposalOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args, ctx) => {
+      const result = await gateway.prepareInvoiceAndPostingProposal(
+        extractCallContext(ctx, options),
+        args,
+      );
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'confirm_prepared_proposal',
+    {
+      title: 'Zatwierdź przygotowaną propozycję (wymaga niezależnego kodu potwierdzenia człowieka)',
+      description:
+        'Operacja krytyczna: zatwierdza wcześniej przygotowany szkic wyłącznie po podaniu świeżego, jednorazowego tokenu potwierdzenia człowieka (confirmationCode) i zgodnego skrótu expectedPayloadHash. Samozatwierdzenie przez agenta jest zablokowane.',
+      inputSchema: ConfirmPreparedProposalInputSchema,
+      outputSchema: ConfirmPreparedProposalOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args, ctx) => {
+      const result = await gateway.confirmPreparedProposal(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  // ── 3. Tax Obligations, Explanations, Legal Basis & JPK Preview ────────────
 
   server.registerTool(
     'get_monthly_tax_obligations',
@@ -203,6 +412,93 @@ export function createPapMcpServer(
   );
 
   server.registerTool(
+    'preview_jpk_export',
+    {
+      title: 'Podgląd gotowości i kontrola spójności JPK (bez wysyłki urzędowej)',
+      description:
+        'Generuje deterministyczny podgląd gotowości JPK_V7M / JPK_PKPIR / JPK_EWP / JPK_FA bez wykonywania wysyłki zewnętrznej ani generowania fałszywego UPO.',
+      inputSchema: PreviewJpkExportInputSchema,
+      outputSchema: PreviewJpkExportOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.previewJpkExport(extractCallContext(ctx, options), args);
+      return toCallToolResult(result);
+    },
+  );
+
+  // ── 4. Bank Reconciliation (List, Prepare, Human-Approved Confirm) ─────────
+
+  server.registerTool(
+    'list_unreconciled_bank_transactions',
+    {
+      title: 'Nieuzgodnione transakcje bankowe',
+      description:
+        'Zwraca listę nieuzgodnionych operacji bankowych w PLN dla wybranej firmy. Tytuły przelewów i nazwy kontrahentów są opatrzone kopertą ochrony przed prompt injection.',
+      inputSchema: ListUnreconciledBankTransactionsInputSchema,
+      outputSchema: ListUnreconciledBankTransactionsOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
+    },
+    async (args, ctx) => {
+      const result = await gateway.listUnreconciledBankTransactions(
+        extractCallContext(ctx, options),
+        args,
+      );
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'prepare_bank_reconciliation',
+    {
+      title: 'Przygotuj bezpieczną propozycję rozliczenia przelewu z fakturą (bez zapisu)',
+      description:
+        'Tworzy audytowaną, idempotentną propozycję alokacji transakcji bankowej do nierozliczonej faktury ze statusem pending_human_approval i skrótem payloadHash.',
+      inputSchema: PrepareBankReconciliationInputSchema,
+      outputSchema: PrepareBankReconciliationOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args, ctx) => {
+      const result = await gateway.prepareBankReconciliation(
+        extractCallContext(ctx, options),
+        args,
+      );
+      return toCallToolResult(result);
+    },
+  );
+
+  server.registerTool(
+    'confirm_bank_reconciliation_proposal',
+    {
+      title: 'Zatwierdź propozycję rozliczenia bankowego (wymaga kodu potwierdzenia człowieka)',
+      description:
+        'Zatwierdza przygotowaną propozycję rozliczenia bankowego wyłącznie po podaniu świeżego, niezależnego tokenu potwierdzenia człowieka (confirmationCode) i zgodnego expectedPayloadHash.',
+      inputSchema: ConfirmBankReconciliationInputSchema,
+      outputSchema: ConfirmBankReconciliationOutputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (args, ctx) => {
+      const result = await gateway.confirmBankReconciliationProposal(
+        extractCallContext(ctx, options),
+        args,
+      );
+      return toCallToolResult(result);
+    },
+  );
+
+  // ── 5. Month Close Checklist, Prepare & Redacted Audit Lineage ─────────────
+
+  server.registerTool(
     'get_month_close_checklist',
     {
       title: 'Lista kontrolna zamknięcia miesiąca',
@@ -219,13 +515,13 @@ export function createPapMcpServer(
   );
 
   server.registerTool(
-    'prepare_invoice_and_posting_proposal',
+    'prepare_month_close',
     {
-      title: 'Przygotuj bezpieczną propozycję faktury i dekretacji (bez księgowania)',
+      title: 'Przygotuj paczkę kontrolną zamknięcia okresu (bez zamykania okresu)',
       description:
-        'Tworzy audytowany, idempotentny szkic faktury i propozycji zaksięgowania ze statusem pending_human_approval. Nigdy nie dokonuje trwałego zapisu w księgach bez odrębnego zatwierdzenia człowieka.',
-      inputSchema: PrepareInvoiceAndPostingProposalInputSchema,
-      outputSchema: PrepareInvoiceAndPostingProposalOutputSchema,
+        'Tworzy audytowaną paczkę zamknięcia miesiąca ze skrótem snapshotHash i listą blokad. Nigdy samodzielnie nie zamyka okresu rozliczeniowego.',
+      inputSchema: PrepareMonthCloseInputSchema,
+      outputSchema: PrepareMonthCloseOutputSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -234,31 +530,23 @@ export function createPapMcpServer(
       },
     },
     async (args, ctx) => {
-      const result = await gateway.prepareInvoiceAndPostingProposal(
-        extractCallContext(ctx, options),
-        args,
-      );
+      const result = await gateway.prepareMonthClose(extractCallContext(ctx, options), args);
       return toCallToolResult(result);
     },
   );
 
   server.registerTool(
-    'confirm_prepared_proposal',
+    'get_audit_lineage',
     {
-      title: 'Zatwierdź przygotowaną propozycję (wymaga kodu potwierdzenia człowieka)',
+      title: 'Ścieżka audytowa i pochodzenie operacji MCP (z redakcją sekretów i PII)',
       description:
-        'Operacja krytyczna: zatwierdza wcześniej przygotowany szkic wyłącznie po podaniu świeżego, jednorazowego tokenu potwierdzenia człowieka (confirmationCode) i zgodnego skrótu expectedPayloadHash.',
-      inputSchema: ConfirmPreparedProposalInputSchema,
-      outputSchema: ConfirmPreparedProposalOutputSchema,
-      annotations: {
-        readOnlyHint: false,
-        destructiveHint: true,
-        idempotentHint: true,
-        openWorldHint: false,
-      },
+        'Zwraca historię zdarzeń audytowych dla firmy, propozycji lub correlationId z automatyczną redakcją tokenów, kodów potwierdzeń oraz danych wrażliwych.',
+      inputSchema: GetAuditLineageInputSchema,
+      outputSchema: GetAuditLineageOutputSchema,
+      annotations: { readOnlyHint: true, destructiveHint: false },
     },
     async (args, ctx) => {
-      const result = await gateway.confirmPreparedProposal(extractCallContext(ctx, options), args);
+      const result = await gateway.getAuditLineage(extractCallContext(ctx, options), args);
       return toCallToolResult(result);
     },
   );

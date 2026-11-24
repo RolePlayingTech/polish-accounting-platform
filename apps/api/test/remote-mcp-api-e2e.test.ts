@@ -109,24 +109,40 @@ describe('Live Streamable HTTP MCP (/api/v1/mcp) inside @pap/api', () => {
     expect(spoofHeader.status).toBe(401);
   });
 
-  it('exposes 9 MCP tools, reads KPiR/month-close & legal rules, neutralizes prompt injection in prepare_*, and posts to KPiR only after human challenge confirmation', async () => {
+  it('exposes 18 MCP tools and 3 MCP resources, reads KPiR/month-close & legal rules, neutralizes prompt injection in prepare_*, and posts to KPiR only after human challenge confirmation', async () => {
     await withMcpClient(janToken, async (client) => {
-      // 1. listTools() -> 9 registered MCP tools
+      // 1. listTools() -> 18 registered MCP tools + listResources() -> 3 resources
       const toolsResult = await client.listTools();
-      expect(toolsResult.tools).toHaveLength(9);
+      expect(toolsResult.tools).toHaveLength(18);
       expect(toolsResult.tools.map((t) => t.name).sort()).toEqual(
         [
           'system_status',
           'list_my_companies',
+          'get_company_profile',
+          'list_available_capabilities',
           'list_unpaid_invoices',
+          'preview_invoice_posting',
+          'prepare_invoice_and_posting_proposal',
+          'confirm_prepared_proposal',
           'get_monthly_tax_obligations',
           'explain_accounting_item',
           'get_legal_basis',
+          'preview_jpk_export',
+          'list_unreconciled_bank_transactions',
+          'prepare_bank_reconciliation',
+          'confirm_bank_reconciliation_proposal',
           'get_month_close_checklist',
-          'prepare_invoice_and_posting_proposal',
-          'confirm_prepared_proposal',
+          'prepare_month_close',
+          'get_audit_lineage',
         ].sort(),
       );
+
+      const resourcesResult = await client.listResources();
+      expect(resourcesResult.resources.map((r) => r.uri)).toEqual([
+        'pap://system/status',
+        'pap://system/capabilities-catalog',
+        'pap://companies/mine',
+      ]);
 
       // 2. Read company directory, month-close checklist/summary, and legal rule explanation
       const companiesCall = await client.callTool({

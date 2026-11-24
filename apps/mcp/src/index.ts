@@ -11,3 +11,9 @@ export type {
   RunningPapMcpHttpServer,
   StartPapMcpHttpServerOptions,
 } from './http-server.js';
+export { startPapMcpStdioUpstreamBridge, validateLoopbackMcpUpstreamUrl } from './stdio-bridge.js';
+export type {
+  RunningPapMcpStdioBridge,
+  StartPapMcpStdioUpstreamBridgeOptions,
+  ValidatedLoopbackUpstreamConfig,
+} from './stdio-bridge.js';

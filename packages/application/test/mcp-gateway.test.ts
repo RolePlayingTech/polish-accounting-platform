@@ -11,8 +11,10 @@ import type { TenantAuthorizationDataSource } from '../src/tenant-authorization.
 import {
   InMemoryMcpAuditSink,
   InMemoryPapMcpDataSource,
+  PAP_MCP_TOOL_DESCRIPTORS,
   PapMcpGateway,
   VERIFIED_POLISH_LEGAL_BASIS_CATALOG,
+  redactSecretsAndPiiForMcp,
   resolveSafeRequestCorrelationId,
   sanitizeUntrustedDocumentTextForMcp,
 } from '../src/mcp-gateway.js';
@@ -34,6 +36,7 @@ function createGatewayFixture(options?: {
   readonly auditDelayMs?: number | undefined;
   readonly seedExtraRegimeCompanies?: boolean | undefined;
   readonly nowIso?: string | undefined;
+  readonly rateLimitMaxCallsPerMinute?: number | undefined;
 }) {
   let currentNow = new Date(options?.nowIso ?? '2026-11-10T10:00:00Z');
   const clock = {
@@ -81,6 +84,22 @@ function createGatewayFixture(options?: {
         subject: 'sub-reader',
         scopes: ['pap:mcp:read', 'pap:mcp:prepare'],
         userIdVal: USER_READER,
+      },
+    ],
+    [
+      'tok-oidc-mcp-only',
+      {
+        subject: 'sub-accountant',
+        scopes: ['openid', 'pap:mcp:read', 'pap:mcp:prepare'],
+        userIdVal: USER_ACCOUNTANT,
+      },
+    ],
+    [
+      'tok-human-ui',
+      {
+        subject: 'sub-accountant',
+        scopes: ['openid', 'pap:ui:full', 'pap:mcp:read', 'pap:mcp:prepare'],
+        userIdVal: USER_ACCOUNTANT,
       },
     ],
   ]);
@@ -421,6 +440,7 @@ function createGatewayFixture(options?: {
     dataSource,
     auditSink,
     clock,
+    rateLimitMaxCallsPerMinute: options?.rateLimitMaxCallsPerMinute,
   });
 
   return { gateway, auditSink, dataSource, clock };
@@ -1338,5 +1358,476 @@ describe('PapMcpGateway domain use-cases and security invariants', () => {
     const sanitizedBadId = resolveSafeRequestCorrelationId('Bearer secret.jwt\r\ninjected');
     expect(sanitizedBadId.invalidHeaderRejected).toBe(true);
     expect(sanitizedBadId.correlationId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('fixes #112: rejects zero-VAT or flattened multi-rate invoices without explicit VAT classification and preserves multi-rate lines without loss', async () => {
+    const { gateway } = createGatewayFixture({ seedExtraRegimeCompanies: true });
+
+    // 1. Zero VAT (0.00 PLN) without explicit vatRate or lines -> MUST fail closed (vat_classification_required)
+    const uncategorizedZeroVat = await gateway.prepareInvoiceAndPostingProposal(
+      { rawBearerToken: 'tok-accountant-full' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        idempotencyKey: '50505050-5050-4050-8050-505050505001',
+        invoice: {
+          direction: 'purchase',
+          invoiceNumber: 'FV/112/ZERO-MISSING',
+          issueDate: '2026-11-05',
+          dueDate: '2026-11-19',
+          counterpartyNip: '5260250995',
+          counterpartyName: 'Dostawca Bez Stawki Sp. z o.o.',
+          netAmountPln: '1000.00',
+          vatAmountPln: '0.00',
+          grossAmountPln: '1000.00',
+          expenseDescription: 'Usługa edukacyjna lub eksportowa bez jawnej stawki',
+          suggestedCategory: 'uslugi_obce',
+        },
+      },
+    );
+    expect(uncategorizedZeroVat.ok).toBe(false);
+    if (!uncategorizedZeroVat.ok) {
+      expect(uncategorizedZeroVat.error.errorCode).toBe('vat_classification_required');
+    }
+
+    // 2. Flattened mixed-rate VAT (1000*23% + 500*8% = 270.00 VAT on 1500.00 net) without lines -> MUST fail closed!
+    const flattenedMixedVat = await gateway.previewInvoicePosting(
+      { rawBearerToken: 'tok-accountant-full' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        invoice: {
+          direction: 'purchase',
+          invoiceNumber: 'FV/112/FLATTENED',
+          issueDate: '2026-11-05',
+          dueDate: '2026-11-19',
+          counterpartyNip: '5260250995',
+          counterpartyName: 'Dostawca Mieszany Sp. z o.o.',
+          netAmountPln: '1500.00',
+          vatAmountPln: '270.00',
+          grossAmountPln: '1770.00',
+          expenseDescription: 'Spłaszczona faktura wielostawkowa 23% + 8%',
+          suggestedCategory: 'uslugi_obce',
+        },
+      },
+    );
+    expect(flattenedMixedVat.ok).toBe(false);
+    if (!flattenedMixedVat.ok) {
+      expect(flattenedMixedVat.error.errorCode).toBe('vat_classification_required');
+    }
+
+    // 3. Sales invoice with vatRate='zw' on czynny VAT taxpayer WITHOUT legal reason -> MUST fail closed (art. 106e ust. 1 pkt 19)
+    const zwSalesMissingBasis = await gateway.previewInvoicePosting(
+      { rawBearerToken: 'tok-accountant-full' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        invoice: {
+          direction: 'sales',
+          invoiceNumber: 'FV/112/ZW-NO-BASIS',
+          issueDate: '2026-11-05',
+          dueDate: '2026-11-19',
+          counterpartyNip: '5260250995',
+          counterpartyName: 'Nabywca Usług Szkoleniowych',
+          netAmountPln: '800.00',
+          vatAmountPln: '0.00',
+          grossAmountPln: '800.00',
+          vatRate: 'zw',
+          expenseDescription: 'Szkolenie zawodowe',
+          suggestedCategory: 'przychod_sprzedaz',
+        },
+      },
+    );
+    expect(zwSalesMissingBasis.ok).toBe(false);
+    if (!zwSalesMissingBasis.ok) {
+      expect(zwSalesMissingBasis.error.errorCode).toBe('vat_classification_required');
+    }
+
+    // 4. Sales invoice with vatRate='zw' + explicit zeroVatReasonCode='zw_art_43_przedmiotowe' -> succeeds cleanly!
+    const zwSalesWithBasis = await gateway.previewInvoicePosting(
+      { rawBearerToken: 'tok-accountant-full' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        invoice: {
+          direction: 'sales',
+          invoiceNumber: 'FV/112/ZW-OK',
+          issueDate: '2026-11-05',
+          dueDate: '2026-11-19',
+          counterpartyNip: '5260250995',
+          counterpartyName: 'Nabywca Usług Szkoleniowych',
+          netAmountPln: '800.00',
+          vatAmountPln: '0.00',
+          grossAmountPln: '800.00',
+          vatRate: 'zw',
+          zeroVatReasonCode: 'zw_art_43_przedmiotowe',
+          vatClassificationReasonPl: 'Art. 43 ust. 1 pkt 29 ustawy o VAT — kształcenie zawodowe',
+          expenseDescription: 'Szkolenie zawodowe',
+          suggestedCategory: 'przychod_sprzedaz',
+        },
+      },
+    );
+    expect(zwSalesWithBasis.ok).toBe(true);
+    if (zwSalesWithBasis.ok) {
+      expect(zwSalesWithBasis.data.proposedPosting.vatClassificationStatus).toBe('explicit_rate');
+      expect(zwSalesWithBasis.data.proposedPosting.vatBreakdown?.[0]?.vatRate).toBe('zw');
+    }
+
+    // 5. Multi-rate purchase invoice (23% + 8% + zw) preserves every line, VAT breakdown, and binds into payloadHash!
+    const multiRatePrepared = await gateway.prepareInvoiceAndPostingProposal(
+      { rawBearerToken: 'tok-accountant-full' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        idempotencyKey: '50505050-5050-4050-8050-505050505002',
+        invoice: {
+          direction: 'purchase',
+          invoiceNumber: 'FV/112/MULTI-LINES',
+          issueDate: '2026-11-05',
+          dueDate: '2026-11-19',
+          counterpartyNip: '5260250995',
+          counterpartyName: 'Wydawnictwo i Chmura Sp. z o.o.',
+          netAmountPln: '1700.00',
+          vatAmountPln: '270.00',
+          grossAmountPln: '1970.00',
+          expenseDescription: 'Pakiet licencji + książki + opłata pocztowa zw',
+          suggestedCategory: 'uslugi_obce',
+          lines: [
+            {
+              description: 'Subskrypcja chmurowa 23%',
+              netAmountPln: '1000.00',
+              vatRate: '23',
+              vatAmountPln: '230.00',
+              grossAmountPln: '1230.00',
+            },
+            {
+              description: 'Publikacje fachowe 8%',
+              netAmountPln: '500.00',
+              vatRate: '8',
+              vatAmountPln: '40.00',
+              grossAmountPln: '540.00',
+            },
+            {
+              description: 'Usługa pocztowa zwolniona zw',
+              netAmountPln: '200.00',
+              vatRate: 'zw',
+              vatAmountPln: '0.00',
+              grossAmountPln: '200.00',
+              zeroVatReasonCode: 'zw_art_43_przedmiotowe',
+            },
+          ],
+        },
+      },
+    );
+    expect(multiRatePrepared.ok).toBe(true);
+    if (multiRatePrepared.ok) {
+      expect(multiRatePrepared.data.proposedPosting.vatClassificationStatus).toBe('explicit_lines');
+      expect(multiRatePrepared.data.proposedPosting.resolvedLines).toHaveLength(3);
+      expect(multiRatePrepared.data.proposedPosting.vatBreakdown).toEqual([
+        {
+          vatRate: '23',
+          netAmountPln: '1000.00',
+          vatAmountPln: '230.00',
+          grossAmountPln: '1230.00',
+          deductibleVatAmountPln: '230.00',
+          nonDeductibleVatAmountPln: '0.00',
+        },
+        {
+          vatRate: '8',
+          netAmountPln: '500.00',
+          vatAmountPln: '40.00',
+          grossAmountPln: '540.00',
+          deductibleVatAmountPln: '40.00',
+          nonDeductibleVatAmountPln: '0.00',
+        },
+        {
+          vatRate: 'zw',
+          netAmountPln: '200.00',
+          vatAmountPln: '0.00',
+          grossAmountPln: '200.00',
+          deductibleVatAmountPln: '0.00',
+          nonDeductibleVatAmountPln: '0.00',
+        },
+      ]);
+      expect(multiRatePrepared.data.proposedPosting.kupAmountPln).toBe('1700.00');
+      expect(multiRatePrepared.data.proposedPosting.deductibleVatAmountPln).toBe('270.00');
+    }
+  });
+
+  it('supports capability discovery, JPK preview, bank reconciliation maker-checker, month-close prepare, audit redaction, OIDC anti-self-approval, and rate limiting', async () => {
+    const { gateway, dataSource } = createGatewayFixture({
+      seedExtraRegimeCompanies: true,
+      rateLimitMaxCallsPerMinute: 40,
+    });
+
+    expect(PAP_MCP_TOOL_DESCRIPTORS).toHaveLength(18);
+
+    // 1. get_company_profile & list_available_capabilities across supported / experimental / unsupported tax year
+    const profileKpir = await gateway.getCompanyProfile(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A1 },
+    );
+    expect(profileKpir.ok).toBe(true);
+    if (profileKpir.ok) {
+      expect(profileKpir.data.profileSupportStatus).toBe('supported');
+      expect(profileKpir.data.grantedActions).toEqual(['read', 'write']);
+    }
+
+    const profileCit = await gateway.getCompanyProfile(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A_CIT, taxYear: 2026 },
+    );
+    expect(profileCit.ok).toBe(true);
+    if (profileCit.ok) {
+      expect(profileCit.data.profileSupportStatus).toBe('experimental');
+    }
+
+    const capsCit = await gateway.listAvailableCapabilities(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A_CIT, taxYear: 2026 },
+    );
+    expect(capsCit.ok).toBe(true);
+    if (capsCit.ok) {
+      expect(
+        capsCit.data.capabilities.find((c) => c.capabilityId === 'ledger.kpir_bookkeeping')?.status,
+      ).toBe('unsupported');
+      expect(
+        capsCit.data.capabilities.find((c) => c.capabilityId === 'ledger.uor_full_books_and_cit')
+          ?.status,
+      ).toBe('experimental');
+    }
+
+    const capsUnsupportedYear = await gateway.listAvailableCapabilities(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A1, taxYear: 2022 },
+    );
+    expect(capsUnsupportedYear.ok).toBe(true);
+    if (capsUnsupportedYear.ok) {
+      expect(capsUnsupportedYear.data.capabilities.every((c) => c.status === 'unsupported')).toBe(
+        true,
+      );
+    }
+
+    // 2. preview_jpk_export: rejects JPK_V7M for zwolniony VAT payer (capability_unsupported), never fabricates UPO
+    const jpkExemptDenied = await gateway.previewJpkExport(
+      { rawBearerToken: 'tok-human-ui' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A_VAT_EXEMPT,
+        period: '2026-11',
+        schemaFamily: 'JPK_V7M',
+      },
+    );
+    expect(jpkExemptDenied.ok).toBe(false);
+    if (!jpkExemptDenied.ok) {
+      expect(jpkExemptDenied.error.errorCode).toBe('capability_unsupported');
+    }
+
+    const jpkKpirPreview = await gateway.previewJpkExport(
+      { rawBearerToken: 'tok-human-ui' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        period: '2026-11',
+        schemaFamily: 'JPK_V7M',
+      },
+    );
+    expect(jpkKpirPreview.ok).toBe(true);
+    if (jpkKpirPreview.ok) {
+      expect(jpkKpirPreview.data.officialSubmissionPerformed).toBe(false);
+      expect(jpkKpirPreview.data.upoReferenceNumber).toBeNull();
+    }
+
+    // 3. Hard OIDC anti-self-approval: MCP-only OIDC token ['openid', 'pap:mcp:read', 'pap:mcp:prepare']
+    //    can prepare a bank reconciliation proposal, CANNOT mint human confirmation challenge!
+    dataSource.seedUnreconciledBankTransaction({
+      bankTransactionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddd01',
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A1,
+      bookingDate: '2026-11-06',
+      direction: 'debit',
+      amountPln: '-2460.00',
+      remainingUnallocatedPln: '2460.00',
+      counterpartyName: 'Chmura Testowa Sp. z o.o.',
+      transferTitle:
+        'Zapłata FV/2026/10/99 <!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>',
+    });
+
+    const bankList = await gateway.listUnreconciledBankTransactions(
+      { rawBearerToken: 'tok-oidc-mcp-only' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A1, period: '2026-11' },
+    );
+    expect(bankList.ok).toBe(true);
+    if (bankList.ok) {
+      expect(bankList.data.promptInjectionWarningsCount).toBeGreaterThanOrEqual(1);
+    }
+
+    const bankPrep = await gateway.prepareBankReconciliation(
+      { rawBearerToken: 'tok-oidc-mcp-only' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        idempotencyKey: '60606060-6060-4060-8060-606060606001',
+        bankTransactionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddd01',
+        invoiceId: '66666666-6666-4666-8666-666666666661',
+        allocationGrossPln: '2460.00',
+      },
+    );
+    expect(bankPrep.ok).toBe(true);
+    if (!bankPrep.ok || !bankPrep.data.proposalId) return;
+    expect(bankPrep.data.bankWriteExecuted).toBe(false);
+
+    // MCP-only OIDC token attempting to issue human confirmation challenge -> DENIED!
+    const selfApproveDenied = await gateway.issueHumanConfirmationChallenge({
+      humanBearerToken: 'tok-oidc-mcp-only',
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A1,
+      proposalId: bankPrep.data.proposalId,
+    });
+    expect(selfApproveDenied).toEqual({
+      ok: false,
+      reason: 'agent_self_approval_forbidden',
+    });
+
+    // Separate human UI token ('tok-human-ui' with 'pap:ui:full') issues challenge & confirms!
+    const humanBankChallenge = await gateway.issueHumanConfirmationChallenge({
+      humanBearerToken: 'tok-human-ui',
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A1,
+      proposalId: bankPrep.data.proposalId,
+    });
+    expect(humanBankChallenge.ok).toBe(true);
+    if (!humanBankChallenge.ok) return;
+
+    const bankConfirmed = await gateway.confirmBankReconciliationProposal(
+      { rawBearerToken: 'tok-human-ui' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        idempotencyKey: '60606060-6060-4060-8060-606060606002',
+        proposalId: bankPrep.data.proposalId,
+        expectedPayloadHash: bankPrep.data.payloadHash,
+        confirmationCode: humanBankChallenge.confirmationCode,
+      },
+    );
+    expect(bankConfirmed.ok).toBe(true);
+    if (bankConfirmed.ok) {
+      expect(bankConfirmed.data.allocationApplied).toBe(true);
+      expect(bankConfirmed.data.remainingInvoiceGrossAfterPln).toBe('0.00');
+    }
+
+    // Over-allocation attempt after full settlement -> DENIED (amount_mismatch)!
+    const secondOverAlloc = await gateway.prepareBankReconciliation(
+      { rawBearerToken: 'tok-oidc-mcp-only' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        idempotencyKey: '60606060-6060-4060-8060-606060606003',
+        bankTransactionId: 'dddddddd-dddd-4ddd-8ddd-dddddddddd01',
+        invoiceId: '66666666-6666-4666-8666-666666666661',
+        allocationGrossPln: '100.00',
+      },
+    );
+    expect(secondOverAlloc.ok).toBe(false);
+
+    // 4. prepare_month_close never closes period on its own (periodClosed === false)
+    const monthClosePrep = await gateway.prepareMonthClose(
+      { rawBearerToken: 'tok-human-ui' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        idempotencyKey: '60606060-6060-4060-8060-606060606004',
+        period: '2026-11',
+      },
+    );
+    expect(monthClosePrep.ok).toBe(true);
+    if (monthClosePrep.ok) {
+      expect(monthClosePrep.data.periodClosed).toBe(false);
+    }
+
+    // 4b. Closed period blocks prepare_invoice_and_posting_proposal (period_closed)
+    dataSource.seedClosedPeriod(TENANT_A, ENTITY_A1, '2026-09');
+    const closedPeriodInvoice = await gateway.prepareInvoiceAndPostingProposal(
+      { rawBearerToken: 'tok-human-ui' },
+      {
+        tenantId: TENANT_A,
+        legalEntityId: ENTITY_A1,
+        idempotencyKey: '60606060-6060-4060-8060-606060606099',
+        invoice: {
+          direction: 'purchase',
+          invoiceNumber: 'FV/CLOSED/2026/09/01',
+          issueDate: '2026-09-15',
+          dueDate: '2026-09-29',
+          counterpartyNip: '5260250995',
+          counterpartyName: 'Dostawca Zamkniętego Okresu',
+          netAmountPln: '100.00',
+          vatAmountPln: '23.00',
+          grossAmountPln: '123.00',
+          vatRate: '23',
+          expenseDescription: 'Próba księgowania do zamkniętego okresu',
+          suggestedCategory: 'uslugi_obce',
+        },
+      },
+    );
+    expect(closedPeriodInvoice.ok).toBe(false);
+    if (!closedPeriodInvoice.ok) {
+      expect(closedPeriodInvoice.error.errorCode).toBe('period_closed');
+    }
+
+    // 5. get_audit_lineage & redactSecretsAndPiiForMcp scrub JWTs, hconf codes, NIP, PESEL, IBAN, and emails
+    dataSource.seedExternalAuditEvents(TENANT_A, ENTITY_A1, [
+      {
+        auditEventId: 'ext-audit-pii-1',
+        occurredAt: '2026-11-10T10:05:00Z',
+        channel: 'accounting',
+        action: 'manual_review',
+        outcome: 'allow',
+        reasonCode: 'approved_by_jan.testowy@firma.example.pl',
+        summaryPl:
+          'Zatwierdzono dla NIP 5260250995 PESEL 90010112345 rachunek PL61109010140000071219812874 kod pap_hconf_secret123456 Bearer superSecretTok999',
+      },
+    ]);
+
+    const lineage = await gateway.getAuditLineage(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A1, limit: 50 },
+    );
+    expect(lineage.ok).toBe(true);
+    if (lineage.ok) {
+      expect(lineage.data.piiRedacted).toBe(true);
+      const serialized = JSON.stringify(lineage.data);
+      expect(serialized).not.toContain('5260250995');
+      expect(serialized).not.toContain('90010112345');
+      expect(serialized).not.toContain('jan.testowy@firma.example.pl');
+      expect(serialized).not.toContain('PL61109010140000071219812874');
+      expect(serialized).not.toContain('pap_hconf_secret123456');
+      expect(serialized).not.toContain('superSecretTok999');
+      expect(serialized).toContain('******0995');
+    }
+
+    expect(redactSecretsAndPiiForMcp('Token custom_secret_xyz', ['custom_secret_xyz'])).toBe(
+      'Token [REDACTED_SECRET]',
+    );
+
+    // 6. Rate limiting per (actorUserId + tenantId + toolName)
+    const { gateway: tightGateway } = createGatewayFixture({ rateLimitMaxCallsPerMinute: 2 });
+    const rl1 = await tightGateway.getCompanyProfile(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A1 },
+    );
+    const rl2 = await tightGateway.getCompanyProfile(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A1 },
+    );
+    const rl3 = await tightGateway.getCompanyProfile(
+      { rawBearerToken: 'tok-human-ui' },
+      { tenantId: TENANT_A, legalEntityId: ENTITY_A1 },
+    );
+    expect(rl1.ok).toBe(true);
+    expect(rl2.ok).toBe(true);
+    expect(rl3.ok).toBe(false);
+    if (!rl3.ok) {
+      expect(rl3.error.errorCode).toBe('rate_limit_exceeded');
+    }
   });
 });
