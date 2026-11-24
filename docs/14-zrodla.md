@@ -1,5 +1,7 @@
 # 14. Oficjalne źródła i rejestr weryfikacji
 
+> **Powiązanie z wersjonowanym rejestrem (2026-11-24):** Konkretne akty prawne (Dz.U./M.P. 2025–2026) powiązane z kalkulatorami `@pap/domain` znajdują się w [dokumencie 32](32-rejestr-regul-prawnych-i-matryca-jdg.md), natomiast obowiązkowy szablon metadanych źródeł i przypiętych sum `SHA-256` dla oficjalnych schem XSD MF (`#4`, `#82`, `#98`) w [rejestrze capability i bramek](product/capability-and-gate-registry.md).
+
 **Stan dokumentacji: 26 października 2026.** Ten dokument jest zestawem punktów startowych, a nie automatycznie aktualnym kodeksem. Przepisy mogą się zmieniać — każdą regułę należy powiązać z właściwym aktem, publikacją i datą.
 
 | Domena                       | Oficjalne źródło                                                                                       |

@@ -1,5 +1,7 @@
 # 09. Silnik reguł prawnych i aktualizacji
 
+> **Wdrożony rejestr domenowy i szablon XSD (2026-11-24):** Katalog 44 wersji reguł 2025–2026 w `@pap/domain` oraz 6-krokowy proces aktualizacji (`#4`) opisuje [dokument 32](32-rejestr-regul-prawnych-i-matryca-jdg.md). Bieżący status walidacji oficjalnych schem XSD (`FA(2)/FA(3)`, `JPK_V7M(3)/V7K(3)`, `JPK_PD`), otwarte blokery runtime (`#81`, `#82`, `#98`, `#119`) i bramka odbioru eksperckiego (`#100`) są śledzone w [rejestrze capability i bramek](product/capability-and-gate-registry.md).
+
 ## Dlaczego reguły wersjonowane
 
 Prawo podatkowe zmienia się w trakcie roku. Reguła rozliczenia musi być przypisana do okresu, formy działalności i faktów, a także do obowiązującego na dany moment aktu prawnego.
