@@ -20,13 +20,11 @@ import {
 } from '@pap/ui';
 import { AlertBanner, Button, NipInput, TaxRegimeSelector } from '../../../components/ui-controls';
 import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
-import {
-  COMPANY_JDG_KPIR_ID,
-  TENANT_1_ID,
-  type AuditLogEntryRecord,
-  type CompanyProfileRecord,
-  type CompanyUserGrantRecord,
-  type TenantDirectoryMemberSummary,
+import type {
+  AuditLogEntryRecord,
+  CompanyProfileRecord,
+  CompanyUserGrantRecord,
+  TenantDirectoryMemberSummary,
 } from '../../../lib/workspace-types';
 
 export interface CompaniesWorkbenchProps {
@@ -36,6 +34,7 @@ export interface CompaniesWorkbenchProps {
   members?: readonly TenantDirectoryMemberSummary[];
   invitations?: readonly TenantInvitationItemContract[];
   isOidcSession?: boolean;
+  isolationProbeTarget?: { readonly tenantId: string; readonly legalEntityId: string } | null;
   currentUserId?: string;
   auditLog: readonly AuditLogEntryRecord[];
   period: string;
@@ -58,6 +57,7 @@ export function CompaniesWorkbench({
   helpMap,
   invitations = [],
   isOidcSession = false,
+  isolationProbeTarget = null,
   members = [],
   period,
   zusBasis,
@@ -301,13 +301,16 @@ export function CompaniesWorkbench({
         eyebrow="Dostępne podmioty prawne (GET /api/v1/me/companies)"
         title="Firmy w Twoim zakresie autoryzacji"
         actions={
-          !isOidcSession ? (
+          !isOidcSession && isolationProbeTarget ? (
             <Button
               size="sm"
               variant="secondary"
               disabled={busy}
               onClick={() => {
-                void switchCompany(TENANT_1_ID, COMPANY_JDG_KPIR_ID);
+                void switchCompany(
+                  isolationProbeTarget.tenantId,
+                  isolationProbeTarget.legalEntityId,
+                );
               }}
             >
               Test izolacji: spróbuj odczytać Tenant 1

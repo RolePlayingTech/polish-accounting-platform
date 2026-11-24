@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { WorkspaceAccessErrorShell } from '../../../../components/access-denied-shell';
+import { KsefSandboxPanel } from '../../../../components/ksef-sandbox-panel';
 import { LoginRequiredCard } from '../../../../components/login-required-card';
 import { AcademyDisclaimerBanner, AlertBanner } from '../../../../components/ui-controls';
 import { WorkspaceShell } from '../../../../components/workspace-shell';
@@ -10,6 +11,10 @@ import {
   getDocumentDetailSnapshot,
   getWorkspaceShellContext,
 } from '../../../../lib/synthetic-workspace';
+import {
+  getKsefSandboxStatusSnapshot,
+  getPeriodCloseSnapshot,
+} from '../../../../lib/wave2-statutory-and-close';
 import { DocumentVerificationClient } from './document-verification-client';
 
 export default async function DocumentDetailPage({
@@ -103,6 +108,11 @@ export default async function DocumentDetailPage({
     );
   }
 
+  const [ksefStatus, periodClose] = await Promise.all([
+    getKsefSandboxStatusSnapshot(session),
+    getPeriodCloseSnapshot(session, session.context.period),
+  ]);
+
   return (
     <WorkspaceShell
       activeHref="/app/documents"
@@ -112,6 +122,7 @@ export default async function DocumentDetailPage({
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
+      periodStatus={periodClose.status}
     >
       <div className="space-y-6">
         <DocumentVerificationClient
@@ -129,6 +140,16 @@ export default async function DocumentDetailPage({
             kupDeductibility: mustResolveUiFieldHelp('kup_deductibility'),
             vat50Vehicle: mustResolveUiFieldHelp('vat_50_vehicle'),
           }}
+        />
+        <KsefSandboxPanel
+          key={`detail-ksef-${detail.document.documentId}`}
+          companyName={detail.activeCompany.companyName}
+          companyNip={detail.activeCompany.nip}
+          period={session.context.period}
+          canWrite={detail.activeCompany.grantedActions.includes('write')}
+          status={ksefStatus}
+          documents={[detail.document]}
+          preselectedDocumentId={detail.document.documentId}
         />
         <AcademyDisclaimerBanner />
       </div>

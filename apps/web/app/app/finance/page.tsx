@@ -2,12 +2,17 @@ import {
   WorkspaceAccessErrorShell,
   tryLoadWorkspaceData,
 } from '../../../components/access-denied-shell';
+import { DueVsPaidObligationsCard } from '../../../components/due-vs-paid-obligations-card';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
 import { getFinanceSnapshot, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
+import {
+  getPeriodCloseSnapshot,
+  getTaxObligationsDueVsPaidSnapshot,
+} from '../../../lib/wave2-statutory-and-close';
 import { FinanceWorkbench } from './finance-workbench';
 
 export default async function FinancePage() {
@@ -34,11 +39,13 @@ export default async function FinancePage() {
   }
 
   const loaded = await tryLoadWorkspaceData(async () => {
-    const [dash, fin] = await Promise.all([
+    const [dash, fin, dueVsPaid, periodClose] = await Promise.all([
       getWorkspaceShellContext(session),
       getFinanceSnapshot(session),
+      getTaxObligationsDueVsPaidSnapshot(session, session.context.period),
+      getPeriodCloseSnapshot(session, session.context.period),
     ]);
-    return { dash, fin };
+    return { dash, fin, dueVsPaid, periodClose };
   });
   if (!loaded.ok) {
     return (
@@ -52,7 +59,7 @@ export default async function FinancePage() {
     );
   }
 
-  const { dash, fin } = loaded.data;
+  const { dash, fin, dueVsPaid, periodClose } = loaded.data;
 
   return (
     <WorkspaceShell
@@ -63,9 +70,11 @@ export default async function FinancePage() {
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
+      periodStatus={periodClose.status}
     >
       <div className="space-y-6">
         <FinanceWorkbench
+          key={`${dash.activeCompany.legalEntityId}:${session.context.period}`}
           openDocuments={fin.openDocuments}
           bankTransactions={fin.bankTransactions}
           reconciliationMatches={fin.reconciliationMatches}
@@ -76,6 +85,7 @@ export default async function FinancePage() {
             mpp: mustResolveUiFieldHelp('split_payment_mpp'),
           }}
         />
+        <DueVsPaidObligationsCard snapshot={dueVsPaid} />
         <AcademyDisclaimerBanner />
       </div>
     </WorkspaceShell>

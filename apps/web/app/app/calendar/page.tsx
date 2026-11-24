@@ -3,12 +3,18 @@ import {
   WorkspaceAccessErrorShell,
   tryLoadWorkspaceData,
 } from '../../../components/access-denied-shell';
+import { DueVsPaidObligationsCard } from '../../../components/due-vs-paid-obligations-card';
 import { LoginRequiredCard } from '../../../components/login-required-card';
+import { PeriodClosePanel } from '../../../components/period-close-panel';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
 import { getDashboardSnapshot } from '../../../lib/synthetic-workspace';
+import {
+  getPeriodCloseSnapshot,
+  getTaxObligationsDueVsPaidSnapshot,
+} from '../../../lib/wave2-statutory-and-close';
 import { CalendarWorkbench } from './calendar-workbench';
 
 export default async function TaxCalendarPage() {
@@ -34,7 +40,14 @@ export default async function TaxCalendarPage() {
     );
   }
 
-  const loaded = await tryLoadWorkspaceData(() => getDashboardSnapshot(session));
+  const loaded = await tryLoadWorkspaceData(async () => {
+    const [dash, periodClose, dueVsPaid] = await Promise.all([
+      getDashboardSnapshot(session),
+      getPeriodCloseSnapshot(session, session.context.period),
+      getTaxObligationsDueVsPaidSnapshot(session, session.context.period),
+    ]);
+    return { dash, periodClose, dueVsPaid };
+  });
   if (!loaded.ok) {
     return (
       <WorkspaceAccessErrorShell
@@ -47,7 +60,7 @@ export default async function TaxCalendarPage() {
     );
   }
 
-  const dash = loaded.data;
+  const { dash, periodClose, dueVsPaid } = loaded.data;
   const yearNum = Number(session.context.period.slice(0, 4)) || 2026;
   const holidaysMap = getPolishStatutoryHolidaysForYear(yearNum);
   const holidaysInYear = [...holidaysMap.entries()]
@@ -75,9 +88,21 @@ export default async function TaxCalendarPage() {
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
+      periodStatus={periodClose.status}
     >
       <div className="space-y-6">
+        <DueVsPaidObligationsCard snapshot={dueVsPaid} />
+
+        <PeriodClosePanel
+          key={`cal-close-${dash.activeCompany.legalEntityId}:${session.context.period}`}
+          companyName={dash.activeCompany.companyName}
+          companyNip={dash.activeCompany.nip}
+          canWrite={dash.activeCompany.grantedActions.includes('write')}
+          initialSnapshot={periodClose}
+        />
+
         <CalendarWorkbench
+          key={`${dash.activeCompany.legalEntityId}:${session.context.period}`}
           period={session.context.period}
           canWrite={dash.activeCompany.grantedActions.includes('write')}
           obligations={obligations}

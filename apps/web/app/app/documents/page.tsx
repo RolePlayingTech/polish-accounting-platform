@@ -2,6 +2,7 @@ import {
   WorkspaceAccessErrorShell,
   tryLoadWorkspaceData,
 } from '../../../components/access-denied-shell';
+import { KsefSandboxPanel } from '../../../components/ksef-sandbox-panel';
 import { LoginRequiredCard } from '../../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
@@ -11,6 +12,10 @@ import {
   getDocumentsForActiveCompany,
   getWorkspaceShellContext,
 } from '../../../lib/synthetic-workspace';
+import {
+  getKsefSandboxStatusSnapshot,
+  getPeriodCloseSnapshot,
+} from '../../../lib/wave2-statutory-and-close';
 import { DocumentsWorkbench } from './documents-workbench';
 
 export default async function DocumentsPage() {
@@ -37,11 +42,13 @@ export default async function DocumentsPage() {
   }
 
   const loaded = await tryLoadWorkspaceData(async () => {
-    const [dash, documents] = await Promise.all([
+    const [dash, documents, ksefStatus, periodClose] = await Promise.all([
       getWorkspaceShellContext(session),
       getDocumentsForActiveCompany(session),
+      getKsefSandboxStatusSnapshot(session),
+      getPeriodCloseSnapshot(session, session.context.period),
     ]);
-    return { dash, documents };
+    return { dash, documents, ksefStatus, periodClose };
   });
   if (!loaded.ok) {
     return (
@@ -55,7 +62,7 @@ export default async function DocumentsPage() {
     );
   }
 
-  const { dash, documents } = loaded.data;
+  const { dash, documents, ksefStatus, periodClose } = loaded.data;
 
   return (
     <WorkspaceShell
@@ -66,6 +73,7 @@ export default async function DocumentsPage() {
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
+      periodStatus={periodClose.status}
     >
       <div className="space-y-6">
         <DocumentsWorkbench
@@ -80,6 +88,15 @@ export default async function DocumentsPage() {
             gtuCode: mustResolveUiFieldHelp('gtu_code'),
             mpp: mustResolveUiFieldHelp('split_payment_mpp'),
           }}
+        />
+        <KsefSandboxPanel
+          key={`docs-ksef-${dash.activeCompany.legalEntityId}:${session.context.period}`}
+          companyName={dash.activeCompany.companyName}
+          companyNip={dash.activeCompany.nip}
+          period={session.context.period}
+          canWrite={dash.activeCompany.grantedActions.includes('write')}
+          status={ksefStatus}
+          documents={documents}
         />
         <AcademyDisclaimerBanner />
       </div>

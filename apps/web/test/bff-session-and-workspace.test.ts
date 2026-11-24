@@ -800,7 +800,8 @@ describe('Online BFF Unification (#57, #58, #59, #60, #62, #63) & Offline Demo M
     });
     expect(firstImport.status).toBe('ai_proposal');
     expect(firstImport.isDuplicateSha256).toBe(false);
-    expect(firstImport.ksefReferenceNumber).toBe('5213004125-20261016-FA3084-99A1B2-44');
+    expect(firstImport.ksefMarker).toBe('OFF');
+    expect(firstImport.ksefReferenceNumber).toBeUndefined();
     expect(firstImport.whiteListStatus).toBe('not_checked');
     expect(firstImport.aiConfidencePercent).toBeNull();
 

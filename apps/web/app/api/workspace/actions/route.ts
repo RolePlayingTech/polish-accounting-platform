@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import type {
   KpirExpenseQualificationKind,
+  OfficialJpkStructureCode,
   RyczaltRateCode,
   TaxProfileCode,
   VatDeductionMode,
@@ -37,6 +38,14 @@ import type {
   NotificationFrequency,
   ReminderStage,
 } from '../../../../lib/workspace-types';
+import {
+  archiveSourceDocumentWormMutation,
+  closeAccountingPeriodMutation,
+  exportInvoiceFa3XmlMutation,
+  exportValidatedJpkXmlMutation,
+  issueToKsefSandboxMutation,
+  syncIncomingKsefSandboxMutation,
+} from '../../../../lib/wave2-statutory-and-close';
 
 function str(val: unknown, fallback = ''): string {
   return typeof val === 'string' ? val : fallback;
@@ -492,6 +501,64 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       case 'mcp_create_demo_proposal': {
         const res = await manageMcpProposalMutation(session, { op: 'create_demo_proposal' });
         return NextResponse.json({ ok: true, ...res });
+      }
+
+      case 'export_jpk_xml': {
+        const purpose = payload['purpose'] === 2 || payload['purpose'] === '2' ? 2 : 1;
+        const periodArg = str(payload['period']).trim() || undefined;
+        const artifact = await exportValidatedJpkXmlMutation(session, {
+          ...(periodArg ? { period: periodArg } : {}),
+          structureCode: str(payload['structureCode'], 'JPK_V7M(3)') as OfficialJpkStructureCode,
+          purpose,
+        });
+        return NextResponse.json({ ok: true, artifact });
+      }
+
+      case 'export_invoice_fa3_xml': {
+        const fa3 = await exportInvoiceFa3XmlMutation(session, str(payload['documentId']));
+        return NextResponse.json({ ok: true, fa3 });
+      }
+
+      case 'ksef_sandbox_issue': {
+        const rawEnv = str(payload['environment'], 'local_mock');
+        const environment: 'test' | 'demo' | 'local_mock' =
+          rawEnv === 'test' ? 'test' : rawEnv === 'demo' ? 'demo' : 'local_mock';
+        const targetEndpointUrl = str(payload['targetEndpointUrl']).trim() || undefined;
+        const result = await issueToKsefSandboxMutation(session, {
+          documentId: str(payload['documentId']),
+          environment,
+          confirmHumanSend: payload['confirmHumanSend'] === true,
+          ...(targetEndpointUrl ? { targetEndpointUrl } : {}),
+        });
+        return NextResponse.json({ ok: true, result });
+      }
+
+      case 'ksef_sandbox_sync_incoming': {
+        const rawEnv = str(payload['environment'], 'local_mock');
+        const environment: 'test' | 'demo' | 'local_mock' =
+          rawEnv === 'test' ? 'test' : rawEnv === 'demo' ? 'demo' : 'local_mock';
+        const result = await syncIncomingKsefSandboxMutation(session, { environment });
+        return NextResponse.json({ ok: true, result });
+      }
+
+      case 'archive_source_document_worm': {
+        const record = await archiveSourceDocumentWormMutation(session, {
+          fileName: str(payload['fileName'], 'zalacznik.pdf'),
+          mimeType: str(payload['mimeType'], 'application/pdf'),
+          content: str(payload['content']),
+        });
+        return NextResponse.json({ ok: true, record });
+      }
+
+      case 'close_accounting_period': {
+        const periodArg = str(payload['period']).trim() || undefined;
+        const noteArg = str(payload['note']).trim() || undefined;
+        const periodClose = await closeAccountingPeriodMutation(session, {
+          ...(periodArg ? { period: periodArg } : {}),
+          confirmClose: payload['confirmClose'] === true,
+          ...(noteArg ? { note: noteArg } : {}),
+        });
+        return NextResponse.json({ ok: true, periodClose });
       }
 
       default:

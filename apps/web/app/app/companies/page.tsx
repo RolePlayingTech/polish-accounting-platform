@@ -8,7 +8,10 @@ import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { isSyntheticPersonaLoginAllowed } from '../../../lib/runtime-mode';
 import { readServerSession } from '../../../lib/session';
-import { getCompaniesManagementSnapshot } from '../../../lib/synthetic-workspace';
+import {
+  getCompaniesManagementSnapshot,
+  getSyntheticIsolationProbeTarget,
+} from '../../../lib/synthetic-workspace';
 import { CompaniesWorkbench } from './companies-workbench';
 
 export default async function CompaniesPage() {
@@ -77,6 +80,7 @@ export default async function CompaniesPage() {
           members={snapshot.members}
           invitations={snapshot.invitations}
           isOidcSession={session.authMethod === 'oidc'}
+          isolationProbeTarget={allowPersonas ? getSyntheticIsolationProbeTarget() : null}
           currentUserId={session.context.userId}
           auditLog={snapshot.auditLog}
           period={session.context.period}

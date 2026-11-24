@@ -5,6 +5,7 @@ import {
   tryLoadWorkspaceData,
 } from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
+import { StatutoryJpkExportPanel } from '../../../components/statutory-jpk-export-panel';
 import { AcademyDisclaimerBanner, AlertBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
@@ -14,6 +15,10 @@ import {
   getDashboardSnapshot,
   getDocumentsForActiveCompany,
 } from '../../../lib/synthetic-workspace';
+import {
+  getApplicableJpkSnapshot,
+  getPeriodCloseSnapshot,
+} from '../../../lib/wave2-statutory-and-close';
 import { VatRegistersWorkbench, type VatDocumentMarkers } from './vat-workbench';
 
 export default async function VatAndJpkPage() {
@@ -38,11 +43,13 @@ export default async function VatAndJpkPage() {
 
   const loaded = await tryLoadWorkspaceData(async () => {
     const dash = await getDashboardSnapshot(session);
-    const [vat, docs] = await Promise.all([
+    const [vat, docs, applicableJpk, periodClose] = await Promise.all([
       buildVatRegistersForCompany(dash.activeCompany, session.context.period, session),
       getDocumentsForActiveCompany(session),
+      getApplicableJpkSnapshot(session, session.context.period),
+      getPeriodCloseSnapshot(session, session.context.period),
     ]);
-    return { dash, vat, docs };
+    return { dash, vat, docs, applicableJpk, periodClose };
   });
   if (!loaded.ok) {
     return (
@@ -56,7 +63,7 @@ export default async function VatAndJpkPage() {
     );
   }
 
-  const { dash, vat, docs } = loaded.data;
+  const { dash, vat, docs, applicableJpk, periodClose } = loaded.data;
 
   const markersByDocNumber: Record<string, VatDocumentMarkers> = {};
   for (const d of docs) {
@@ -120,6 +127,7 @@ export default async function VatAndJpkPage() {
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
+      periodStatus={periodClose.status}
       pageActions={
         <div className="flex items-center gap-1.5">
           <FieldHelpButton help={mustResolveUiFieldHelp('vat_rates_guide')} />
@@ -369,6 +377,13 @@ export default async function VatAndJpkPage() {
             </Card>
           </div>
         </div>
+
+        <StatutoryJpkExportPanel
+          key={`vat-jpk-${dash.activeCompany.legalEntityId}:${session.context.period}`}
+          period={session.context.period}
+          structures={applicableJpk.structures}
+          vatActive={!isVatExempt}
+        />
 
         <AcademyDisclaimerBanner />
       </div>

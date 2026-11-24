@@ -3,11 +3,16 @@ import {
   tryLoadWorkspaceData,
 } from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
+import { StatutoryJpkExportPanel } from '../../../components/statutory-jpk-export-panel';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
 import { getRyczaltSnapshot, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
+import {
+  getApplicableJpkSnapshot,
+  getPeriodCloseSnapshot,
+} from '../../../lib/wave2-statutory-and-close';
 import { RyczaltWorkbench } from './ryczalt-workbench';
 
 export default async function RyczaltPage() {
@@ -31,11 +36,13 @@ export default async function RyczaltPage() {
   }
 
   const loaded = await tryLoadWorkspaceData(async () => {
-    const [dash, ryc] = await Promise.all([
+    const [dash, ryc, applicableJpk, periodClose] = await Promise.all([
       getWorkspaceShellContext(session),
       getRyczaltSnapshot(session),
+      getApplicableJpkSnapshot(session, session.context.period),
+      getPeriodCloseSnapshot(session, session.context.period),
     ]);
-    return { dash, ryc };
+    return { dash, ryc, applicableJpk, periodClose };
   });
   if (!loaded.ok) {
     return (
@@ -49,7 +56,7 @@ export default async function RyczaltPage() {
     );
   }
 
-  const { dash, ryc } = loaded.data;
+  const { dash, ryc, applicableJpk, periodClose } = loaded.data;
 
   return (
     <WorkspaceShell
@@ -60,6 +67,7 @@ export default async function RyczaltPage() {
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
+      periodStatus={periodClose.status}
     >
       <div className="space-y-6">
         <RyczaltWorkbench
@@ -88,6 +96,12 @@ export default async function RyczaltPage() {
             ryczaltRate: mustResolveUiFieldHelp('ryczalt_rate'),
             vatLimit: mustResolveUiFieldHelp('vat_exemption_240k'),
           }}
+        />
+        <StatutoryJpkExportPanel
+          key={`ryc-jpk-${dash.activeCompany.legalEntityId}:${session.context.period}`}
+          period={session.context.period}
+          structures={applicableJpk.structures}
+          vatActive={applicableJpk.vatActive}
         />
         <AcademyDisclaimerBanner />
       </div>
