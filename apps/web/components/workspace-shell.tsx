@@ -11,6 +11,11 @@ import {
   type NavSection,
   type ShellLinkRenderer,
 } from '@pap/ui';
+import {
+  buildWorkspaceNavSections,
+  resolveCompatibleHrefAfterCompanySwitch,
+} from '../lib/company-capabilities';
+import { formatUserFacingErrorPl } from '../lib/error-messages-pl';
 import type { SessionContext } from '../lib/session';
 import { AVAILABLE_PERIODS, type CompanyProfileRecord } from '../lib/workspace-types';
 import { useAllowSyntheticLogin } from './runtime-mode-provider';
@@ -133,10 +138,16 @@ export function WorkspaceShell({
           baseEntityId: activeCompany?.legalEntityId,
         });
       }
+      if (comp) {
+        const compatibleHref = resolveCompatibleHrefAfterCompanySwitch(activeHref, comp);
+        if (compatibleHref) {
+          router.push(compatibleHref);
+        }
+      }
     }
     window.addEventListener('pap:company-switched', onCompanySwitched);
     return () => window.removeEventListener('pap:company-switched', onCompanySwitched);
-  }, [activeCompany?.legalEntityId]);
+  }, [activeCompany?.legalEntityId, activeHref, router]);
 
   const mergedAccessibleCompanies = [
     ...accessibleCompanies,
@@ -148,6 +159,8 @@ export function WorkspaceShell({
     (optimisticEntityId
       ? mergedAccessibleCompanies.find((c) => c.legalEntityId === optimisticEntityId)
       : null) ?? activeCompany;
+
+  const navSections = buildWorkspaceNavSections(effectiveActiveCompany);
 
   async function handleContextChange(next: {
     tenantId?: string;
@@ -162,15 +175,41 @@ export function WorkspaceShell({
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify(next),
       });
-      const data = (await response.json()) as { ok?: boolean; error?: string };
+      const data = (await response.json()) as {
+        ok?: boolean;
+        error?: string;
+        reasonCode?: string;
+      };
       if (!response.ok || !data.ok) {
-        setSwitchError(data.error ?? 'Nie udało się zmienić aktywnej firmy.');
+        setSwitchError(
+          formatUserFacingErrorPl({
+            status: response.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Nie udało się zmienić aktywnej firmy.',
+          }),
+        );
       } else {
+        let nextTargetHref: string | null = null;
         if (next.legalEntityId) {
           setOptimisticSwitch({
             targetEntityId: next.legalEntityId,
             baseEntityId: activeCompany?.legalEntityId,
           });
+          const targetComp = mergedAccessibleCompanies.find(
+            (c) => c.legalEntityId === next.legalEntityId,
+          );
+          if (targetComp) {
+            window.dispatchEvent(
+              new CustomEvent('pap:company-switched', {
+                detail: { company: targetComp, legalEntityId: targetComp.legalEntityId },
+              }),
+            );
+            nextTargetHref = resolveCompatibleHrefAfterCompanySwitch(activeHref, targetComp);
+          }
+        }
+        if (nextTargetHref) {
+          router.push(nextTargetHref);
         }
         router.refresh();
       }
@@ -330,9 +369,7 @@ export function WorkspaceShell({
             href="/login"
             className="inline-flex min-h-8 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-3 py-1 text-xs font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
           >
-            {effectiveAllowSyntheticLogin
-              ? 'Zaloguj się do środowiska testowego'
-              : 'Zaloguj się'}
+            {effectiveAllowSyntheticLogin ? 'Zaloguj się do środowiska testowego' : 'Zaloguj się'}
           </Link>
         </div>
       </div>
@@ -342,7 +379,7 @@ export function WorkspaceShell({
     <AppShell
       activeHref={activeHref}
       surface={surface}
-      sections={WORKSPACE_NAV_SECTIONS}
+      sections={navSections}
       contextHeader={contextHeader}
       renderLink={nextLinkRenderer}
       {...(pageTitle !== undefined ? { pageTitle } : {})}

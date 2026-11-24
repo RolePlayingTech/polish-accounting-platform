@@ -3,7 +3,9 @@
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import {
+  parsePlnToGrosze,
   sumGrosze,
+  validatePolishNip,
   type KpirColumnLayout,
   type KpirEntry,
   type KpirPeriodSummary,
@@ -21,7 +23,9 @@ import {
   type LedgerColumn,
   type LegalBasisInfo,
 } from '@pap/ui';
+import { IncompatibleRegimeGateCard } from '../../../components/regime-context-card';
 import { AlertBanner, Button, MoneyInput } from '../../../components/ui-controls';
+import { formatUserFacingErrorPl, isValidIsoCalendarDate } from '../../../lib/error-messages-pl';
 import type { CompanyProfileRecord } from '../../../lib/workspace-types';
 
 export interface KpirEntryRowView {
@@ -31,6 +35,7 @@ export interface KpirEntryRowView {
 
 export interface KpirWorkbenchProps {
   activeCompany: CompanyProfileRecord;
+  accessibleCompanies?: readonly CompanyProfileRecord[];
   period: string;
   canWrite: boolean;
   rows: readonly KpirEntryRowView[];
@@ -49,6 +54,7 @@ export interface KpirWorkbenchProps {
 }
 
 export function KpirWorkbench({
+  accessibleCompanies = [],
   activeCompany,
   canWrite,
   helpMap,
@@ -71,40 +77,109 @@ export function KpirWorkbench({
     title: string;
     detail: string;
   } | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
-  // Formularz ręcznego wpisu KPiR
+  const isKpirCompany =
+    activeCompany.profileCode === 'jdg_kpir_skala' ||
+    activeCompany.profileCode === 'jdg_kpir_liniowy';
+  const canWriteEffective = canWrite && isKpirCompany;
+
+  // Formularz ręcznego wpisu KPiR — bez fikcyjnego domyślnego NrKSeF (#115) i bez cichych danych (#102)
   const [eventDate, setEventDate] = useState(`${period}-21`);
-  const [docNumber, setDocNumber] = useState(`DW/${period}/09`);
-  const [ksefRef, setKsefRef] = useState('5250001003-20261021-AABBCC112233-09');
-  const [counterpartyName, setCounterpartyName] = useState(
-    'Usługi Hostingowe Syntetyka Sp. z o.o.',
-  );
-  const [counterpartyNip, setCounterpartyNip] = useState('5213004125');
-  const [eventDesc, setEventDesc] = useState('Serwery dedykowane do projektów klientów');
+  const [docNumber, setDocNumber] = useState('');
+  const [ksefRef, setKsefRef] = useState('');
+  const [counterpartyName, setCounterpartyName] = useState('');
+  const [counterpartyNip, setCounterpartyNip] = useState('');
+  const [eventDesc, setEventDesc] = useState('');
   const [salesPln, setSalesPln] = useState('0.00');
-  const [expensesPln, setExpensesPln] = useState('650.00');
+  const [expensesPln, setExpensesPln] = useState('');
 
   // Formularz czerwonego storna
   const [stornoTargetId, setStornoTargetId] = useState(rows[0]?.entry.id ?? '');
-  const [stornoReason, setStornoReason] = useState('Omyłka pisarska w kwocie dowodu wewnętrznego');
+  const [stornoReason, setStornoReason] = useState('');
 
   const activeLayout = layoutMode === '2026' ? layout2026 : layout2019;
   const selectedRow = rows.find((r) => r.entry.id === selectedRowId) ?? rows[0] ?? null;
 
-  async function switchToDemoKpir() {
-    setBusy(true);
-    try {
-      const res = await fetch('/api/session/context', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ demoCompanyCode: 'demo_jdg_kpir_alfa' }),
-      });
-      if (res.ok) {
-        router.refresh();
+  function fillDemoKpirExpense() {
+    setEventDate(`${period}-21`);
+    setDocNumber(`DW-DEMO/${period}/09`);
+    setKsefRef('');
+    setCounterpartyName('Usługi Hostingowe Syntetyka Sp. z o.o. [DEMO]');
+    setCounterpartyNip('5213004125');
+    setEventDesc('[DEMO] Serwery dedykowane do projektów klientów');
+    setSalesPln('0.00');
+    setExpensesPln('650.00');
+    setFieldErrors({});
+  }
+
+  function validateEntryForm(): boolean {
+    const nextErrors: Record<string, string> = {};
+    let firstId: string | null = null;
+    const mark = (k: string, id: string, msg: string) => {
+      if (!nextErrors[k]) {
+        nextErrors[k] = msg;
+        if (!firstId) firstId = id;
       }
-    } finally {
-      setBusy(false);
+    };
+
+    if (!isValidIsoCalendarDate(eventDate)) {
+      mark(
+        'eventDate',
+        'kpir-event-date',
+        `Wskaż poprawną datę zdarzenia gospodarczego w formacie RRRR-MM-DD (np. ${period}-21).`,
+      );
     }
+    if (!docNumber.trim()) {
+      mark('docNumber', 'kpir-doc-num', `Podaj numer dowodu księgowego (np. DW/${period}/01).`);
+    }
+    if (counterpartyName.trim().length < 2) {
+      mark('counterpartyName', 'kpir-cp-name', 'Podaj nazwę kontrahenta lub wystawcy dowodu.');
+    }
+    if (counterpartyNip.trim().length > 0) {
+      const nipCheck = validatePolishNip(counterpartyNip);
+      if (!nipCheck.valid) {
+        mark(
+          'counterpartyNip',
+          'kpir-cp-nip',
+          nipCheck.reason ?? 'Podaj poprawny 10-cyfrowy NIP albo pozostaw puste dla braku NIP.',
+        );
+      }
+    }
+    if (eventDesc.trim().length < 3) {
+      mark(
+        'eventDesc',
+        'kpir-desc',
+        'Opisz zwięźle zdarzenie gospodarcze (np. „Zakup licencji oprogramowania”).',
+      );
+    }
+
+    let salesG = 0;
+    let expG = 0;
+    try {
+      salesG = parsePlnToGrosze(salesPln.trim() || '0.00');
+    } catch {
+      mark('salesPln', 'kpir-sales-pln', 'Wpisz poprawną kwotę przychodu PLN (np. 0.00).');
+    }
+    try {
+      expG = parsePlnToGrosze(expensesPln.trim() || '0.00');
+    } catch {
+      mark('expensesPln', 'kpir-exp-pln', 'Wpisz poprawną kwotę wydatku PLN (np. 650.00).');
+    }
+    if (!nextErrors['salesPln'] && !nextErrors['expensesPln'] && salesG <= 0 && expG <= 0) {
+      mark(
+        'expensesPln',
+        'kpir-exp-pln',
+        'Podaj dodatnią kwotę przychodu albo pozostałych wydatków (co najmniej jedna wartość > 0,00 PLN).',
+      );
+    }
+
+    setFieldErrors(nextErrors);
+    if (firstId) {
+      window.document.getElementById(firstId)?.focus();
+      return false;
+    }
+    return true;
   }
 
   async function postKpirMutation(body: Record<string, unknown>, okMessage: string) {
@@ -116,12 +191,22 @@ export function KpirWorkbench({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string; entryId?: string };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        reasonCode?: string;
+        error?: string;
+        entryId?: string;
+      };
       if (!res.ok || !data.ok) {
         setFeedback({
           tone: 'danger',
           title: `Błąd zapisu KPiR (HTTP ${String(res.status)})`,
-          detail: data.error ?? 'Sprawdź poprawność wprowadzonych danych.',
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Sprawdź poprawność wprowadzonych danych wpisu KPiR.',
+          }),
         });
       } else {
         setFeedback({
@@ -134,6 +219,12 @@ export function KpirWorkbench({
         }
         router.refresh();
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się zapisać pozycji w KPiR.',
+      });
     } finally {
       setBusy(false);
     }
@@ -310,27 +401,13 @@ export function KpirWorkbench({
     },
   ];
 
-  const isNonKpirCompany =
-    activeCompany.profileCode !== 'jdg_kpir_skala' &&
-    activeCompany.profileCode !== 'jdg_kpir_liniowy';
-
   return (
     <div className="space-y-6">
-      {isNonKpirCompany ? (
-        <AlertBanner
-          tone="info"
-          title={`Aktywna firma (${activeCompany.shortName}) rozlicza się w innym reżimie (${activeCompany.profileLabelPl})`}
-          actions={
-            <Button size="sm" disabled={busy} onClick={() => void switchToDemoKpir()}>
-              Przełącz na JDG KPiR (Pracownia Projektowa)
-            </Button>
-          }
-        >
-          Możesz jednym kliknięciem przełączyć aktywny kontekst na syntetyczną firmę{' '}
-          <strong>Pracownia Projektowa Jan Testowy</strong>, aby zobaczyć wypełnioną KPiR 2026 z
-          numerami KSeF i kosztami 75% KUP.
-        </AlertBanner>
-      ) : null}
+      <IncompatibleRegimeGateCard
+        activeCompany={activeCompany}
+        accessibleCompanies={accessibleCompanies}
+        requiredBook="kpir"
+      />
 
       {feedback ? (
         <AlertBanner tone={feedback.tone} title={feedback.title}>
@@ -433,16 +510,23 @@ export function KpirWorkbench({
           eyebrow="Nowy zapis w księdze"
           title="Dodaj ręczny wpis do KPiR"
           actions={
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1.5">
+              <Button size="sm" variant="secondary" onClick={fillDemoKpirExpense}>
+                [DEMO] Wypełnij przykładem
+              </Button>
               <FieldHelpButton help={helpMap.col7} />
               <FieldHelpButton help={helpMap.col13} />
             </div>
           }
         >
           <form
+            noValidate
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
+              if (!validateEntryForm()) {
+                return;
+              }
               void postKpirMutation(
                 {
                   action: 'add_kpir_entry',
@@ -453,21 +537,31 @@ export function KpirWorkbench({
                   counterpartyNip,
                   counterpartyAddress: 'Polska',
                   eventDescription: eventDesc,
-                  salesPln,
-                  otherExpensesPln: expensesPln,
+                  salesPln: salesPln.trim() || '0.00',
+                  otherExpensesPln: expensesPln.trim() || '0.00',
                 },
-                `Dopisano pozycję KPiR (${docNumber}) wraz z numerem KSeF.`,
+                `Dopisano pozycję KPiR (${docNumber.trim()}).`,
               );
             }}
           >
             <div className="grid gap-3 sm:grid-cols-2">
-              <FormField id="kpir-event-date" label="Data zdarzenia (Kol. 2)">
+              <FormField
+                id="kpir-event-date"
+                label="Data zdarzenia (Kol. 2)"
+                required
+                {...(fieldErrors['eventDate'] ? { error: fieldErrors['eventDate'] } : {})}
+              >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="date"
                     value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
+                    onChange={(e) => {
+                      setEventDate(e.target.value);
+                      if (fieldErrors['eventDate']) {
+                        setFieldErrors((prev) => ({ ...prev, eventDate: '' }));
+                      }
+                    }}
                     className={`${ctrl.className} font-mono tabular-nums`}
                   />
                 )}
@@ -475,13 +569,22 @@ export function KpirWorkbench({
               <FormField
                 id="kpir-doc-num"
                 label={`Nr dowodu księgowego (Kol. ${String(activeLayout.documentNumberCol)})`}
+                required
+                {...(fieldErrors['docNumber'] ? { error: fieldErrors['docNumber'] } : {})}
               >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="text"
                     value={docNumber}
-                    onChange={(e) => setDocNumber(e.target.value)}
+                    onChange={(e) => {
+                      setDocNumber(e.target.value);
+                      if (fieldErrors['docNumber']) {
+                        setFieldErrors((prev) => ({ ...prev, docNumber: '' }));
+                      }
+                    }}
+                    placeholder={`np. DW/${period}/01`}
+                    className={`${ctrl.className} font-mono`}
                   />
                 )}
               </FormField>
@@ -489,7 +592,8 @@ export function KpirWorkbench({
 
             <FormField
               id="kpir-ksef-ref"
-              label="Numer KSeF (Kol. 3 we wzorze 2026)"
+              label="Numer KSeF (Kol. 3 we wzorze 2026 — opcjonalnie)"
+              hint="Wpisz wyłącznie rzeczywisty numer KSeF faktury ustrukturyzowanej. Dla dowodów wewnętrznych i faktur poza KSeF pozostaw puste."
               fieldHelp={helpMap.ksefReference}
             >
               {(ctrl) => (
@@ -498,42 +602,79 @@ export function KpirWorkbench({
                   type="text"
                   value={ksefRef}
                   onChange={(e) => setKsefRef(e.target.value)}
+                  placeholder="Pozostaw puste, jeśli dokument nie pochodzi z KSeF"
                   className={`${ctrl.className} font-mono text-xs tabular-nums`}
                 />
               )}
             </FormField>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <FormField id="kpir-cp-name" label="Kontrahent">
+              <FormField
+                id="kpir-cp-name"
+                label="Kontrahent"
+                required
+                {...(fieldErrors['counterpartyName']
+                  ? { error: fieldErrors['counterpartyName'] }
+                  : {})}
+              >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="text"
                     value={counterpartyName}
-                    onChange={(e) => setCounterpartyName(e.target.value)}
+                    onChange={(e) => {
+                      setCounterpartyName(e.target.value);
+                      if (fieldErrors['counterpartyName']) {
+                        setFieldErrors((prev) => ({ ...prev, counterpartyName: '' }));
+                      }
+                    }}
+                    placeholder="Nazwa kontrahenta"
                   />
                 )}
               </FormField>
-              <FormField id="kpir-cp-nip" label="NIP kontrahenta (Kol. 5 we wzorze 2026)">
+              <FormField
+                id="kpir-cp-nip"
+                label="NIP kontrahenta (Kol. 5 we wzorze 2026)"
+                {...(fieldErrors['counterpartyNip']
+                  ? { error: fieldErrors['counterpartyNip'] }
+                  : {})}
+              >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="text"
                     value={counterpartyNip}
-                    onChange={(e) => setCounterpartyNip(e.target.value)}
+                    onChange={(e) => {
+                      setCounterpartyNip(e.target.value);
+                      if (fieldErrors['counterpartyNip']) {
+                        setFieldErrors((prev) => ({ ...prev, counterpartyNip: '' }));
+                      }
+                    }}
+                    placeholder="10 cyfr lub puste"
                     className={`${ctrl.className} font-mono tabular-nums`}
                   />
                 )}
               </FormField>
             </div>
 
-            <FormField id="kpir-desc" label="Opis zdarzenia gospodarczego">
+            <FormField
+              id="kpir-desc"
+              label="Opis zdarzenia gospodarczego"
+              required
+              {...(fieldErrors['eventDesc'] ? { error: fieldErrors['eventDesc'] } : {})}
+            >
               {(ctrl) => (
                 <input
                   {...ctrl}
                   type="text"
                   value={eventDesc}
-                  onChange={(e) => setEventDesc(e.target.value)}
+                  onChange={(e) => {
+                    setEventDesc(e.target.value);
+                    if (fieldErrors['eventDesc']) {
+                      setFieldErrors((prev) => ({ ...prev, eventDesc: '' }));
+                    }
+                  }}
+                  placeholder="Zwięzły opis przychodu lub kosztu uzyskania przychodów"
                 />
               )}
             </FormField>
@@ -543,20 +684,36 @@ export function KpirWorkbench({
                 id="kpir-sales-pln"
                 label={`Przychód ze sprzedaży (Kol. ${String(activeLayout.salesRevenueCol)})`}
                 value={salesPln}
-                onChange={setSalesPln}
+                onChange={(val) => {
+                  setSalesPln(val);
+                  if (fieldErrors['salesPln'] || fieldErrors['expensesPln']) {
+                    setFieldErrors((prev) => ({ ...prev, salesPln: '', expensesPln: '' }));
+                  }
+                }}
                 fieldHelp={helpMap.col7}
+                {...(fieldErrors['salesPln'] ? { error: fieldErrors['salesPln'] } : {})}
               />
               <MoneyInput
                 id="kpir-exp-pln"
                 label={`Pozostałe wydatki (Kol. ${String(activeLayout.otherExpensesCol)})`}
                 value={expensesPln}
-                onChange={setExpensesPln}
+                onChange={(val) => {
+                  setExpensesPln(val);
+                  if (fieldErrors['expensesPln']) {
+                    setFieldErrors((prev) => ({ ...prev, expensesPln: '' }));
+                  }
+                }}
                 fieldHelp={helpMap.col13}
+                {...(fieldErrors['expensesPln'] ? { error: fieldErrors['expensesPln'] } : {})}
               />
             </div>
 
-            <Button type="submit" disabled={busy || !canWrite}>
-              Zapisz pozycję w KPiR
+            <Button type="submit" disabled={busy || !canWriteEffective}>
+              {!isKpirCompany
+                ? 'Zapis zablokowany — aktywna firma nie prowadzi KPiR'
+                : !canWrite
+                  ? 'Tylko odczyt — brak grantu write'
+                  : 'Zapisz pozycję w KPiR'}
             </Button>
           </form>
         </Card>
@@ -567,9 +724,19 @@ export function KpirWorkbench({
           title="Utwórz czerwone storno / zapis korygujący"
         >
           <form
+            noValidate
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
+              if (!stornoReason.trim()) {
+                setFieldErrors((prev) => ({
+                  ...prev,
+                  stornoReason:
+                    'Podaj uzasadnienie storna do dziennika audytu (np. „Omyłka pisarska w kwocie”).',
+                }));
+                window.document.getElementById('storno-reason')?.focus();
+                return;
+              }
               void postKpirMutation(
                 {
                   action: 'storno_kpir_entry',
@@ -582,7 +749,7 @@ export function KpirWorkbench({
               );
             }}
           >
-            <FormField id="storno-target" label="Wybierz korygowany wpis KPiR">
+            <FormField id="storno-target" label="Wybierz korygowany wpis KPiR" required>
               {(ctrl) => (
                 <select
                   {...ctrl}
@@ -599,13 +766,24 @@ export function KpirWorkbench({
               )}
             </FormField>
 
-            <FormField id="storno-reason" label="Przyczyna storna / korekty (do dziennika audytu)">
+            <FormField
+              id="storno-reason"
+              label="Przyczyna storna / korekty (do dziennika audytu)"
+              required
+              {...(fieldErrors['stornoReason'] ? { error: fieldErrors['stornoReason'] } : {})}
+            >
               {(ctrl) => (
                 <input
                   {...ctrl}
                   type="text"
                   value={stornoReason}
-                  onChange={(e) => setStornoReason(e.target.value)}
+                  onChange={(e) => {
+                    setStornoReason(e.target.value);
+                    if (fieldErrors['stornoReason']) {
+                      setFieldErrors((prev) => ({ ...prev, stornoReason: '' }));
+                    }
+                  }}
+                  placeholder="np. Korekta kwoty na podstawie faktury korygującej"
                 />
               )}
             </FormField>
@@ -613,9 +791,11 @@ export function KpirWorkbench({
             <Button
               type="submit"
               variant="danger"
-              disabled={busy || !canWrite || rows.length === 0}
+              disabled={busy || !canWriteEffective || rows.length === 0}
             >
-              Zaksięguj czerwone storno
+              {!isKpirCompany
+                ? 'Storno niedostępne — inna forma opodatkowania'
+                : 'Zaksięguj czerwone storno'}
             </Button>
           </form>
         </Card>

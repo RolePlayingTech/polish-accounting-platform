@@ -16,6 +16,7 @@ import {
   type LedgerColumn,
 } from '@pap/ui';
 import { AlertBanner, Button } from '../../../components/ui-controls';
+import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
 import {
   SAMPLE_BANK_CSV,
   SAMPLE_BANK_MT940,
@@ -89,6 +90,7 @@ export function FinanceWorkbench({
       });
       const data = (await res.json()) as {
         ok?: boolean;
+        reasonCode?: string;
         error?: string;
         importedCount?: number;
         matchedCount?: number;
@@ -99,7 +101,12 @@ export function FinanceWorkbench({
         setFeedback({
           tone: 'danger',
           title: `Błąd importu wyciągu bankowego (HTTP ${String(res.status)})`,
-          detail: data.error ?? 'Sprawdź strukturę pliku CSV / MT940.',
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Sprawdź strukturę pliku CSV / MT940.',
+          }),
         });
       } else {
         if (Array.isArray(data.bankTransactions)) {
@@ -115,6 +122,12 @@ export function FinanceWorkbench({
         });
         router.refresh();
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się przesłać wyciągu bankowego.',
+      });
     } finally {
       setBusy(false);
     }
@@ -129,7 +142,8 @@ export function FinanceWorkbench({
         <div>
           <p className="font-mono text-xs font-semibold text-[#191c1a]">{row.documentNumber}</p>
           <p className="text-xs text-[#464c48]">
-            {row.counterpartyName} ({formatNip(row.counterpartyNip)})
+            {row.counterpartyName} (
+            {row.counterpartyNip ? formatNip(row.counterpartyNip) : 'BrakID'})
           </p>
         </div>
       ),

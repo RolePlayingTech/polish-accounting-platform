@@ -9,10 +9,7 @@ export interface RuntimeModeProviderProps {
   readonly children: ReactNode;
 }
 
-export function RuntimeModeProvider({
-  allowSyntheticLogin,
-  children,
-}: RuntimeModeProviderProps) {
+export function RuntimeModeProvider({ allowSyntheticLogin, children }: RuntimeModeProviderProps) {
   return (
     <RuntimeModeAllowSyntheticContext.Provider value={allowSyntheticLogin}>
       {children}

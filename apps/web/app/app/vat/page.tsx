@@ -1,4 +1,5 @@
-import { Card, FieldHelpButton, LegalBasisPanel, MoneyAmount } from '@pap/ui';
+import { evaluateVatExemptionLimit } from '@pap/domain';
+import { Card, FieldHelpButton, LegalBasisPanel, MoneyAmount, StatusBadge } from '@pap/ui';
 import {
   WorkspaceAccessErrorShell,
   tryLoadWorkspaceData,
@@ -78,17 +79,50 @@ export default async function VatAndJpkPage() {
     `Część deklaracyjna ${vat.jpkSummary.schemaVersion} za ${session.context.period}`,
   );
 
+  const isVatExempt = dash.activeCompany.vatStatus !== 'czynny';
+  const exemptionEval = isVatExempt
+    ? evaluateVatExemptionLimit({
+        eventDate: `${session.context.period}-28`,
+        activityStartDate: dash.activeCompany.activityStartDate,
+        cumulativeNetSalesBeforeGrosze: dash.activeCompany.ytdPriorMonthsRevenueGrosze,
+        currentTransactionNetGrosze: Math.max(0, dash.monthlyRevenueGrosze),
+      })
+    : null;
+  const exemptionPercent = exemptionEval
+    ? Math.min(
+        100,
+        Math.round(
+          (exemptionEval.cumulativeNetSalesAfterGrosze /
+            Math.max(1, exemptionEval.proportionalLimitGrosze)) *
+            100,
+        ),
+      )
+    : 0;
+
   return (
     <WorkspaceShell
       activeHref="/app/vat"
-      pageEyebrow={`Ewidencja VAT i JPK · okres ${session.context.period}`}
-      pageTitle="Rejestry VAT sprzedaży i zakupów oraz deklaracja JPK_V7M(3)"
-      pageSubtitle="Ewidencja ze znacznikami KSeF (NrKSeF, OFF, BFK, DI), kodami GTU, rozbiciem 50% VAT od samochodów osobowych i prewalidacją pól P_10–P_62."
+      pageEyebrow={
+        isVatExempt
+          ? `Status podatnika VAT · zwolnienie podmiotowe · okres ${session.context.period}`
+          : `Ewidencja VAT i JPK · okres ${session.context.period}`
+      }
+      pageTitle={
+        isVatExempt
+          ? 'Status zwolnienia z VAT i monitor limitu 240 000 PLN'
+          : 'Rejestry VAT sprzedaży i zakupów oraz deklaracja JPK_V7M(3)'
+      }
+      pageSubtitle={
+        isVatExempt
+          ? 'Kontrola rocznego limitu sprzedaży uprawniającego do zwolnienia podmiotowego (art. 113 ust. 1 i 9 ustawy o VAT) oraz wyłączeń ustawowych (art. 113 ust. 13).'
+          : 'Ewidencja ze znacznikami KSeF (NrKSeF, OFF, BFK, DI), kodami GTU, rozbiciem 50% VAT od samochodów osobowych i prewalidacją pól P_10–P_62.'
+      }
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
       pageActions={
         <div className="flex items-center gap-1.5">
+          <FieldHelpButton help={mustResolveUiFieldHelp('vat_rates_guide')} />
           <FieldHelpButton help={mustResolveUiFieldHelp('gtu_code')} />
           <FieldHelpButton help={mustResolveUiFieldHelp('vat_50_vehicle')} />
           <FieldHelpButton help={mustResolveUiFieldHelp('ksef_reference')} />
@@ -96,16 +130,93 @@ export default async function VatAndJpkPage() {
       }
     >
       <div className="space-y-6">
-        <AlertBanner
-          tone="warning"
-          title="Wysyłka urzędowa JPK_V7M(3) do Ministerstwa Finansów jest zablokowana w środowisku testowym"
-        >
-          Ten ekran generuje deterministyczny podgląd pól deklaracyjnych i ewidencyjnych{' '}
-          <code className="font-mono">{vat.jpkSummary.schemaVersion}</code> na danych syntetycznych.
-          Rzeczywiste złożenie pliku XML na bramkę e-Dokumenty MF wymaga poza tym środowiskiem
-          odrębnego podpisu kwalifikowanego, Profilu Zaufanego (ePUAP) albo danych autoryzujących
-          osoby fizycznej.
-        </AlertBanner>
+        {isVatExempt && exemptionEval ? (
+          <div data-testid="vat-exempt-status-monitor" className="space-y-4">
+            <AlertBanner
+              tone={exemptionEval.status === 'exempt_within_limit' ? 'info' : 'danger'}
+              title={
+                exemptionEval.status === 'exempt_within_limit'
+                  ? 'Aktywna firma korzysta ze zwolnienia z VAT — brak rutynowego obowiązku składania JPK_V7M'
+                  : 'Przekroczono limit zwolnienia podmiotowego VAT — wymagana rejestracja VAT-R!'
+              }
+            >
+              Podatnik zwolniony podmiotowo na podstawie{' '}
+              <strong>art. 113 ust. 1 i 9 ustawy o VAT</strong> nie składa co do zasady miesięcznych
+              plików <code className="font-mono">JPK_V7M</code>, o ile wartość sprzedaży nie
+              przekroczyła w roku podatkowym limitu <strong>240 000 PLN</strong> (od 2026 r.) oraz
+              podatnik nie wykonuje czynności wyłączonych ze zwolnienia z{' '}
+              <strong>art. 113 ust. 13 VAT</strong> (m.in. usług doradczych, prawniczych,
+              jubilerskich, ściągania długów) ani transakcji wymagających odrębnego rozliczenia (np.
+              import usług — VAT-9M).
+            </AlertBanner>
+
+            <Card
+              as="div"
+              eyebrow="Art. 113 ust. 1 i 9 ustawy o VAT · ewidencja uproszczona art. 109 ust. 1"
+              title="Wykorzystanie rocznego limitu zwolnienia podmiotowego VAT"
+              actions={
+                <StatusBadge
+                  size="sm"
+                  tone={
+                    exemptionEval.status !== 'exempt_within_limit'
+                      ? 'danger'
+                      : exemptionPercent >= 80
+                        ? 'warning'
+                        : 'success'
+                  }
+                  label={
+                    exemptionEval.status !== 'exempt_within_limit'
+                      ? 'Limit przekroczony!'
+                      : `Wykorzystano ${String(exemptionPercent)}% limitu`
+                  }
+                />
+              }
+            >
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3">
+                    <p className="text-xs text-[#636b66]">Sprzedaż wliczana do limitu (YTD):</p>
+                    <MoneyAmount
+                      amount={exemptionEval.cumulativeNetSalesAfterGrosze}
+                      inGrosze
+                      size="md"
+                      variant="income"
+                    />
+                  </div>
+                  <div className="rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3">
+                    <p className="text-xs text-[#636b66]">Przysługujący limit w roku:</p>
+                    <MoneyAmount
+                      amount={exemptionEval.proportionalLimitGrosze}
+                      inGrosze
+                      size="md"
+                    />
+                  </div>
+                  <div className="rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3">
+                    <p className="text-xs text-[#636b66]">Pozostały bezpieczny bufor:</p>
+                    <MoneyAmount amount={exemptionEval.remainingLimitGrosze} inGrosze size="md" />
+                  </div>
+                </div>
+                <LegalBasisPanel
+                  basis={mapDomainExplanationToBasisInfo(
+                    exemptionEval.explanation,
+                    'Monitor limitu zwolnienia podmiotowego z VAT (240 000 PLN)',
+                  )}
+                />
+              </div>
+            </Card>
+          </div>
+        ) : (
+          <AlertBanner
+            tone="warning"
+            title="Wysyłka urzędowa JPK_V7M(3) do Ministerstwa Finansów jest zablokowana w środowisku testowym"
+          >
+            Ten ekran generuje deterministyczny podgląd pól deklaracyjnych i ewidencyjnych{' '}
+            <code className="font-mono">{vat.jpkSummary.schemaVersion}</code> na danych
+            syntetycznych. Rzeczywiste złożenie pliku XML na bramkę e-Dokumenty MF wymaga poza tym
+            środowiskiem odrębnego podpisu kwalifikowanego, Profilu Zaufanego (ePUAP) albo danych
+            autoryzujących osoby fizycznej.
+          </AlertBanner>
+        )}
 
         <VatRegistersWorkbench
           period={session.context.period}

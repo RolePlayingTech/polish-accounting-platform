@@ -6,6 +6,7 @@ import { LoginRequiredCard } from '../../components/login-required-card';
 import { AcademyDisclaimerBanner } from '../../components/ui-controls';
 import { WorkspaceShell } from '../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../lib/field-help';
+import { isSyntheticPersonaLoginAllowed } from '../../lib/runtime-mode';
 import { readServerSession } from '../../lib/session';
 import { getCompaniesManagementSnapshot } from '../../lib/synthetic-workspace';
 import { CompaniesWorkbench } from '../app/companies/companies-workbench';
@@ -46,6 +47,7 @@ export default async function SettingsPage() {
   }
 
   const snapshot = loaded.data;
+  const allowPersonas = isSyntheticPersonaLoginAllowed();
   const zusBasis = snapshot.zusPreview
     ? mapDomainExplanationToBasisInfo(
         snapshot.zusPreview.explanation,
@@ -63,12 +65,18 @@ export default async function SettingsPage() {
       sessionContext={session.context}
       activeCompany={snapshot.activeCompany}
       accessibleCompanies={snapshot.accessibleCompanies}
+      allowSyntheticLogin={allowPersonas}
     >
       <div className="space-y-6">
         <CompaniesWorkbench
+          key={`${snapshot.activeCompany.legalEntityId}:${session.context.period}`}
           activeCompany={snapshot.activeCompany}
           accessibleCompanies={snapshot.accessibleCompanies}
           grants={snapshot.grants}
+          members={snapshot.members}
+          invitations={snapshot.invitations}
+          isOidcSession={session.authMethod === 'oidc'}
+          currentUserId={session.context.userId}
           auditLog={snapshot.auditLog}
           period={session.context.period}
           zusTotalGrosze={snapshot.zusPreview?.totalZusToPayGrosze ?? null}

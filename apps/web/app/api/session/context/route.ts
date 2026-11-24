@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { formatUserFacingErrorPl } from '../../../../lib/error-messages-pl';
 import { OidcServiceUnavailableError } from '../../../../lib/oidc-client';
 import { assertSameOriginMutation } from '../../../../lib/request-security';
+import { isSyntheticPersonaLoginAllowed } from '../../../../lib/runtime-mode';
 import {
   persistUpdatedSessionContext,
   readServerSessionOrThrowUnavailable,
@@ -74,7 +76,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   }
 
   const demoCode =
-    typeof body['demoCompanyCode'] === 'string' ? body['demoCompanyCode'] : undefined;
+    typeof body['demoCompanyCode'] === 'string' ? body['demoCompanyCode'].trim() : undefined;
+  if (demoCode && (session.authMethod === 'oidc' || !isSyntheticPersonaLoginAllowed())) {
+    return NextResponse.json(
+      {
+        ok: false,
+        reasonCode: 'demo_company_code_forbidden',
+        error:
+          'Przełączanie przez globalny kod demonstracyjny jest wyłączone w sesji OIDC. Wybierz rzeczywisty podmiot z listy dostępnych firm lub utwórz własny podmiot testowy w /app/companies.',
+      },
+      { status: 403 },
+    );
+  }
   const mappedDemo = demoCode ? DEMO_CODE_TO_ENTITY[demoCode] : undefined;
 
   const targetTenantId =
@@ -117,7 +130,16 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     if (err instanceof WorkspaceAccessError) {
       return NextResponse.json(
-        { ok: false, reasonCode: err.reasonCode, error: err.message },
+        {
+          ok: false,
+          reasonCode: err.reasonCode,
+          error: formatUserFacingErrorPl({
+            status: err.statusCode,
+            reasonCode: err.reasonCode,
+            rawMessage: err.message,
+            fallbackPl: 'Nie udało się zmienić aktywnej firmy.',
+          }),
+        },
         { status: err.statusCode },
       );
     }

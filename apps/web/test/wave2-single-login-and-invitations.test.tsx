@@ -14,11 +14,11 @@ const TEST_BFF_SECRET = 'pap-vitest-slice5-bff-session-secret-key-min-32b!!';
 const VALID_OPAQUE_SESSION_ID = 's5_opaque_session_identifier_0123456789abcdef';
 const VALID_INVITE_TOKEN = 'inv_tok_0123456789abcdefghijklmnopqrstuvwxyzABCD';
 
-const cookiesMock = vi.fn<() => Promise<{ get: (name: string) => { name: string; value: string } | undefined }>>(
-  async () => ({
-    get: () => undefined,
-  }),
-);
+const cookiesMock = vi.fn<
+  () => Promise<{ get: (name: string) => { name: string; value: string } | undefined }>
+>(async () => ({
+  get: () => undefined,
+}));
 
 vi.mock('next/headers', () => ({
   cookies: () => cookiesMock(),
@@ -133,9 +133,7 @@ describe('Wave 2 Slice 5 — Pojedyncze logowanie OIDC (#78), trasy BFF zaprosze
 
     cookiesMock.mockImplementation(async () => ({
       get: (name: string) =>
-        name === BFF_SESSION_COOKIE_NAME
-          ? { name, value: VALID_OPAQUE_SESSION_ID }
-          : undefined,
+        name === BFF_SESSION_COOKIE_NAME ? { name, value: VALID_OPAQUE_SESSION_ID } : undefined,
     }));
 
     let capturedContextUpdate: Record<string, unknown> | null = null;
@@ -375,9 +373,7 @@ describe('Wave 2 Slice 5 — Pojedyncze logowanie OIDC (#78), trasy BFF zaprosze
 
     cookiesMock.mockImplementation(async () => ({
       get: (name: string) =>
-        name === BFF_SESSION_COOKIE_NAME
-          ? { name, value: VALID_OPAQUE_SESSION_ID }
-          : undefined,
+        name === BFF_SESSION_COOKIE_NAME ? { name, value: VALID_OPAQUE_SESSION_ID } : undefined,
     }));
 
     let contextSaved: Record<string, unknown> | null = null;
@@ -507,14 +503,17 @@ describe('Wave 2 Slice 5 — Pojedyncze logowanie OIDC (#78), trasy BFF zaprosze
       }),
     );
 
-    const crossAcceptReq = new NextRequest('http://localhost:31608/api/session/invitations/accept', {
-      method: 'POST',
-      headers: {
-        origin: 'http://localhost:31608',
-        'content-type': 'application/json',
+    const crossAcceptReq = new NextRequest(
+      'http://localhost:31608/api/session/invitations/accept',
+      {
+        method: 'POST',
+        headers: {
+          origin: 'http://localhost:31608',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ invitationToken: VALID_INVITE_TOKEN }),
       },
-      body: JSON.stringify({ invitationToken: VALID_INVITE_TOKEN }),
-    });
+    );
     const crossAcceptRes = await acceptInvitationPost(crossAcceptReq);
     expect(crossAcceptRes.status).toBe(200);
     // legalEntityId z poprzedniego tenanta NIE może zostać zachowane!

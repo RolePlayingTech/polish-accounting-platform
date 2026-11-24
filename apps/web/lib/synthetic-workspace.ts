@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import type {
   AuthenticatedSessionView,
+  CreateDocumentRequest,
   CreateTenantInvitationResponse,
   ListTenantInvitationsResponse,
   RevokeTenantInvitationResponse,
@@ -71,6 +72,8 @@ import {
   papBffFetch,
   papBffMcpCallTool,
 } from './api-url';
+import { getCompanyCapabilities } from './company-capabilities';
+import { formatUserFacingErrorPl } from './error-messages-pl';
 import type { ActiveWebSession, PersonaId, SessionContext } from './session';
 import {
   AVAILABLE_PERIODS,
@@ -88,6 +91,7 @@ import {
   type CompanyProfileRecord,
   type CompanyUserGrantRecord,
   type DocumentKind,
+  type KsefVerificationStatus,
   type McpPendingProposalRecord,
   type NotificationFrequency,
   type NotificationOutboxEntry,
@@ -96,6 +100,7 @@ import {
   type TenantDirectoryMemberSummary,
   type ReminderStage,
   type SyntheticPersonaDefinition,
+  type WorkspaceDocumentLineItem,
   type WorkspaceDocumentRecord,
 } from './workspace-types';
 
@@ -1253,17 +1258,35 @@ function throwWorkspaceErrorFromRemote(
     throw new WorkspaceAccessError(
       401,
       'api_unauthorized',
-      'Brak autoryzacji w API (401) — zaloguj się ponownie.',
+      formatUserFacingErrorPl({
+        status: 401,
+        reasonCode: 'api_unauthorized',
+        fallbackPl: 'Brak autoryzacji w API (401) — zaloguj się ponownie.',
+      }),
     );
   }
   if (remote.kind === 'forbidden') {
-    throw new WorkspaceAccessError(403, remote.reasonCode ?? 'api_forbidden', remote.message);
+    throw new WorkspaceAccessError(
+      403,
+      remote.reasonCode ?? 'api_forbidden',
+      formatUserFacingErrorPl({
+        status: 403,
+        reasonCode: remote.reasonCode,
+        rawMessage: remote.message,
+        fallbackPl: 'Odmowa dostępu (403) — brak wymaganego uprawnienia do wykonania operacji.',
+      }),
+    );
   }
   if (remote.kind === 'validation_error') {
     throw new WorkspaceAccessError(
       remote.status,
       remote.reasonCode ?? 'api_validation_error',
-      remote.message,
+      formatUserFacingErrorPl({
+        status: remote.status,
+        reasonCode: remote.reasonCode,
+        rawMessage: remote.message,
+        fallbackPl: fallbackMessagePl,
+      }),
     );
   }
   if (remote.kind === 'not_found') {
@@ -1279,10 +1302,24 @@ function throwWorkspaceErrorFromRemote(
     throw new WorkspaceAccessError(
       remote.status,
       remote.reasonCode ?? 'api_server_error',
-      remote.message,
+      formatUserFacingErrorPl({
+        status: remote.status,
+        reasonCode: remote.reasonCode,
+        rawMessage: remote.message,
+        fallbackPl: fallbackMessagePl,
+      }),
     );
   }
-  throw new WorkspaceAccessError(503, 'api_unavailable', fallbackMessagePl);
+  throw new WorkspaceAccessError(
+    503,
+    'api_unavailable',
+    formatUserFacingErrorPl({
+      status: 503,
+      reasonCode: 'api_unavailable',
+      rawMessage: fallbackMessagePl,
+      fallbackPl: fallbackMessagePl,
+    }),
+  );
 }
 
 interface RemoteStructuredAddress {
@@ -1524,6 +1561,8 @@ interface RemoteDocumentItem {
   readonly approvedByUserId: string | null;
   readonly approvedAt: string | null;
   readonly isCorrection: boolean;
+  readonly correctedDocumentNumber?: string;
+  readonly correctionReason?: string;
   readonly document: {
     readonly documentId: string;
     readonly documentNumber: string;
@@ -1558,6 +1597,7 @@ interface RemoteDocumentItem {
     readonly suggestedCategory: string;
     readonly vatDeductionMode: VatDeductionMode;
     readonly kpirQualification: KpirExpenseQualificationKind;
+    readonly ryczaltRate?: RyczaltRateCode;
     readonly extractedSummaryPl: string;
     readonly promptInjectionSuspected: boolean;
   };
@@ -1578,8 +1618,22 @@ function mapRemoteDocumentToWorkspaceRecord(
   const vatRate: VatRateCode = firstLine?.vatRate ?? '23';
   const annex15Item = doc.lines.some((l) => l.annex15Item);
   const dueDate = doc.dueDate ?? doc.issueDate;
-  const counterpartyNip = doc.counterpartyNip ?? '5213004125';
-  const description = firstLine?.description ?? 'Operacja gospodarcza';
+  const counterpartyNip = doc.counterpartyNip?.trim() ?? '';
+  const mappedLines: WorkspaceDocumentLineItem[] = doc.lines.map((l) => ({
+    lineNumber: l.lineNumber,
+    description: l.description,
+    quantity: l.quantity,
+    unit: l.unit,
+    netGrosze: l.netGrosze,
+    vatRate: l.vatRate,
+    vatGrosze: l.vatGrosze,
+    grossGrosze: l.grossGrosze,
+    annex15Item: l.annex15Item,
+  }));
+  const description =
+    doc.lines.length > 1
+      ? doc.lines.map((l) => l.description).join(' · ')
+      : (firstLine?.description ?? 'Operacja gospodarcza');
   const safeFileStem = doc.documentNumber.replace(/[^A-Za-z0-9_-]/g, '_');
 
   let sourceChannel: WorkspaceDocumentRecord['sourceChannel'] = 'Formularz ręczny';
@@ -1598,7 +1652,7 @@ function mapRemoteDocumentToWorkspaceRecord(
     fileName = `${safeFileStem}.csv`;
     extractionMethodLabelPl = 'Parser deterministyczny CSV (bez AI)';
   } else if (item.sourceFormat === 'json') {
-    sourceChannel = 'Import CSV';
+    sourceChannel = 'Import JSON';
     mimeLabel = 'application/json';
     fileName = `${safeFileStem}.json`;
     extractionMethodLabelPl = 'Parser deterministyczny JSON (bez AI)';
@@ -1649,13 +1703,40 @@ function mapRemoteDocumentToWorkspaceRecord(
       ? doc.totalGrossGrosze
       : 0);
 
+  const resolvedKsefMarker = doc.ksefMarker ?? (doc.ksefReferenceNumber ? 'NrKSeF' : 'BFK');
+  const ksefVerificationStatus: KsefVerificationStatus = !doc.ksefReferenceNumber
+    ? 'not_applicable'
+    : item.sourceFormat === 'ksef_xml'
+      ? 'parsed_xml_unverified'
+      : 'declared_unverified';
+
+  const distinctVatRates = Array.from(new Set(doc.lines.map((l) => l.vatRate)));
+  const vatSummaryLabel =
+    distinctVatRates.length > 1
+      ? distinctVatRates.map((r) => (r === 'zw' || r === 'np' ? r : `${r}%`)).join(', ')
+      : vatRate === 'zw' || vatRate === 'np'
+        ? vatRate
+        : `${vatRate}%`;
+
   const rawPreviewLines = [
-    `Dokument: ${doc.documentNumber} (${doc.direction === 'sales' ? 'Sprzedaż' : 'Zakup'})`,
-    `Kontrahent: ${doc.counterpartyName} (NIP: ${counterpartyNip})`,
-    `Data wystawienia: ${doc.issueDate} | Data zdarzenia: ${doc.eventDate} | Termin płatności: ${dueDate}`,
-    ...(doc.ksefReferenceNumber ? [`Numer KSeF: ${doc.ksefReferenceNumber}`] : []),
-    `Pozycja: ${description}`,
-    `Kwota netto: ${formatPlnFromGrosze(doc.totalNetGrosze)} | VAT (${vatRate}%): ${formatPlnFromGrosze(doc.totalVatGrosze)} | Brutto: ${formatPlnFromGrosze(doc.totalGrossGrosze)}`,
+    `Dokument: ${doc.documentNumber} (${doc.direction === 'sales' ? 'Sprzedaż' : 'Zakup'}${item.isCorrection ? ' · KOREKTA' : ''})`,
+    `Kontrahent: ${doc.counterpartyName} (NIP: ${counterpartyNip || 'BrakID — brak polskiego NIP'})`,
+    `Data wystawienia: ${doc.issueDate} | Data sprzedaży/zdarzenia: ${doc.eventDate} | Termin płatności: ${dueDate}`,
+    ...(doc.ksefReferenceNumber
+      ? [
+          `Numer KSeF (${ksefVerificationStatus === 'parsed_xml_unverified' ? 'z pliku XML — niezweryfikowano online w MF' : 'deklarowany — niezweryfikowano online w MF'}): ${doc.ksefReferenceNumber}`,
+        ]
+      : [`Status KSeF: ${resolvedKsefMarker} (nieprzesłano / poza KSeF)`]),
+    ...(item.correctedDocumentNumber
+      ? [
+          `Dokument korygowany: ${item.correctedDocumentNumber}${item.correctionReason ? ` | Przyczyna: ${item.correctionReason}` : ''}`,
+        ]
+      : []),
+    ...mappedLines.map(
+      (line) =>
+        `Poz. ${String(line.lineNumber)}: ${line.description} | ${line.quantity} ${line.unit} | Netto: ${formatPlnFromGrosze(line.netGrosze)} | VAT (${line.vatRate === 'zw' || line.vatRate === 'np' ? line.vatRate : `${line.vatRate}%`}): ${formatPlnFromGrosze(line.vatGrosze)} | Brutto: ${formatPlnFromGrosze(line.grossGrosze)}`,
+    ),
+    `Razem netto: ${formatPlnFromGrosze(doc.totalNetGrosze)} | VAT (${vatSummaryLabel}): ${formatPlnFromGrosze(doc.totalVatGrosze)} | Brutto: ${formatPlnFromGrosze(doc.totalGrossGrosze)}`,
     `Metoda ekstrakcji: ${extractionMethodLabelPl}`,
     `Podsumowanie kwalifikacji: ${item.aiProposal.extractedSummaryPl}`,
     `Skrót SHA-256: ${item.sha256Hash}`,
@@ -1675,10 +1756,11 @@ function mapRemoteDocumentToWorkspaceRecord(
     dueDate,
     counterpartyName: doc.counterpartyName,
     counterpartyNip,
-    counterpartyAddress: doc.counterpartyAddress ?? 'ul. Syntetyczna 1, 00-001 Warszawa',
-    counterpartyIban: doc.counterpartyIban ?? 'PL61109010140000071219812874',
+    counterpartyAddress: doc.counterpartyAddress ?? '',
+    counterpartyIban: doc.counterpartyIban ?? '',
     description,
     vatRate,
+    lines: mappedLines,
     netGrosze: doc.totalNetGrosze,
     vatGrosze: doc.totalVatGrosze,
     grossGrosze: doc.totalGrossGrosze,
@@ -1689,9 +1771,18 @@ function mapRemoteDocumentToWorkspaceRecord(
     mimeLabel,
     sourceChannel,
     extractionMethodLabelPl,
-    ksefMarker: doc.ksefMarker ?? (doc.ksefReferenceNumber ? 'NrKSeF' : 'DI'),
+    ksefMarker: resolvedKsefMarker,
     ...(doc.ksefReferenceNumber !== undefined
       ? { ksefReferenceNumber: doc.ksefReferenceNumber }
+      : {}),
+    ksefVerificationStatus,
+    isCorrection: item.isCorrection,
+    ...(item.correctedDocumentNumber !== undefined
+      ? { correctedDocumentNumber: item.correctedDocumentNumber }
+      : {}),
+    ...(item.correctionReason !== undefined ? { correctionReason: item.correctionReason } : {}),
+    ...(item.aiProposal.ryczaltRate !== undefined
+      ? { ryczaltRate: item.aiProposal.ryczaltRate }
       : {}),
     gtuCodes: seedDocMatch?.gtuCodes ?? [],
     procedureCodes: annex15Item ? ['MPP'] : (seedDocMatch?.procedureCodes ?? []),
@@ -2049,7 +2140,10 @@ export async function verifySessionAccess(
 export async function listAccessibleCompaniesForSession(
   session: ActiveWebSession,
 ): Promise<readonly CompanyProfileRecord[]> {
-  if (session.authMethod === 'oidc' && (!session.context.tenantId || session.hasTenantMembership === false)) {
+  if (
+    session.authMethod === 'oidc' &&
+    (!session.context.tenantId || session.hasTenantMembership === false)
+  ) {
     return [];
   }
   assertValidSessionIdentity(session, { requireActiveCompany: false });
@@ -2173,27 +2267,70 @@ export async function buildVatRegistersForCompany(
       d.status !== 'archived',
   );
 
-  const allEntries: VatRegisterEntry[] = docs.map((doc) =>
-    createVatRegisterEntry({
-      id: `vat-${doc.documentId}`,
-      registerType: doc.direction,
-      period: doc.period,
-      taxPointDate: doc.eventDate,
-      issueDate: doc.issueDate,
-      documentNumber: doc.documentNumber,
-      counterpartyName: doc.counterpartyName,
-      counterpartyNip: doc.counterpartyNip,
-      vatRate: doc.vatRate,
-      netGrosze: doc.netGrosze,
-      vatTotalGrosze: doc.vatGrosze,
-      deductionMode: doc.vatDeductionMode,
-      annex15Item: doc.annex15Item,
-      ksefMarker: doc.ksefMarker,
-      ...(doc.ksefReferenceNumber !== undefined
-        ? { ksefReferenceNumber: doc.ksefReferenceNumber }
-        : {}),
-    }),
-  );
+  const allEntries: VatRegisterEntry[] = docs.flatMap((doc) => {
+    const safeNip = doc.counterpartyNip?.trim() || 'BrakID';
+    if (doc.lines && doc.lines.length > 1) {
+      const groupedByRate = new Map<
+        VatRateCode,
+        { netGrosze: number; vatGrosze: number; annex15: boolean }
+      >();
+      for (const line of doc.lines) {
+        const cur = groupedByRate.get(line.vatRate) ?? {
+          netGrosze: 0,
+          vatGrosze: 0,
+          annex15: false,
+        };
+        groupedByRate.set(line.vatRate, {
+          netGrosze: cur.netGrosze + line.netGrosze,
+          vatGrosze: cur.vatGrosze + line.vatGrosze,
+          annex15: cur.annex15 || line.annex15Item,
+        });
+      }
+      return Array.from(groupedByRate.entries()).map(([rate, bucket]) =>
+        createVatRegisterEntry({
+          id: `vat-${doc.documentId}-${rate}`,
+          registerType: doc.direction,
+          period: doc.period,
+          taxPointDate: doc.eventDate,
+          issueDate: doc.issueDate,
+          documentNumber: doc.documentNumber,
+          counterpartyName: doc.counterpartyName,
+          counterpartyNip: safeNip,
+          vatRate: rate,
+          netGrosze: bucket.netGrosze,
+          vatTotalGrosze: bucket.vatGrosze,
+          deductionMode: doc.vatDeductionMode,
+          annex15Item: bucket.annex15 || doc.annex15Item,
+          ksefMarker: doc.ksefMarker,
+          ...(doc.ksefReferenceNumber !== undefined
+            ? { ksefReferenceNumber: doc.ksefReferenceNumber }
+            : {}),
+        }),
+      );
+    }
+
+    return [
+      createVatRegisterEntry({
+        id: `vat-${doc.documentId}`,
+        registerType: doc.direction,
+        period: doc.period,
+        taxPointDate: doc.eventDate,
+        issueDate: doc.issueDate,
+        documentNumber: doc.documentNumber,
+        counterpartyName: doc.counterpartyName,
+        counterpartyNip: safeNip,
+        vatRate: doc.vatRate,
+        netGrosze: doc.netGrosze,
+        vatTotalGrosze: doc.vatGrosze,
+        deductionMode: doc.vatDeductionMode,
+        annex15Item: doc.annex15Item,
+        ksefMarker: doc.ksefMarker,
+        ...(doc.ksefReferenceNumber !== undefined
+          ? { ksefReferenceNumber: doc.ksefReferenceNumber }
+          : {}),
+      }),
+    ];
+  });
 
   const salesEntries = allEntries.filter((e) => e.registerType === 'sales');
   const purchaseEntries = allEntries.filter((e) => e.registerType === 'purchase');
@@ -2753,12 +2890,102 @@ export async function getDocumentsForActiveCompany(
   );
 }
 
+function buildGroupedVatEntriesForDocument(params: {
+  readonly idPrefix: string;
+  readonly registerType: 'sales' | 'purchase';
+  readonly period: string;
+  readonly taxPointDate: string;
+  readonly issueDate: string;
+  readonly documentNumber: string;
+  readonly counterpartyName: string;
+  readonly counterpartyNip: string;
+  readonly deductionMode: VatDeductionMode;
+  readonly fallbackVatRate: VatRateCode;
+  readonly fallbackNetGrosze: number;
+  readonly fallbackVatGrosze: number;
+  readonly fallbackAnnex15Item?: boolean;
+  readonly lines?: readonly WorkspaceDocumentLineItem[] | undefined;
+  readonly useLines: boolean;
+  readonly ksefMarker?: 'NrKSeF' | 'OFF' | 'BFK' | 'DI' | undefined;
+  readonly ksefReferenceNumber?: string | undefined;
+}): {
+  readonly primaryVatEntry: VatRegisterEntry;
+  readonly vatEntries: readonly VatRegisterEntry[];
+  readonly totalDeductibleVatGrosze: number;
+  readonly totalNonDeductibleVatGrosze: number;
+} {
+  const rateBuckets = new Map<
+    VatRateCode,
+    { netGrosze: number; vatTotalGrosze: number; hasAnnex15: boolean }
+  >();
+  if (params.useLines && params.lines && params.lines.length > 0) {
+    for (const line of params.lines) {
+      const prev = rateBuckets.get(line.vatRate) ?? {
+        netGrosze: 0,
+        vatTotalGrosze: 0,
+        hasAnnex15: false,
+      };
+      rateBuckets.set(line.vatRate, {
+        netGrosze: prev.netGrosze + line.netGrosze,
+        vatTotalGrosze: prev.vatTotalGrosze + line.vatGrosze,
+        hasAnnex15: prev.hasAnnex15 || Boolean(line.annex15Item),
+      });
+    }
+  }
+  if (rateBuckets.size === 0) {
+    rateBuckets.set(params.fallbackVatRate, {
+      netGrosze: params.fallbackNetGrosze,
+      vatTotalGrosze: params.fallbackVatGrosze,
+      hasAnnex15: Boolean(params.fallbackAnnex15Item),
+    });
+  }
+
+  const vatEntries: VatRegisterEntry[] = [];
+  let totalDeductibleVatGrosze = 0;
+  let totalNonDeductibleVatGrosze = 0;
+  let idx = 0;
+
+  for (const [vatRate, group] of rateBuckets.entries()) {
+    idx += 1;
+    const entry = createVatRegisterEntry({
+      id: `${params.idPrefix}-${String(idx)}`,
+      registerType: params.registerType,
+      period: params.period,
+      taxPointDate: params.taxPointDate,
+      issueDate: params.issueDate,
+      documentNumber: params.documentNumber,
+      counterpartyName: params.counterpartyName,
+      counterpartyNip: params.counterpartyNip || 'BrakID',
+      vatRate,
+      netGrosze: group.netGrosze,
+      vatTotalGrosze: group.vatTotalGrosze,
+      deductionMode: params.registerType === 'sales' ? 'full_100' : params.deductionMode,
+      annex15Item: group.hasAnnex15,
+      ...(params.ksefMarker !== undefined ? { ksefMarker: params.ksefMarker } : {}),
+      ...(params.ksefReferenceNumber !== undefined
+        ? { ksefReferenceNumber: params.ksefReferenceNumber }
+        : {}),
+    });
+    vatEntries.push(entry);
+    totalDeductibleVatGrosze += entry.deductibleVatGrosze;
+    totalNonDeductibleVatGrosze += entry.nonDeductibleVatGrosze;
+  }
+
+  return {
+    primaryVatEntry: vatEntries[0]!,
+    vatEntries,
+    totalDeductibleVatGrosze,
+    totalNonDeductibleVatGrosze,
+  };
+}
+
 export async function getDocumentDetailSnapshot(
   session: ActiveWebSession,
   documentId: string,
 ): Promise<{
   readonly activeCompany: CompanyProfileRecord;
   readonly document: WorkspaceDocumentRecord;
+  readonly resolvedCorrectedEntryId?: string | undefined;
   readonly kupQualification: ReturnType<typeof qualifyKpirExpense> | null;
   readonly vatEntryPreview: VatRegisterEntry;
 }> {
@@ -2770,6 +2997,7 @@ export async function getDocumentDetailSnapshot(
   );
 
   let document: WorkspaceDocumentRecord | undefined;
+  let resolvedCorrectedEntryId: string | undefined;
   if (!isOfflineDemoModeEnabled()) {
     const safeTenantId = assertUuidPathParam(activeCompany.tenantId, 'tenantId');
     const safeEntityId = assertUuidPathParam(activeCompany.legalEntityId, 'legalEntityId');
@@ -2788,6 +3016,19 @@ export async function getDocumentDetailSnapshot(
       );
     }
     document = mapRemoteDocumentToWorkspaceRecord(remote.data);
+    if (
+      (document.isCorrection || document.documentKind === 'correction') &&
+      document.correctedDocumentNumber
+    ) {
+      const allDocs = await getDocumentsForActiveCompany(session);
+      const matchedOriginal = allDocs.find(
+        (d) =>
+          d.documentId !== document!.documentId &&
+          d.documentNumber === document!.correctedDocumentNumber &&
+          d.postedEntryId,
+      );
+      resolvedCorrectedEntryId = matchedOriginal?.postedEntryId ?? document.correctedDocumentNumber;
+    }
   } else {
     const store = getStore();
     document = store.documents.find(
@@ -2796,6 +3037,20 @@ export async function getDocumentDetailSnapshot(
         d.tenantId === activeCompany.tenantId &&
         d.legalEntityId === activeCompany.legalEntityId,
     );
+    if (
+      document &&
+      (document.isCorrection || document.documentKind === 'correction') &&
+      document.correctedDocumentNumber
+    ) {
+      const matchedOriginal = store.documents.find(
+        (d) =>
+          d.legalEntityId === activeCompany.legalEntityId &&
+          d.documentId !== document!.documentId &&
+          d.documentNumber === document!.correctedDocumentNumber &&
+          d.postedEntryId,
+      );
+      resolvedCorrectedEntryId = matchedOriginal?.postedEntryId ?? document.correctedDocumentNumber;
+    }
   }
 
   if (!document) {
@@ -2806,8 +3061,8 @@ export async function getDocumentDetailSnapshot(
     );
   }
 
-  const vatEntryPreview = createVatRegisterEntry({
-    id: `preview-vat-${document.documentId}`,
+  const groupedVat = buildGroupedVatEntriesForDocument({
+    idPrefix: `preview-vat-${document.documentId}`,
     registerType: document.direction,
     period: document.period,
     taxPointDate: document.eventDate,
@@ -2815,15 +3070,15 @@ export async function getDocumentDetailSnapshot(
     documentNumber: document.documentNumber,
     counterpartyName: document.counterpartyName,
     counterpartyNip: document.counterpartyNip,
-    vatRate: document.vatRate,
-    netGrosze: document.netGrosze,
-    vatTotalGrosze: document.vatGrosze,
     deductionMode: document.vatDeductionMode,
-    annex15Item: document.annex15Item,
+    fallbackVatRate: document.vatRate,
+    fallbackNetGrosze: document.netGrosze,
+    fallbackVatGrosze: document.vatGrosze,
+    fallbackAnnex15Item: document.annex15Item,
+    lines: document.lines,
+    useLines: true,
     ksefMarker: document.ksefMarker,
-    ...(document.ksefReferenceNumber !== undefined
-      ? { ksefReferenceNumber: document.ksefReferenceNumber }
-      : {}),
+    ksefReferenceNumber: document.ksefReferenceNumber,
   });
 
   const kupQualification =
@@ -2834,15 +3089,16 @@ export async function getDocumentDetailSnapshot(
           netGrosze: document.netGrosze,
           vatGrosze: document.vatGrosze,
           taxpayerVatActive: activeCompany.vatStatus === 'czynny',
-          deductibleVatGrosze: vatEntryPreview.deductibleVatGrosze,
+          deductibleVatGrosze: groupedVat.totalDeductibleVatGrosze,
         })
       : null;
 
   return {
     activeCompany,
     document,
+    resolvedCorrectedEntryId,
     kupQualification,
-    vatEntryPreview,
+    vatEntryPreview: groupedVat.primaryVatEntry,
   };
 }
 
@@ -3799,6 +4055,38 @@ function extractXmlTag(xml: string, tag: string): string | undefined {
   return rx.exec(xml)?.[1]?.trim();
 }
 
+export interface ManualDocumentLineInput {
+  readonly description: string;
+  readonly quantity?: string;
+  readonly unit?: string;
+  readonly netPln: string;
+  readonly vatRate: VatRateCode;
+  readonly annex15Item?: boolean;
+}
+
+const ALLOWED_VAT_RATE_CODES: readonly VatRateCode[] = ['23', '8', '5', '0', 'zw', 'np'];
+
+type SuggestedPostingCategory = NonNullable<
+  Extract<CreateDocumentRequest, { lines: readonly unknown[] }>['suggestedCategory']
+>;
+
+function mapExpenseQualificationToSuggestedCategory(
+  direction: 'sales' | 'purchase',
+  qualification?: KpirExpenseQualificationKind,
+): SuggestedPostingCategory {
+  if (direction === 'sales') return 'przychod_sprzedaz';
+  switch (qualification) {
+    case 'goods_and_materials_col10':
+      return 'towary_i_materialy';
+    case 'vehicle_mixed_75_col13':
+      return 'eksploatacja_samochodu_mieszana';
+    case 'other_expenses_100_col13':
+      return 'pozostale_wydatki_kpir';
+    default:
+      return 'uslugi_obce';
+  }
+}
+
 export async function createOrImportDocumentMutation(
   session: ActiveWebSession,
   input:
@@ -3808,15 +4096,25 @@ export async function createOrImportDocumentMutation(
         readonly direction: 'sales' | 'purchase';
         readonly documentNumber: string;
         readonly issueDate: string;
+        readonly saleDate?: string;
         readonly dueDate: string;
         readonly counterpartyName: string;
         readonly counterpartyNip: string;
-        readonly description: string;
-        readonly netPln: string;
-        readonly vatRate: VatRateCode;
-        readonly ksefMarker: 'NrKSeF' | 'OFF' | 'BFK' | 'DI';
+        readonly noPolishNip?: boolean;
+        readonly counterpartyAddress?: string;
+        readonly description?: string;
+        readonly netPln?: string;
+        readonly vatRate?: VatRateCode;
+        readonly lines?: readonly ManualDocumentLineInput[];
+        readonly ksefMarker?: 'NrKSeF' | 'OFF' | 'BFK' | 'DI';
         readonly ksefReferenceNumber?: string;
-        readonly annex15Item: boolean;
+        readonly annex15Item?: boolean;
+        readonly isCorrection?: boolean;
+        readonly correctedDocumentNumber?: string;
+        readonly correctionReason?: string;
+        readonly expenseQualification?: KpirExpenseQualificationKind;
+        readonly vatDeductionMode?: VatDeductionMode;
+        readonly ryczaltRate?: RyczaltRateCode;
       }
     | {
         readonly mode: 'import_xml_or_csv';
@@ -3828,28 +4126,138 @@ export async function createOrImportDocumentMutation(
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
 
-  if (!isOfflineDemoModeEnabled()) {
-    if (input.mode === 'manual') {
+  if (input.mode === 'manual') {
+    const docNum = input.documentNumber.trim();
+    if (!docNum) {
+      throw new WorkspaceAccessError(
+        400,
+        'missing_doc_number',
+        'Podaj numer faktury lub dokumentu księgowego (np. FV/2026/03/014).',
+      );
+    }
+    const counterpartyName = input.counterpartyName.trim();
+    if (counterpartyName.length < 2) {
+      throw new WorkspaceAccessError(
+        400,
+        'missing_counterparty_name',
+        'Podaj pełną nazwę kontrahenta widniejącą na dowodzie źródłowym.',
+      );
+    }
+
+    const noPolishNip = Boolean(input.noPolishNip);
+    let normalizedNip: string | undefined;
+    if (!noPolishNip) {
       const nipValidation = validatePolishNip(input.counterpartyNip);
       if (!nipValidation.valid || !nipValidation.normalizedNip) {
         throw new WorkspaceAccessError(
           400,
           'invalid_nip',
-          nipValidation.reason ?? 'Nieprawidłowy NIP kontrahenta.',
+          nipValidation.reason ??
+            'Podaj poprawny 10-cyfrowy polski NIP kontrahenta albo zaznacz opcję „Brak polskiego NIP (BrakID)”.',
         );
       }
-      const docNum = input.documentNumber.trim();
-      if (!docNum) {
+      normalizedNip = nipValidation.normalizedNip;
+    }
+
+    const issueDate = assertIsoCalendarDateOrThrow(input.issueDate, 'wystawienia');
+    const eventDate = input.saleDate?.trim()
+      ? assertIsoCalendarDateOrThrow(input.saleDate, 'sprzedaży / wykonania usługi')
+      : issueDate;
+    const dueDate = assertIsoCalendarDateOrThrow(input.dueDate, 'płatności');
+    if (dueDate < issueDate) {
+      throw new WorkspaceAccessError(
+        400,
+        'invalid_due_date',
+        'Termin płatności nie może być wcześniejszy niż data wystawienia dokumentu.',
+      );
+    }
+
+    const isCorrection = Boolean(input.isCorrection) || input.documentKind === 'correction';
+    const correctedDocNum = input.correctedDocumentNumber?.trim() || undefined;
+    const correctionReason = input.correctionReason?.trim() || undefined;
+    if (isCorrection && (!correctedDocNum || !correctionReason)) {
+      throw new WorkspaceAccessError(
+        400,
+        'missing_correction_metadata',
+        'Dla faktury korygującej podaj numer faktury korygowanej oraz przyczynę korekty (art. 106j ust. 2 ustawy o VAT).',
+      );
+    }
+
+    const ksefMarker: 'NrKSeF' | 'OFF' | 'BFK' | 'DI' = input.ksefMarker ?? 'BFK';
+    const rawKsefRef = input.ksefReferenceNumber?.trim() || '';
+    if (ksefMarker === 'NrKSeF' && rawKsefRef.length < 10) {
+      throw new WorkspaceAccessError(
+        400,
+        'missing_ksef_reference',
+        'Wybrano znacznik NrKSeF — wpisz rzeczywisty numer KSeF e-faktury albo wybierz znacznik BFK (faktura poza KSeF / nieprzesłano).',
+      );
+    }
+    const ksefRef = ksefMarker === 'NrKSeF' ? rawKsefRef : undefined;
+
+    const rawLineInputs: readonly ManualDocumentLineInput[] =
+      input.lines && input.lines.length > 0
+        ? input.lines
+        : [
+            {
+              description: input.description ?? '',
+              quantity: '1',
+              unit: 'usł.',
+              netPln: input.netPln ?? '',
+              vatRate: input.vatRate ?? '23',
+              ...(input.annex15Item !== undefined ? { annex15Item: input.annex15Item } : {}),
+            },
+          ];
+
+    const builtLines: WorkspaceDocumentLineItem[] = rawLineInputs.map((line, index) => {
+      const desc = line.description.trim();
+      if (!desc) {
         throw new WorkspaceAccessError(
           400,
-          'missing_doc_number',
-          'Podaj numer dokumentu księgowego.',
+          'missing_line_description',
+          `Uzupełnij opis towaru lub usługi w pozycji nr ${String(index + 1)} (np. „Usługa programistyczna wg umowy z dn. ...”).`,
         );
       }
-      const issueDate = assertIsoCalendarDateOrThrow(input.issueDate, 'wystawienia');
-      const dueDate = assertIsoCalendarDateOrThrow(input.dueDate, 'płatności');
-      const netGrosze = Math.abs(parsePlnToGroszeOrThrow(input.netPln, 'kwota netto'));
-      const ksefRef = input.ksefReferenceNumber?.trim() || undefined;
+      const rate: VatRateCode = ALLOWED_VAT_RATE_CODES.includes(line.vatRate) ? line.vatRate : '23';
+      let netGrosze = parsePlnToGroszeOrThrow(
+        line.netPln,
+        `kwota netto pozycji nr ${String(index + 1)}`,
+      );
+      if (netGrosze === 0) {
+        throw new WorkspaceAccessError(
+          400,
+          'zero_line_amount',
+          `Kwota netto w pozycji nr ${String(index + 1)} musi być różna od 0,00 PLN.`,
+        );
+      }
+      if (isCorrection && netGrosze > 0) {
+        netGrosze = -netGrosze;
+      } else if (!isCorrection && netGrosze < 0) {
+        throw new WorkspaceAccessError(
+          400,
+          'negative_amount_requires_correction',
+          `Ujemna kwota netto w pozycji nr ${String(index + 1)} wymaga wyboru rodzaju dokumentu „Faktura korygująca (KOR)”.`,
+        );
+      }
+      const calc = calculateInvoiceLineFromNet(netGrosze, rate);
+      return {
+        lineNumber: index + 1,
+        description: desc,
+        quantity: line.quantity?.trim() || '1',
+        unit: line.unit?.trim() || 'szt.',
+        netGrosze: calc.netGrosze,
+        vatRate: rate,
+        vatGrosze: calc.vatGrosze,
+        grossGrosze: calc.grossGrosze,
+        annex15Item: Boolean(line.annex15Item ?? input.annex15Item),
+      };
+    });
+
+    if (!isOfflineDemoModeEnabled()) {
+      const suggestedCategory = mapExpenseQualificationToSuggestedCategory(
+        input.direction,
+        input.expenseQualification,
+      );
+      const counterpartyAddr = input.counterpartyAddress?.trim();
 
       const remote = await papBffFetch<CompanyDocumentItem>(
         `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents`,
@@ -3861,21 +4269,29 @@ export async function createOrImportDocumentMutation(
             documentNumber: docNum,
             direction: input.direction,
             issueDate,
-            eventDate: issueDate,
+            eventDate,
             dueDate,
-            counterpartyName: input.counterpartyName.trim() || 'Kontrahent syntetyczny',
-            counterpartyNip: nipValidation.normalizedNip,
+            counterpartyName,
+            ...(normalizedNip !== undefined ? { counterpartyNip: normalizedNip } : {}),
+            ...(counterpartyAddr ? { counterpartyAddress: counterpartyAddr } : {}),
             ...(ksefRef ? { ksefReferenceNumber: ksefRef } : {}),
-            ksefMarker: input.ksefMarker,
-            isCorrection: input.documentKind === 'correction',
-            lines: [
-              {
-                description: input.description.trim() || 'Operacja gospodarcza',
-                netGrosze,
-                vatRate: input.vatRate,
-                annex15Item: input.annex15Item,
-              },
-            ],
+            ksefMarker,
+            suggestedCategory,
+            ...(input.vatDeductionMode ? { vatDeductionMode: input.vatDeductionMode } : {}),
+            ...(input.ryczaltRate ? { ryczaltRate: input.ryczaltRate } : {}),
+            isCorrection,
+            ...(correctedDocNum ? { correctedDocumentNumber: correctedDocNum } : {}),
+            ...(correctionReason ? { correctionReason } : {}),
+            lines: builtLines.map((l) => ({
+              description: l.description,
+              quantity: l.quantity,
+              unit: l.unit,
+              netGrosze: l.netGrosze,
+              vatRate: l.vatRate,
+              vatGrosze: l.vatGrosze,
+              grossGrosze: l.grossGrosze,
+              annex15Item: l.annex15Item,
+            })),
           },
         },
       );
@@ -3888,13 +4304,134 @@ export async function createOrImportDocumentMutation(
       return mapRemoteDocumentToWorkspaceRecord(remote.data);
     }
 
+    const company = await verifySessionAccess(
+      session,
+      session.context.tenantId,
+      session.context.legalEntityId,
+      'write',
+    );
+    const store = getStore();
+    const totalNetGrosze = builtLines.reduce((s, l) => s + l.netGrosze, 0);
+    const totalVatGrosze = builtLines.reduce((s, l) => s + l.vatGrosze, 0);
+    const totalGrossGrosze = builtLines.reduce((s, l) => s + l.grossGrosze, 0);
+    const anyAnnex15 = builtLines.some((l) => l.annex15Item);
+    const summaryDescription =
+      builtLines.length > 1
+        ? builtLines.map((l) => l.description).join(' · ')
+        : builtLines[0]!.description;
+
+    const canonicalRaw = JSON.stringify({
+      documentNumber: docNum,
+      direction: input.direction,
+      issueDate,
+      eventDate,
+      counterpartyNip: normalizedNip ?? '',
+      lines: builtLines,
+    });
+    const digest = sha256Hex(canonicalRaw);
+    if (
+      store.documents.some(
+        (existing) =>
+          existing.legalEntityId === company.legalEntityId && existing.sha256 === digest,
+      )
+    ) {
+      throw new WorkspaceAccessError(
+        409,
+        'duplicate_document_sha256',
+        `Dokument o identycznym skrócie SHA-256 (${digest.slice(0, 12)}…) został już wcześniej zarejestrowany w tej firmie.`,
+      );
+    }
+
+    const manualDoc: WorkspaceDocumentRecord = {
+      documentId: `doc-${randomUUID().slice(0, 8)}`,
+      tenantId: company.tenantId,
+      legalEntityId: company.legalEntityId,
+      period: eventDate.slice(0, 7),
+      status: 'ai_proposal',
+      documentKind: isCorrection ? 'correction' : input.documentKind,
+      direction: input.direction,
+      documentNumber: docNum,
+      issueDate,
+      eventDate,
+      dueDate,
+      counterpartyName,
+      counterpartyNip: normalizedNip ?? '',
+      counterpartyAddress: input.counterpartyAddress?.trim() ?? '',
+      counterpartyIban: '',
+      description: summaryDescription,
+      vatRate: builtLines[0]!.vatRate,
+      lines: builtLines,
+      netGrosze: totalNetGrosze,
+      vatGrosze: totalVatGrosze,
+      grossGrosze: totalGrossGrosze,
+      paidAmountGrosze: 0,
+      sha256: digest,
+      isDuplicateSha256: false,
+      fileName: `${docNum.replace(/[^A-Za-z0-9_-]/g, '_')}.json`,
+      mimeLabel: 'application/json · Formularz',
+      sourceChannel: 'Formularz ręczny',
+      ksefMarker,
+      ...(ksefRef !== undefined ? { ksefReferenceNumber: ksefRef } : {}),
+      ksefVerificationStatus: ksefRef ? 'declared_unverified' : 'not_applicable',
+      isCorrection,
+      ...(correctedDocNum ? { correctedDocumentNumber: correctedDocNum } : {}),
+      ...(correctionReason ? { correctionReason } : {}),
+      ...(input.ryczaltRate ? { ryczaltRate: input.ryczaltRate } : {}),
+      gtuCodes: [],
+      procedureCodes: anyAnnex15 ? ['MPP'] : [],
+      annex15Item: anyAnnex15,
+      whiteListStatus: 'not_checked',
+      aiConfidence: 'high',
+      aiConfidencePercent: null,
+      extractionMethodLabelPl:
+        'Wprowadzono ręcznie w formularzu — wymaga weryfikacji przed księgowaniem',
+      aiProposed: {
+        documentNumber: docNum,
+        issueDate,
+        eventDate,
+        dueDate,
+        counterpartyName,
+        counterpartyNip: normalizedNip ?? '',
+        netGrosze: totalNetGrosze,
+        vatGrosze: totalVatGrosze,
+        grossGrosze: totalGrossGrosze,
+      },
+      expenseQualification:
+        input.direction === 'purchase'
+          ? (input.expenseQualification ?? 'other_expenses_100_col13')
+          : 'none',
+      vatDeductionMode:
+        input.direction === 'purchase' ? (input.vatDeductionMode ?? 'full_100') : 'full_100',
+      rawPreviewText: [
+        `Dokument: ${docNum} (${input.direction === 'sales' ? 'Sprzedaż' : 'Zakup'}${isCorrection ? ' · KOREKTA' : ''})`,
+        `Kontrahent: ${counterpartyName} (NIP: ${normalizedNip ?? 'BrakID'})`,
+        `Data wystawienia: ${issueDate} | Data sprzedaży: ${eventDate} | Termin płatności: ${dueDate}`,
+        ...builtLines.map(
+          (l) =>
+            `Poz. ${String(l.lineNumber)}: ${l.description} | ${l.quantity} ${l.unit} | Netto: ${formatPlnFromGrosze(l.netGrosze)} | VAT (${l.vatRate}): ${formatPlnFromGrosze(l.vatGrosze)} | Brutto: ${formatPlnFromGrosze(l.grossGrosze)}`,
+        ),
+      ].join('\n'),
+      uploadedAtLabel: new Date().toISOString().slice(0, 16).replace('T', ' '),
+    };
+
+    store.documents.unshift(manualDoc);
+    appendAudit(
+      session,
+      company,
+      'DOCUMENT_INGESTED',
+      `Zarejestrowano ręcznie dokument ${manualDoc.documentNumber} (${String(builtLines.length)} poz., SHA-256 ${digest.slice(0, 12)}…).`,
+    );
+    return manualDoc;
+  }
+
+  if (!isOfflineDemoModeEnabled()) {
     assertPayloadSizeWithinLimit(input.rawPayload, 'import dokumentu');
     const rawText = input.rawPayload.trim();
     if (!rawText) {
       throw new WorkspaceAccessError(
         400,
         'empty_import',
-        'Wklej lub wczytaj treść pliku do importu.',
+        'Wklej lub wczytaj treść pliku XML, CSV lub JSON przed uruchomieniem importu.',
       );
     }
 
@@ -3935,8 +4472,10 @@ export async function createOrImportDocumentMutation(
   let vatRate: VatRateCode = '23';
   let vatGrosze: number;
   let grossGrosze: number;
+  let importedLines: WorkspaceDocumentLineItem[] | undefined;
   let ksefMarker: 'NrKSeF' | 'OFF' | 'BFK' | 'DI';
   let ksefRef: string | undefined;
+  let ksefVerificationStatus: KsefVerificationStatus = 'not_applicable';
   let annex15Item = false;
   let rawText: string;
   let fileName: string;
@@ -3944,48 +4483,7 @@ export async function createOrImportDocumentMutation(
   let sourceChannel: WorkspaceDocumentRecord['sourceChannel'];
   let extractionMethodLabelPl: string;
 
-  if (input.mode === 'manual') {
-    const nipValidation = validatePolishNip(input.counterpartyNip);
-    if (!nipValidation.valid || !nipValidation.normalizedNip) {
-      throw new WorkspaceAccessError(
-        400,
-        'invalid_nip',
-        nipValidation.reason ?? 'Nieprawidłowy NIP kontrahenta.',
-      );
-    }
-    docNum = input.documentNumber.trim();
-    if (!docNum) {
-      throw new WorkspaceAccessError(
-        400,
-        'missing_doc_number',
-        'Podaj numer dokumentu księgowego.',
-      );
-    }
-    direction = input.direction;
-    docKind = input.documentKind;
-    issueDate = assertIsoCalendarDateOrThrow(input.issueDate, 'wystawienia');
-    dueDate = assertIsoCalendarDateOrThrow(input.dueDate, 'płatności');
-    counterpartyName = input.counterpartyName.trim() || 'Kontrahent syntetyczny';
-    counterpartyNip = nipValidation.normalizedNip;
-    description = input.description.trim() || 'Operacja gospodarcza';
-    netGrosze = parsePlnToGroszeOrThrow(input.netPln, 'kwota netto');
-    if (docKind === 'correction' && netGrosze > 0) {
-      netGrosze = -netGrosze;
-    }
-    vatRate = input.vatRate;
-    const calc = calculateInvoiceLineFromNet(netGrosze, vatRate);
-    vatGrosze = calc.vatGrosze;
-    grossGrosze = calc.grossGrosze;
-    ksefMarker = input.ksefMarker;
-    ksefRef = input.ksefReferenceNumber?.trim() || undefined;
-    annex15Item = input.annex15Item;
-    rawText = `${docNum}|${counterpartyNip}|${issueDate}|${String(grossGrosze)}`;
-    fileName = `${docNum.replace(/[^A-Za-z0-9_-]/g, '_')}.json`;
-    mimeLabel = 'application/json · Formularz';
-    sourceChannel = 'Formularz ręczny';
-    extractionMethodLabelPl =
-      'Wprowadzono ręcznie w formularzu — wymaga weryfikacji przed księgowaniem';
-  } else {
+  {
     assertPayloadSizeWithinLimit(input.rawPayload, 'import dokumentu');
     rawText = input.rawPayload.trim();
     if (!rawText) {
@@ -4006,7 +4504,7 @@ export async function createOrImportDocumentMutation(
         extractXmlTag(rawText, 'Termin') ?? `${session.context.period}-28`,
         'płatności (Termin)',
       );
-      const sellerNipRaw = extractXmlTag(rawText, 'NIP') ?? '5213004125';
+      const sellerNipRaw = extractXmlTag(rawText, 'NIP') ?? '';
       const sellerNipCheck = validatePolishNip(sellerNipRaw);
       if (!sellerNipCheck.valid || !sellerNipCheck.normalizedNip) {
         throw new WorkspaceAccessError(
@@ -4019,7 +4517,7 @@ export async function createOrImportDocumentMutation(
       const sellerName = extractXmlTag(rawText, 'Nazwa') ?? 'Dostawca KSeF FA(3) Sp. z o.o.';
       direction = sellerNip === company.nip ? 'sales' : 'purchase';
       docKind = direction;
-      counterpartyNip = sellerNip === company.nip ? '7792301205' : sellerNip;
+      counterpartyNip = sellerNip;
       counterpartyName = sellerName;
       description =
         extractXmlTag(rawText, 'P_7') ??
@@ -4037,30 +4535,107 @@ export async function createOrImportDocumentMutation(
         'P_15 (brutto)',
       );
       vatRate = '23';
+      importedLines = [
+        {
+          lineNumber: 1,
+          description,
+          quantity: extractXmlTag(rawText, 'P_8B') ?? '1',
+          unit: extractXmlTag(rawText, 'P_8A') ?? 'usł.',
+          netGrosze,
+          vatRate,
+          vatGrosze,
+          grossGrosze,
+          annex15Item: /<P_18A>\s*1\s*<\/P_18A>/i.test(rawText),
+        },
+      ];
       ksefRef = extractXmlTag(rawText, 'NrKSeF');
       ksefMarker = ksefRef ? 'NrKSeF' : 'OFF';
+      ksefVerificationStatus = ksefRef ? 'parsed_xml_unverified' : 'not_applicable';
       annex15Item = /<P_18A>\s*1\s*<\/P_18A>/i.test(rawText);
       fileName = `${docNum.replace(/[^A-Za-z0-9_-]/g, '_')}.xml`;
       mimeLabel = 'application/xml · KSeF FA(3)';
       sourceChannel = 'KSeF FA(3) XML';
       extractionMethodLabelPl = 'Parser deterministyczny XML KSeF (bez udziału AI)';
     } else if (input.format === 'csv') {
-      const lines = rawText.split(/\r?\n/).filter((l) => l.trim().length > 0);
-      const dataRow = (lines.length > 1 ? lines[1] : lines[0]) ?? '';
-      const cols = dataRow.split(';').map((c) => c.trim());
-      docNum = cols[0] || `CSV/${session.context.period}/01`;
-      direction = cols[1] === 'sales' ? 'sales' : 'purchase';
+      const rawCsvLines = rawText.split(/\r?\n/).filter((l) => l.trim().length > 0);
+      const firstLineCols = (rawCsvLines[0] ?? '').split(';').map((c) => c.trim());
+      const isLegacyHeaderlessRow =
+        rawCsvLines.length === 1 &&
+        firstLineCols.length >= 9 &&
+        /^\d{4}-\d{2}-\d{2}$/.test(firstLineCols[2] ?? '');
+
+      const csvLines = isLegacyHeaderlessRow
+        ? [
+            'numer_faktury;kierunek;data_wystawienia;termin_platnosci;kontrahent;nip;opis;netto;vat',
+            rawCsvLines[0]!,
+          ]
+        : rawCsvLines;
+
+      if (csvLines.length < 2) {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_document_csv',
+          formatUserFacingErrorPl({ reasonCode: 'invalid_document_csv' }),
+        );
+      }
+      const delimiter = csvLines[0]!.includes(';') ? ';' : ',';
+      const headers = csvLines[0]!
+        .split(delimiter)
+        .map((h) => h.trim().toLowerCase().replace(/^"|"$/g, ''));
+      const idxOf = (aliases: readonly string[]) => headers.findIndex((h) => aliases.includes(h));
+
+      const docNumIdx = idxOf(['numer_faktury', 'numer_dokumentu', 'document_number']);
+      const issueIdx = idxOf(['data_wystawienia', 'issue_date']);
+      const dueIdx = idxOf(['termin_platnosci', 'due_date']);
+      const dirIdx = idxOf(['kierunek', 'direction']);
+      const cpIdx = idxOf(['kontrahent', 'counterparty_name']);
+      const nipIdx = idxOf(['nip', 'counterparty_nip']);
+      const descIdx = idxOf(['opis', 'description']);
+      const qtyIdx = idxOf(['ilosc', 'quantity']);
+      const unitIdx = idxOf(['jm', 'unit']);
+      const rateIdx = idxOf(['stawka_vat', 'vat_rate']);
+      const netIdx = idxOf(['netto', 'net_amount']);
+      const vatIdx = idxOf(['vat', 'vat_amount']);
+      const grossIdx = idxOf(['brutto', 'gross_amount']);
+
+      if (
+        docNumIdx < 0 ||
+        issueIdx < 0 ||
+        cpIdx < 0 ||
+        nipIdx < 0 ||
+        descIdx < 0 ||
+        netIdx < 0 ||
+        vatIdx < 0 ||
+        (!isLegacyHeaderlessRow && (rateIdx < 0 || grossIdx < 0))
+      ) {
+        throw new WorkspaceAccessError(
+          400,
+          'invalid_document_csv_headers',
+          formatUserFacingErrorPl({ reasonCode: 'invalid_document_csv_headers' }),
+        );
+      }
+
+      const dataRows = csvLines
+        .slice(1)
+        .map((row) => row.split(delimiter).map((c) => c.trim().replace(/^"|"$/g, '')));
+      const firstRow = dataRows[0]!;
+      docNum = firstRow[docNumIdx] || '';
+      if (!docNum) {
+        throw new WorkspaceAccessError(
+          400,
+          'missing_csv_required_fields',
+          formatUserFacingErrorPl({ reasonCode: 'missing_csv_required_fields' }),
+        );
+      }
+      direction = dirIdx >= 0 && firstRow[dirIdx] === 'sales' ? 'sales' : 'purchase';
       docKind = direction;
-      issueDate = assertIsoCalendarDateOrThrow(
-        cols[2] || `${session.context.period}-18`,
-        'wystawienia (CSV)',
-      );
-      dueDate = assertIsoCalendarDateOrThrow(
-        cols[3] || `${session.context.period}-28`,
-        'płatności (CSV)',
-      );
-      counterpartyName = cols[4] || 'Kontrahent CSV Sp. z o.o.';
-      const csvNipCheck = validatePolishNip(cols[5] || '7792301205');
+      issueDate = assertIsoCalendarDateOrThrow(firstRow[issueIdx] || '', 'wystawienia (CSV)');
+      dueDate =
+        dueIdx >= 0 && firstRow[dueIdx]
+          ? assertIsoCalendarDateOrThrow(firstRow[dueIdx]!, 'płatności (CSV)')
+          : issueDate;
+      counterpartyName = firstRow[cpIdx] || '';
+      const csvNipCheck = validatePolishNip(firstRow[nipIdx] || '');
       if (!csvNipCheck.valid || !csvNipCheck.normalizedNip) {
         throw new WorkspaceAccessError(
           400,
@@ -4069,13 +4644,49 @@ export async function createOrImportDocumentMutation(
         );
       }
       counterpartyNip = csvNipCheck.normalizedNip;
-      description = cols[6] || 'Pozycja z pliku CSV';
-      netGrosze = parsePlnToGroszeOrThrow(cols[7] || '1000.00', 'NettoPLN (CSV)');
-      vatGrosze = parsePlnToGroszeOrThrow(cols[8] || '230.00', 'VatPLN (CSV)');
-      grossGrosze = netGrosze + vatGrosze;
-      vatRate = '23';
-      ksefRef = cols[10] || undefined;
-      ksefMarker = ksefRef ? 'NrKSeF' : 'DI';
+
+      importedLines = dataRows.map((cols, idx) => {
+        const lineDesc = cols[descIdx] || `Pozycja nr ${String(idx + 1)}`;
+        const rawRate = (rateIdx >= 0 && cols[rateIdx] ? cols[rateIdx]! : '23').replace(
+          /%$/,
+          '',
+        ) as VatRateCode;
+        const resolvedRate: VatRateCode = ALLOWED_VAT_RATE_CODES.includes(rawRate) ? rawRate : '23';
+        const rowNet = parsePlnToGroszeOrThrow(cols[netIdx] || '0.00', 'netto (CSV)');
+        const rowVat = parsePlnToGroszeOrThrow(cols[vatIdx] || '0.00', 'vat (CSV)');
+        const rowGross =
+          grossIdx >= 0 && cols[grossIdx]
+            ? parsePlnToGroszeOrThrow(cols[grossIdx]!, 'brutto (CSV)')
+            : rowNet + rowVat;
+        if (rowNet + rowVat !== rowGross) {
+          throw new WorkspaceAccessError(
+            422,
+            'document_amount_mismatch',
+            formatUserFacingErrorPl({ reasonCode: 'document_amount_mismatch' }),
+          );
+        }
+        return {
+          lineNumber: idx + 1,
+          description: lineDesc,
+          quantity: (qtyIdx >= 0 ? cols[qtyIdx] : undefined) || '1',
+          unit: (unitIdx >= 0 ? cols[unitIdx] : undefined) || 'szt.',
+          netGrosze: rowNet,
+          vatRate: resolvedRate,
+          vatGrosze: rowVat,
+          grossGrosze: rowGross,
+          annex15Item: false,
+        };
+      });
+
+      netGrosze = importedLines.reduce((s, l) => s + l.netGrosze, 0);
+      vatGrosze = importedLines.reduce((s, l) => s + l.vatGrosze, 0);
+      grossGrosze = importedLines.reduce((s, l) => s + l.grossGrosze, 0);
+      vatRate = importedLines[0]!.vatRate;
+      description =
+        importedLines.length > 1
+          ? importedLines.map((l) => l.description).join(' · ')
+          : importedLines[0]!.description;
+      ksefMarker = 'BFK';
       fileName = 'import_dokumentow.csv';
       mimeLabel = 'text/csv · średnik';
       sourceChannel = 'Import CSV';
@@ -4095,7 +4706,14 @@ export async function createOrImportDocumentMutation(
           'Nieprawidłowy format JSON dokumentu do importu.',
         );
       }
-      docNum = String(parsed['documentNumber'] ?? `JSON/${session.context.period}/01`).trim();
+      docNum = String(parsed['documentNumber'] ?? '').trim();
+      if (!docNum) {
+        throw new WorkspaceAccessError(
+          400,
+          'missing_doc_number',
+          'W strukturze JSON brakuje pola documentNumber.',
+        );
+      }
       direction = parsed['direction'] === 'sales' ? 'sales' : 'purchase';
       docKind = direction;
       issueDate = assertIsoCalendarDateOrThrow(
@@ -4107,7 +4725,7 @@ export async function createOrImportDocumentMutation(
         'płatności (JSON)',
       );
       counterpartyName = String(parsed['counterpartyName'] ?? 'Kontrahent JSON').trim();
-      const jsonNipCheck = validatePolishNip(String(parsed['counterpartyNip'] ?? '5213004125'));
+      const jsonNipCheck = validatePolishNip(String(parsed['counterpartyNip'] ?? ''));
       if (!jsonNipCheck.valid || !jsonNipCheck.normalizedNip) {
         throw new WorkspaceAccessError(
           400,
@@ -4116,15 +4734,60 @@ export async function createOrImportDocumentMutation(
         );
       }
       counterpartyNip = jsonNipCheck.normalizedNip;
-      description = String(parsed['description'] ?? 'Dokument JSON').trim();
-      netGrosze = parsePlnToGroszeOrThrow(String(parsed['netPln'] ?? '1000.00'), 'netPln (JSON)');
-      const calc = calculateInvoiceLineFromNet(netGrosze, '23');
-      vatGrosze = calc.vatGrosze;
-      grossGrosze = calc.grossGrosze;
-      ksefMarker = 'DI';
+
+      if (Array.isArray(parsed['lines']) && parsed['lines'].length > 0) {
+        importedLines = (parsed['lines'] as Record<string, unknown>[]).map((item, idx) => {
+          const itemRate = String(item['vatRate'] ?? '23') as VatRateCode;
+          const resolvedRate: VatRateCode = ALLOWED_VAT_RATE_CODES.includes(itemRate)
+            ? itemRate
+            : '23';
+          const lineNet =
+            typeof item['netGrosze'] === 'number'
+              ? item['netGrosze']
+              : parsePlnToGroszeOrThrow(String(item['netPln'] ?? '0.00'), 'netPln (JSON)');
+          const calc = calculateInvoiceLineFromNet(lineNet, resolvedRate);
+          return {
+            lineNumber: idx + 1,
+            description: String(item['description'] ?? `Pozycja ${String(idx + 1)}`).trim(),
+            quantity: String(item['quantity'] ?? '1'),
+            unit: String(item['unit'] ?? 'szt.'),
+            netGrosze: calc.netGrosze,
+            vatRate: resolvedRate,
+            vatGrosze: typeof item['vatGrosze'] === 'number' ? item['vatGrosze'] : calc.vatGrosze,
+            grossGrosze:
+              typeof item['grossGrosze'] === 'number' ? item['grossGrosze'] : calc.grossGrosze,
+            annex15Item: Boolean(item['annex15Item']),
+          };
+        });
+        netGrosze = importedLines.reduce((s, l) => s + l.netGrosze, 0);
+        vatGrosze = importedLines.reduce((s, l) => s + l.vatGrosze, 0);
+        grossGrosze = importedLines.reduce((s, l) => s + l.grossGrosze, 0);
+        vatRate = importedLines[0]!.vatRate;
+        description = importedLines.map((l) => l.description).join(' · ');
+      } else {
+        description = String(parsed['description'] ?? 'Dokument JSON').trim();
+        netGrosze = parsePlnToGroszeOrThrow(String(parsed['netPln'] ?? '1000.00'), 'netPln (JSON)');
+        const calc = calculateInvoiceLineFromNet(netGrosze, '23');
+        vatGrosze = calc.vatGrosze;
+        grossGrosze = calc.grossGrosze;
+        importedLines = [
+          {
+            lineNumber: 1,
+            description,
+            quantity: '1',
+            unit: 'szt.',
+            netGrosze,
+            vatRate: '23',
+            vatGrosze,
+            grossGrosze,
+            annex15Item: false,
+          },
+        ];
+      }
+      ksefMarker = 'BFK';
       fileName = 'import.json';
       mimeLabel = 'application/json';
-      sourceChannel = 'Import CSV';
+      sourceChannel = 'Import JSON';
       extractionMethodLabelPl = 'Parser deterministyczny JSON (bez udziału AI)';
     }
   }
@@ -4155,10 +4818,11 @@ export async function createOrImportDocumentMutation(
     dueDate,
     counterpartyName,
     counterpartyNip,
-    counterpartyAddress: 'ul. Syntetyczna 12, 00-100 Warszawa',
-    counterpartyIban: 'PL61109010140000071219812874',
+    counterpartyAddress: '',
+    counterpartyIban: '',
     description,
     vatRate,
+    ...(importedLines !== undefined ? { lines: importedLines } : {}),
     netGrosze,
     vatGrosze,
     grossGrosze,
@@ -4170,6 +4834,7 @@ export async function createOrImportDocumentMutation(
     sourceChannel,
     ksefMarker,
     ...(ksefRef !== undefined ? { ksefReferenceNumber: ksefRef } : {}),
+    ksefVerificationStatus,
     gtuCodes: [],
     procedureCodes: annex15Item ? ['MPP'] : [],
     annex15Item,
@@ -4189,7 +4854,7 @@ export async function createOrImportDocumentMutation(
       grossGrosze,
     },
     expenseQualification: direction === 'purchase' ? 'other_expenses_100_col13' : 'none',
-    vatDeductionMode: direction === 'purchase' ? 'full_100' : 'full_100',
+    vatDeductionMode: 'full_100',
     rawPreviewText: rawText,
     uploadedAtLabel: new Date().toISOString().slice(0, 16).replace('T', ' '),
   };
@@ -4212,11 +4877,17 @@ export async function approveAndPostDocumentMutation(
     readonly documentNumber: string;
     readonly counterpartyName: string;
     readonly counterpartyNip: string;
+    readonly noPolishNip?: boolean;
     readonly issueDate: string;
     readonly netPln: string;
     readonly vatPln: string;
+    readonly amountsEdited?: boolean;
+    readonly isCorrection?: boolean;
+    readonly correctedEntryId?: string;
+    readonly correctionReason?: string;
     readonly expenseQualification: KpirExpenseQualificationKind;
     readonly vatDeductionMode: VatDeductionMode;
+    readonly ryczaltRate?: RyczaltRateCode;
   },
 ): Promise<WorkspaceDocumentRecord> {
   assertValidSessionIdentity(session);
@@ -4225,20 +4896,86 @@ export async function approveAndPostDocumentMutation(
   const safeDocId = assertSafeResourceIdPathParam(input.documentId, 'documentId');
   const validatedIssueDate = assertIsoCalendarDateOrThrow(input.issueDate, 'wystawienia');
 
-  const nipCheck = validatePolishNip(input.counterpartyNip);
-  if (!nipCheck.valid || !nipCheck.normalizedNip) {
+  const docNumTrimmed = input.documentNumber.trim();
+  if (!docNumTrimmed) {
     throw new WorkspaceAccessError(
       400,
-      'invalid_nip',
-      nipCheck.reason ?? 'Nieprawidłowy NIP kontrahenta — popraw przed zatwierdzeniem.',
+      'missing_doc_number',
+      'Podaj numer dowodu księgowego przed zatwierdzeniem dokumentu.',
     );
+  }
+  const cpNameTrimmed = input.counterpartyName.trim();
+  if (!cpNameTrimmed) {
+    throw new WorkspaceAccessError(
+      400,
+      'missing_counterparty_name',
+      'Podaj nazwę kontrahenta przed zatwierdzeniem dokumentu.',
+    );
+  }
+
+  const trimmedNipInput = input.counterpartyNip.trim();
+  let normalizedNip: string | undefined;
+  if (!input.noPolishNip && trimmedNipInput.length > 0 && trimmedNipInput !== 'BrakID') {
+    const nipCheck = validatePolishNip(trimmedNipInput);
+    if (!nipCheck.valid || !nipCheck.normalizedNip) {
+      throw new WorkspaceAccessError(
+        400,
+        'invalid_nip',
+        nipCheck.reason ?? 'Nieprawidłowy NIP kontrahenta — popraw przed zatwierdzeniem.',
+      );
+    }
+    normalizedNip = nipCheck.normalizedNip;
   }
 
   const netGrosze = parsePlnToGroszeOrThrow(input.netPln, 'kwota netto');
   const vatGrosze = parsePlnToGroszeOrThrow(input.vatPln, 'kwota VAT');
   const grossGrosze = netGrosze + vatGrosze;
+  const shouldSendAmountOverrides = input.amountsEdited === true;
+
+  if (shouldSendAmountOverrides && (netGrosze < 0 || vatGrosze < 0)) {
+    throw new WorkspaceAccessError(
+      400,
+      'correction_line_amounts_locked',
+      'Kwoty ujemne faktury korygującej (KOR) wynikają bezpośrednio z pozycji dokumentu — zatwierdź dokument bez ręcznego nadpisywania sumy nagłówka.',
+    );
+  }
 
   if (!isOfflineDemoModeEnabled()) {
+    let resolvedRemoteCorrectedEntryId = input.correctedEntryId?.trim() || undefined;
+    let resolvedRemoteCorrectionReason = input.correctionReason?.trim() || undefined;
+
+    if (
+      (input.isCorrection === true || netGrosze < 0 || vatGrosze < 0) &&
+      (!resolvedRemoteCorrectedEntryId || !resolvedRemoteCorrectionReason)
+    ) {
+      const targetRemote = await papBffFetch<RemoteDocumentItem>(
+        `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents/${safeDocId}`,
+        {
+          method: 'GET',
+          bearerToken: session.oidcToken,
+        },
+      );
+      if (targetRemote.kind === 'ok' && targetRemote.data.isCorrection) {
+        if (!resolvedRemoteCorrectionReason) {
+          resolvedRemoteCorrectionReason =
+            targetRemote.data.correctionReason?.trim() || 'Faktura korygująca (KOR)';
+        }
+        if (!resolvedRemoteCorrectedEntryId) {
+          const origDocNum = targetRemote.data.correctedDocumentNumber?.trim();
+          if (origDocNum) {
+            const listRes = await getDocumentsForActiveCompany(session);
+            const matchedOrig = listRes.find(
+              (d) =>
+                d.documentId !== safeDocId && d.documentNumber === origDocNum && d.postedEntryId,
+            );
+            resolvedRemoteCorrectedEntryId = matchedOrig?.postedEntryId ?? origDocNum;
+          } else {
+            resolvedRemoteCorrectedEntryId = `kor-ref-${safeDocId}`;
+          }
+        }
+      }
+    }
+
     const remote = await papBffFetch<
       CompanyDocumentItem | { readonly document: CompanyDocumentItem }
     >(
@@ -4247,14 +4984,25 @@ export async function approveAndPostDocumentMutation(
         method: 'POST',
         bearerToken: session.oidcToken,
         body: {
-          documentNumber: input.documentNumber.trim(),
-          counterpartyName: input.counterpartyName.trim(),
-          counterpartyNip: nipCheck.normalizedNip,
+          documentNumber: docNumTrimmed,
+          counterpartyName: cpNameTrimmed,
+          ...(normalizedNip !== undefined ? { counterpartyNip: normalizedNip } : {}),
           issueDate: validatedIssueDate,
-          netPln: (Math.abs(netGrosze) / 100).toFixed(2),
-          vatPln: (Math.abs(vatGrosze) / 100).toFixed(2),
+          ...(shouldSendAmountOverrides
+            ? {
+                netPln: (netGrosze / 100).toFixed(2),
+                vatPln: (vatGrosze / 100).toFixed(2),
+              }
+            : {}),
+          ...(resolvedRemoteCorrectedEntryId !== undefined
+            ? { correctedEntryId: resolvedRemoteCorrectedEntryId }
+            : {}),
+          ...(resolvedRemoteCorrectionReason !== undefined
+            ? { correctionReason: resolvedRemoteCorrectionReason }
+            : {}),
           expenseQualification: input.expenseQualification,
           vatDeductionMode: input.vatDeductionMode,
+          ...(input.ryczaltRate ? { ryczaltRate: input.ryczaltRate } : {}),
         },
       },
     );
@@ -4293,6 +5041,27 @@ export async function approveAndPostDocumentMutation(
   const current = store.documents[docIndex]!;
   const postedPeriod = validatedIssueDate.slice(0, 7);
   let postedEntryId = current.postedEntryId ?? `post-${randomUUID().slice(0, 8)}`;
+  const effectiveNipForLedger = normalizedNip ?? 'BrakID';
+  const isCorrectionDoc =
+    Boolean(current.isCorrection) || current.documentKind === 'correction' || grossGrosze < 0;
+  const matchedOfflineOriginal = current.correctedDocumentNumber
+    ? store.documents.find(
+        (d) =>
+          d.legalEntityId === company.legalEntityId &&
+          d.documentId !== current.documentId &&
+          d.documentNumber === current.correctedDocumentNumber &&
+          d.postedEntryId,
+      )
+    : undefined;
+  const offlineCorrectedEntryId =
+    input.correctedEntryId?.trim() ||
+    matchedOfflineOriginal?.postedEntryId ||
+    current.correctedDocumentNumber?.trim() ||
+    `kor-ref-${current.documentId}`;
+  const offlineCorrectionReason =
+    input.correctionReason?.trim() ||
+    current.correctionReason?.trim() ||
+    'Faktura korygująca (KOR)';
 
   if (current.status !== 'approved_posted') {
     if (company.profileCode === 'jdg_kpir_skala' || company.profileCode === 'jdg_kpir_liniowy') {
@@ -4305,32 +5074,44 @@ export async function approveAndPostDocumentMutation(
           id: postedEntryId,
           ordinalNumber: nextOrdinal,
           eventDate: validatedIssueDate,
-          documentNumber: input.documentNumber.trim(),
+          documentNumber: docNumTrimmed,
           ...(current.ksefReferenceNumber !== undefined
             ? { ksefReferenceNumber: current.ksefReferenceNumber }
             : {}),
-          counterpartyName: input.counterpartyName.trim(),
-          counterpartyNip: nipCheck.normalizedNip,
-          counterpartyAddress: current.counterpartyAddress,
+          counterpartyName: cpNameTrimmed,
+          ...(normalizedNip !== undefined ? { counterpartyNip: normalizedNip } : {}),
+          counterpartyAddress: current.counterpartyAddress || 'Polska',
           eventDescription: current.description,
           col7SalesRevenueGrosze: netGrosze,
           qualificationKind: 'none',
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId: offlineCorrectedEntryId,
+                correctionReason: offlineCorrectionReason,
+              }
+            : {}),
         });
         store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
       } else if (input.expenseQualification !== 'none') {
-        const vatEntry = createVatRegisterEntry({
-          id: `vat-post-${current.documentId}`,
+        const groupedPurchaseVat = buildGroupedVatEntriesForDocument({
+          idPrefix: `vat-post-${current.documentId}`,
           registerType: 'purchase',
           period: postedPeriod,
           taxPointDate: validatedIssueDate,
           issueDate: validatedIssueDate,
-          documentNumber: input.documentNumber.trim(),
-          counterpartyName: input.counterpartyName.trim(),
-          counterpartyNip: nipCheck.normalizedNip,
-          vatRate: current.vatRate,
-          netGrosze,
-          vatTotalGrosze: vatGrosze,
+          documentNumber: docNumTrimmed,
+          counterpartyName: cpNameTrimmed,
+          counterpartyNip: effectiveNipForLedger,
           deductionMode: input.vatDeductionMode,
+          fallbackVatRate: current.vatRate,
+          fallbackNetGrosze: netGrosze,
+          fallbackVatGrosze: vatGrosze,
+          fallbackAnnex15Item: current.annex15Item,
+          lines: current.lines,
+          useLines: !shouldSendAmountOverrides,
+          ksefMarker: current.ksefMarker,
+          ksefReferenceNumber: current.ksefReferenceNumber,
         });
 
         const qualified = qualifyKpirExpense({
@@ -4339,20 +5120,20 @@ export async function approveAndPostDocumentMutation(
           netGrosze,
           vatGrosze,
           taxpayerVatActive: company.vatStatus === 'czynny',
-          deductibleVatGrosze: vatEntry.deductibleVatGrosze,
+          deductibleVatGrosze: groupedPurchaseVat.totalDeductibleVatGrosze,
         });
 
         const entry = createKpirEntry({
           id: postedEntryId,
           ordinalNumber: nextOrdinal,
           eventDate: validatedIssueDate,
-          documentNumber: input.documentNumber.trim(),
+          documentNumber: docNumTrimmed,
           ...(current.ksefReferenceNumber !== undefined
             ? { ksefReferenceNumber: current.ksefReferenceNumber }
             : {}),
-          counterpartyName: input.counterpartyName.trim(),
-          counterpartyNip: nipCheck.normalizedNip,
-          counterpartyAddress: current.counterpartyAddress,
+          counterpartyName: cpNameTrimmed,
+          ...(normalizedNip !== undefined ? { counterpartyNip: normalizedNip } : {}),
+          counterpartyAddress: current.counterpartyAddress || 'Polska',
           eventDescription: current.description,
           col10GoodsAndMaterialsGrosze: qualified.col10GoodsAndMaterialsGrosze,
           col11IncidentalCostsGrosze: qualified.col11IncidentalCostsGrosze,
@@ -4360,11 +5141,18 @@ export async function approveAndPostDocumentMutation(
           col13OtherExpensesGrosze: qualified.col13OtherExpensesGrosze,
           col16ResearchDevelopmentCostGrosze: qualified.col16ResearchDevelopmentCostGrosze,
           qualificationKind: input.expenseQualification,
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId: offlineCorrectedEntryId,
+                correctionReason: offlineCorrectionReason,
+              }
+            : {}),
         });
         store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
       }
     } else if (company.profileCode === 'jdg_ryczalt') {
-      if (current.direction === 'sales' && netGrosze > 0) {
+      if (current.direction === 'sales' && netGrosze !== 0) {
         const existingRyczalt = store.ryczaltEntriesByCompany.get(company.legalEntityId) ?? [];
         const nextOrd = existingRyczalt.length + 1;
         postedEntryId = `ryczalt-${postedPeriod}-${String(nextOrd)}`;
@@ -4373,12 +5161,19 @@ export async function approveAndPostDocumentMutation(
           ordinalNumber: nextOrd,
           entryDate: validatedIssueDate,
           revenueDate: validatedIssueDate,
-          documentNumber: input.documentNumber.trim(),
-          counterpartyName: input.counterpartyName.trim(),
-          counterpartyNip: nipCheck.normalizedNip,
-          rate: '12',
+          documentNumber: docNumTrimmed,
+          counterpartyName: cpNameTrimmed,
+          ...(normalizedNip !== undefined ? { counterpartyNip: normalizedNip } : {}),
+          rate: input.ryczaltRate ?? current.ryczaltRate ?? '12',
           revenueGrosze: netGrosze,
           remarks: current.description,
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId: offlineCorrectedEntryId,
+                correctionReason: offlineCorrectionReason,
+              }
+            : {}),
         });
         store.ryczaltEntriesByCompany.set(company.legalEntityId, [...existingRyczalt, rycEntry]);
       } else {
@@ -4389,9 +5184,8 @@ export async function approveAndPostDocumentMutation(
       const nextNo = existingJournal.length + 1;
       const entryNumber = `DK/${postedPeriod}/${String(nextNo).padStart(3, '0')}`;
       postedEntryId = `jrn-${postedPeriod}-${String(nextNo)}`;
-      const isCorrection = grossGrosze < 0;
-      const stornoMeta = isCorrection
-        ? { isRedStorno: true, stornoReason: 'Faktura korygująca' }
+      const stornoMeta = isCorrectionDoc
+        ? { isRedStorno: true, stornoReason: offlineCorrectionReason }
         : {};
 
       const journalLines: {
@@ -4408,7 +5202,7 @@ export async function approveAndPostDocumentMutation(
           accountCode: '201',
           side: 'Wn',
           amountGrosze: grossGrosze,
-          description: `Należność brutto — ${input.counterpartyName.trim()}`,
+          description: `Należność brutto — ${cpNameTrimmed}`,
           ...stornoMeta,
         });
         if (netGrosze !== 0) {
@@ -4416,7 +5210,7 @@ export async function approveAndPostDocumentMutation(
             accountCode: '700',
             side: 'Ma',
             amountGrosze: netGrosze,
-            description: `Przychód netto ze sprzedaży — ${input.documentNumber.trim()}`,
+            description: `Przychód netto ze sprzedaży — ${docNumTrimmed}`,
             ...stornoMeta,
           });
         }
@@ -4425,26 +5219,32 @@ export async function approveAndPostDocumentMutation(
             accountCode: '221-1',
             side: 'Ma',
             amountGrosze: vatGrosze,
-            description: `VAT należny — ${input.documentNumber.trim()}`,
+            description: `VAT należny — ${docNumTrimmed}`,
             ...stornoMeta,
           });
         }
       } else {
-        const vatEntry = createVatRegisterEntry({
-          id: `vat-jrn-${current.documentId}`,
+        const groupedJrnVat = buildGroupedVatEntriesForDocument({
+          idPrefix: `vat-jrn-${current.documentId}`,
           registerType: 'purchase',
           period: postedPeriod,
           taxPointDate: validatedIssueDate,
           issueDate: validatedIssueDate,
-          documentNumber: input.documentNumber.trim(),
-          counterpartyName: input.counterpartyName.trim(),
-          counterpartyNip: nipCheck.normalizedNip,
-          vatRate: current.vatRate,
-          netGrosze,
-          vatTotalGrosze: vatGrosze,
+          documentNumber: docNumTrimmed,
+          counterpartyName: cpNameTrimmed,
+          counterpartyNip: effectiveNipForLedger,
           deductionMode: company.vatStatus === 'czynny' ? input.vatDeductionMode : 'none_0',
+          fallbackVatRate: current.vatRate,
+          fallbackNetGrosze: netGrosze,
+          fallbackVatGrosze: vatGrosze,
+          fallbackAnnex15Item: current.annex15Item,
+          lines: current.lines,
+          useLines: !shouldSendAmountOverrides,
+          ksefMarker: current.ksefMarker,
+          ksefReferenceNumber: current.ksefReferenceNumber,
         });
-        const deductibleVat = company.vatStatus === 'czynny' ? vatEntry.deductibleVatGrosze : 0;
+        const deductibleVat =
+          company.vatStatus === 'czynny' ? groupedJrnVat.totalDeductibleVatGrosze : 0;
         const costAmount = grossGrosze - deductibleVat;
         const expenseAccount =
           input.expenseQualification === 'goods_and_materials_col10' ? '330' : '402';
@@ -4463,7 +5263,7 @@ export async function approveAndPostDocumentMutation(
             accountCode: '221-2',
             side: 'Wn',
             amountGrosze: deductibleVat,
-            description: `VAT naliczony podlegający odliczeniu — ${input.documentNumber.trim()}`,
+            description: `VAT naliczony podlegający odliczeniu — ${docNumTrimmed}`,
             ...stornoMeta,
           });
         }
@@ -4471,7 +5271,7 @@ export async function approveAndPostDocumentMutation(
           accountCode: '202',
           side: 'Ma',
           amountGrosze: grossGrosze,
-          description: `Zobowiązanie wobec dostawcy — ${input.counterpartyName.trim()}`,
+          description: `Zobowiązanie wobec dostawcy — ${cpNameTrimmed}`,
           ...stornoMeta,
         });
       }
@@ -4481,8 +5281,8 @@ export async function approveAndPostDocumentMutation(
         entryNumber,
         bookingDate: validatedIssueDate,
         documentDate: validatedIssueDate,
-        documentNumber: input.documentNumber.trim(),
-        description: `${current.description} (${input.counterpartyName.trim()})`,
+        documentNumber: docNumTrimmed,
+        description: `${current.description} (${cpNameTrimmed})`,
         lines: journalLines,
       });
       store.journalEntriesByCompany.set(company.legalEntityId, [...existingJournal, journalEntry]);
@@ -4493,9 +5293,9 @@ export async function approveAndPostDocumentMutation(
     ...current,
     period: postedPeriod,
     status: 'approved_posted',
-    documentNumber: input.documentNumber.trim(),
-    counterpartyName: input.counterpartyName.trim(),
-    counterpartyNip: nipCheck.normalizedNip,
+    documentNumber: docNumTrimmed,
+    counterpartyName: cpNameTrimmed,
+    counterpartyNip: normalizedNip ?? '',
     issueDate: validatedIssueDate,
     eventDate: validatedIssueDate,
     netGrosze,
@@ -4503,6 +5303,7 @@ export async function approveAndPostDocumentMutation(
     grossGrosze,
     expenseQualification: input.expenseQualification,
     vatDeductionMode: input.vatDeductionMode,
+    ...(input.ryczaltRate ? { ryczaltRate: input.ryczaltRate } : {}),
     approvedBy: session.context.displayName,
     approvedAt: new Date().toISOString(),
     postedEntryId,
@@ -4625,6 +5426,13 @@ export async function addManualKpirEntryMutation(
     session.context.legalEntityId,
     'write',
   );
+  if (!getCompanyCapabilities(company).supportsKpir) {
+    throw new WorkspaceAccessError(
+      422,
+      'incompatible_tax_regime',
+      formatUserFacingErrorPl({ reasonCode: 'incompatible_tax_regime' }),
+    );
+  }
   const store = getStore();
   const currentList = store.kpirEntriesByCompany.get(company.legalEntityId) ?? [];
   const nextOrdinal = currentList.length + 1;
@@ -4791,6 +5599,13 @@ export async function addRyczaltEntryMutation(
     session.context.legalEntityId,
     'write',
   );
+  if (!getCompanyCapabilities(company).supportsRyczalt) {
+    throw new WorkspaceAccessError(
+      422,
+      'incompatible_tax_regime',
+      formatUserFacingErrorPl({ reasonCode: 'incompatible_tax_regime' }),
+    );
+  }
   const store = getStore();
   const list = store.ryczaltEntriesByCompany.get(company.legalEntityId) ?? [];
   const nextOrd = list.length + 1;
@@ -4885,6 +5700,13 @@ export async function addJournalEntryMutation(
     session.context.legalEntityId,
     'write',
   );
+  if (!getCompanyCapabilities(company).supportsFullLedger) {
+    throw new WorkspaceAccessError(
+      422,
+      'incompatible_tax_regime',
+      formatUserFacingErrorPl({ reasonCode: 'incompatible_tax_regime' }),
+    );
+  }
   const store = getStore();
   const list = store.journalEntriesByCompany.get(company.legalEntityId) ?? [];
   const nextNo = list.length + 1;

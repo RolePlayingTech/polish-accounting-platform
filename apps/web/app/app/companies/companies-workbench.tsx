@@ -19,6 +19,7 @@ import {
   type LegalBasisInfo,
 } from '@pap/ui';
 import { AlertBanner, Button, NipInput, TaxRegimeSelector } from '../../../components/ui-controls';
+import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
 import {
   COMPANY_JDG_KPIR_ID,
   TENANT_1_ID,
@@ -70,13 +71,14 @@ export function CompaniesWorkbench({
   } | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Formularz nowej firmy
+  // Formularz nowej firmy syntetycznej (kreator demo na /app/companies)
   const [newName, setNewName] = useState('');
   const [newNip, setNewNip] = useState('5213004125');
   const [newAddress, setNewAddress] = useState('ul. Nowogrodzka 15/3, 00-511 Warszawa');
   const [newProfile, setNewProfile] = useState<TaxProfileCode>('jdg_kpir_skala');
   const [newLegalForm, setNewLegalForm] = useState<'jdg' | 'sp_z_o_o'>('jdg');
   const [newVatStatus, setNewVatStatus] = useState<'czynny' | 'zwolniony_art_113'>('czynny');
+  const canWriteActive = activeCompany.grantedActions.includes('write');
 
   // Edycja ustawień podatkowych aktywnej firmy
   const [editProfile, setEditProfile] = useState<TaxProfileCode>(activeCompany.profileCode);
@@ -119,6 +121,7 @@ export function CompaniesWorkbench({
       });
       const data = (await response.json()) as {
         ok?: boolean;
+        reasonCode?: string;
         error?: string;
         legalEntityId?: string;
         company?: CompanyProfileRecord;
@@ -130,13 +133,19 @@ export function CompaniesWorkbench({
         setFeedback({
           tone: 'danger',
           title: `Odmowa lub błąd walidacji (HTTP ${String(response.status)})`,
-          detail: data.error ?? 'Operacja nie powiodła się.',
+          detail: formatUserFacingErrorPl({
+            status: response.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Operacja nie powiodła się.',
+          }),
         });
       } else {
         if (
-          body['action'] === 'create_company' &&
-          body['switchImmediately'] !== false &&
-          data.company
+          (body['action'] === 'create_company' &&
+            body['switchImmediately'] !== false &&
+            data.company) ||
+          (body['action'] === 'update_tax_settings' && data.company)
         ) {
           window.dispatchEvent(
             new CustomEvent('pap:company-switched', {
@@ -187,21 +196,49 @@ export function CompaniesWorkbench({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tenantId, legalEntityId }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string; companyName?: string };
+      const data = (await res.json()) as {
+        ok?: boolean;
+        reasonCode?: string;
+        error?: string;
+        companyName?: string;
+        legalEntityId?: string;
+      };
       if (!res.ok || !data.ok) {
         setFeedback({
           tone: 'danger',
           title: `Zablokowano dostęp międzyorganizacyjny (HTTP ${String(res.status)})`,
-          detail: data.error ?? 'Brak uprawnień do wskazanego podmiotu.',
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Brak uprawnień do wskazanego podmiotu.',
+          }),
         });
       } else {
+        const matched = accessibleCompanies.find((c) => c.legalEntityId === legalEntityId);
+        if (matched) {
+          window.dispatchEvent(
+            new CustomEvent('pap:company-switched', {
+              detail: {
+                company: matched,
+                legalEntityId: matched.legalEntityId,
+              },
+            }),
+          );
+        }
         setFeedback({
           tone: 'success',
           title: 'Przełączono aktywny podmiot',
-          detail: `Aktywna firma: ${data.companyName ?? ''}`,
+          detail: `Aktywna firma: ${data.companyName ?? matched?.companyName ?? ''}`,
         });
         router.refresh();
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się zmienić aktywnego podmiotu.',
+      });
     } finally {
       setBusy(false);
     }
@@ -451,8 +488,10 @@ export function CompaniesWorkbench({
                 </div>
               ) : null}
 
-              <Button type="submit" disabled={busy}>
-                Zapisz ustawienia podatkowe firmy
+              <Button type="submit" disabled={busy || !canWriteActive}>
+                {canWriteActive
+                  ? 'Zapisz ustawienia podatkowe firmy'
+                  : 'Tylko odczyt — brak grantu write'}
               </Button>
             </form>
           </Card>
@@ -463,6 +502,19 @@ export function CompaniesWorkbench({
             as="div"
             eyebrow="Rejestracja podmiotu w organizacji (POST .../companies)"
             title="Dodaj nową firmę syntetyczną"
+            actions={
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => {
+                  setNewName('Pracownia Architektury Syntetycznej [DEMO]');
+                  setNewNip('5213004125');
+                  setNewAddress('ul. Nowogrodzka 15/3, 00-511 Warszawa');
+                }}
+              >
+                [DEMO] Wypełnij przykładem
+              </Button>
+            }
           >
             <form
               className="space-y-4"
@@ -833,9 +885,7 @@ export function CompaniesWorkbench({
                         <div>
                           <p className="text-xs font-semibold text-[#191c1a]">
                             {inv.inviteeDisplayName ?? inv.inviteeMaskedEmail}{' '}
-                            <span className="font-normal text-[#636b66]">
-                              ({inv.intendedRole})
-                            </span>
+                            <span className="font-normal text-[#636b66]">({inv.intendedRole})</span>
                           </p>
                           <p className="font-mono text-[11px] text-[#636b66]">
                             {inv.inviteeMaskedEmail} · ważność do {inv.expiresAt.slice(0, 10)}
@@ -863,7 +913,8 @@ export function CompaniesWorkbench({
                                   {
                                     action: 'revoke_invitation',
                                     invitationId: inv.invitationId,
-                                    reason: 'Odwołanie oczekującego zaproszenia w panelu organizacji',
+                                    reason:
+                                      'Odwołanie oczekującego zaproszenia w panelu organizacji',
                                   },
                                   `Cofnięto oczekujące zaproszenie (${inv.inviteeMaskedEmail}).`,
                                 );

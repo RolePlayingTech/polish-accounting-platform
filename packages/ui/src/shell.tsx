@@ -31,6 +31,8 @@ export interface NavSection {
   readonly id: string;
   readonly title: string;
   readonly items: readonly NavItem[];
+  readonly collapsible?: boolean | undefined;
+  readonly defaultCollapsed?: boolean | undefined;
 }
 
 export const DEFAULT_APP_NAV_SECTIONS: readonly NavSection[] = [
@@ -292,6 +294,7 @@ export function AppShell({
   surface = 'app',
 }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState<boolean>(defaultMobileMenuOpen);
+  const [toggledSections, setToggledSections] = useState<Readonly<Record<string, boolean>>>({});
   const mobileDrawerId = useId();
   const surfaceMeta = SURFACE_META[surface];
   const mobileDrawerRef = useModalFocusTrap<HTMLDivElement>({
@@ -299,82 +302,127 @@ export function AppShell({
     onClose: () => setMobileOpen(false),
   });
 
+  const isSectionExpanded = (section: NavSection): boolean => {
+    if (!section.collapsible) {
+      return true;
+    }
+    const containsActiveItem = section.items.some((item) => {
+      const safeHref = sanitizeAppUrl(item.href);
+      return safeHref !== undefined && safeHref === activeHref;
+    });
+    if (containsActiveItem) {
+      return true;
+    }
+    const explicit = toggledSections[section.id];
+    if (explicit !== undefined) {
+      return explicit;
+    }
+    return !section.defaultCollapsed;
+  };
+
+  const toggleSection = (section: NavSection) => {
+    const current = isSectionExpanded(section);
+    setToggledSections((prev) => ({ ...prev, [section.id]: !current }));
+  };
+
   const renderNavigationList = (onNavigate?: () => void) => (
     <nav
       aria-label="Główna nawigacja aplikacji"
       className="flex-1 space-y-6 overflow-y-auto px-3 py-5"
     >
-      {sections.map((section) => (
-        <div key={section.id}>
-          <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#636b66]">
-            {section.title}
-          </p>
-          <ul className="mt-2 space-y-0.5" role="list">
-            {section.items.map((item) => {
-              const safeHref = sanitizeAppUrl(item.href);
-              const isActive = safeHref !== undefined && safeHref === activeHref;
-              const baseItemClass = `flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px] font-medium ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`;
-              const stateClass =
-                item.disabled || !safeHref
-                  ? 'cursor-not-allowed text-[#636b66] opacity-60'
-                  : isActive
-                    ? 'bg-[#e7f1ec] font-semibold text-[#164833] border border-[#b7d4c5]'
-                    : 'border border-transparent text-[#464c48] hover:bg-white/70 hover:text-[#191c1a]';
+      {sections.map((section) => {
+        const expanded = isSectionExpanded(section);
+        const listId = `nav-sec-${section.id}`;
+        return (
+          <div key={section.id}>
+            {section.collapsible ? (
+              <button
+                aria-controls={listId}
+                aria-expanded={expanded}
+                className={`flex min-h-7 w-full items-center justify-between gap-2 rounded-md px-3 py-1 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-[#636b66] hover:bg-white/60 hover:text-[#191c1a] ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`}
+                data-testid={`nav-section-toggle-${section.id}`}
+                onClick={() => toggleSection(section)}
+                type="button"
+              >
+                <span>{section.title}</span>
+                <span aria-hidden="true" className="font-mono text-xs">
+                  {expanded ? '−' : '+'}
+                </span>
+              </button>
+            ) : (
+              <p className="px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#636b66]">
+                {section.title}
+              </p>
+            )}
+            {expanded ? (
+              <ul className="mt-2 space-y-0.5" id={listId} role="list">
+                {section.items.map((item) => {
+                  const safeHref = sanitizeAppUrl(item.href);
+                  const isActive = safeHref !== undefined && safeHref === activeHref;
+                  const baseItemClass = `flex w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px] font-medium ${ksiegaTokens.a11y.focusRing} ${ksiegaTokens.a11y.reducedMotion}`;
+                  const stateClass =
+                    item.disabled || !safeHref
+                      ? 'cursor-not-allowed text-[#636b66] opacity-60'
+                      : isActive
+                        ? 'bg-[#e7f1ec] font-semibold text-[#164833] border border-[#b7d4c5]'
+                        : 'border border-transparent text-[#464c48] hover:bg-white/70 hover:text-[#191c1a]';
 
-              if (item.disabled || !safeHref) {
-                return (
-                  <li key={item.id}>
-                    <span
-                      aria-disabled="true"
-                      className={`${baseItemClass} ${stateClass}`}
-                      data-blocked-unsafe-href={!safeHref ? 'true' : undefined}
-                    >
-                      <span>{item.label}</span>
-                      <span className="text-[10px] uppercase tracking-wider text-[#636b66]">
-                        {item.disabled ? 'Wkrótce' : 'Zablokowano'}
-                      </span>
-                    </span>
-                  </li>
-                );
-              }
-
-              const isExternal = safeHref.startsWith('https://');
-
-              return (
-                <li key={item.id}>
-                  {renderLink({
-                    href: safeHref,
-                    'aria-current': isActive ? 'page' : undefined,
-                    rel: isExternal ? 'noopener noreferrer' : undefined,
-                    className: `${baseItemClass} ${stateClass}`,
-                    onClick: onNavigate,
-                    children: (
-                      <>
-                        <span className="flex items-center gap-2.5 truncate">
-                          <span
-                            aria-hidden="true"
-                            className={`size-1.5 shrink-0 rounded-full ${
-                              isActive ? 'bg-[#1d5c42]' : 'bg-[#858177]'
-                            }`}
-                          />
-                          <span className="truncate">{item.label}</span>
+                  if (item.disabled || !safeHref) {
+                    return (
+                      <li key={item.id}>
+                        <span
+                          aria-disabled="true"
+                          className={`${baseItemClass} ${stateClass}`}
+                          data-blocked-unsafe-href={!safeHref ? 'true' : undefined}
+                        >
+                          <span>{item.label}</span>
+                          <span className="text-[10px] uppercase tracking-wider text-[#636b66]">
+                            {item.disabled ? 'Wkrótce' : 'Zablokowano'}
+                          </span>
                         </span>
-                        {item.badge !== undefined && (
-                          <StatusBadge
-                            label={String(item.badge)}
-                            size="sm"
-                            tone={item.badgeTone ?? 'warning'}
-                          />
-                        )}
-                      </>
-                    ),
-                  })}
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      ))}
+                      </li>
+                    );
+                  }
+
+                  const isExternal = safeHref.startsWith('https://');
+
+                  return (
+                    <li key={item.id}>
+                      {renderLink({
+                        href: safeHref,
+                        'aria-current': isActive ? 'page' : undefined,
+                        rel: isExternal ? 'noopener noreferrer' : undefined,
+                        className: `${baseItemClass} ${stateClass}`,
+                        onClick: onNavigate,
+                        children: (
+                          <>
+                            <span className="flex items-center gap-2.5 truncate">
+                              <span
+                                aria-hidden="true"
+                                className={`size-1.5 shrink-0 rounded-full ${
+                                  isActive ? 'bg-[#1d5c42]' : 'bg-[#858177]'
+                                }`}
+                              />
+                              <span className="truncate">{item.label}</span>
+                            </span>
+                            {item.badge !== undefined && (
+                              <StatusBadge
+                                label={String(item.badge)}
+                                size="sm"
+                                tone={item.badgeTone ?? 'warning'}
+                              />
+                            )}
+                          </>
+                        ),
+                      })}
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : null}
+          </div>
+        );
+      })}
     </nav>
   );
 

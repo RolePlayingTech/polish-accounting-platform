@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Card, LegalBasisPanel, StatusBadge, type LegalBasisInfo } from '@pap/ui';
 import { AlertBanner, Button } from '../../../components/ui-controls';
+import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
 
 export interface CalendarObligationView {
   readonly code: string;
@@ -34,9 +35,15 @@ export function CalendarWorkbench({
   const router = useRouter();
   const [expandedCode, setExpandedCode] = useState<string | null>(obligations[0]?.code ?? null);
   const [busyCode, setBusyCode] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<{
+    tone: 'success' | 'danger';
+    title: string;
+    detail: string;
+  } | null>(null);
 
   async function togglePaid(code: string) {
     setBusyCode(code);
+    setFeedback(null);
     try {
       const res = await fetch('/api/workspace/actions', {
         method: 'POST',
@@ -46,9 +53,40 @@ export function CalendarWorkbench({
           obligationCode: code,
         }),
       });
-      if (res.ok) {
+      const data = (await res.json()) as {
+        ok?: boolean;
+        reasonCode?: string;
+        error?: string;
+        isPaid?: boolean;
+      };
+      if (!res.ok || !data.ok) {
+        setFeedback({
+          tone: 'danger',
+          title: `Nie udało się zmienić statusu wpłaty (HTTP ${String(res.status)})`,
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Sprawdź uprawnienia zapisu do aktywnego podmiotu.',
+          }),
+        });
+      } else {
+        setFeedback({
+          tone: 'success',
+          title: data.isPaid
+            ? 'Oznaczono zobowiązanie jako opłacone w ewidencji pomocniczej'
+            : 'Cofnięto oznaczenie wpłaty zobowiązania',
+          detail:
+            'Pamiętaj: oznaczenie w kalendarzu ma charakter kontrolny i nie zastępuje faktycznego przelewu na mikrorachunek podatkowy lub konto ZUS.',
+        });
         router.refresh();
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się zapisać zmiany statusu wpłaty.',
+      });
     } finally {
       setBusyCode(null);
     }
@@ -56,6 +94,12 @@ export function CalendarWorkbench({
 
   return (
     <div className="space-y-6">
+      {feedback ? (
+        <AlertBanner tone={feedback.tone} title={feedback.title}>
+          {feedback.detail}
+        </AlertBanner>
+      ) : null}
+
       <div data-testid="zus-dra-and-holiday-reminder">
         <AlertBanner
           tone="legal"

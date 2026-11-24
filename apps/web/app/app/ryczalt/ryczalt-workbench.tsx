@@ -2,11 +2,13 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import type {
-  MonthlyRyczaltCalculationResult,
-  RyczaltEntry,
-  RyczaltRateCode,
-  VatExemptionEvaluationResult,
+import {
+  parsePlnToGrosze,
+  validatePolishNip,
+  type MonthlyRyczaltCalculationResult,
+  type RyczaltEntry,
+  type RyczaltRateCode,
+  type VatExemptionEvaluationResult,
 } from '@pap/domain';
 import {
   Card,
@@ -20,11 +22,15 @@ import {
   type LedgerColumn,
   type LegalBasisInfo,
 } from '@pap/ui';
+import { IncompatibleRegimeGateCard } from '../../../components/regime-context-card';
+import { RyczaltRateGuideTrigger } from '../../../components/tax-guide-drawer';
 import { AlertBanner, Button, MoneyInput } from '../../../components/ui-controls';
+import { formatUserFacingErrorPl, isValidIsoCalendarDate } from '../../../lib/error-messages-pl';
 import type { CompanyProfileRecord } from '../../../lib/workspace-types';
 
 export interface RyczaltWorkbenchProps {
   activeCompany: CompanyProfileRecord;
+  accessibleCompanies?: readonly CompanyProfileRecord[];
   period: string;
   canWrite: boolean;
   entries: readonly RyczaltEntry[];
@@ -41,6 +47,7 @@ export interface RyczaltWorkbenchProps {
 }
 
 export function RyczaltWorkbench({
+  accessibleCompanies = [],
   activeCompany,
   canWrite,
   entries,
@@ -60,16 +67,18 @@ export function RyczaltWorkbench({
     title: string;
     detail: string;
   } | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+
+  const isRegimeCompatible = activeCompany.profileCode === 'jdg_ryczalt';
+  const canWriteEffective = canWrite && isRegimeCompatible;
 
   const [revenueDate, setRevenueDate] = useState(`${period}-22`);
-  const [docNumber, setDocNumber] = useState(`FS/RYC/${period}/08`);
-  const [counterpartyName, setCounterpartyName] = useState(
-    'Aplikacje Mobilne Syntetyka Sp. z o.o.',
-  );
-  const [counterpartyNip, setCounterpartyNip] = useState('5213004125');
+  const [docNumber, setDocNumber] = useState('');
+  const [counterpartyName, setCounterpartyName] = useState('');
+  const [counterpartyNip, setCounterpartyNip] = useState('');
   const [rate, setRate] = useState<RyczaltRateCode>('12');
-  const [revenuePln, setRevenuePln] = useState('8400.00');
-  const [remarks, setRemarks] = useState('PKWiU 62.01 — wytwarzanie oprogramowania');
+  const [revenuePln, setRevenuePln] = useState('');
+  const [remarks, setRemarks] = useState('');
 
   const isLimitExceeded = vatExemption.status !== 'exempt_within_limit';
   const usedPercent = Math.min(
@@ -81,26 +90,81 @@ export function RyczaltWorkbench({
     ),
   );
 
-  async function switchToDemoRyczalt() {
-    setBusy(true);
-    try {
-      const res = await fetch('/api/session/context', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ demoCompanyCode: 'demo_jdg_ryczalt_beta' }),
-      });
-      if (res.ok) {
-        router.refresh();
+  function fillDemoRyczaltEntry() {
+    setRevenueDate(`${period}-22`);
+    setDocNumber(`FS-DEMO/RYC/${period}/08`);
+    setCounterpartyName('Aplikacje Mobilne Syntetyka Sp. z o.o. [DEMO]');
+    setCounterpartyNip('5213004125');
+    setRate('12');
+    setRevenuePln('8400.00');
+    setRemarks('[DEMO] PKWiU 62.01 — wytwarzanie oprogramowania');
+    setFieldErrors({});
+  }
+
+  function validateForm(): boolean {
+    const nextErrors: Record<string, string> = {};
+    let firstId: string | null = null;
+    const mark = (k: string, id: string, msg: string) => {
+      if (!nextErrors[k]) {
+        nextErrors[k] = msg;
+        if (!firstId) firstId = id;
       }
-    } finally {
-      setBusy(false);
+    };
+
+    if (!isValidIsoCalendarDate(revenueDate)) {
+      mark(
+        'revenueDate',
+        'ryc-date',
+        `Wskaż poprawną datę uzyskania przychodu w formacie RRRR-MM-DD (np. ${period}-22).`,
+      );
     }
+    if (!docNumber.trim()) {
+      mark('docNumber', 'ryc-doc', `Podaj numer dowodu sprzedaży (np. FS/${period}/08).`);
+    }
+    if (counterpartyName.trim().length < 2) {
+      mark(
+        'counterpartyName',
+        'ryc-cp',
+        'Podaj nazwę nabywcy albo wpisz „Sprzedaż bezrachunkowa”.',
+      );
+    }
+    if (counterpartyNip.trim().length > 0) {
+      const nipCheck = validatePolishNip(counterpartyNip);
+      if (!nipCheck.valid) {
+        mark(
+          'counterpartyNip',
+          'ryc-nip',
+          nipCheck.reason ?? 'Podaj poprawny 10-cyfrowy NIP albo pozostaw pole puste.',
+        );
+      }
+    }
+    if (!revenuePln.trim()) {
+      mark('revenuePln', 'ryc-amount', 'Podaj kwotę uzyskanego przychodu netto (np. 4500.00).');
+    } else {
+      try {
+        if (parsePlnToGrosze(revenuePln) <= 0) {
+          mark('revenuePln', 'ryc-amount', 'Kwota przychodu musi być większa od 0,00 PLN.');
+        }
+      } catch {
+        mark('revenuePln', 'ryc-amount', 'Wpisz kwotę PLN w formacie dziesiętnym, np. 4500.00.');
+      }
+    }
+
+    setFieldErrors(nextErrors);
+    if (firstId) {
+      window.document.getElementById(firstId)?.focus();
+      return false;
+    }
+    return true;
   }
 
   async function handleAddEntry(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
     setFeedback(null);
+    if (!validateForm()) {
+      return;
+    }
+    setBusy(true);
     try {
       const res = await fetch('/api/workspace/actions', {
         method: 'POST',
@@ -116,21 +180,32 @@ export function RyczaltWorkbench({
           remarks,
         }),
       });
-      const data = (await res.json()) as { ok?: boolean; error?: string };
+      const data = (await res.json()) as { ok?: boolean; reasonCode?: string; error?: string };
       if (!res.ok || !data.ok) {
         setFeedback({
           tone: 'danger',
           title: `Odmowa zapisu (HTTP ${String(res.status)})`,
-          detail: data.error ?? 'Nie udało się zapisać pozycji w ewidencji przychodów.',
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Nie udało się zapisać pozycji w ewidencji przychodów.',
+          }),
         });
       } else {
         setFeedback({
           tone: 'success',
           title: 'Dopisano przychód do ewidencji ryczałtu',
-          detail: `Zaktualizowano ryczałt PPE wg stawki ${rate}% oraz licznik limitu VAT 240 000 PLN.`,
+          detail: `Zaktualizowano ryczałt PPE wg stawki ${rate}% oraz licznik limitu VAT.`,
         });
         router.refresh();
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się zapisać przychodu w ewidencji.',
+      });
     } finally {
       setBusy(false);
     }
@@ -204,21 +279,11 @@ export function RyczaltWorkbench({
 
   return (
     <div className="space-y-6">
-      {activeCompany.profileCode !== 'jdg_ryczalt' ? (
-        <AlertBanner
-          tone="info"
-          title={`Aktywna firma (${activeCompany.shortName}) nie rozlicza się ryczałtem`}
-          actions={
-            <Button size="sm" disabled={busy} onClick={() => void switchToDemoRyczalt()}>
-              Przełącz na Studio Kodowania (Ryczałt 12% + zw. VAT)
-            </Button>
-          }
-        >
-          Przełącz jednym kliknięciem na firmę <strong>Studio Kodowania Anna Przykładowa</strong>,
-          aby obejrzeć ewidencję ryczałtu w stawkach 12% i 8,5% oraz monitor limitu zwolnienia z VAT
-          240 000 PLN.
-        </AlertBanner>
-      ) : null}
+      <IncompatibleRegimeGateCard
+        activeCompany={activeCompany}
+        accessibleCompanies={accessibleCompanies}
+        requiredBook="ryczalt"
+      />
 
       {feedback ? (
         <AlertBanner tone={feedback.tone} title={feedback.title}>
@@ -339,101 +404,176 @@ export function RyczaltWorkbench({
         />
       </div>
 
-      <Card as="div" eyebrow="Nowy wpis ewidencyjny" title="Dodaj przychód do ewidencji ryczałtu">
-        <form className="grid gap-3 md:grid-cols-3" onSubmit={(e) => void handleAddEntry(e)}>
-          <FormField id="ryc-date" label="Data uzyskania przychodu">
-            {(ctrl) => (
-              <input
-                {...ctrl}
-                type="date"
-                value={revenueDate}
-                onChange={(e) => setRevenueDate(e.target.value)}
-                className={`${ctrl.className} font-mono tabular-nums`}
-              />
-            )}
-          </FormField>
+      <Card
+        as="div"
+        eyebrow="Nowy wpis ewidencyjny (art. 15 PPE)"
+        title="Dodaj przychód do ewidencji ryczałtu"
+        actions={
+          <Button size="sm" variant="secondary" onClick={fillDemoRyczaltEntry}>
+            [DEMO] Wypełnij przykładem (12% IT)
+          </Button>
+        }
+      >
+        <form noValidate className="space-y-4" onSubmit={(e) => void handleAddEntry(e)}>
+          <div className="grid gap-3 md:grid-cols-3">
+            <FormField
+              id="ryc-date"
+              label="Data uzyskania przychodu"
+              required
+              {...(fieldErrors['revenueDate'] ? { error: fieldErrors['revenueDate'] } : {})}
+            >
+              {(ctrl) => (
+                <input
+                  {...ctrl}
+                  type="date"
+                  value={revenueDate}
+                  onChange={(e) => {
+                    setRevenueDate(e.target.value);
+                    if (fieldErrors['revenueDate']) {
+                      setFieldErrors((prev) => ({ ...prev, revenueDate: '' }));
+                    }
+                  }}
+                  className={`${ctrl.className} font-mono tabular-nums`}
+                />
+              )}
+            </FormField>
 
-          <FormField id="ryc-doc" label="Numer dowodu sprzedaży">
-            {(ctrl) => (
-              <input
-                {...ctrl}
-                type="text"
-                value={docNumber}
-                onChange={(e) => setDocNumber(e.target.value)}
-              />
-            )}
-          </FormField>
-
-          <FormField
-            id="ryc-rate"
-            label="Stawka ryczałtu (art. 12 PPE)"
-            fieldHelp={helpMap.ryczaltRate}
-          >
-            {(ctrl) => (
-              <select
-                {...ctrl}
-                value={rate}
-                onChange={(e) => setRate(e.target.value as RyczaltRateCode)}
-              >
-                <option value="12">12% — IT / programowanie (PKWiU 62.01)</option>
-                <option value="8.5">8,5% — działalność usługowa do 100 tys. PLN</option>
-                <option value="15">15% — doradztwo, reklama, pośrednictwo</option>
-                <option value="17">17% — wolne zawody</option>
-                <option value="14">14% — usługi architektoniczne i inżynierskie</option>
-                <option value="5.5">5,5% — roboty budowlane / wytwórcze</option>
-                <option value="3">3% — działalność handlowa / gastronomia</option>
-              </select>
-            )}
-          </FormField>
-
-          <FormField id="ryc-cp" label="Kontrahent">
-            {(ctrl) => (
-              <input
-                {...ctrl}
-                type="text"
-                value={counterpartyName}
-                onChange={(e) => setCounterpartyName(e.target.value)}
-              />
-            )}
-          </FormField>
-
-          <FormField id="ryc-nip" label="NIP kontrahenta">
-            {(ctrl) => (
-              <input
-                {...ctrl}
-                type="text"
-                value={counterpartyNip}
-                onChange={(e) => setCounterpartyNip(e.target.value)}
-                className={`${ctrl.className} font-mono tabular-nums`}
-              />
-            )}
-          </FormField>
-
-          <MoneyInput
-            id="ryc-amount"
-            label="Kwota przychodu netto"
-            value={revenuePln}
-            onChange={setRevenuePln}
-            fieldHelp={helpMap.vatLimit}
-          />
-
-          <div className="md:col-span-2">
-            <FormField id="ryc-remarks" label="Klasyfikacja PKWiU / uwagi">
+            <FormField
+              id="ryc-doc"
+              label="Numer dowodu sprzedaży"
+              required
+              {...(fieldErrors['docNumber'] ? { error: fieldErrors['docNumber'] } : {})}
+            >
               {(ctrl) => (
                 <input
                   {...ctrl}
                   type="text"
-                  value={remarks}
-                  onChange={(e) => setRemarks(e.target.value)}
+                  value={docNumber}
+                  onChange={(e) => {
+                    setDocNumber(e.target.value);
+                    if (fieldErrors['docNumber']) {
+                      setFieldErrors((prev) => ({ ...prev, docNumber: '' }));
+                    }
+                  }}
+                  placeholder={`np. FS/${period}/08`}
+                  className={`${ctrl.className} font-mono`}
                 />
+              )}
+            </FormField>
+
+            <FormField
+              id="ryc-rate"
+              label="Stawka ryczałtu (art. 12 PPE)"
+              required
+              fieldHelp={helpMap.ryczaltRate}
+            >
+              {(ctrl) => (
+                <select
+                  {...ctrl}
+                  value={rate}
+                  onChange={(e) => setRate(e.target.value as RyczaltRateCode)}
+                >
+                  <option value="12">12% — IT / programowanie (PKWiU 62.01)</option>
+                  <option value="8.5">8,5% — działalność usługowa ogólna</option>
+                  <option value="15">15% — doradztwo, reklama, pośrednictwo</option>
+                  <option value="17">17% — wolne zawody</option>
+                  <option value="14">14% — usługi architektoniczne i inżynierskie</option>
+                  <option value="5.5">5,5% — roboty budowlane / wytwórcze</option>
+                  <option value="3">3% — działalność handlowa / gastronomia</option>
+                </select>
               )}
             </FormField>
           </div>
 
-          <div className="flex items-end">
-            <Button type="submit" disabled={busy || !canWrite} className="w-full">
-              {canWrite ? 'Zapisz w ewidencji ryczałtu' : 'Brak uprawnień do zapisu (read-only)'}
-            </Button>
+          <RyczaltRateGuideTrigger selectedRate={rate} eventDate={revenueDate} />
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <FormField
+              id="ryc-cp"
+              label="Kontrahent"
+              required
+              {...(fieldErrors['counterpartyName']
+                ? { error: fieldErrors['counterpartyName'] }
+                : {})}
+            >
+              {(ctrl) => (
+                <input
+                  {...ctrl}
+                  type="text"
+                  value={counterpartyName}
+                  onChange={(e) => {
+                    setCounterpartyName(e.target.value);
+                    if (fieldErrors['counterpartyName']) {
+                      setFieldErrors((prev) => ({ ...prev, counterpartyName: '' }));
+                    }
+                  }}
+                  placeholder="Nazwa nabywcy z faktury"
+                />
+              )}
+            </FormField>
+
+            <FormField
+              id="ryc-nip"
+              label="NIP kontrahenta (opcjonalnie)"
+              {...(fieldErrors['counterpartyNip'] ? { error: fieldErrors['counterpartyNip'] } : {})}
+            >
+              {(ctrl) => (
+                <input
+                  {...ctrl}
+                  type="text"
+                  value={counterpartyNip}
+                  onChange={(e) => {
+                    setCounterpartyNip(e.target.value);
+                    if (fieldErrors['counterpartyNip']) {
+                      setFieldErrors((prev) => ({ ...prev, counterpartyNip: '' }));
+                    }
+                  }}
+                  placeholder="10 cyfr lub puste dla B2C"
+                  className={`${ctrl.className} font-mono tabular-nums`}
+                />
+              )}
+            </FormField>
+
+            <MoneyInput
+              id="ryc-amount"
+              label="Kwota przychodu netto"
+              required
+              value={revenuePln}
+              onChange={(val) => {
+                setRevenuePln(val);
+                if (fieldErrors['revenuePln']) {
+                  setFieldErrors((prev) => ({ ...prev, revenuePln: '' }));
+                }
+              }}
+              fieldHelp={helpMap.vatLimit}
+              {...(fieldErrors['revenuePln'] ? { error: fieldErrors['revenuePln'] } : {})}
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="md:col-span-2">
+              <FormField id="ryc-remarks" label="Klasyfikacja PKWiU / opis wykonanej usługi">
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    value={remarks}
+                    onChange={(e) => setRemarks(e.target.value)}
+                    placeholder="np. PKWiU 62.01 — wytwarzanie oprogramowania"
+                  />
+                )}
+              </FormField>
+            </div>
+
+            <div className="flex items-end">
+              <Button type="submit" disabled={busy || !canWriteEffective} className="w-full">
+                {!isRegimeCompatible
+                  ? 'Zapis zablokowany — inna forma opodatkowania'
+                  : !canWrite
+                    ? 'Brak uprawnień do zapisu (read-only)'
+                    : 'Zapisz w ewidencji ryczałtu'}
+              </Button>
+            </div>
           </div>
         </form>
       </Card>

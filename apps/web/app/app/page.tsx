@@ -12,6 +12,7 @@ import { WorkspaceAccessDeniedCard } from '../../components/access-denied-card';
 import { SystemStatusDiagnosticSection } from '../../components/system-status-section';
 import { AcademyDisclaimerBanner } from '../../components/ui-controls';
 import { WorkspaceShell } from '../../components/workspace-shell';
+import { getCompanyCapabilities } from '../../lib/company-capabilities';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../lib/field-help';
 import { readPublicSystemStatus } from '../../lib/read-system-status';
 import { isSyntheticPersonaLoginAllowed } from '../../lib/runtime-mode';
@@ -32,8 +33,7 @@ export default async function AppDashboardPage({
   searchParams?: Promise<{ invite?: string }>;
 }) {
   const resolvedParams = searchParams ? await searchParams : {};
-  const rawInvite =
-    typeof resolvedParams.invite === 'string' ? resolvedParams.invite.trim() : '';
+  const rawInvite = typeof resolvedParams.invite === 'string' ? resolvedParams.invite.trim() : '';
   const inviteToken = SAFE_INVITE_TOKEN_REGEX.test(rawInvite) ? rawInvite : undefined;
   const allowPersonas = isSyntheticPersonaLoginAllowed();
 
@@ -195,11 +195,7 @@ export default async function AppDashboardPage({
 
             <div className="mt-5 flex flex-wrap items-center gap-3">
               <Link
-                href={
-                  inviteToken
-                    ? `/login?invite=${encodeURIComponent(inviteToken)}`
-                    : '/login'
-                }
+                href={inviteToken ? `/login?invite=${encodeURIComponent(inviteToken)}` : '/login'}
                 className="inline-flex min-h-10 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-4 py-2 text-sm font-medium text-white hover:bg-[#164833] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1d5c42]"
               >
                 {allowPersonas ? 'Zaloguj się do środowiska testowego' : 'Zaloguj się do aplikacji'}
@@ -288,6 +284,8 @@ export default async function AppDashboardPage({
     };
   });
 
+  const activeCaps = getCompanyCapabilities(snapshot.activeCompany);
+
   return (
     <WorkspaceShell
       activeHref="/app"
@@ -304,7 +302,7 @@ export default async function AppDashboardPage({
             href="/app/documents"
             className="inline-flex min-h-9 items-center rounded-md border border-[#1d5c42] bg-[#1d5c42] px-3.5 py-1.5 text-xs font-medium text-white hover:bg-[#164833]"
           >
-            + Dodaj / importuj FA(3)
+            + Dodaj / importuj dokument
           </Link>
           <Link
             href="/academy"
@@ -360,20 +358,34 @@ export default async function AppDashboardPage({
             </p>
           </Card>
 
-          <Card as="div" eyebrow="Bilans VAT (należny − naliczony)">
-            <div className="mt-1">
-              <MoneyAmount
-                amount={snapshot.outputVatGrosze - snapshot.deductibleInputVatGrosze}
-                inGrosze
-                size="lg"
-                variant="tax"
-              />
-            </div>
-            <p className="mt-1.5 font-mono text-xs tabular-nums text-[#636b66]">
-              Sprz.: {(snapshot.outputVatGrosze / 100).toFixed(2)} · Zak.:{' '}
-              {(snapshot.deductibleInputVatGrosze / 100).toFixed(2)} PLN
-            </p>
-          </Card>
+          {activeCaps.vatMode === 'exempt_limit_monitor' ? (
+            <Card as="div" eyebrow="Status VAT · Zwolnienie podmiotowe">
+              <div className="mt-1.5">
+                <StatusBadge size="sm" tone="neutral" label="Zwolniony z VAT (art. 113)" />
+              </div>
+              <p className="mt-2 text-xs text-[#636b66]">
+                Brak obowiązku JPK_V7M w limicie 240 tys. PLN — monitoruj w{' '}
+                <Link href="/app/vat" className="font-semibold text-[#1d5c42] underline">
+                  Status VAT
+                </Link>
+              </p>
+            </Card>
+          ) : (
+            <Card as="div" eyebrow="Bilans VAT (należny − naliczony)">
+              <div className="mt-1">
+                <MoneyAmount
+                  amount={snapshot.outputVatGrosze - snapshot.deductibleInputVatGrosze}
+                  inGrosze
+                  size="lg"
+                  variant="tax"
+                />
+              </div>
+              <p className="mt-1.5 font-mono text-xs tabular-nums text-[#636b66]">
+                Sprz.: {(snapshot.outputVatGrosze / 100).toFixed(2)} · Zak.:{' '}
+                {(snapshot.deductibleInputVatGrosze / 100).toFixed(2)} PLN
+              </p>
+            </Card>
+          )}
 
           <Card as="div" eyebrow={snapshot.incomeTaxLabelPl}>
             <div className="mt-1">
@@ -384,7 +396,9 @@ export default async function AppDashboardPage({
                 variant="tax"
               />
             </div>
-            <p className="mt-1.5 text-xs text-[#636b66]">Wyliczenie deterministyczne z ksiąg</p>
+            <p className="mt-1.5 text-xs text-[#636b66]">
+              Naliczone z ksiąg okresu (status wpłaty w Kalendarzu)
+            </p>
           </Card>
 
           <Card as="div" eyebrow="Składki ZUS (DRA)">
@@ -394,7 +408,7 @@ export default async function AppDashboardPage({
             <p className="mt-1.5 text-xs text-[#636b66]">
               {snapshot.activeCompany.zusScheme === 'not_applicable'
                 ? 'Sp. z o.o. — brak ZUS właścicielskiego JDG'
-                : `Schemat: ${snapshot.activeCompany.zusScheme}`}
+                : `Naliczone (${snapshot.activeCompany.zusScheme}) — odliczenie po zapłacie`}
             </p>
           </Card>
         </div>
@@ -414,24 +428,29 @@ export default async function AppDashboardPage({
             />
           </div>
 
-          <Card as="div" eyebrow="Szybkie przejścia do modułów" title="Księgi, rejestry i edukacja">
+          <Card
+            as="div"
+            eyebrow={`Moduły profilu · ${activeCaps.profileShortBadgePl}`}
+            title="Moja księgowość i narzędzia"
+          >
             <ul className="space-y-2.5 text-sm">
               <li>
                 <Link
-                  href="/app/kpir"
+                  href={activeCaps.primaryBookHref}
                   className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
                 >
-                  <span>KPiR (19 kolumn 2026 / 17 kolumn)</span>
-                  <StatusBadge size="sm" tone="legal" label="Dz.U. 2025 poz. 1299" />
-                </Link>
-              </li>
-              <li>
-                <Link
-                  href="/app/ryczalt"
-                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
-                >
-                  <span>Ewidencja ryczałtu i limit 240 tys. PLN</span>
-                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
+                  <span>{activeCaps.primaryBookLabelPl}</span>
+                  <StatusBadge
+                    size="sm"
+                    tone="legal"
+                    label={
+                      activeCaps.supportsKpir
+                        ? 'Dz.U. 2025 poz. 1299'
+                        : activeCaps.supportsRyczalt
+                          ? 'art. 12 PPE'
+                          : 'UoR + CIT'
+                    }
+                  />
                 </Link>
               </li>
               <li>
@@ -439,16 +458,7 @@ export default async function AppDashboardPage({
                   href="/app/vat"
                   className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
                 >
-                  <span>Rejestry VAT i pola JPK_V7M(3)</span>
-                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
-                </Link>
-              </li>
-              <li>
-                <Link
-                  href="/app/ledger"
-                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
-                >
-                  <span>Pełne księgi UoR, Bilans, RZiS i CIT</span>
+                  <span>{activeCaps.vatQuickLinkLabelPl}</span>
                   <span className="font-mono text-xs text-[#1d5c42]">→</span>
                 </Link>
               </li>
@@ -458,6 +468,15 @@ export default async function AppDashboardPage({
                   className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
                 >
                   <span>Rozrachunki, wiekowanie i bank CSV/MT940</span>
+                  <span className="font-mono text-xs text-[#1d5c42]">→</span>
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/app/calendar"
+                  className="flex items-center justify-between rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2.5 font-medium text-[#191c1a] hover:border-[#1d5c42]"
+                >
+                  <span>Kalendarz terminów (naliczone vs opłacone)</span>
                   <span className="font-mono text-xs text-[#1d5c42]">→</span>
                 </Link>
               </li>

@@ -63,7 +63,9 @@ export default async function RyczaltPage() {
     >
       <div className="space-y-6">
         <RyczaltWorkbench
+          key={`${ryc.activeCompany.legalEntityId}:${session.context.period}`}
           activeCompany={ryc.activeCompany}
+          accessibleCompanies={dash.accessibleCompanies}
           period={session.context.period}
           canWrite={ryc.activeCompany.grantedActions.includes('write')}
           entries={ryc.entries}

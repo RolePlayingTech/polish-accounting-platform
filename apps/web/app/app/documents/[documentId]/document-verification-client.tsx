@@ -5,11 +5,14 @@ import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import {
   createVatRegisterEntry,
+  formatPlnFromGrosze,
   parsePlnToGrosze,
   qualifyKpirExpense,
   validatePolishNip,
   type KpirExpenseQualificationKind,
+  type RyczaltRateCode,
   type VatDeductionMode,
+  type VatRateCode,
 } from '@pap/domain';
 import {
   AiProposalField,
@@ -23,34 +26,27 @@ import {
   StatusBadge,
   type FieldHelpInfo,
 } from '@pap/ui';
+import {
+  PurchaseQualificationHelpNotice,
+  RyczaltRateGuideTrigger,
+  VatRateGuideTrigger,
+} from '../../../../components/tax-guide-drawer';
 import { AlertBanner } from '../../../../components/ui-controls';
+import { formatUserFacingErrorPl, isValidIsoCalendarDate } from '../../../../lib/error-messages-pl';
 import { mapDomainExplanationToBasisInfo } from '../../../../lib/field-help';
 import type {
   CompanyProfileRecord,
   WorkspaceDocumentRecord,
 } from '../../../../lib/workspace-types';
 
-function isValidIsoCalendarDate(candidate: string): boolean {
-  const trimmed = candidate.trim();
-  const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(trimmed);
-  if (!match) {
-    return false;
-  }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const utc = new Date(Date.UTC(year, month - 1, day));
-  return (
-    !Number.isNaN(utc.getTime()) &&
-    utc.getUTCFullYear() === year &&
-    utc.getUTCMonth() === month - 1 &&
-    utc.getUTCDate() === day
-  );
+function formatVatRateLabel(rate: VatRateCode): string {
+  return rate === 'zw' ? 'zw.' : rate === 'np' ? 'np.' : `${rate}%`;
 }
 
 export interface DocumentVerificationClientProps {
   company: CompanyProfileRecord;
   document: WorkspaceDocumentRecord;
+  resolvedCorrectedEntryId?: string | undefined;
   helpMap: {
     readonly nip: FieldHelpInfo;
     readonly ksefReference: FieldHelpInfo;
@@ -64,24 +60,38 @@ export interface DocumentVerificationClientProps {
 export function DocumentVerificationClient({
   company,
   document,
+  resolvedCorrectedEntryId,
   helpMap,
 }: DocumentVerificationClientProps) {
   const router = useRouter();
   const canWrite = company.grantedActions.includes('write');
   const isAlreadyPosted = document.status === 'approved_posted';
+  const hasMultipleLines = Boolean(document.lines && document.lines.length > 1);
+  const isCorrectionDoc = Boolean(document.isCorrection) || document.documentKind === 'correction';
+  const lockHeaderAmounts = hasMultipleLines || isCorrectionDoc;
 
   const [docNumber, setDocNumber] = useState(document.documentNumber);
   const [issueDate, setIssueDate] = useState(document.issueDate);
   const [counterpartyName, setCounterpartyName] = useState(document.counterpartyName);
   const [counterpartyNip, setCounterpartyNip] = useState(document.counterpartyNip);
+  const [noPolishNip, setNoPolishNip] = useState(!document.counterpartyNip);
   const [netPln, setNetPln] = useState((document.netGrosze / 100).toFixed(2));
   const [vatPln, setVatPln] = useState((document.vatGrosze / 100).toFixed(2));
+  const [correctedEntryId, setCorrectedEntryId] = useState(
+    resolvedCorrectedEntryId ??
+      document.correctedDocumentNumber ??
+      `kor-ref-${document.documentId}`,
+  );
+  const [correctionReason, setCorrectionReason] = useState(
+    document.correctionReason ?? 'Faktura korygująca (KOR)',
+  );
   const [expenseQualification, setExpenseQualification] = useState<KpirExpenseQualificationKind>(
     document.expenseQualification,
   );
   const [vatDeductionMode, setVatDeductionMode] = useState<VatDeductionMode>(
     document.vatDeductionMode,
   );
+  const [ryczaltRate, setRyczaltRate] = useState<RyczaltRateCode>(document.ryczaltRate ?? '12');
 
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -94,41 +104,87 @@ export function DocumentVerificationClient({
   const liveCalculation = useMemo(() => {
     let netGrosze = document.netGrosze;
     let vatGrosze = document.vatGrosze;
-    try {
-      netGrosze = parsePlnToGrosze(netPln);
-      vatGrosze = parsePlnToGrosze(vatPln);
-    } catch {
-      // Pozostaw poprzednią kwotę przy niepełnym wpisywaniu
+    if (!lockHeaderAmounts) {
+      try {
+        netGrosze = parsePlnToGrosze(netPln);
+        vatGrosze = parsePlnToGrosze(vatPln);
+      } catch {
+        // Pozostaw poprzednią kwotę przy niepełnym wpisywaniu
+      }
     }
 
+    const amountsEdited =
+      !lockHeaderAmounts && (netGrosze !== document.netGrosze || vatGrosze !== document.vatGrosze);
     const safeIssueDate = isValidIsoCalendarDate(issueDate) ? issueDate.trim() : document.issueDate;
     const nipValidation = validatePolishNip(counterpartyNip);
-    const safeNip =
-      nipValidation.valid && nipValidation.normalizedNip
+    const safeNip = noPolishNip
+      ? 'BrakID'
+      : nipValidation.valid && nipValidation.normalizedNip
         ? nipValidation.normalizedNip
-        : document.counterpartyNip;
+        : document.counterpartyNip || 'BrakID';
     const safeDocNum = docNumber.trim() || document.documentNumber;
     const safeCounterpartyName = counterpartyName.trim() || document.counterpartyName;
 
-    const vatEntry = createVatRegisterEntry({
-      id: `live-vat-${document.documentId}`,
-      registerType: document.direction,
-      period: safeIssueDate.slice(0, 7),
-      taxPointDate: safeIssueDate,
-      issueDate: safeIssueDate,
-      documentNumber: safeDocNum,
-      counterpartyName: safeCounterpartyName,
-      counterpartyNip: safeNip,
-      vatRate: document.vatRate,
-      netGrosze,
-      vatTotalGrosze: vatGrosze,
-      deductionMode: vatDeductionMode,
-      annex15Item: document.annex15Item,
-      ksefMarker: document.ksefMarker,
-      ...(document.ksefReferenceNumber !== undefined
-        ? { ksefReferenceNumber: document.ksefReferenceNumber }
-        : {}),
-    });
+    const rateBuckets = new Map<
+      VatRateCode,
+      { netGrosze: number; vatTotalGrosze: number; hasAnnex15: boolean }
+    >();
+    if (!amountsEdited && document.lines && document.lines.length > 0) {
+      for (const line of document.lines) {
+        const prev = rateBuckets.get(line.vatRate) ?? {
+          netGrosze: 0,
+          vatTotalGrosze: 0,
+          hasAnnex15: false,
+        };
+        rateBuckets.set(line.vatRate, {
+          netGrosze: prev.netGrosze + line.netGrosze,
+          vatTotalGrosze: prev.vatTotalGrosze + line.vatGrosze,
+          hasAnnex15: prev.hasAnnex15 || Boolean(line.annex15Item),
+        });
+      }
+    }
+    if (rateBuckets.size === 0) {
+      rateBuckets.set(document.vatRate, {
+        netGrosze,
+        vatTotalGrosze: vatGrosze,
+        hasAnnex15: document.annex15Item,
+      });
+    }
+
+    let primaryVatEntry: ReturnType<typeof createVatRegisterEntry> | null = null;
+    let totalDeductibleVatGrosze = 0;
+    let totalNonDeductibleVatGrosze = 0;
+    let idx = 0;
+
+    for (const [rate, group] of rateBuckets.entries()) {
+      idx += 1;
+      const entry = createVatRegisterEntry({
+        id: `live-vat-${document.documentId}-${String(idx)}`,
+        registerType: document.direction,
+        period: safeIssueDate.slice(0, 7),
+        taxPointDate: safeIssueDate,
+        issueDate: safeIssueDate,
+        documentNumber: safeDocNum,
+        counterpartyName: safeCounterpartyName,
+        counterpartyNip: safeNip,
+        vatRate: rate,
+        netGrosze: group.netGrosze,
+        vatTotalGrosze: group.vatTotalGrosze,
+        deductionMode: document.direction === 'sales' ? 'full_100' : vatDeductionMode,
+        annex15Item: group.hasAnnex15,
+        ksefMarker: document.ksefMarker,
+        ...(document.ksefReferenceNumber !== undefined
+          ? { ksefReferenceNumber: document.ksefReferenceNumber }
+          : {}),
+      });
+      if (!primaryVatEntry) {
+        primaryVatEntry = entry;
+      }
+      totalDeductibleVatGrosze += entry.deductibleVatGrosze;
+      totalNonDeductibleVatGrosze += entry.nonDeductibleVatGrosze;
+    }
+
+    const vatEntry = primaryVatEntry!;
 
     const kup =
       document.direction === 'purchase' && expenseQualification !== 'none'
@@ -138,7 +194,7 @@ export function DocumentVerificationClient({
             netGrosze,
             vatGrosze,
             taxpayerVatActive: company.vatStatus === 'czynny',
-            deductibleVatGrosze: vatEntry.deductibleVatGrosze,
+            deductibleVatGrosze: totalDeductibleVatGrosze,
           })
         : null;
 
@@ -156,7 +212,10 @@ export function DocumentVerificationClient({
       netGrosze,
       vatGrosze,
       grossGrosze: netGrosze + vatGrosze,
+      amountsEdited,
       vatEntry,
+      totalDeductibleVatGrosze,
+      totalNonDeductibleVatGrosze,
       kup,
       basis,
     };
@@ -168,7 +227,9 @@ export function DocumentVerificationClient({
     document,
     expenseQualification,
     issueDate,
+    lockHeaderAmounts,
     netPln,
+    noPolishNip,
     vatDeductionMode,
     vatPln,
   ]);
@@ -185,16 +246,32 @@ export function DocumentVerificationClient({
           documentId: document.documentId,
           documentNumber: docNumber,
           counterpartyName,
-          counterpartyNip,
+          counterpartyNip: noPolishNip ? '' : counterpartyNip,
+          noPolishNip,
           issueDate,
           netPln,
           vatPln,
+          amountsEdited: liveCalculation.amountsEdited,
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId:
+                  correctedEntryId.trim() ||
+                  document.correctedDocumentNumber ||
+                  `kor-ref-${document.documentId}`,
+                correctionReason: correctionReason.trim() || 'Faktura korygująca (KOR)',
+              }
+            : {}),
           expenseQualification,
           vatDeductionMode,
+          ...(document.direction === 'sales' && company.profileCode === 'jdg_ryczalt'
+            ? { ryczaltRate }
+            : {}),
         }),
       });
       const data = (await response.json()) as {
         ok?: boolean;
+        reasonCode?: string;
         error?: string;
         document?: { postedEntryId?: string };
       };
@@ -203,7 +280,12 @@ export function DocumentVerificationClient({
         setFeedback({
           tone: 'danger',
           title: `Odmowa lub błąd księgowania (HTTP ${String(response.status)})`,
-          detail: data.error ?? 'Nie udało się zatwierdzić dokumentu.',
+          detail: formatUserFacingErrorPl({
+            status: response.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Nie udało się zatwierdzić dokumentu.',
+          }),
         });
       } else {
         setFeedback({
@@ -217,13 +299,21 @@ export function DocumentVerificationClient({
       setConfirmOpen(false);
       setFeedback({
         tone: 'danger',
-        title: 'Błąd połączenia z BFF',
-        detail: 'Nie udało się wysłać zatwierdzenia.',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się wysłać zatwierdzenia. Księgi pozostały nienaruszone.',
       });
     } finally {
       setSubmitting(false);
     }
   }
+
+  const ksefHeaderBadgeLabel = document.ksefReferenceNumber
+    ? document.ksefVerificationStatus === 'parsed_xml_unverified'
+      ? `XML FA · NrKSeF: ${document.ksefReferenceNumber} (niezweryfikowano online w MF)`
+      : `NrKSeF deklarowany: ${document.ksefReferenceNumber} (niezweryfikowano w MF)`
+    : document.ksefMarker === 'BFK'
+      ? 'Poza KSeF (BFK — nieprzesłano)'
+      : `Znacznik JPK: ${document.ksefMarker}`;
 
   return (
     <div data-testid="document-split-verification-workbench" className="space-y-6">
@@ -239,12 +329,8 @@ export function DocumentVerificationClient({
             <StatusBadge tone="danger" label="Ostrzeżenie: wykryto duplikat SHA-256!" />
           ) : null}
           <StatusBadge
-            tone="legal"
-            label={
-              document.ksefReferenceNumber
-                ? `KSeF FA(3): ${document.ksefReferenceNumber}`
-                : `Znacznik JPK: ${document.ksefMarker}`
-            }
+            tone={document.ksefReferenceNumber ? 'legal' : 'neutral'}
+            label={ksefHeaderBadgeLabel}
           />
           <FieldHelpButton help={helpMap.ksefReference} />
           <FieldHelpButton help={helpMap.gtuCode} />
@@ -268,7 +354,7 @@ export function DocumentVerificationClient({
           verificationStatusLabel={
             isAlreadyPosted
               ? `Zaksięgowano (${document.postedEntryId ?? 'OK'})`
-              : `${document.extractionMethodLabelPl ?? 'Heurystyka demonstracyjna — wymaga weryfikacji człowieka'}${document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined ? ` (${String(document.aiConfidencePercent)}%)` : ''} — czeka na decyzję człowieka`
+              : `${document.extractionMethodLabelPl ?? 'Wymaga weryfikacji człowieka'}${document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined ? ` (${String(document.aiConfidencePercent)}%)` : ''} — czeka na decyzję człowieka`
           }
           verificationTone={isAlreadyPosted ? 'success' : 'warning'}
           primaryActionLabel="Zatwierdź i zaksięguj dokument"
@@ -281,7 +367,7 @@ export function DocumentVerificationClient({
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#e5e2d9] pb-2 text-xs text-[#464c48]">
                 <span className="font-semibold text-[#191c1a]">
-                  Treść oryginału / XML KSeF FA(3)
+                  Treść oryginału / pozycje źródłowe
                 </span>
                 <span className="font-mono">
                   Biała Lista KAS:{' '}
@@ -289,9 +375,58 @@ export function DocumentVerificationClient({
                     ? (document.whiteListCheckId ?? 'zweryfikowano w API MF')
                     : document.whiteListStatus === 'mismatch_alert'
                       ? 'Uwaga: IBAN poza Białą Listą!'
-                      : 'Niesprawdzone w API KAS (symulacja demo)'}
+                      : 'Niesprawdzone w API KAS'}
                 </span>
               </div>
+
+              {document.lines && document.lines.length > 0 ? (
+                <div
+                  data-testid="split-view-document-lines-table"
+                  className="overflow-x-auto rounded border border-[#e5e2d9] bg-white"
+                >
+                  <table className="w-full border-collapse text-left text-xs">
+                    <thead className="border-b border-[#e5e2d9] bg-[#f4f2ec] text-[11px] font-semibold text-[#464c48]">
+                      <tr>
+                        <th className="px-2.5 py-1.5">Poz.</th>
+                        <th className="px-2.5 py-1.5">Opis pozycji</th>
+                        <th className="px-2.5 py-1.5 text-right">Ilość</th>
+                        <th className="px-2.5 py-1.5 text-right">Netto</th>
+                        <th className="px-2.5 py-1.5 text-right">Stawka</th>
+                        <th className="px-2.5 py-1.5 text-right">VAT</th>
+                        <th className="px-2.5 py-1.5 text-right">Brutto</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#efede6]">
+                      {document.lines.map((line) => (
+                        <tr key={line.lineNumber}>
+                          <td className="px-2.5 py-1.5 font-mono tabular-nums">
+                            {String(line.lineNumber)}
+                          </td>
+                          <td className="px-2.5 py-1.5 font-medium text-[#191c1a]">
+                            {line.description}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right font-mono tabular-nums">
+                            {line.quantity} {line.unit}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right font-mono tabular-nums">
+                            {formatPlnFromGrosze(line.netGrosze)}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right font-mono tabular-nums">
+                            {formatVatRateLabel(line.vatRate)}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right font-mono tabular-nums">
+                            {formatPlnFromGrosze(line.vatGrosze)}
+                          </td>
+                          <td className="px-2.5 py-1.5 text-right font-mono font-semibold tabular-nums">
+                            {formatPlnFromGrosze(line.grossGrosze)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+
               <pre className="overflow-x-auto whitespace-pre-wrap rounded border border-[#e5e2d9] bg-[#faf9f5] p-3 font-mono text-xs leading-relaxed text-[#191c1a]">
                 {document.rawPreviewText}
               </pre>
@@ -340,52 +475,127 @@ export function DocumentVerificationClient({
             readOnly={isAlreadyPosted || !canWrite}
           />
 
-          <AiProposalField
-            id="verify-counterparty-nip"
-            label="NIP kontrahenta"
-            proposedValue={document.aiProposed.counterpartyNip}
-            value={counterpartyNip}
-            onChange={setCounterpartyNip}
-            confidence={document.aiConfidence}
-            {...(document.aiConfidencePercent !== null && document.aiConfidencePercent !== undefined
-              ? { confidencePercent: document.aiConfidencePercent }
-              : {})}
-            numeric
-            fieldHelp={helpMap.nip}
-            readOnly={isAlreadyPosted || !canWrite}
-          />
+          {!noPolishNip ? (
+            <AiProposalField
+              id="verify-counterparty-nip"
+              label="NIP kontrahenta"
+              proposedValue={document.aiProposed.counterpartyNip || 'BrakID'}
+              value={counterpartyNip}
+              onChange={setCounterpartyNip}
+              confidence={document.aiConfidence}
+              {...(document.aiConfidencePercent !== null &&
+              document.aiConfidencePercent !== undefined
+                ? { confidencePercent: document.aiConfidencePercent }
+                : {})}
+              numeric
+              fieldHelp={helpMap.nip}
+              readOnly={isAlreadyPosted || !canWrite}
+            />
+          ) : (
+            <p className="rounded-md border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2 text-xs text-[#464c48]">
+              Kontrahent bez polskiego numeru NIP (<code className="font-mono">BrakID</code>).
+              {!isAlreadyPosted && canWrite ? (
+                <button
+                  type="button"
+                  onClick={() => setNoPolishNip(false)}
+                  className="ml-2 font-semibold text-[#1d5c42] underline"
+                >
+                  Uzupełnij polski NIP
+                </button>
+              ) : null}
+            </p>
+          )}
 
           <div className="grid gap-3 sm:grid-cols-2">
             <AiProposalField
               id="verify-net-pln"
-              label="Kwota netto (PLN)"
+              label={hasMultipleLines ? 'Suma netto wszystkich pozycji (PLN)' : 'Kwota netto (PLN)'}
               proposedValue={(document.aiProposed.netGrosze / 100).toFixed(2)}
               value={netPln}
               onChange={setNetPln}
               confidence={document.aiConfidence}
               numeric
-              readOnly={isAlreadyPosted || !canWrite}
+              readOnly={isAlreadyPosted || !canWrite || lockHeaderAmounts}
             />
             <AiProposalField
               id="verify-vat-pln"
-              label={`Kwota VAT (${document.vatRate}%, PLN)`}
+              label={
+                hasMultipleLines
+                  ? 'Suma podatku VAT wszystkich stawek (PLN)'
+                  : `Kwota VAT (${formatVatRateLabel(document.vatRate)}, PLN)`
+              }
               proposedValue={(document.aiProposed.vatGrosze / 100).toFixed(2)}
               value={vatPln}
               onChange={setVatPln}
               confidence={document.aiConfidence}
               numeric
-              readOnly={isAlreadyPosted || !canWrite}
+              readOnly={isAlreadyPosted || !canWrite || lockHeaderAmounts}
             />
           </div>
+
+          {lockHeaderAmounts ? (
+            <p className="rounded-md border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2 text-xs text-[#464c48]">
+              {isCorrectionDoc
+                ? 'Kwoty ujemne faktury korygującej (KOR) są zablokowane do odczytu w podsumowaniu nagłówka — wynikają bezpośrednio z pozycji korekty widocznych po lewej stronie.'
+                : 'Suma nagłówka wynika z podziału pozycji na stawki VAT w tabeli po lewej stronie — zaksięgowanie zachowuje wszystkie stawki bez spłaszczania.'}
+            </p>
+          ) : null}
+
+          {isCorrectionDoc ? (
+            <div
+              data-testid="verify-correction-metadata-panel"
+              className="grid gap-3 rounded-lg border border-[#dcd3b8] bg-[#faf8f1] p-3 sm:grid-cols-2"
+            >
+              <FormField
+                id="verify-corrected-entry-id"
+                label="Dowód / wpis korygowany (art. 106j VAT)"
+                required
+              >
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    disabled={isAlreadyPosted || !canWrite}
+                    value={correctedEntryId}
+                    onChange={(e) => setCorrectedEntryId(e.target.value)}
+                    className={`${ctrl.className} font-mono text-xs`}
+                  />
+                )}
+              </FormField>
+              <FormField id="verify-correction-reason" label="Przyczyna korekty" required>
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    disabled={isAlreadyPosted || !canWrite}
+                    value={correctionReason}
+                    onChange={(e) => setCorrectionReason(e.target.value)}
+                  />
+                )}
+              </FormField>
+            </div>
+          ) : null}
+
+          <VatRateGuideTrigger
+            selectedRate={document.vatRate}
+            eventDate={issueDate}
+            profileCode={company.profileCode}
+          />
 
           {document.direction === 'purchase' ? (
             <div
               data-testid="document-tax-qualification-panel"
               className="space-y-3 rounded-xl border border-[#e5e2d9] bg-[#faf9f5] p-3.5"
             >
+              <PurchaseQualificationHelpNotice
+                profileCode={company.profileCode}
+                vatStatus={company.vatStatus}
+                eventDate={issueDate}
+              />
+
               <FormField
                 id="verify-expense-qualification"
-                label="Kwalifikacja kosztu uzyskania przychodów (KUP / KPiR)"
+                label="Kwalifikacja kosztu uzyskania przychodów (KUP / KPiR / CIT)"
                 fieldHelp={
                   expenseQualification === 'vehicle_mixed_75_col13'
                     ? helpMap.vehicle75Kup
@@ -445,7 +655,9 @@ export function DocumentVerificationClient({
                     <option value="vehicle_mixed_50">
                       50% odliczenia VAT — pojazd samochodowy o użytku mieszanym (art. 86a VAT)
                     </option>
-                    <option value="none_0">0% — brak prawa do odliczenia VAT</option>
+                    <option value="none_0">
+                      0% — brak prawa do odliczenia VAT (np. zw. z VAT lub wyłączenia art. 88)
+                    </option>
                   </select>
                 )}
               </FormField>
@@ -459,7 +671,7 @@ export function DocumentVerificationClient({
                     VAT do odliczenia
                   </p>
                   <MoneyAmount
-                    amount={liveCalculation.vatEntry.deductibleVatGrosze}
+                    amount={liveCalculation.totalDeductibleVatGrosze}
                     inGrosze
                     size="sm"
                     variant="tax"
@@ -470,7 +682,7 @@ export function DocumentVerificationClient({
                     VAT nieodliczony
                   </p>
                   <MoneyAmount
-                    amount={liveCalculation.vatEntry.nonDeductibleVatGrosze}
+                    amount={liveCalculation.totalNonDeductibleVatGrosze}
                     inGrosze
                     size="sm"
                     variant="neutral"
@@ -489,6 +701,32 @@ export function DocumentVerificationClient({
                 </div>
               </div>
             </div>
+          ) : company.profileCode === 'jdg_ryczalt' ? (
+            <div className="space-y-3 rounded-xl border border-[#dcd3b8] bg-[#faf8f1] p-3.5">
+              <FormField
+                id="verify-ryczalt-rate"
+                label="Stawka ryczałtu przychodu (art. 12 PPE)"
+                required
+              >
+                {(ctrl) => (
+                  <select
+                    {...ctrl}
+                    disabled={isAlreadyPosted || !canWrite}
+                    value={ryczaltRate}
+                    onChange={(e) => setRyczaltRate(e.target.value as RyczaltRateCode)}
+                  >
+                    <option value="17">17% — wolne zawody</option>
+                    <option value="15">15% — doradztwo, reklama, licencje</option>
+                    <option value="14">14% — architektura, inżynieria, opieka zdrowotna</option>
+                    <option value="12">12% — programowanie i IT (PKWiU 62)</option>
+                    <option value="8.5">8,5% — usługi ogólne</option>
+                    <option value="5.5">5,5% — roboty budowlane i wytwórczość</option>
+                    <option value="3">3% — działalność handlowa</option>
+                  </select>
+                )}
+              </FormField>
+              <RyczaltRateGuideTrigger selectedRate={ryczaltRate} eventDate={issueDate} />
+            </div>
           ) : null}
         </SplitVerificationView>
       </div>
@@ -501,14 +739,16 @@ export function DocumentVerificationClient({
         open={confirmOpen}
         operationType="ledger_post"
         title="Potwierdź zatwierdzenie i zaksięgowanie dokumentu"
-        description={`Zatwierdzasz jako człowiek propozycję AI dla dowodu ${docNumber} (${counterpartyName}).`}
+        description={`Zatwierdzasz jako człowiek propozycję dla dowodu ${docNumber} (${counterpartyName}).`}
         companyName={company.companyName}
         nip={company.nip}
         period={document.period}
         amountGrosze={liveCalculation.grossGrosze}
         auditConsequences={[
-          `Dokument przejdzie ze stanu propozycji AI do stanu „Zweryfikowany i zaksięgowany” (POST .../approve-and-post).`,
-          `Kwota ujęcia w ewidencji i rejestrze VAT zostanie utrwalona wraz z podpisem aktora ${company.shortName}.`,
+          `Dokument przejdzie ze stanu propozycji do stanu „Zweryfikowany i zaksięgowany” (POST .../approve-and-post).`,
+          hasMultipleLines && !liveCalculation.amountsEdited
+            ? `Wszystkie pozycje wielostawkowe (${String(document.lines?.length ?? 1)} poz.) zostaną ujęte w rejestrze VAT z podziałem na stawki.`
+            : `Kwota ujęcia w ewidencji i rejestrze VAT zostanie utrwalona wraz z podpisem aktora ${company.shortName}.`,
         ]}
         confirmLabel="Zatwierdź i zaksięguj dokument"
         isSubmitting={submitting}

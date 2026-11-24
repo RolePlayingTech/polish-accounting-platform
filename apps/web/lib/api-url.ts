@@ -35,6 +35,10 @@ export function isOfflineDemoModeEnabled(): boolean {
 export function resolveValidatedApiBaseUrl(
   options: ResolveApiBaseUrlOptions = {},
 ): URL | undefined {
+  const isLocalOidcE2eTest =
+    process.env.PAP_OIDC_ENV === 'test' &&
+    process.env.PAP_ENV !== 'staging' &&
+    process.env.PAP_DATABASE_ENV !== 'staging';
   const isProduction = options.isProduction ?? process.env.NODE_ENV === 'production';
   const configuredUrl =
     options.apiBaseUrl ??
@@ -64,7 +68,16 @@ export function resolveValidatedApiBaseUrl(
   }
 
   if (isProduction) {
-    if (!ALLOWED_PRODUCTION_API_ORIGINS.has(configuredUrl) || baseUrl.origin !== configuredUrl) {
+    const isAllowedLocalTestOrigin =
+      options.isProduction === undefined &&
+      isLocalOidcE2eTest &&
+      baseUrl.protocol === 'http:' &&
+      baseUrl.hostname === '127.0.0.1' &&
+      baseUrl.origin === configuredUrl;
+    if (
+      !isAllowedLocalTestOrigin &&
+      (!ALLOWED_PRODUCTION_API_ORIGINS.has(configuredUrl) || baseUrl.origin !== configuredUrl)
+    ) {
       return undefined;
     }
   }

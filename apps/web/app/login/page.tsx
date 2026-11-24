@@ -74,13 +74,10 @@ export default async function LoginPage({
 }) {
   const resolvedParams = await searchParams;
   const allowPersonas = isSyntheticPersonaLoginAllowed();
-  const rawInvite =
-    typeof resolvedParams.invite === 'string' ? resolvedParams.invite.trim() : '';
+  const rawInvite = typeof resolvedParams.invite === 'string' ? resolvedParams.invite.trim() : '';
   const inviteToken = SAFE_INVITE_TOKEN_REGEX.test(rawInvite) ? rawInvite : undefined;
 
-  const fallbackTarget = inviteToken
-    ? `/app?invite=${encodeURIComponent(inviteToken)}`
-    : '/app';
+  const fallbackTarget = inviteToken ? `/app?invite=${encodeURIComponent(inviteToken)}` : '/app';
   const redirectTo = sanitizeInternalRedirect(resolvedParams.redirectTo, fallbackTarget);
   const authStateNotice =
     typeof resolvedParams.authState === 'string'
@@ -120,20 +117,14 @@ export default async function LoginPage({
           ) : null}
 
           {inviteToken ? (
-            <AlertBanner
-              tone="info"
-              title="Wykryto jednorazowe zaproszenie do organizacji"
-            >
+            <AlertBanner tone="info" title="Wykryto jednorazowe zaproszenie do organizacji">
               Po zalogowaniu przez dostawcę tożsamości potwierdzisz przyjęcie lub odrzucenie
               zaproszenia na pulpicie aplikacji.
             </AlertBanner>
           ) : null}
 
           {activeSession ? (
-            <AlertBanner
-              tone="info"
-              title={`Aktywna sesja: ${activeSession.context.displayName}`}
-            >
+            <AlertBanner tone="info" title={`Aktywna sesja: ${activeSession.context.displayName}`}>
               <div className="mt-2 flex flex-wrap items-center gap-2.5">
                 <Link
                   href={redirectTo}

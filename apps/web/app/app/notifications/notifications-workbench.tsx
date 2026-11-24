@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Card, FormField, StatusBadge } from '@pap/ui';
 import { AlertBanner, Button } from '../../../components/ui-controls';
+import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
 import type {
   NotificationFrequency,
   NotificationOutboxEntry,
@@ -76,6 +77,7 @@ export function NotificationsWorkbench({
       });
       const data = (await res.json()) as {
         ok?: boolean;
+        reasonCode?: string;
         error?: string;
         outbox?: readonly NotificationOutboxEntry[];
       };
@@ -83,7 +85,12 @@ export function NotificationsWorkbench({
         setFeedback({
           tone: 'danger',
           title: 'Błąd zapisu preferencji powiadomień',
-          detail: data.error ?? 'Nie udało się zapisać ustawień.',
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Nie udało się zapisać ustawień powiadomień.',
+          }),
         });
       } else {
         if (Array.isArray(data.outbox)) {
@@ -98,6 +105,12 @@ export function NotificationsWorkbench({
         });
         router.refresh();
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się zapisać ustawień przypomnień.',
+      });
     } finally {
       setBusy(false);
     }
@@ -114,6 +127,7 @@ export function NotificationsWorkbench({
       });
       const data = (await res.json()) as {
         ok?: boolean;
+        reasonCode?: string;
         error?: string;
         outbox?: readonly NotificationOutboxEntry[];
       };
@@ -121,7 +135,12 @@ export function NotificationsWorkbench({
         setFeedback({
           tone: 'danger',
           title: 'Nie udało się uruchomić wysyłki przypomnień',
-          detail: data.error ?? 'Błąd operacji dispatch-due.',
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Błąd operacji dispatch-due.',
+          }),
         });
       } else {
         if (Array.isArray(data.outbox)) {
@@ -138,6 +157,12 @@ export function NotificationsWorkbench({
         });
         router.refresh();
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się wywołać wysyłki przypomnień Sandbox.',
+      });
     } finally {
       setBusy(false);
     }

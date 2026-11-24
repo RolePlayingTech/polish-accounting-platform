@@ -70,6 +70,27 @@ const SUPPLEMENTARY_UI_FIELD_HELP: Readonly<
     example: 'PAP-HUMAN-9F4A2C8E11B0',
     lessonSlug: 'bezpieczna-wspolpraca-z-ai-i-mcp-czlowiek-zatwierdza',
   },
+  ryczalt_rate: {
+    title: 'Stawka ryczałtu od przychodów ewidencjonowanych wg PKWiU (art. 12 PPE)',
+    explanation:
+      'Ryczałt jest podatkiem dochodowym liczonym od przychodu netto (bez pomniejszania o koszty KUP). Stawka (np. 17%, 15%, 14%, 12%, 8,5%, 5,5%, 3%) zależy od rzeczywistego rodzaju wykonanej usługi lub sprzedanego towaru wg klasyfikacji PKWiU i art. 12 ust. 1 ustawy o ryczałcie — nie myl jej ze stawką podatku VAT.',
+    example: '12% — wybrane usługi oprogramowania (PKWiU ex 62.01.1)',
+    lessonSlug: 'ewidencja-przychodow-stawki-ryczaltu-pkwiu',
+  },
+  vat_rates_guide: {
+    title: 'Stawki podatku VAT (23%, 8%, 5%, 0%, zw., np.) — warunki stosowania',
+    explanation:
+      'Stawka 23% jest zasadnicza; 8% i 5% dotyczą towarów i usług z załączników ustawowych; 0% to sprzedaż opodatkowana z prawem do odliczenia VAT przy spełnieniu warunków dokumentacyjnych (np. WDT/eksport); „zw.” to zwolnienie z VAT (podmiotowe art. 113 lub przedmiotowe art. 43 ust. 1, co do zasady bez prawa do odliczenia VAT); „np.” to czynność poza zakresem polskiego VAT (np. miejsce świadczenia w kraju nabywcy wg art. 28b).',
+    example: '23% podstawowa / 0% WDT / zw. art. 113 / np. art. 28b',
+    lessonSlug: 'rejestry-vat-sprzedazy-i-zakupow-stawki-23-8-5-0-zw',
+  },
+  due_vs_paid_obligations: {
+    title: 'Zobowiązania naliczone wg ksiąg vs kwoty faktycznie opłacone',
+    explanation:
+      'Wyliczenia na pulpicie i w ewidencjach pokazują zobowiązanie naliczone z dokumentów okresu. W polskim PIT i ryczałcie składki ZUS społeczne oraz odliczalna część składki zdrowotnej pomniejszają podatek dopiero w miesiącu ich faktycznej zapłaty (metoda kasowa — art. 26 ust. 1 pkt 2 PIT oraz art. 11 ust. 1 PPE).',
+    example: 'Naliczone za 2026-10 vs opłacone przelewem do 20.11.2026',
+    lessonSlug: 'kalendarz-podatkowy-terminy-us-zus-i-przesuniecia',
+  },
 };
 
 export const ACADEMY_PROFILE_LABELS_PL: Readonly<Record<AcademyTaxProfileCode, string>> = {

@@ -57,7 +57,11 @@ function resolveAllowedApiBaseUrl(configuredUrl: string, isProduction: boolean):
 export async function readPublicSystemStatus(
   options: ReadStatusOptions = {},
 ): Promise<PublicSystemStatusResult> {
-  const isProduction = process.env.NODE_ENV === 'production';
+  const isLocalOidcE2eTest =
+    process.env.PAP_OIDC_ENV === 'test' &&
+    process.env.PAP_ENV !== 'staging' &&
+    process.env.PAP_DATABASE_ENV !== 'staging';
+  const isProduction = process.env.NODE_ENV === 'production' && !isLocalOidcE2eTest;
   const configuredUrl =
     options.apiBaseUrl ??
     process.env.API_BASE_URL ??

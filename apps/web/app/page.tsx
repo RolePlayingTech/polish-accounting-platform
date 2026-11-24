@@ -10,9 +10,7 @@ export default async function ProductHomePage() {
   const session = await readServerSession();
   const allowPersonas = isSyntheticPersonaLoginAllowed();
   const runtimeMode = resolveWebRuntimeMode();
-  const primaryLoginLabel = allowPersonas
-    ? 'Zaloguj się do środowiska testowego'
-    : 'Zaloguj się';
+  const primaryLoginLabel = allowPersonas ? 'Zaloguj się do środowiska testowego' : 'Zaloguj się';
   const heroLoginLabel = session
     ? 'Otwórz pulpit księgowy (/app)'
     : allowPersonas
@@ -74,10 +72,7 @@ export default async function ProductHomePage() {
       <main className="mx-auto max-w-6xl space-y-8 px-4 py-10 sm:px-6">
         <div className="rounded-2xl border border-[#e5e2d9] bg-white p-6 sm:p-10">
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge
-              tone={allowPersonas ? 'warning' : 'info'}
-              label={envBadgeLabel}
-            />
+            <StatusBadge tone={allowPersonas ? 'warning' : 'info'} label={envBadgeLabel} />
             <StatusBadge
               tone="legal"
               label={`${String(POLISH_LEGAL_RULES_REGISTRY.length)} zweryfikowane reguły prawne`}
