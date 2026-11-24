@@ -3,9 +3,14 @@ import type {
   AuthenticatedSessionView,
   CreateDocumentRequest,
   CreateTenantInvitationResponse,
+  KpirViewResponse,
+  LedgerViewResponse,
   ListTenantInvitationsResponse,
+  PeriodTaxObligationsResponse,
   RevokeTenantInvitationResponse,
+  RyczaltViewResponse,
   TenantInvitationItemContract,
+  VatViewResponse,
 } from '@pap/contracts';
 import {
   POLISH_LEGAL_RULES_REGISTRY,
@@ -46,10 +51,12 @@ import {
   type JournalEntry,
   type JpkV7mDeclarationSummary,
   type KpirColumnLayout,
+  type KpirColumnsTotals,
   type KpirEntry,
   type KpirExpenseQualificationKind,
   type KpirPeriodSummary,
   type KpirPitAdvanceResult,
+  type LegalExplanation,
   type LegalRule,
   type MonthlyRyczaltCalculationResult,
   type MonthlyZusContributionsResult,
@@ -1558,9 +1565,9 @@ function mapRemoteCompanyToProfileRecord(
     smallTaxpayer: taxProfile?.smallTaxpayer ?? seedFallback?.smallTaxpayer ?? true,
     activityStartDate:
       taxProfile?.activityStartDate ?? seedFallback?.activityStartDate ?? '2025-01-01',
-    priorYearGrossSalesGrosze: seedFallback?.priorYearGrossSalesGrosze ?? 0,
-    ytdPriorMonthsRevenueGrosze: seedFallback?.ytdPriorMonthsRevenueGrosze ?? 0,
-    ytdPriorMonthsCostsGrosze: seedFallback?.ytdPriorMonthsCostsGrosze ?? 0,
+    priorYearGrossSalesGrosze: 0,
+    ytdPriorMonthsRevenueGrosze: 0,
+    ytdPriorMonthsCostsGrosze: 0,
     grantedActions,
   };
 }
@@ -2245,17 +2252,19 @@ export async function buildVatRegistersForCompany(
   readonly salesEntries: readonly VatRegisterEntry[];
   readonly purchaseEntries: readonly VatRegisterEntry[];
   readonly jpkSummary: JpkV7mDeclarationSummary;
+  readonly vatExemption?: VatExemptionEvaluationResult | null;
 }> {
   if (!isOfflineDemoModeEnabled() && session) {
     const safeTenantId = assertUuidPathParam(company.tenantId, 'tenantId');
     const safeEntityId = assertUuidPathParam(company.legalEntityId, 'legalEntityId');
     const remote = await papBffFetch<{
-      salesEntries: readonly VatRegisterEntry[];
-      purchaseEntries: readonly VatRegisterEntry[];
-      jpkV7m?: {
+      readonly salesEntries: readonly VatRegisterEntry[];
+      readonly purchaseEntries: readonly VatRegisterEntry[];
+      readonly jpkV7m?: {
         readonly carryOverFromPreviousPeriodP39Grosze?: number;
         readonly refundToBankAccountP54Grosze?: number;
       } | null;
+      readonly vatExemptionLimit?: VatViewResponse['vatExemptionLimit'];
     }>(
       `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/vat?period=${encodeURIComponent(period)}`,
       {
@@ -2281,7 +2290,26 @@ export async function buildVatRegistersForCompany(
         : {}),
       ...(refundP54 !== undefined ? { refundRequestedP54Grosze: refundP54 } : {}),
     });
-    return { salesEntries, purchaseEntries, jpkSummary };
+    const remoteLimit = remote.data.vatExemptionLimit ?? null;
+    let vatExemption: VatExemptionEvaluationResult | null = null;
+    if (remoteLimit) {
+      const baseEval = evaluateVatExemptionLimit({
+        eventDate: `${period}-28`,
+        activityStartDate: company.activityStartDate,
+        cumulativeNetSalesBeforeGrosze: Math.max(0, remoteLimit.ytdSalesGrosze),
+        currentTransactionNetGrosze: 0,
+      });
+      vatExemption = {
+        ...baseEval,
+        proportionalLimitGrosze: remoteLimit.limitGrosze,
+        cumulativeNetSalesAfterGrosze: remoteLimit.ytdSalesGrosze,
+        remainingLimitGrosze: remoteLimit.remainingLimitGrosze,
+        status: remoteLimit.status === 'exceeded' ? 'already_exceeded' : 'exempt_within_limit',
+        currentTransactionTaxableVat: remoteLimit.status === 'exceeded',
+        explanation: remoteLimit.explanation as LegalExplanation,
+      };
+    }
+    return { salesEntries, purchaseEntries, jpkSummary, vatExemption };
   }
 
   const store = getStore();
@@ -3151,6 +3179,28 @@ export async function getDocumentDetailSnapshot(
   };
 }
 
+function mapContractKpirTotalsToDomain(
+  totals: KpirViewResponse['periodSummary'],
+): KpirColumnsTotals {
+  return {
+    col7SalesRevenueGrosze: totals.col7SalesRevenueGrosze,
+    col8OtherRevenueGrosze: totals.col8OtherRevenueGrosze,
+    col9TotalRevenueGrosze: totals.col9TotalRevenueGrosze,
+    col10GoodsAndMaterialsGrosze: totals.col10GoodsAndMaterialsGrosze,
+    col11IncidentalCostsGrosze: totals.col11IncidentalCostsGrosze,
+    col12RemunerationGrosze: totals.col12RemunerationGrosze,
+    col13OtherExpensesGrosze: totals.col13OtherExpensesGrosze,
+    col14TotalExpensesGrosze: totals.col14TotalExpensesGrosze,
+    col16ResearchDevelopmentCostGrosze: totals.col16ResearchDevelopmentCostGrosze,
+    totalTaxDeductibleCostsGrosze: totals.totalTaxDeductibleCostsGrosze,
+    accountingIncomeGrosze: totals.incomeOrLossGrosze,
+  };
+}
+
+function isUnmountedOptionalTaxesRoute404(remote: BffFetchResult<unknown>): boolean {
+  return remote.kind === 'not_found' && remote.routeUnmounted !== false;
+}
+
 export async function getKpirSnapshot(session: ActiveWebSession): Promise<{
   readonly activeCompany: CompanyProfileRecord;
   readonly entries: readonly KpirEntry[];
@@ -3168,28 +3218,149 @@ export async function getKpirSnapshot(session: ActiveWebSession): Promise<{
   );
   const period = session.context.period;
 
-  let entries: readonly KpirEntry[];
   if (!isOfflineDemoModeEnabled()) {
     const safeTenantId = assertUuidPathParam(activeCompany.tenantId, 'tenantId');
     const safeEntityId = assertUuidPathParam(activeCompany.legalEntityId, 'legalEntityId');
-    const remote = await papBffFetch<{ entries: readonly KpirEntry[] }>(
-      `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/kpir?period=${encodeURIComponent(period)}`,
-      {
-        method: 'GET',
-        bearerToken: session.oidcToken,
-      },
-    );
+    const isKpirProfile =
+      activeCompany.profileCode === 'jdg_kpir_skala' ||
+      activeCompany.profileCode === 'jdg_kpir_liniowy';
+
+    const [remote, taxesRemote] = await Promise.all([
+      papBffFetch<Partial<KpirViewResponse> & { readonly entries?: readonly KpirEntry[] }>(
+        `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/kpir?period=${encodeURIComponent(period)}`,
+        {
+          method: 'GET',
+          bearerToken: session.oidcToken,
+        },
+      ),
+      isKpirProfile
+        ? papBffFetch<PeriodTaxObligationsResponse>(
+            `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/taxes/obligations?period=${encodeURIComponent(period)}`,
+            {
+              method: 'GET',
+              bearerToken: session.oidcToken,
+            },
+          )
+        : Promise.resolve(null),
+    ]);
+
     if (remote.kind !== 'ok') {
       throwWorkspaceErrorFromRemote(
         remote,
         'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać księgi PKPiR.',
       );
     }
-    entries = remote.data.entries ?? [];
-  } else {
-    const store = getStore();
-    entries = store.kpirEntriesByCompany.get(activeCompany.legalEntityId) ?? [];
+    if (
+      taxesRemote &&
+      taxesRemote.kind !== 'ok' &&
+      !isUnmountedOptionalTaxesRoute404(taxesRemote)
+    ) {
+      throwWorkspaceErrorFromRemote(
+        taxesRemote,
+        'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać rozliczenia zaliczki PIT i ZUS.',
+      );
+    }
+
+    const entries = remote.data.entries ?? [];
+    const summary: KpirPeriodSummary =
+      remote.data.periodSummary && remote.data.ytdSummary
+        ? {
+            period,
+            monthTotals: mapContractKpirTotalsToDomain(remote.data.periodSummary),
+            yearToDateTotals: mapContractKpirTotalsToDomain(remote.data.ytdSummary),
+          }
+        : summarizeKpirPeriod(entries, period);
+
+    const apiPitAdvance = remote.data.pitAdvance;
+    const apiInputs = apiPitAdvance?.explanation?.inputs;
+    const paidSocialYtd =
+      taxesRemote?.kind === 'ok'
+        ? taxesRemote.data.paidSocialZusUsedInTaxBaseGrosze
+        : typeof apiInputs?.['paidSocialZusYtdGrosze'] === 'number'
+          ? apiInputs['paidSocialZusYtdGrosze']
+          : 0;
+    const paidHealthYtd =
+      taxesRemote?.kind === 'ok'
+        ? taxesRemote.data.paidHealthZusUsedInTaxBaseGrosze
+        : typeof apiInputs?.['paidHealthInsuranceYtdGrosze'] === 'number'
+          ? apiInputs['paidHealthInsuranceYtdGrosze']
+          : 0;
+    const prevAdvancesFromApi =
+      typeof apiInputs?.['previousAdvancesPaidYtdGrosze'] === 'number'
+        ? apiInputs['previousAdvancesPaidYtdGrosze']
+        : 0;
+
+    const ytdRev = summary.yearToDateTotals.col9TotalRevenueGrosze;
+    const ytdCosts = summary.yearToDateTotals.totalTaxDeductibleCostsGrosze;
+
+    const basePitSkala = calculateKpirPitAdvance({
+      period,
+      taxForm: 'skala',
+      ytdRevenueGrosze: ytdRev,
+      ytdCostsGrosze: ytdCosts,
+      paidSocialZusYtdGrosze: paidSocialYtd,
+      paidHealthInsuranceYtdGrosze: paidHealthYtd,
+      previousAdvancesPaidYtdGrosze: apiPitAdvance?.taxForm === 'skala' ? prevAdvancesFromApi : 0,
+    });
+
+    const basePitLiniowy = calculateKpirPitAdvance({
+      period,
+      taxForm: 'liniowy',
+      ytdRevenueGrosze: ytdRev,
+      ytdCostsGrosze: ytdCosts,
+      paidSocialZusYtdGrosze: paidSocialYtd,
+      paidHealthInsuranceYtdGrosze: paidHealthYtd,
+      previousAdvancesPaidYtdGrosze: apiPitAdvance?.taxForm === 'liniowy' ? prevAdvancesFromApi : 0,
+    });
+
+    const pitObligationItem =
+      taxesRemote?.kind === 'ok'
+        ? taxesRemote.data.items.find((i) => i.obligationKind === 'pit_advance')
+        : undefined;
+
+    const pitSkala: KpirPitAdvanceResult =
+      apiPitAdvance?.taxForm === 'skala'
+        ? {
+            ...basePitSkala,
+            roundedTaxBaseGrosze: apiPitAdvance.taxBaseRoundedPlnGrosze,
+            roundedTaxBaseFullPln: Math.round(apiPitAdvance.taxBaseRoundedPlnGrosze / 100),
+            advanceDueGrosze:
+              pitObligationItem?.accruedGrosze ?? apiPitAdvance.advanceDueRoundedPlnGrosze,
+            advanceDueRoundedPln: Math.round(
+              (pitObligationItem?.accruedGrosze ?? apiPitAdvance.advanceDueRoundedPlnGrosze) / 100,
+            ),
+            explanation: apiPitAdvance.explanation as LegalExplanation,
+          }
+        : basePitSkala;
+
+    const pitLiniowy: KpirPitAdvanceResult =
+      apiPitAdvance?.taxForm === 'liniowy'
+        ? {
+            ...basePitLiniowy,
+            roundedTaxBaseGrosze: apiPitAdvance.taxBaseRoundedPlnGrosze,
+            roundedTaxBaseFullPln: Math.round(apiPitAdvance.taxBaseRoundedPlnGrosze / 100),
+            advanceDueGrosze:
+              pitObligationItem?.accruedGrosze ?? apiPitAdvance.advanceDueRoundedPlnGrosze,
+            advanceDueRoundedPln: Math.round(
+              (pitObligationItem?.accruedGrosze ?? apiPitAdvance.advanceDueRoundedPlnGrosze) / 100,
+            ),
+            explanation: apiPitAdvance.explanation as LegalExplanation,
+          }
+        : basePitLiniowy;
+
+    return {
+      activeCompany,
+      entries,
+      summary,
+      layout2026: getKpirColumnLayout('pkpir_2026_ksef'),
+      layout2019: getKpirColumnLayout('pkpir_2019_17col'),
+      pitSkala,
+      pitLiniowy,
+    };
   }
+
+  const store = getStore();
+  const entries = store.kpirEntriesByCompany.get(activeCompany.legalEntityId) ?? [];
 
   const summary = summarizeKpirPeriod(entries, period);
   const ytdRev =
@@ -3244,28 +3415,165 @@ export async function getRyczaltSnapshot(session: ActiveWebSession): Promise<{
   );
   const period = session.context.period;
 
-  let entries: readonly RyczaltEntry[];
   if (!isOfflineDemoModeEnabled()) {
     const safeTenantId = assertUuidPathParam(activeCompany.tenantId, 'tenantId');
     const safeEntityId = assertUuidPathParam(activeCompany.legalEntityId, 'legalEntityId');
-    const remote = await papBffFetch<{ entries: readonly RyczaltEntry[] }>(
-      `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/ryczalt?period=${encodeURIComponent(period)}`,
-      {
-        method: 'GET',
-        bearerToken: session.oidcToken,
-      },
-    );
+    const isRyczaltProfile = activeCompany.profileCode === 'jdg_ryczalt';
+
+    const [remote, taxesRemote] = await Promise.all([
+      papBffFetch<Partial<RyczaltViewResponse> & { readonly entries?: readonly RyczaltEntry[] }>(
+        `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/ryczalt?period=${encodeURIComponent(period)}`,
+        {
+          method: 'GET',
+          bearerToken: session.oidcToken,
+        },
+      ),
+      isRyczaltProfile
+        ? papBffFetch<PeriodTaxObligationsResponse>(
+            `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/taxes/obligations?period=${encodeURIComponent(period)}`,
+            {
+              method: 'GET',
+              bearerToken: session.oidcToken,
+            },
+          )
+        : Promise.resolve(null),
+    ]);
+
     if (remote.kind !== 'ok') {
       throwWorkspaceErrorFromRemote(
         remote,
         'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać ewidencji ryczałtu.',
       );
     }
-    entries = remote.data.entries ?? [];
-  } else {
-    const store = getStore();
-    entries = store.ryczaltEntriesByCompany.get(activeCompany.legalEntityId) ?? [];
+    if (
+      taxesRemote &&
+      taxesRemote.kind !== 'ok' &&
+      !isUnmountedOptionalTaxesRoute404(taxesRemote)
+    ) {
+      throwWorkspaceErrorFromRemote(
+        taxesRemote,
+        'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać rozliczenia ryczałtu i ZUS.',
+      );
+    }
+
+    const entries = remote.data.entries ?? [];
+    const paidSocialUsed =
+      taxesRemote?.kind === 'ok' ? taxesRemote.data.paidSocialZusUsedInTaxBaseGrosze : 0;
+    const paidHealth50Used =
+      taxesRemote?.kind === 'ok' ? taxesRemote.data.paidHealthZusUsedInTaxBaseGrosze : 0;
+
+    const ytdSalesFromApi =
+      remote.data.vatExemptionLimit?.ytdSalesGrosze ??
+      Math.max(
+        0,
+        entries.reduce((acc, e) => acc + e.revenueGrosze, 0),
+      );
+
+    const baseZusResult = calculateMonthlyZusContributions({
+      period,
+      zusScheme:
+        activeCompany.zusScheme === 'not_applicable'
+          ? 'preferencyjny_zus'
+          : activeCompany.zusScheme,
+      taxForm: 'ryczalt',
+      voluntarySicknessInsurance: activeCompany.voluntarySicknessInsurance,
+      ytdRyczaltRevenueGrosze: Math.max(0, ytdSalesFromApi),
+      ytdDeductibleSocialZusGrosze: paidSocialUsed,
+    });
+
+    const zusSocialItem =
+      taxesRemote?.kind === 'ok'
+        ? taxesRemote.data.items.find((i) => i.obligationKind === 'zus_social')
+        : undefined;
+    const zusHealthItem =
+      taxesRemote?.kind === 'ok'
+        ? taxesRemote.data.items.find((i) => i.obligationKind === 'zus_health')
+        : undefined;
+    const zusLaborItem =
+      taxesRemote?.kind === 'ok'
+        ? taxesRemote.data.items.find((i) => i.obligationKind === 'zus_labor_fund')
+        : undefined;
+
+    const zusResult: MonthlyZusContributionsResult =
+      zusSocialItem || zusHealthItem || zusLaborItem
+        ? {
+            ...baseZusResult,
+            socialContributionsTotalGrosze:
+              zusSocialItem?.accruedGrosze ?? baseZusResult.socialContributionsTotalGrosze,
+            healthContributionGrosze:
+              zusHealthItem?.accruedGrosze ?? baseZusResult.healthContributionGrosze,
+            laborAndSolidarityFundGrosze:
+              zusLaborItem?.accruedGrosze ?? baseZusResult.laborAndSolidarityFundGrosze,
+            totalZusToPayGrosze:
+              (zusSocialItem?.accruedGrosze ?? baseZusResult.socialContributionsTotalGrosze) +
+              (zusHealthItem?.accruedGrosze ?? baseZusResult.healthContributionGrosze) +
+              (zusLaborItem?.accruedGrosze ?? baseZusResult.laborAndSolidarityFundGrosze),
+          }
+        : baseZusResult;
+
+    // Uwaga: paidHealthZusUsedInTaxBaseGrosze w PeriodTaxObligationsResponse to już 50% odliczalnej
+    // składki zdrowotnej (art. 11 ust. 1a u.z.p.d.), a calculateMonthlyRyczalt mnoży wejście przez 50%.
+    const baseRyczalt = calculateMonthlyRyczalt({
+      period,
+      entries,
+      paidSocialZusInMonthGrosze: paidSocialUsed,
+      paidHealthInsuranceInMonthGrosze: paidHealth50Used * 2,
+    });
+
+    const rycObligationItem =
+      taxesRemote?.kind === 'ok'
+        ? taxesRemote.data.items.find((i) => i.obligationKind === 'ryczalt_advance')
+        : undefined;
+    const authoritativeTaxDueGrosze =
+      rycObligationItem?.accruedGrosze ??
+      remote.data.monthlySummary?.taxDueRoundedPlnGrosze ??
+      baseRyczalt.taxDueGrosze;
+
+    const ryczaltSummary: MonthlyRyczaltCalculationResult = {
+      ...baseRyczalt,
+      ...(remote.data.monthlySummary
+        ? {
+            totalNetRevenueGrosze: remote.data.monthlySummary.grossRevenueGrosze,
+            explanation: remote.data.monthlySummary.explanation as LegalExplanation,
+          }
+        : {}),
+      taxDueGrosze: authoritativeTaxDueGrosze,
+      taxDueRoundedPln: Math.round(authoritativeTaxDueGrosze / 100),
+    };
+
+    const baseVatLimit = evaluateVatExemptionLimit({
+      eventDate: `${period}-28`,
+      activityStartDate: activeCompany.activityStartDate,
+      cumulativeNetSalesBeforeGrosze: Math.max(0, ytdSalesFromApi),
+      currentTransactionNetGrosze: 0,
+    });
+
+    const vatExemption: VatExemptionEvaluationResult = remote.data.vatExemptionLimit
+      ? {
+          ...baseVatLimit,
+          proportionalLimitGrosze: remote.data.vatExemptionLimit.limitGrosze,
+          cumulativeNetSalesAfterGrosze: remote.data.vatExemptionLimit.ytdSalesGrosze,
+          remainingLimitGrosze: remote.data.vatExemptionLimit.remainingLimitGrosze,
+          status:
+            remote.data.vatExemptionLimit.status === 'exceeded'
+              ? 'already_exceeded'
+              : 'exempt_within_limit',
+          currentTransactionTaxableVat: remote.data.vatExemptionLimit.status === 'exceeded',
+          explanation: remote.data.vatExemptionLimit.explanation as LegalExplanation,
+        }
+      : baseVatLimit;
+
+    return {
+      activeCompany,
+      entries,
+      ryczaltSummary,
+      vatExemption,
+      zusResult,
+    };
   }
+
+  const store = getStore();
+  const entries = store.ryczaltEntriesByCompany.get(activeCompany.legalEntityId) ?? [];
 
   const zusResult = calculateMonthlyZusContributions({
     period,
@@ -3317,28 +3625,178 @@ export async function getFullLedgerSnapshot(session: ActiveWebSession): Promise<
   );
   const period = session.context.period;
 
-  let journalEntries: readonly JournalEntry[];
   if (!isOfflineDemoModeEnabled()) {
     const safeTenantId = assertUuidPathParam(activeCompany.tenantId, 'tenantId');
     const safeEntityId = assertUuidPathParam(activeCompany.legalEntityId, 'legalEntityId');
-    const remote = await papBffFetch<{ journalEntries: readonly JournalEntry[] }>(
-      `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/ledger?period=${encodeURIComponent(period)}`,
-      {
-        method: 'GET',
-        bearerToken: session.oidcToken,
-      },
-    );
+    const isSpzooProfile = activeCompany.profileCode === 'spzoo_pelne_ksiegi';
+
+    const [remote, taxes19Remote, taxes9Remote] = await Promise.all([
+      papBffFetch<
+        Partial<LedgerViewResponse> & { readonly journalEntries?: readonly JournalEntry[] }
+      >(
+        `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/ledger?period=${encodeURIComponent(period)}`,
+        {
+          method: 'GET',
+          bearerToken: session.oidcToken,
+        },
+      ),
+      isSpzooProfile
+        ? papBffFetch<PeriodTaxObligationsResponse>(
+            `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/taxes/obligations?period=${encodeURIComponent(period)}&requestPreferentialCit9Pct=false`,
+            {
+              method: 'GET',
+              bearerToken: session.oidcToken,
+            },
+          )
+        : Promise.resolve(null),
+      isSpzooProfile
+        ? papBffFetch<PeriodTaxObligationsResponse>(
+            `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/taxes/obligations?period=${encodeURIComponent(period)}&requestPreferentialCit9Pct=true`,
+            {
+              method: 'GET',
+              bearerToken: session.oidcToken,
+            },
+          )
+        : Promise.resolve(null),
+    ]);
+
     if (remote.kind !== 'ok') {
       throwWorkspaceErrorFromRemote(
         remote,
         'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać księgi głównej i dziennika UoR.',
       );
     }
-    journalEntries = remote.data.journalEntries ?? [];
-  } else {
-    const store = getStore();
-    journalEntries = store.journalEntriesByCompany.get(activeCompany.legalEntityId) ?? [];
+    if (
+      taxes19Remote &&
+      taxes19Remote.kind !== 'ok' &&
+      !isUnmountedOptionalTaxesRoute404(taxes19Remote)
+    ) {
+      throwWorkspaceErrorFromRemote(
+        taxes19Remote,
+        'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać kalkulacji zaliczki CIT 19%.',
+      );
+    }
+    if (
+      taxes9Remote &&
+      taxes9Remote.kind !== 'ok' &&
+      taxes9Remote.kind !== 'validation_error' &&
+      !isUnmountedOptionalTaxesRoute404(taxes9Remote)
+    ) {
+      throwWorkspaceErrorFromRemote(
+        taxes9Remote,
+        'Usługa API (apps/api) jest niedostępna (503) — nie można pobrać kalkulacji zaliczki CIT 9%.',
+      );
+    }
+
+    const journalEntries = remote.data.journalEntries ?? [];
+    const trialBalance = generateTrialBalance(journalEntries);
+    const profitAndLoss = generateProfitAndLoss(journalEntries);
+    const balanceSheet = generateBalanceSheet(journalEntries);
+
+    const apiCitAdvance = remote.data.citAdvance;
+    const apiTaxableIncome =
+      apiCitAdvance?.taxableIncomeGrosze ??
+      Math.max(
+        0,
+        profitAndLoss.totalRevenuesGrosze - profitAndLoss.totalOperatingAndFinancialExpensesGrosze,
+      );
+
+    const baseCit9 = calculateCitAdvance({
+      period,
+      ytdTaxableRevenuesGrosze: apiTaxableIncome,
+      ytdTaxDeductibleCostsGrosze: 0,
+      smallTaxpayerStatus: true,
+      previousAdvancesPaidYtdGrosze: 0,
+    });
+
+    const baseCit19 = calculateCitAdvance({
+      period,
+      ytdTaxableRevenuesGrosze: apiTaxableIncome,
+      ytdTaxDeductibleCostsGrosze: 0,
+      smallTaxpayerStatus: false,
+      previousAdvancesPaidYtdGrosze: 0,
+    });
+
+    const cit19Item =
+      taxes19Remote?.kind === 'ok'
+        ? taxes19Remote.data.items.find((i) => i.obligationKind === 'cit_advance')
+        : undefined;
+    const cit19DueGrosze =
+      cit19Item?.accruedGrosze ??
+      (apiCitAdvance?.citRateKind === 'standard_19'
+        ? apiCitAdvance.citAdvanceDueRoundedPlnGrosze
+        : baseCit19.advanceDueGrosze);
+    const cit19Explanation: LegalExplanation =
+      taxes19Remote?.kind === 'ok'
+        ? (taxes19Remote.data.explanation as LegalExplanation)
+        : apiCitAdvance?.citRateKind === 'standard_19'
+          ? (apiCitAdvance.explanation as LegalExplanation)
+          : baseCit19.explanation;
+
+    const cit9Item =
+      taxes9Remote?.kind === 'ok'
+        ? taxes9Remote.data.items.find((i) => i.obligationKind === 'cit_advance')
+        : undefined;
+    let cit9DueGrosze: number;
+    let cit9Explanation: LegalExplanation;
+    if (taxes9Remote?.kind === 'ok' && cit9Item) {
+      cit9DueGrosze = cit9Item.accruedGrosze;
+      cit9Explanation =
+        apiCitAdvance?.citRateKind === 'small_9'
+          ? (apiCitAdvance.explanation as LegalExplanation)
+          : (taxes9Remote.data.explanation as LegalExplanation);
+    } else if (apiCitAdvance?.citRateKind === 'small_9') {
+      cit9DueGrosze = apiCitAdvance.citAdvanceDueRoundedPlnGrosze;
+      cit9Explanation = apiCitAdvance.explanation as LegalExplanation;
+    } else if (taxes9Remote?.kind === 'validation_error') {
+      cit9DueGrosze = baseCit9.advanceDueGrosze;
+      cit9Explanation = {
+        ...baseCit9.explanation,
+        warnings: [
+          ...baseCit9.explanation.warnings,
+          {
+            code: 'CIT_9_PCT_ATTESTATION_REQUIRED',
+            severity: 'warning',
+            message:
+              'Spółka nie posiada poświadczenia przesłanek małego podatnika (art. 19 ust. 1 pkt 2 oraz ust. 1a–1c ustawy o CIT) — wiążącą stawką dla bieżącego rozliczenia jest 19% CIT.',
+          },
+        ],
+      };
+    } else {
+      cit9DueGrosze = baseCit9.advanceDueGrosze;
+      cit9Explanation = baseCit9.explanation;
+    }
+
+    const cit9: CitAdvanceCalculationResult = {
+      ...baseCit9,
+      ytdTaxIncomeGrosze: apiTaxableIncome,
+      advanceDueGrosze: cit9DueGrosze,
+      advanceDueRoundedPln: Math.round(cit9DueGrosze / 100),
+      explanation: cit9Explanation,
+    };
+
+    const cit19: CitAdvanceCalculationResult = {
+      ...baseCit19,
+      ytdTaxIncomeGrosze: apiTaxableIncome,
+      advanceDueGrosze: cit19DueGrosze,
+      advanceDueRoundedPln: Math.round(cit19DueGrosze / 100),
+      explanation: cit19Explanation,
+    };
+
+    return {
+      activeCompany,
+      chartOfAccounts: STANDARD_SPZOO_CHART_OF_ACCOUNTS,
+      journalEntries,
+      trialBalance,
+      balanceSheet,
+      profitAndLoss,
+      cit9,
+      cit19,
+    };
   }
+
+  const store = getStore();
+  const journalEntries = store.journalEntriesByCompany.get(activeCompany.legalEntityId) ?? [];
 
   const trialBalance = generateTrialBalance(journalEntries);
   const profitAndLoss = generateProfitAndLoss(journalEntries);

@@ -23,7 +23,9 @@ import {
   getDocumentsForActiveCompany,
   getFinanceSnapshot,
   getFullLedgerSnapshot,
+  getKpirSnapshot,
   getPersonaById,
+  getRyczaltSnapshot,
   importAndReconcileBankStatementMutation,
   resetSyntheticWorkspaceForTests,
 } from '../lib/synthetic-workspace.js';
@@ -720,5 +722,572 @@ describe('Wave 2: Statutory JPK XSD exports, FA(3) & KSeF 2.0 Sandbox, WORM Arch
     const dash = await getDashboardSnapshot(sessionNov);
     const vatNov = await buildVatRegistersForCompany(dash.activeCompany, '2026-11', sessionNov);
     expect(vatNov.jpkSummary.period).toBe('2026-11');
+  });
+
+  it('enforces online-mode UI <-> REST <-> MCP tax parity across getRyczaltSnapshot, getKpirSnapshot, and getFullLedgerSnapshot with 0 unpaid ZUS and 0 phantom prior advances ([P1-G6-1])', async () => {
+    vi.stubEnv('PAP_WEB_OFFLINE_DEMO_MODE', 'false');
+    const oidcToken = 'eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqYW4tZzYifQ.sig';
+
+    const makeOnlineSession = (legalEntityId: string, period = '2026-03'): ActiveWebSession => {
+      const persona = getPersonaById('jan-testowy');
+      return {
+        authMethod: 'oidc',
+        oidcToken,
+        context: {
+          personaId: persona.personaId,
+          userId: persona.userId,
+          displayName: persona.displayName,
+          email: persona.email,
+          roleSummaryPl: persona.roleSummaryPl,
+          tenantId: TENANT_1_ID,
+          legalEntityId,
+          period,
+        },
+      };
+    };
+
+    const makeMockExplanation = (
+      calculationType: string,
+      summary: string,
+      inputs: Record<string, string | number | boolean> = {},
+    ) => ({
+      calculationType,
+      summary,
+      eventDate: '2026-03-01',
+      appliedRules: [],
+      steps: [],
+      inputs,
+      outputs: {},
+      warnings: [],
+      requiresHumanApproval: false,
+    });
+
+    let spzooAttested = true;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = input instanceof URL ? input.toString() : String(input);
+        const json = (payload: unknown, status = 200) =>
+          new Response(JSON.stringify(payload), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          });
+
+        // 1. Settings endpoints
+        if (url.includes(`/companies/${COMPANY_JDG_RYCZALT_ID}/settings`)) {
+          return json({
+            company: {
+              tenantId: TENANT_1_ID,
+              legalEntityId: COMPANY_JDG_RYCZALT_ID,
+              displayName: 'Beta IT Ryczałt JDG',
+              nip: '5213004125',
+              legalForm: 'jdg',
+              taxRegime: 'ryczalt',
+              vatStatus: 'zwolniony_podmiotowo',
+              zusStage: 'preferencyjny_zus',
+              canRead: true,
+              canWrite: true,
+            },
+            taxProfile: {
+              profileCode: 'jdg_ryczalt',
+              vatStatus: 'zwolniony_podmiotowo',
+              vatSettlementPeriod: 'not_applicable',
+              zusScheme: 'preferencyjny_zus',
+              voluntarySicknessInsurance: false,
+              smallTaxpayer: true,
+              activityStartDate: '2025-01-01',
+            },
+          });
+        }
+
+        if (url.includes(`/companies/${COMPANY_JDG_KPIR_ID}/settings`)) {
+          return json({
+            company: {
+              tenantId: TENANT_1_ID,
+              legalEntityId: COMPANY_JDG_KPIR_ID,
+              displayName: 'Alfa Studio KPiR JDG',
+              nip: '5250001003',
+              legalForm: 'jdg',
+              taxRegime: 'kpir_skala',
+              vatStatus: 'czynny',
+              zusStage: 'duzy_zus',
+              canRead: true,
+              canWrite: true,
+            },
+            taxProfile: {
+              profileCode: 'jdg_kpir_skala',
+              vatStatus: 'czynny',
+              vatSettlementPeriod: 'monthly',
+              zusScheme: 'duzy_zus',
+              voluntarySicknessInsurance: true,
+              smallTaxpayer: true,
+              activityStartDate: '2024-01-01',
+            },
+          });
+        }
+
+        if (url.includes(`/companies/${COMPANY_SPZOO_ID}/settings`)) {
+          return json({
+            company: {
+              tenantId: TENANT_1_ID,
+              legalEntityId: COMPANY_SPZOO_ID,
+              displayName: 'Gamma Systemy Sp. z o.o.',
+              nip: '5260250995',
+              legalForm: 'sp_z_o_o',
+              taxRegime: 'pelne_ksiegi_cit',
+              vatStatus: 'czynny',
+              zusStage: 'not_applicable',
+              canRead: true,
+              canWrite: true,
+            },
+            taxProfile: {
+              profileCode: 'spzoo_pelne_ksiegi',
+              vatStatus: 'czynny',
+              vatSettlementPeriod: 'monthly',
+              zusScheme: 'not_applicable',
+              voluntarySicknessInsurance: false,
+              smallTaxpayer: spzooAttested,
+              activityStartDate: '2023-01-01',
+            },
+          });
+        }
+
+        // 2. Profile B: Ryczałt (18 000 PLN @ 12%, -1 600 PLN paid ZUS social, 0 paid ZUS health -> 1 968,00 PLN tax)
+        if (url.includes(`/companies/${COMPANY_JDG_RYCZALT_ID}/ryczalt?period=2026-03`)) {
+          return json({
+            period: '2026-03',
+            entries: [
+              {
+                id: 'ryc-2026-03-1',
+                ordinalNumber: 1,
+                period: '2026-03',
+                entryDate: '2026-03-15',
+                revenueDate: '2026-03-15',
+                documentNumber: 'FS/RYC/2026/03/01',
+                counterpartyName: 'Klient B2B Sp. z o.o.',
+                counterpartyNip: '5260250995',
+                rate: '12',
+                revenueGrosze: 1_800_000,
+                revenueFormatted: '18 000,00 zł',
+                isCorrection: false,
+              },
+            ],
+            monthlySummary: {
+              grossRevenueGrosze: 1_800_000,
+              grossRevenueFormatted: '18 000,00 zł',
+              taxDueRoundedPlnGrosze: 196_800,
+              taxDueFormatted: '1 968,00 zł',
+              revenueByRate: { '12': 1_800_000 },
+              explanation: makeMockExplanation(
+                'ryczalt_monthly',
+                'Ryczałt 12% po odliczeniu opłaconego ZUS społecznego 1 600,00 zł = 1 968,00 zł.',
+              ),
+            },
+            vatExemptionLimit: {
+              limitGrosze: 24_000_000,
+              limitFormatted: '240 000,00 zł',
+              ytdSalesGrosze: 4_300_000,
+              ytdSalesFormatted: '43 000,00 zł',
+              remainingLimitGrosze: 19_700_000,
+              remainingLimitFormatted: '197 000,00 zł',
+              utilizationBps: 1792,
+              status: 'within_limit',
+              explanation: makeMockExplanation(
+                'vat_exemption_limit',
+                'Sprzedaż narastająco 43 000,00 zł / 240 000,00 zł.',
+              ),
+            },
+          });
+        }
+
+        if (url.includes(`/companies/${COMPANY_JDG_RYCZALT_ID}/taxes/obligations?period=2026-03`)) {
+          return json({
+            tenantId: TENANT_1_ID,
+            legalEntityId: COMPANY_JDG_RYCZALT_ID,
+            period: '2026-03',
+            profileCode: 'jdg_ryczalt',
+            evaluationDate: '2026-03-31',
+            bindingForDeclaration: true,
+            items: [
+              {
+                obligationKind: 'zus_social',
+                labelPl: 'Składki ZUS społeczne',
+                period: '2026-03',
+                statutoryDueDate: '2026-04-20',
+                accruedGrosze: 45_618,
+                accruedFormatted: '456,18 zł',
+                paidGrosze: 160_000,
+                paidFormatted: '1 600,00 zł',
+                remainingGrosze: 0,
+                remainingFormatted: '0,00 zł',
+                overpaymentGrosze: 114_382,
+                status: 'overpaid',
+                appliedPaymentIds: ['pay-1'],
+              },
+              {
+                obligationKind: 'zus_health',
+                labelPl: 'Składka zdrowotna ZUS (ryczałt)',
+                period: '2026-03',
+                statutoryDueDate: '2026-04-20',
+                accruedGrosze: 49_835,
+                accruedFormatted: '498,35 zł',
+                paidGrosze: 0,
+                paidFormatted: '0,00 zł',
+                remainingGrosze: 49_835,
+                remainingFormatted: '498,35 zł',
+                overpaymentGrosze: 0,
+                status: 'accrued_not_yet_due',
+                appliedPaymentIds: [],
+              },
+              {
+                obligationKind: 'ryczalt_advance',
+                labelPl: 'Ryczałt PPE',
+                period: '2026-03',
+                statutoryDueDate: '2026-04-20',
+                accruedGrosze: 196_800,
+                accruedFormatted: '1 968,00 zł',
+                paidGrosze: 0,
+                paidFormatted: '0,00 zł',
+                remainingGrosze: 196_800,
+                remainingFormatted: '1 968,00 zł',
+                overpaymentGrosze: 0,
+                status: 'accrued_not_yet_due',
+                appliedPaymentIds: [],
+              },
+            ],
+            verifiedPayments: [],
+            totals: {
+              totalAccruedGrosze: 292_253,
+              totalAccruedFormatted: '2 922,53 zł',
+              totalPaidGrosze: 160_000,
+              totalPaidFormatted: '1 600,00 zł',
+              totalRemainingGrosze: 246_635,
+              totalRemainingFormatted: '2 466,35 zł',
+            },
+            paidSocialZusUsedInTaxBaseGrosze: 160_000,
+            paidHealthZusUsedInTaxBaseGrosze: 0,
+            citRateDetails: null,
+            explanation: makeMockExplanation('profile_b_ryczalt', 'Ryczałt należny 1 968,00 zł.'),
+          });
+        }
+
+        // 3. Profile A: KPiR (2026-04 period entries = 10 000 PLN, YTD = 40 000 PLN rev / 5 000 PLN costs, 0 paid ZUS, 0 phantom advances)
+        if (url.includes(`/companies/${COMPANY_JDG_KPIR_ID}/kpir?period=2026-04`)) {
+          return json({
+            period: '2026-04',
+            layout: '2026',
+            regulationVersion: 'pkpir_2026_ksef',
+            columns: [],
+            entries: [
+              {
+                id: 'kpir-2026-04-1',
+                ordinalNumber: 2,
+                period: '2026-04',
+                eventDate: '2026-04-10',
+                documentNumber: 'FV/2026/04/01',
+                counterpartyName: 'Odbiorca Alfa Sp. z o.o.',
+                counterpartyAddress: 'ul. Prosta 1, Warszawa',
+                eventDescription: 'Usługi doradcze kwiecień',
+                col7SalesRevenueGrosze: 1_000_000,
+                col8OtherRevenueGrosze: 0,
+                col9TotalRevenueGrosze: 1_000_000,
+                col10GoodsAndMaterialsGrosze: 0,
+                col11IncidentalCostsGrosze: 0,
+                col12RemunerationGrosze: 0,
+                col13OtherExpensesGrosze: 0,
+                col14TotalExpensesGrosze: 0,
+                col16ResearchDevelopmentCostGrosze: 0,
+                qualificationKind: 'none',
+                isCorrection: false,
+                regulationVersion: 'pkpir_2026_ksef',
+                explanation: makeMockExplanation('kpir_entry', 'Wpis 2026-04'),
+              },
+            ],
+            periodSummary: {
+              period: '2026-04',
+              col7SalesRevenueGrosze: 1_000_000,
+              col8OtherRevenueGrosze: 0,
+              col9TotalRevenueGrosze: 1_000_000,
+              col10GoodsAndMaterialsGrosze: 0,
+              col11IncidentalCostsGrosze: 0,
+              col12RemunerationGrosze: 0,
+              col13OtherExpensesGrosze: 0,
+              col14TotalExpensesGrosze: 0,
+              col16ResearchDevelopmentCostGrosze: 0,
+              totalTaxDeductibleCostsGrosze: 0,
+              incomeOrLossGrosze: 1_000_000,
+            },
+            ytdSummary: {
+              period: '2026-04',
+              col7SalesRevenueGrosze: 4_000_000,
+              col8OtherRevenueGrosze: 0,
+              col9TotalRevenueGrosze: 4_000_000,
+              col10GoodsAndMaterialsGrosze: 0,
+              col11IncidentalCostsGrosze: 0,
+              col12RemunerationGrosze: 0,
+              col13OtherExpensesGrosze: 500_000,
+              col14TotalExpensesGrosze: 500_000,
+              col16ResearchDevelopmentCostGrosze: 0,
+              totalTaxDeductibleCostsGrosze: 500_000,
+              incomeOrLossGrosze: 3_500_000,
+            },
+            pitAdvance: {
+              period: '2026-04',
+              taxForm: 'skala',
+              taxBaseRoundedPlnGrosze: 3_500_000,
+              advanceDueRoundedPlnGrosze: 60_000,
+              advanceDueFormatted: '600,00 zł',
+              explanation: makeMockExplanation('kpir_pit_advance', 'Zaliczka PIT skala 600,00 zł', {
+                paidSocialZusYtdGrosze: 0,
+                paidHealthInsuranceYtdGrosze: 0,
+                previousAdvancesPaidYtdGrosze: 0,
+              }),
+            },
+            regimeComparison: null,
+          });
+        }
+
+        if (url.includes(`/companies/${COMPANY_JDG_KPIR_ID}/taxes/obligations?period=2026-04`)) {
+          return json({
+            tenantId: TENANT_1_ID,
+            legalEntityId: COMPANY_JDG_KPIR_ID,
+            period: '2026-04',
+            profileCode: 'jdg_kpir_skala',
+            evaluationDate: '2026-04-30',
+            bindingForDeclaration: true,
+            items: [
+              {
+                obligationKind: 'pit_advance',
+                labelPl: 'Zaliczka PIT-36 (skala 12%/32%)',
+                period: '2026-04',
+                statutoryDueDate: '2026-05-20',
+                accruedGrosze: 60_000,
+                accruedFormatted: '600,00 zł',
+                paidGrosze: 0,
+                paidFormatted: '0,00 zł',
+                remainingGrosze: 60_000,
+                remainingFormatted: '600,00 zł',
+                overpaymentGrosze: 0,
+                status: 'accrued_not_yet_due',
+                appliedPaymentIds: [],
+              },
+            ],
+            verifiedPayments: [],
+            totals: {
+              totalAccruedGrosze: 60_000,
+              totalAccruedFormatted: '600,00 zł',
+              totalPaidGrosze: 0,
+              totalPaidFormatted: '0,00 zł',
+              totalRemainingGrosze: 60_000,
+              totalRemainingFormatted: '600,00 zł',
+            },
+            paidSocialZusUsedInTaxBaseGrosze: 0,
+            paidHealthZusUsedInTaxBaseGrosze: 0,
+            citRateDetails: null,
+            explanation: makeMockExplanation('profile_a_kpir', 'Zaliczka PIT 600,00 zł.'),
+          });
+        }
+
+        // 4. Profile C: Sp. z o.o. (40 000 PLN taxable income -> CIT 9% = 3 600,00 PLN, CIT 19% = 7 600,00 PLN; 0 phantom prior advances)
+        if (url.includes(`/companies/${COMPANY_SPZOO_ID}/ledger?period=2026-03`)) {
+          return json({
+            period: '2026-03',
+            chartOfAccounts: [],
+            journalEntries: [],
+            trialBalance: {
+              rows: [],
+              totalTurnoverWnGrosze: 0,
+              totalTurnoverMaGrosze: 0,
+              totalEndingBalanceWnGrosze: 0,
+              totalEndingBalanceMaGrosze: 0,
+              isBalanced: true,
+            },
+            balanceSheet: {
+              fixedAssetsGrosze: 0,
+              currentAssetsGrosze: 0,
+              totalAssetsGrosze: 0,
+              totalAssetsFormatted: '0,00 zł',
+              equityTotalGrosze: 0,
+              liabilitiesAndProvisionsGrosze: 0,
+              totalEquityAndLiabilitiesGrosze: 0,
+              totalEquityAndLiabilitiesFormatted: '0,00 zł',
+              isBalanced: true,
+            },
+            profitAndLoss: {
+              salesRevenueGrosze: 4_000_000,
+              operatingCostsGrosze: 0,
+              grossFinancialResultGrosze: 4_000_000,
+              incomeTaxCitGrosze: 0,
+              netFinancialResultGrosze: 4_000_000,
+              netFinancialResultFormatted: '40 000,00 zł',
+            },
+            citAdvance: {
+              citRateKind: spzooAttested ? 'small_9' : 'standard_19',
+              citRateBps: spzooAttested ? 900 : 1900,
+              taxableIncomeGrosze: 4_000_000,
+              citAdvanceDueRoundedPlnGrosze: spzooAttested ? 360_000 : 760_000,
+              citAdvanceDueFormatted: spzooAttested ? '3 600,00 zł' : '7 600,00 zł',
+              explanation: makeMockExplanation(
+                'cit_advance',
+                spzooAttested ? 'Zaliczka CIT 9% = 3 600,00 zł' : 'Zaliczka CIT 19% = 7 600,00 zł',
+              ),
+            },
+          });
+        }
+
+        if (
+          url.includes(
+            `/companies/${COMPANY_SPZOO_ID}/taxes/obligations?period=2026-03&requestPreferentialCit9Pct=false`,
+          )
+        ) {
+          return json({
+            tenantId: TENANT_1_ID,
+            legalEntityId: COMPANY_SPZOO_ID,
+            period: '2026-03',
+            profileCode: 'spzoo_pelne_ksiegi',
+            evaluationDate: '2026-03-31',
+            bindingForDeclaration: true,
+            items: [
+              {
+                obligationKind: 'cit_advance',
+                labelPl: 'Zaliczka CIT-8 (19%)',
+                period: '2026-03',
+                statutoryDueDate: '2026-04-20',
+                accruedGrosze: 760_000,
+                accruedFormatted: '7 600,00 zł',
+                paidGrosze: 0,
+                paidFormatted: '0,00 zł',
+                remainingGrosze: 760_000,
+                remainingFormatted: '7 600,00 zł',
+                overpaymentGrosze: 0,
+                status: 'accrued_not_yet_due',
+                appliedPaymentIds: [],
+              },
+            ],
+            verifiedPayments: [],
+            totals: {
+              totalAccruedGrosze: 760_000,
+              totalAccruedFormatted: '7 600,00 zł',
+              totalPaidGrosze: 0,
+              totalPaidFormatted: '0,00 zł',
+              totalRemainingGrosze: 760_000,
+              totalRemainingFormatted: '7 600,00 zł',
+            },
+            paidSocialZusUsedInTaxBaseGrosze: 0,
+            paidHealthZusUsedInTaxBaseGrosze: 0,
+            citRateDetails: {
+              operatingAppliedRatePct: 19,
+              capitalGainsAppliedRatePct: 19,
+              taxYearMonths: 12,
+              operatingIncomeYtdGrosze: 4_000_000,
+            },
+            explanation: makeMockExplanation('cit_19', 'Zaliczka CIT 19% = 7 600,00 zł.'),
+          });
+        }
+
+        if (
+          url.includes(
+            `/companies/${COMPANY_SPZOO_ID}/taxes/obligations?period=2026-03&requestPreferentialCit9Pct=true`,
+          )
+        ) {
+          if (!spzooAttested) {
+            return json(
+              {
+                code: 'cit_preferential_attestation_missing',
+                message: 'Brak poświadczenia przesłanek 9% CIT.',
+              },
+              422,
+            );
+          }
+          return json({
+            tenantId: TENANT_1_ID,
+            legalEntityId: COMPANY_SPZOO_ID,
+            period: '2026-03',
+            profileCode: 'spzoo_pelne_ksiegi',
+            evaluationDate: '2026-03-31',
+            bindingForDeclaration: true,
+            items: [
+              {
+                obligationKind: 'cit_advance',
+                labelPl: 'Zaliczka CIT-8 (9%)',
+                period: '2026-03',
+                statutoryDueDate: '2026-04-20',
+                accruedGrosze: 360_000,
+                accruedFormatted: '3 600,00 zł',
+                paidGrosze: 0,
+                paidFormatted: '0,00 zł',
+                remainingGrosze: 360_000,
+                remainingFormatted: '3 600,00 zł',
+                overpaymentGrosze: 0,
+                status: 'accrued_not_yet_due',
+                appliedPaymentIds: [],
+              },
+            ],
+            verifiedPayments: [],
+            totals: {
+              totalAccruedGrosze: 360_000,
+              totalAccruedFormatted: '3 600,00 zł',
+              totalPaidGrosze: 0,
+              totalPaidFormatted: '0,00 zł',
+              totalRemainingGrosze: 360_000,
+              totalRemainingFormatted: '3 600,00 zł',
+            },
+            paidSocialZusUsedInTaxBaseGrosze: 0,
+            paidHealthZusUsedInTaxBaseGrosze: 0,
+            citRateDetails: {
+              operatingAppliedRatePct: 9,
+              capitalGainsAppliedRatePct: 19,
+              taxYearMonths: 12,
+              operatingIncomeYtdGrosze: 4_000_000,
+            },
+            explanation: makeMockExplanation('cit_9', 'Zaliczka CIT 9% = 3 600,00 zł.'),
+          });
+        }
+
+        return json({ code: 'not_found', message: `Unhandled URL: ${url}` }, 404);
+      }),
+    );
+
+    // A. Ryczałt (/app/ryczalt): 1 968,00 PLN (196_800 gr), 0 unpaid health deducted, YTD = 43 000,00 PLN
+    const ryczaltSnap = await getRyczaltSnapshot(
+      makeOnlineSession(COMPANY_JDG_RYCZALT_ID, '2026-03'),
+    );
+    expect(ryczaltSnap.ryczaltSummary.taxDueGrosze).toBe(196_800);
+    expect(ryczaltSnap.ryczaltSummary.breakdownByRate[0]?.allocatedSocialDeductionGrosze).toBe(
+      160_000,
+    );
+    expect(ryczaltSnap.ryczaltSummary.breakdownByRate[0]?.allocatedHealthDeductionGrosze).toBe(0);
+    expect(ryczaltSnap.vatExemption.cumulativeNetSalesAfterGrosze).toBe(4_300_000);
+    expect(ryczaltSnap.zusResult.healthContributionGrosze).toBe(49_835);
+
+    // B. KPiR (/app/kpir): month = 10 000 PLN, YTD = 40 000 PLN rev / 5 000 PLN costs, 0 unpaid ZUS, 0 phantom advances
+    // Skala: (35 000 * 12% - 3 600) = 600,00 PLN (60_000 gr); Liniowy: 35 000 * 19% = 6 650,00 PLN (665_000 gr)
+    const kpirSnap = await getKpirSnapshot(makeOnlineSession(COMPANY_JDG_KPIR_ID, '2026-04'));
+    expect(kpirSnap.summary.monthTotals.col9TotalRevenueGrosze).toBe(1_000_000);
+    expect(kpirSnap.summary.yearToDateTotals.col9TotalRevenueGrosze).toBe(4_000_000);
+    expect(kpirSnap.summary.yearToDateTotals.totalTaxDeductibleCostsGrosze).toBe(500_000);
+    expect(kpirSnap.pitSkala.advanceDueGrosze).toBe(60_000);
+    expect(kpirSnap.pitLiniowy.advanceDueGrosze).toBe(665_000);
+
+    // C1. Sp. z o.o. attested (/app/ledger): CIT 9% = 3 600,00 PLN (360_000 gr), CIT 19% = 7 600,00 PLN (760_000 gr)
+    const ledgerAttested = await getFullLedgerSnapshot(
+      makeOnlineSession(COMPANY_SPZOO_ID, '2026-03'),
+    );
+    expect(ledgerAttested.cit9.advanceDueGrosze).toBe(360_000);
+    expect(ledgerAttested.cit19.advanceDueGrosze).toBe(760_000);
+
+    // C2. Sp. z o.o. unattested (/app/ledger): 422 on requestPreferentialCit9Pct=true does not crash page; CIT 19% = 7 600,00 PLN & warning attached
+    spzooAttested = false;
+    const ledgerUnattested = await getFullLedgerSnapshot(
+      makeOnlineSession(COMPANY_SPZOO_ID, '2026-03'),
+    );
+    expect(ledgerUnattested.cit19.advanceDueGrosze).toBe(760_000);
+    expect(ledgerUnattested.cit9.advanceDueGrosze).toBe(360_000);
+    expect(
+      ledgerUnattested.cit9.explanation.warnings.some(
+        (w) => w.code === 'CIT_9_PCT_ATTESTATION_REQUIRED',
+      ),
+    ).toBe(true);
   });
 });
