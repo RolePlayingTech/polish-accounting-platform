@@ -985,4 +985,309 @@ describe('Wave 2 Statutory JPK API (#98/GLD-11), Strict FA(2)/FA(3) XML & Source
     expect(draftDoc.status).toBe('needs_verification');
     expect(draftDoc.postingResult).toBeNull();
   }, 90_000);
+
+  it('enforces Round-1 adversarial statutory & XSD invariants ([P0-1] K_11/P_11 & V7K exact-grosze carry, [P0-2] Art. 63 § 1 OP per-rate summary, [P0-3] JPK_KR_PD ZOiS7 S_12_1/S_12_3, [P1-1] FA(3) buyer IBAN & KOR metadata)', async () => {
+    const fastify = app.getHttpAdapter().getInstance();
+
+    // 1. [P0-3] JPK_KR_PD(1) 3-digit GL synthetic accounts emit exact S_12_1 & CIT S_12_3 (PD1/PD2) markers (never dead-code INNE)
+    const krPdRes = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${COMPANY_SPZOO_ID}/jpk/export`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: { period: '2026-03', structureCode: 'JPK_KR_PD(1)', purpose: 1 },
+    });
+    expect(krPdRes.statusCode).toBe(200);
+    const krPd = ExportJpkResponseSchema.parse(krPdRes.json());
+    expect(krPd.xmlContent).toContain('<S_12_1>BAAII1a_W</S_12_1>'); // 010 Środki trwałe
+    expect(krPd.xmlContent).toContain('<S_12_1>BABIII1c1_SPKR</S_12_1>'); // 130 Rachunek bieżący
+    expect(krPd.xmlContent).toContain('<S_12_1>RPBIII</S_12_1>'); // 402 Usługi obce
+    expect(krPd.xmlContent).toContain('<S_12_3>PD2</S_12_3>'); // 402 CIT KUP
+    expect(krPd.xmlContent).toContain('<S_12_1>RPAI_RKAI_POZ</S_12_1>'); // 700 Przychody ze sprzedaży
+    expect(krPd.xmlContent).toContain('<S_12_3>PD1</S_12_3>'); // 700 CIT Przychód
+    expect(krPd.xmlContent).toContain('<S_12_1>BPAI</S_12_1>'); // 800 Kapitał zakładowy
+    expect(krPd.xmlContent).not.toContain('<S_12_1>INNE</S_12_1>');
+    expect(validateOfficialMfXml(krPd.xmlContent, 'JPK_KR_PD(1)').valid).toBe(true);
+
+    // 2. [P0-1] & [P0-2] Monthly VAT payer: 'np' -> <K_11>/<P_11> (not <K_10>/<P_10>), and multi-rate .50 gr per-rate rounding matches <Deklaracja>
+    const mCompanyRes = await fastify.inject({
+      method: 'POST',
+      url: `/api/v1/tenants/${TENANT_1_ID}/companies`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: {
+        displayName: 'Miesięczna Walidacja Podatkowa Sp. z o.o.',
+        nip: '5260250274',
+        legalForm: 'sp_z_o_o',
+        profileCode: 'spzoo_pelne_ksiegi',
+        vatStatus: 'czynny',
+        vatSettlementPeriod: 'monthly',
+      },
+    });
+    expect(mCompanyRes.statusCode).toBe(201);
+    const mCompanyId = CreateCompanyResponseSchema.parse(mCompanyRes.json()).company.legalEntityId;
+    const mPath = `/api/v1/tenants/${TENANT_1_ID}/companies/${mCompanyId}`;
+
+    const postDoc = async (companyBasePath: string, payload: Record<string, unknown>) => {
+      const created = await fastify.inject({
+        method: 'POST',
+        url: `${companyBasePath}/documents`,
+        headers: { authorization: `Bearer ${janToken}` },
+        payload,
+      });
+      expect(created.statusCode).toBe(201);
+      const docItem = CompanyDocumentItemSchema.parse(created.json());
+      const posted = await fastify.inject({
+        method: 'POST',
+        url: `${companyBasePath}/documents/${docItem.documentId}/approve-and-post`,
+        headers: { authorization: `Bearer ${janToken}` },
+        payload: {},
+      });
+      expect(posted.statusCode).toBe(200);
+      return docItem;
+    };
+
+    // 2a. [P0-1] Outside-country B2B service ('np', art. 28b VAT) -> <K_11>/<P_11> & <P_37>, zero <K_10>/<P_10>
+    await postDoc(mPath, {
+      documentNumber: 'FV/NP/2026/06/01',
+      direction: 'sales',
+      issueDate: '2026-06-10',
+      dueDate: '2026-06-24',
+      counterpartyName: 'Nordic Cloud AB (Stockholm, SE)',
+      lines: [
+        {
+          description: 'Usługa inżynierii oprogramowania poza terytorium kraju (art. 28b VAT)',
+          netGrosze: 100_000,
+          vatRate: 'np',
+        },
+      ],
+    });
+
+    const v7mNpRes = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${mCompanyId}/jpk/export`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: { period: '2026-06', structureCode: 'JPK_V7M(3)', purpose: 1 },
+    });
+    expect(v7mNpRes.statusCode).toBe(200);
+    const v7mNp = ExportJpkResponseSchema.parse(v7mNpRes.json());
+    expect(v7mNp.xmlContent).toContain('<K_11>1000.00</K_11>');
+    expect(v7mNp.xmlContent).toContain('<P_11>1000</P_11>');
+    expect(v7mNp.xmlContent).toContain('<P_37>1000</P_37>');
+    expect(v7mNp.xmlContent).not.toContain('<K_10>');
+    expect(v7mNp.xmlContent).not.toContain('<P_10>');
+    expect(validateOfficialMfXml(v7mNp.xmlContent, 'JPK_V7M(3)').valid).toBe(true);
+
+    // 2b. [P0-2] Multi-rate .50 gr VAT (45,65 zł @ 23% = 10,50 zł VAT -> P_20=11; 131,25 zł @ 8% = 10,50 zł VAT -> P_18=11; P_38=P_51=22)
+    await postDoc(mPath, {
+      documentNumber: 'FV/MULTIRATE/2026/05/01',
+      direction: 'sales',
+      issueDate: '2026-05-15',
+      dueDate: '2026-05-29',
+      counterpartyName: 'Odbiorca Krajowy Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      lines: [
+        { description: 'Usługa wdrożeniowa 23%', netGrosze: 4_565, vatRate: '23' },
+        { description: 'Publikacja specjalistyczna 8%', netGrosze: 13_125, vatRate: '8' },
+      ],
+    });
+
+    const v7mMultiRes = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${mCompanyId}/jpk/export`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: { period: '2026-05', structureCode: 'JPK_V7M(3)', purpose: 1 },
+    });
+    expect(v7mMultiRes.statusCode).toBe(200);
+    const v7mMulti = ExportJpkResponseSchema.parse(v7mMultiRes.json());
+    expect(v7mMulti.xmlContent).toContain('<PodatekNalezny>21.00</PodatekNalezny>');
+    expect(v7mMulti.xmlContent).toContain('<P_18>11</P_18>');
+    expect(v7mMulti.xmlContent).toContain('<P_20>11</P_20>');
+    expect(v7mMulti.xmlContent).toContain('<P_38>22</P_38>');
+    expect(v7mMulti.xmlContent).toContain('<P_51>22</P_51>');
+    expect(v7mMulti.summary.p51TaxDuePln).toBe(22);
+    expect(validateOfficialMfXml(v7mMulti.xmlContent, 'JPK_V7M(3)').valid).toBe(true);
+
+    // 3. [P0-1] & [P0-2] Quarterly JPK_V7K(3): Month 2 omits declaration summary fields; Month 3 sums exact grosze across Q2 (10,40 zł × 3 = 31,20 zł -> P_20=31, not 30) & carries prior-month 'np' into P_11
+    const q2CompanyRes = await fastify.inject({
+      method: 'POST',
+      url: `/api/v1/tenants/${TENANT_1_ID}/companies`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: {
+        displayName: 'Kwartalna Precyzja Groszowa Sp. z o.o.',
+        nip: '5260250995',
+        legalForm: 'sp_z_o_o',
+        profileCode: 'spzoo_pelne_ksiegi',
+        vatStatus: 'czynny',
+        vatSettlementPeriod: 'quarterly',
+      },
+    });
+    expect(q2CompanyRes.statusCode).toBe(201);
+    const q2CompanyId = CreateCompanyResponseSchema.parse(q2CompanyRes.json()).company
+      .legalEntityId;
+    const q2Path = `/api/v1/tenants/${TENANT_1_ID}/companies/${q2CompanyId}`;
+
+    // 45,22 zł * 23% = 10,40 zł VAT (1_040 gr) in each of Apr, May, Jun -> quarterly exact sum = 31,20 zł -> P_20 = 31 PLN
+    await postDoc(q2Path, {
+      documentNumber: 'FV/Q2/04',
+      direction: 'sales',
+      issueDate: '2026-04-10',
+      counterpartyName: 'Klient Q2 Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      lines: [{ description: 'Abonament kwiecień', netGrosze: 4_522, vatRate: '23' }],
+    });
+    await postDoc(q2Path, {
+      documentNumber: 'FV/Q2/05',
+      direction: 'sales',
+      issueDate: '2026-05-10',
+      counterpartyName: 'Klient Q2 Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      lines: [
+        { description: 'Abonament maj', netGrosze: 4_522, vatRate: '23' },
+        { description: 'Konsultacje zagraniczne np maj', netGrosze: 100_000, vatRate: 'np' },
+      ],
+    });
+    await postDoc(q2Path, {
+      documentNumber: 'FV/Q2/06',
+      direction: 'sales',
+      issueDate: '2026-06-10',
+      counterpartyName: 'Klient Q2 Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      lines: [{ description: 'Abonament czerwiec', netGrosze: 4_522, vatRate: '23' }],
+    });
+
+    const v7kMayRes = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${q2CompanyId}/jpk/export`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: { period: '2026-05', structureCode: 'JPK_V7K(3)', purpose: 1 },
+    });
+    expect(v7kMayRes.statusCode).toBe(200);
+    const v7kMay = ExportJpkResponseSchema.parse(v7kMayRes.json());
+    expect(v7kMay.xmlContent).not.toContain('<Deklaracja>');
+    expect(v7kMay.xmlContent).toContain('<K_11>1000.00</K_11>');
+    expect(v7kMay.summary.p39CarryoverPln).toBeUndefined();
+    expect(v7kMay.summary.p51TaxDuePln).toBeUndefined();
+    expect(v7kMay.summary.p53ExcessPln).toBeUndefined();
+    expect(v7kMay.summary.p54RefundPln).toBeUndefined();
+    expect(v7kMay.summary.p62CarryForwardPln).toBeUndefined();
+    expect(validateOfficialMfXml(v7kMay.xmlContent, 'JPK_V7K(3)').valid).toBe(true);
+
+    const v7kJunRes = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${q2CompanyId}/jpk/export`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: { period: '2026-06', structureCode: 'JPK_V7K(3)', purpose: 1 },
+    });
+    expect(v7kJunRes.statusCode).toBe(200);
+    const v7kJun = ExportJpkResponseSchema.parse(v7kJunRes.json());
+    expect(v7kJun.xmlContent).toContain('<P_11>1000</P_11>');
+    expect(v7kJun.xmlContent).toContain('<P_20>31</P_20>');
+    expect(v7kJun.xmlContent).toContain('<P_38>31</P_38>');
+    expect(v7kJun.summary.p51TaxDuePln).toBe(31);
+    expect(validateOfficialMfXml(v7kJun.xmlContent, 'JPK_V7K(3)').valid).toBe(true);
+
+    // 4. [P1-1] FA(3) sales export: never leaks buyer counterpartyIban as seller <NrRB>, resolves original invoice issueDate & NrKSeFFaKorygowanej on KOR, and sets P_18A=1 on negative Annex 15 KOR > 15k PLN
+    const jdgPath = `/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}`;
+    const buyerIban = 'PL10105000997603123456789123';
+    const origSalesCreate = await fastify.inject({
+      method: 'POST',
+      url: `${jdgPath}/documents`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: {
+        documentNumber: 'FV/ORIG-IBAN-KSEF/2026/03/05',
+        direction: 'sales',
+        issueDate: '2026-03-05',
+        dueDate: '2026-03-19',
+        counterpartyName: 'Odbiorca Sprzętowy Sp. z o.o.',
+        counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+        counterpartyIban: buyerIban,
+        lines: [
+          {
+            description: 'Dostawa serwerów obliczeniowych (zał. nr 15)',
+            netGrosze: 2_000_000,
+            vatRate: '23',
+            annex15Item: true,
+          },
+        ],
+      },
+    });
+    expect(origSalesCreate.statusCode).toBe(201);
+    const origSalesDoc = CompanyDocumentItemSchema.parse(origSalesCreate.json());
+
+    const origFa3Res = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${COMPANY_JDG_KPIR_ID}/invoices/${origSalesDoc.documentId}/fa3-xml`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: {},
+    });
+    expect(origFa3Res.statusCode).toBe(200);
+    const origFa3 = GenerateInvoiceFa3XmlResponseSchema.parse(origFa3Res.json());
+    expect(origFa3.xmlContent).not.toContain(buyerIban);
+    expect(origFa3.xmlContent).not.toContain('<RachunekBankowy>');
+    expect(validateOfficialMfXml(origFa3.xmlContent, 'FA(3)').valid).toBe(true);
+
+    // Issue original invoice in KSeF sandbox so it receives an official-format KSeF reference number
+    const origIssueRes = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${COMPANY_JDG_KPIR_ID}/ksef/sandbox/issue`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: {
+        documentId: origSalesDoc.documentId,
+        environment: 'local_mock',
+        idempotencyKey: 'ksef-orig-for-kor-001',
+        humanConfirmation: { confirmedByHuman: true },
+      },
+    });
+    expect(origIssueRes.statusCode).toBe(200);
+    const origKsefNumber = IssueKsefSandboxResponseSchema.parse(origIssueRes.json()).ksefNumber!;
+    expect(validateKsefNumber(origKsefNumber).valid).toBe(true);
+
+    // Create in-minus KOR exceeding 15 000 PLN gross (-18 450,00 zł gross) with Annex 15 item referencing the 2026-03-05 invoice
+    const bigKorCreate = await fastify.inject({
+      method: 'POST',
+      url: `${jdgPath}/documents`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: {
+        documentNumber: 'FKOR/ORIG-IBAN-KSEF/2026/03/29',
+        direction: 'sales',
+        issueDate: '2026-03-29',
+        dueDate: '2026-04-12',
+        counterpartyName: 'Odbiorca Sprzętowy Sp. z o.o.',
+        counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+        counterpartyIban: buyerIban,
+        isCorrection: true,
+        correctedDocumentNumber: 'FV/ORIG-IBAN-KSEF/2026/03/05',
+        correctionReason: 'Zwrot części serwerów obliczeniowych z załącznika nr 15',
+        lines: [
+          {
+            description: 'Korekta in-minus dostawy serwerów (zał. nr 15)',
+            netGrosze: -1_500_000,
+            vatRate: '23',
+            annex15Item: true,
+          },
+        ],
+      },
+    });
+    expect(bigKorCreate.statusCode).toBe(201);
+    const bigKorDoc = CompanyDocumentItemSchema.parse(bigKorCreate.json());
+
+    const bigKorFa3Res = await fastify.inject({
+      method: 'POST',
+      url: `/v1/companies/${COMPANY_JDG_KPIR_ID}/invoices/${bigKorDoc.documentId}/fa3-xml`,
+      headers: { authorization: `Bearer ${janToken}` },
+      payload: {},
+    });
+    expect(bigKorFa3Res.statusCode).toBe(200);
+    const bigKorFa3 = GenerateInvoiceFa3XmlResponseSchema.parse(bigKorFa3Res.json());
+    expect(bigKorFa3.xmlContent).toContain('<RodzajFaktury>KOR</RodzajFaktury>');
+    expect(bigKorFa3.xmlContent).toContain(
+      '<DataWystFaKorygowanej>2026-03-05</DataWystFaKorygowanej>',
+    );
+    expect(bigKorFa3.xmlContent).toContain('<NrKSeF>1</NrKSeF>');
+    expect(bigKorFa3.xmlContent).toContain(
+      `<NrKSeFFaKorygowanej>${origKsefNumber}</NrKSeFFaKorygowanej>`,
+    );
+    expect(bigKorFa3.xmlContent).toContain('<P_18A>1</P_18A>');
+    expect(bigKorFa3.xmlContent).not.toContain(buyerIban);
+    expect(validateOfficialMfXml(bigKorFa3.xmlContent, 'FA(3)').valid).toBe(true);
+  }, 90_000);
 });

@@ -209,11 +209,11 @@ function mapAccountCodeToJpkKrPdTags(accountCode: string): {
   readonly balanceSheetTagS12_1: string;
   readonly taxTagS12_3?: string;
 } {
-  const syntheticRoot = accountCode.includes('-')
-    ? accountCode.split('-')[0]!
-    : accountCode.slice(0, 2);
+  const syntheticCode = accountCode.includes('-')
+    ? accountCode.split('-')[0]!.slice(0, 3)
+    : accountCode.slice(0, 3);
 
-  switch (syntheticRoot) {
+  switch (syntheticCode) {
     case '010':
       return { parentAccountId: '01', balanceSheetTagS12_1: 'BAAII1a_W' };
     case '020':
@@ -239,7 +239,10 @@ function mapAccountCodeToJpkKrPdTags(accountCode: string): {
     case '221':
       return accountCode === '221-2'
         ? { parentAccountId: '221', balanceSheetTagS12_1: 'BABII3b' }
-        : { parentAccountId: '221', balanceSheetTagS12_1: 'BPBIII3g' };
+        : {
+            parentAccountId: accountCode.includes('-') ? '221' : '22',
+            balanceSheetTagS12_1: 'BPBIII3g',
+          };
     case '230':
       return { parentAccountId: '23', balanceSheetTagS12_1: 'BPBIII3h' };
     case '240':
@@ -295,7 +298,10 @@ function mapAccountCodeToJpkKrPdTags(accountCode: string): {
     case '870':
       return { parentAccountId: '87', balanceSheetTagS12_1: 'RPJ_RKM_B' };
     default:
-      return { parentAccountId: syntheticRoot || '00', balanceSheetTagS12_1: 'INNE' };
+      return {
+        parentAccountId: syntheticCode.slice(0, 2) || '00',
+        balanceSheetTagS12_1: 'INNE',
+      };
   }
 }
 
@@ -681,8 +687,11 @@ export class StatutoryFilingFacade {
             mutable.vat5Grosze = (mutable.vat5Grosze ?? 0) + entry.vatTotalGrosze;
           } else if (entry.vatRate === '0') {
             mutable.zeroDomesticNetGrosze = (mutable.zeroDomesticNetGrosze ?? 0) + entry.netGrosze;
-          } else if (entry.vatRate === 'zw' || entry.vatRate === 'np') {
+          } else if (entry.vatRate === 'zw') {
             mutable.exemptNetGrosze = (mutable.exemptNetGrosze ?? 0) + entry.netGrosze;
+          } else if (entry.vatRate === 'np') {
+            mutable.outsideCountryNetGrosze =
+              (mutable.outsideCountryNetGrosze ?? 0) + entry.netGrosze;
           }
           salesByDoc.set(docKey, mutable);
         }
@@ -699,6 +708,8 @@ export class StatutoryFilingFacade {
             entry.deductionMode === 'vehicle_mixed_50'
               ? multiplyGroszeByBps(entry.netGrosze, 5000, 'half_up')
               : entry.netGrosze;
+          const isFixedAsset =
+            (entry as { isFixedAssetPurchase?: boolean }).isFixedAssetPurchase === true;
 
           const baseRow: JpkV7PurchaseRowInput = prev ?? {
             supplierTin: cleanTin,
@@ -708,30 +719,44 @@ export class StatutoryFilingFacade {
             ...(entry.taxPointDate !== entry.issueDate ? { receiptDate: entry.taxPointDate } : {}),
             ksefMarker: this.mapVatEntryKsefMarker(entry),
           };
-          purchaseByDoc.set(docKey, {
-            ...baseRow,
-            otherAcquisitionsNetGrosze:
-              (baseRow.otherAcquisitionsNetGrosze ?? 0) + effectiveNetGrosze,
-            otherAcquisitionsVatGrosze:
-              (baseRow.otherAcquisitionsVatGrosze ?? 0) + entry.deductibleVatGrosze,
-          });
+          purchaseByDoc.set(
+            docKey,
+            isFixedAsset
+              ? {
+                  ...baseRow,
+                  fixedAssetsNetGrosze: (baseRow.fixedAssetsNetGrosze ?? 0) + effectiveNetGrosze,
+                  fixedAssetsVatGrosze:
+                    (baseRow.fixedAssetsVatGrosze ?? 0) + entry.deductibleVatGrosze,
+                }
+              : {
+                  ...baseRow,
+                  otherAcquisitionsNetGrosze:
+                    (baseRow.otherAcquisitionsNetGrosze ?? 0) + effectiveNetGrosze,
+                  otherAcquisitionsVatGrosze:
+                    (baseRow.otherAcquisitionsVatGrosze ?? 0) + entry.deductibleVatGrosze,
+                },
+          );
         }
 
         const salesRows = [...salesByDoc.values()];
         const purchaseRows = [...purchaseByDoc.values()];
+        const includeDeclaration = req.structureCode !== 'JPK_V7K(3)' || month % 3 === 0;
 
-        let quarterlyPriorMonthsCarry:
+        let quarterlyPriorMonthsCarryGrosze:
           | {
-              exemptPln?: number;
-              zeroDomesticPln?: number;
-              net5Pln?: number;
-              vat5Pln?: number;
-              net8Pln?: number;
-              vat8Pln?: number;
-              net23Pln?: number;
-              vat23Pln?: number;
-              otherAcquisitionsNetPln?: number;
-              otherAcquisitionsVatPln?: number;
+              exemptNetGrosze: number;
+              outsideCountryNetGrosze: number;
+              zeroDomesticNetGrosze: number;
+              net5Grosze: number;
+              vat5Grosze: number;
+              net8Grosze: number;
+              vat8Grosze: number;
+              net23Grosze: number;
+              vat23Grosze: number;
+              fixedAssetsNetGrosze: number;
+              fixedAssetsVatGrosze: number;
+              otherAcquisitionsNetGrosze: number;
+              otherAcquisitionsVatGrosze: number;
             }
           | undefined;
 
@@ -750,20 +775,64 @@ export class StatutoryFilingFacade {
           priorCarryoverPln = roundGroszeHalfUpToPln(
             m1Vat.jpkV7m?.carryOverFromPreviousPeriodP39Grosze ?? 0,
           );
-          const f1 = m1Vat.jpkV7m?.fields ?? {};
-          const f2 = m2Vat.jpkV7m?.fields ?? {};
-          quarterlyPriorMonthsCarry = {
-            exemptPln: (f1['P_10'] ?? 0) + (f2['P_10'] ?? 0),
-            zeroDomesticPln: (f1['P_13'] ?? 0) + (f2['P_13'] ?? 0),
-            net5Pln: (f1['P_15'] ?? 0) + (f2['P_15'] ?? 0),
-            vat5Pln: (f1['P_16'] ?? 0) + (f2['P_16'] ?? 0),
-            net8Pln: (f1['P_17'] ?? 0) + (f2['P_17'] ?? 0),
-            vat8Pln: (f1['P_18'] ?? 0) + (f2['P_18'] ?? 0),
-            net23Pln: (f1['P_19'] ?? 0) + (f2['P_19'] ?? 0),
-            vat23Pln: (f1['P_20'] ?? 0) + (f2['P_20'] ?? 0),
-            otherAcquisitionsNetPln: (f1['P_42'] ?? 0) + (f2['P_42'] ?? 0),
-            otherAcquisitionsVatPln: (f1['P_43'] ?? 0) + (f2['P_43'] ?? 0),
+
+          const acc = {
+            exemptNetGrosze: 0,
+            outsideCountryNetGrosze: 0,
+            zeroDomesticNetGrosze: 0,
+            net5Grosze: 0,
+            vat5Grosze: 0,
+            net8Grosze: 0,
+            vat8Grosze: 0,
+            net23Grosze: 0,
+            vat23Grosze: 0,
+            fixedAssetsNetGrosze: 0,
+            fixedAssetsVatGrosze: 0,
+            otherAcquisitionsNetGrosze: 0,
+            otherAcquisitionsVatGrosze: 0,
           };
+
+          for (const priorVat of [m1Vat, m2Vat]) {
+            for (const sEntry of priorVat.salesEntries) {
+              if (sEntry.vatRate === '23') {
+                acc.net23Grosze += sEntry.netGrosze;
+                acc.vat23Grosze += sEntry.vatTotalGrosze;
+              } else if (sEntry.vatRate === '8') {
+                acc.net8Grosze += sEntry.netGrosze;
+                acc.vat8Grosze += sEntry.vatTotalGrosze;
+              } else if (sEntry.vatRate === '5') {
+                acc.net5Grosze += sEntry.netGrosze;
+                acc.vat5Grosze += sEntry.vatTotalGrosze;
+              } else if (sEntry.vatRate === '0') {
+                acc.zeroDomesticNetGrosze += sEntry.netGrosze;
+              } else if (sEntry.vatRate === 'zw') {
+                acc.exemptNetGrosze += sEntry.netGrosze;
+              } else if (sEntry.vatRate === 'np') {
+                acc.outsideCountryNetGrosze += sEntry.netGrosze;
+              }
+            }
+
+            for (const pEntry of priorVat.purchaseEntries) {
+              if (pEntry.deductibleVatGrosze === 0 && pEntry.deductionMode === 'none_0') {
+                continue;
+              }
+              const effNet =
+                pEntry.deductionMode === 'vehicle_mixed_50'
+                  ? multiplyGroszeByBps(pEntry.netGrosze, 5000, 'half_up')
+                  : pEntry.netGrosze;
+              const isFixed =
+                (pEntry as { isFixedAssetPurchase?: boolean }).isFixedAssetPurchase === true;
+              if (isFixed) {
+                acc.fixedAssetsNetGrosze += effNet;
+                acc.fixedAssetsVatGrosze += pEntry.deductibleVatGrosze;
+              } else {
+                acc.otherAcquisitionsNetGrosze += effNet;
+                acc.otherAcquisitionsVatGrosze += pEntry.deductibleVatGrosze;
+              }
+            }
+          }
+
+          quarterlyPriorMonthsCarryGrosze = acc;
         }
 
         const prepared = prepareValidatedJpkExport({
@@ -783,34 +852,64 @@ export class StatutoryFilingFacade {
             ...(req.correctionJustification
               ? { correctionJustification: req.correctionJustification }
               : {}),
-            ...(quarterlyPriorMonthsCarry ? { quarterlyPriorMonthsCarry } : {}),
+            ...(quarterlyPriorMonthsCarryGrosze ? { quarterlyPriorMonthsCarryGrosze } : {}),
           },
         });
 
-        const totalOutPln =
-          roundGroszeHalfUpToPln(
-            salesRows.reduce(
-              (acc, r) => acc + (r.vat5Grosze ?? 0) + (r.vat8Grosze ?? 0) + (r.vat23Grosze ?? 0),
-              0,
-            ),
-          ) +
-          (quarterlyPriorMonthsCarry
-            ? (quarterlyPriorMonthsCarry.vat5Pln ?? 0) +
-              (quarterlyPriorMonthsCarry.vat8Pln ?? 0) +
-              (quarterlyPriorMonthsCarry.vat23Pln ?? 0)
-            : 0);
-        const totalInPln =
-          priorCarryoverPln +
-          roundGroszeHalfUpToPln(
-            purchaseRows.reduce(
-              (acc, r) => acc + (r.fixedAssetsVatGrosze ?? 0) + (r.otherAcquisitionsVatGrosze ?? 0),
-              0,
-            ),
-          ) +
-          (quarterlyPriorMonthsCarry?.otherAcquisitionsVatPln ?? 0);
-        const p51 = Math.max(0, totalOutPln - totalInPln);
-        const p53 = Math.max(0, totalInPln - totalOutPln);
-        const p62 = Math.max(0, p53 - requestedRefundPln);
+        let declarationSummaryFields:
+          | {
+              p39CarryoverPln: number;
+              p51TaxDuePln: number;
+              p53ExcessPln: number;
+              p54RefundPln: number;
+              p62CarryForwardPln: number;
+            }
+          | undefined;
+
+        if (includeDeclaration) {
+          const m3Vat5Grosze = salesRows.reduce((sum, r) => sum + (r.vat5Grosze ?? 0), 0);
+          const m3Vat8Grosze = salesRows.reduce((sum, r) => sum + (r.vat8Grosze ?? 0), 0);
+          const m3Vat23Grosze = salesRows.reduce((sum, r) => sum + (r.vat23Grosze ?? 0), 0);
+          const m3FixedVatGrosze = purchaseRows.reduce(
+            (sum, r) => sum + (r.fixedAssetsVatGrosze ?? 0),
+            0,
+          );
+          const m3OtherVatGrosze = purchaseRows.reduce(
+            (sum, r) => sum + (r.otherAcquisitionsVatGrosze ?? 0),
+            0,
+          );
+
+          const p16Pln = roundGroszeHalfUpToPln(
+            m3Vat5Grosze + (quarterlyPriorMonthsCarryGrosze?.vat5Grosze ?? 0),
+          );
+          const p18Pln = roundGroszeHalfUpToPln(
+            m3Vat8Grosze + (quarterlyPriorMonthsCarryGrosze?.vat8Grosze ?? 0),
+          );
+          const p20Pln = roundGroszeHalfUpToPln(
+            m3Vat23Grosze + (quarterlyPriorMonthsCarryGrosze?.vat23Grosze ?? 0),
+          );
+          const p38Pln = p16Pln + p18Pln + p20Pln;
+
+          const p41Pln = roundGroszeHalfUpToPln(
+            m3FixedVatGrosze + (quarterlyPriorMonthsCarryGrosze?.fixedAssetsVatGrosze ?? 0),
+          );
+          const p43Pln = roundGroszeHalfUpToPln(
+            m3OtherVatGrosze + (quarterlyPriorMonthsCarryGrosze?.otherAcquisitionsVatGrosze ?? 0),
+          );
+          const p48Pln = priorCarryoverPln + p41Pln + p43Pln;
+
+          const p51 = Math.max(0, p38Pln - p48Pln);
+          const p53 = Math.max(0, p48Pln - p38Pln);
+          const p62 = Math.max(0, p53 - requestedRefundPln);
+
+          declarationSummaryFields = {
+            p39CarryoverPln: priorCarryoverPln,
+            p51TaxDuePln: p51,
+            p53ExcessPln: p53,
+            p54RefundPln: requestedRefundPln,
+            p62CarryForwardPln: p62,
+          };
+        }
 
         return ExportJpkResponseSchema.parse({
           tenantId,
@@ -834,11 +933,7 @@ export class StatutoryFilingFacade {
           generatedAtIso,
           summary: {
             rowsCount: salesRows.length + purchaseRows.length,
-            p39CarryoverPln: priorCarryoverPln,
-            p51TaxDuePln: p51,
-            p53ExcessPln: p53,
-            p54RefundPln: requestedRefundPln,
-            p62CarryForwardPln: p62,
+            ...(declarationSummaryFields ?? {}),
           },
           truthfulnessNoticePl: prepared.truthfulnessNoticePl,
         });
@@ -1542,11 +1637,37 @@ export class StatutoryFilingFacade {
     }
 
     const hasAnnex15 = doc.lines.some((l) => l.annex15Item);
-    const mandatoryMpp = hasAnnex15 && doc.totalGrossGrosze > 1_500_000;
+    const mandatoryMpp = hasAnnex15 && Math.abs(doc.totalGrossGrosze) > 1_500_000;
+
+    let originalIssueDate = doc.issueDate;
+    let originalKsefNumber: string | undefined;
+    if (docItem.isCorrection && docItem.correctedDocumentNumber) {
+      const targetDocNumber = docItem.correctedDocumentNumber.trim();
+      const companyDocs = await this.workspace.listDocuments(actor, tenantId, legalEntityId);
+      const originalDoc = companyDocs.documents.find(
+        (candidate) =>
+          candidate.documentId !== docItem.documentId &&
+          candidate.document.direction === 'sales' &&
+          candidate.document.documentNumber.trim() === targetDocNumber,
+      );
+      if (originalDoc) {
+        originalIssueDate = originalDoc.document.issueDate;
+        const archive = this.getOrCreateCompanyArchive(tenantId, legalEntityId);
+        const archivedKsefNumber = archive
+          .listCompanyArtifacts({ actorUserId: actor.userId, tenantId, legalEntityId })
+          .find(
+            (a) => a.linkedDocumentId === originalDoc.documentId && a.ksefReferenceNumber,
+          )?.ksefReferenceNumber;
+        const candidateKsef = originalDoc.document.ksefReferenceNumber ?? archivedKsefNumber;
+        if (candidateKsef && validateKsefNumber(candidateKsef, { verifyCrc8: false }).valid) {
+          originalKsefNumber = candidateKsef;
+        }
+      }
+    }
 
     let generated;
     try {
-      const sellerIban = req.sellerBankAccountIban ?? doc.counterpartyIban;
+      const sellerIban = req.sellerBankAccountIban;
       const vatExemptionBasis =
         settings.taxProfile.vatStatus === 'zwolniony_art_113'
           ? 'Zwolnienie podmiotowe z VAT na podstawie art. 113 ust. 1 i 9 ustawy o VAT'
@@ -1594,8 +1715,9 @@ export class StatutoryFilingFacade {
                 reason: docItem.correctionReason ?? 'Korekta faktury sprzedaży',
                 correctedInvoices: [
                   {
-                    originalIssueDate: doc.issueDate,
+                    originalIssueDate,
                     originalInvoiceNumber: docItem.correctedDocumentNumber ?? 'FV/PIERWOTNA',
+                    ...(originalKsefNumber ? { originalKsefNumber } : {}),
                   },
                 ],
               },

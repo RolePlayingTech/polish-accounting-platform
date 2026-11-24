@@ -340,6 +340,7 @@ export interface JpkV7SalesRowInput {
   gtuCodes?: ReadonlyArray<JpkGtuCode>;
   procedureCodes?: ReadonlyArray<JpkSalesProcedureCode>;
   exemptNetGrosze?: number; // K_10
+  outsideCountryNetGrosze?: number; // K_11
   zeroDomesticNetGrosze?: number; // K_13
   net5Grosze?: number; // K_15
   vat5Grosze?: number; // K_16
@@ -396,6 +397,7 @@ export interface GenerateJpkV7Input {
    */
   quarterlyPriorMonthsCarry?: {
     exemptPln?: number;
+    outsideCountryPln?: number;
     zeroDomesticPln?: number;
     net5Pln?: number;
     vat5Pln?: number;
@@ -407,6 +409,26 @@ export interface GenerateJpkV7Input {
     fixedAssetsVatPln?: number;
     otherAcquisitionsNetPln?: number;
     otherAcquisitionsVatPln?: number;
+  };
+  /**
+   * Exact integer grosze carry for JPK_V7K(3) months 1+2 so quarterly VAT-7K(17) fields
+   * are summed in grosze across all 3 months of the quarter and rounded once per rate/bucket
+   * (Art. 99 ust. 2–3 ustawy o VAT + Art. 63 § 1 Ordynacji podatkowej).
+   */
+  quarterlyPriorMonthsCarryGrosze?: {
+    exemptNetGrosze?: number;
+    outsideCountryNetGrosze?: number;
+    zeroDomesticNetGrosze?: number;
+    net5Grosze?: number;
+    vat5Grosze?: number;
+    net8Grosze?: number;
+    vat8Grosze?: number;
+    net23Grosze?: number;
+    vat23Grosze?: number;
+    fixedAssetsNetGrosze?: number;
+    fixedAssetsVatGrosze?: number;
+    otherAcquisitionsNetGrosze?: number;
+    otherAcquisitionsVatGrosze?: number;
   };
 }
 
@@ -507,6 +529,7 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
   const variantNum = isV3 ? '3' : '2';
 
   let totalExemptGrosze = 0;
+  let totalOutsideCountryGrosze = 0;
   let totalZeroDomesticGrosze = 0;
   let totalNet5Grosze = 0;
   let totalVat5Grosze = 0;
@@ -530,6 +553,7 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
     }
 
     const k10 = row.exemptNetGrosze ?? 0;
+    const k11 = row.outsideCountryNetGrosze ?? 0;
     const k13 = row.zeroDomesticNetGrosze ?? 0;
     const k15 = row.net5Grosze ?? 0;
     const k16 = row.vat5Grosze ?? 0;
@@ -539,6 +563,7 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
     const k20 = row.vat23Grosze ?? 0;
 
     totalExemptGrosze += k10;
+    totalOutsideCountryGrosze += k11;
     totalZeroDomesticGrosze += k13;
     totalNet5Grosze += k15;
     totalVat5Grosze += k16;
@@ -590,6 +615,9 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
     }
     if (k10 !== 0) {
       salesXmlLines.push(`      <K_10>${formatGroszeDecimal(k10)}</K_10>`);
+    }
+    if (k11 !== 0) {
+      salesXmlLines.push(`      <K_11>${formatGroszeDecimal(k11)}</K_11>`);
     }
     if (k13 !== 0) {
       salesXmlLines.push(`      <K_13>${formatGroszeDecimal(k13)}</K_13>`);
@@ -700,17 +728,38 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
 
   if (includeDeclaration) {
     const qCarry = input.quarterlyPriorMonthsCarry;
-    const p10 = roundGroszeHalfUpToPlnInteger(totalExemptGrosze) + (qCarry?.exemptPln ?? 0);
+    const qGrosze = input.quarterlyPriorMonthsCarryGrosze;
+    const p10 =
+      roundGroszeHalfUpToPlnInteger(totalExemptGrosze + (qGrosze?.exemptNetGrosze ?? 0)) +
+      (qCarry?.exemptPln ?? 0);
+    const p11 =
+      roundGroszeHalfUpToPlnInteger(
+        totalOutsideCountryGrosze + (qGrosze?.outsideCountryNetGrosze ?? 0),
+      ) + (qCarry?.outsideCountryPln ?? 0);
     const p13 =
-      roundGroszeHalfUpToPlnInteger(totalZeroDomesticGrosze) + (qCarry?.zeroDomesticPln ?? 0);
-    const p15 = roundGroszeHalfUpToPlnInteger(totalNet5Grosze) + (qCarry?.net5Pln ?? 0);
-    const p16 = roundGroszeHalfUpToPlnInteger(totalVat5Grosze) + (qCarry?.vat5Pln ?? 0);
-    const p17 = roundGroszeHalfUpToPlnInteger(totalNet8Grosze) + (qCarry?.net8Pln ?? 0);
-    const p18 = roundGroszeHalfUpToPlnInteger(totalVat8Grosze) + (qCarry?.vat8Pln ?? 0);
-    const p19 = roundGroszeHalfUpToPlnInteger(totalNet23Grosze) + (qCarry?.net23Pln ?? 0);
-    const p20 = roundGroszeHalfUpToPlnInteger(totalVat23Grosze) + (qCarry?.vat23Pln ?? 0);
+      roundGroszeHalfUpToPlnInteger(
+        totalZeroDomesticGrosze + (qGrosze?.zeroDomesticNetGrosze ?? 0),
+      ) + (qCarry?.zeroDomesticPln ?? 0);
+    const p15 =
+      roundGroszeHalfUpToPlnInteger(totalNet5Grosze + (qGrosze?.net5Grosze ?? 0)) +
+      (qCarry?.net5Pln ?? 0);
+    const p16 =
+      roundGroszeHalfUpToPlnInteger(totalVat5Grosze + (qGrosze?.vat5Grosze ?? 0)) +
+      (qCarry?.vat5Pln ?? 0);
+    const p17 =
+      roundGroszeHalfUpToPlnInteger(totalNet8Grosze + (qGrosze?.net8Grosze ?? 0)) +
+      (qCarry?.net8Pln ?? 0);
+    const p18 =
+      roundGroszeHalfUpToPlnInteger(totalVat8Grosze + (qGrosze?.vat8Grosze ?? 0)) +
+      (qCarry?.vat8Pln ?? 0);
+    const p19 =
+      roundGroszeHalfUpToPlnInteger(totalNet23Grosze + (qGrosze?.net23Grosze ?? 0)) +
+      (qCarry?.net23Pln ?? 0);
+    const p20 =
+      roundGroszeHalfUpToPlnInteger(totalVat23Grosze + (qGrosze?.vat23Grosze ?? 0)) +
+      (qCarry?.vat23Pln ?? 0);
 
-    const p37 = p10 + p13 + p15 + p17 + p19;
+    const p37 = p10 + p11 + p13 + p15 + p17 + p19;
     const p38 = p16 + p18 + p20;
     const p39 = input.priorExcessCarryoverPln ?? 0;
     if (!Number.isInteger(p39) || p39 < 0) {
@@ -720,13 +769,21 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
     }
 
     const p40 =
-      roundGroszeHalfUpToPlnInteger(totalFixedAssetsNetGrosze) + (qCarry?.fixedAssetsNetPln ?? 0);
+      roundGroszeHalfUpToPlnInteger(
+        totalFixedAssetsNetGrosze + (qGrosze?.fixedAssetsNetGrosze ?? 0),
+      ) + (qCarry?.fixedAssetsNetPln ?? 0);
     const p41 =
-      roundGroszeHalfUpToPlnInteger(totalFixedAssetsVatGrosze) + (qCarry?.fixedAssetsVatPln ?? 0);
+      roundGroszeHalfUpToPlnInteger(
+        totalFixedAssetsVatGrosze + (qGrosze?.fixedAssetsVatGrosze ?? 0),
+      ) + (qCarry?.fixedAssetsVatPln ?? 0);
     const p42 =
-      roundGroszeHalfUpToPlnInteger(totalOtherNetGrosze) + (qCarry?.otherAcquisitionsNetPln ?? 0);
+      roundGroszeHalfUpToPlnInteger(
+        totalOtherNetGrosze + (qGrosze?.otherAcquisitionsNetGrosze ?? 0),
+      ) + (qCarry?.otherAcquisitionsNetPln ?? 0);
     const p43 =
-      roundGroszeHalfUpToPlnInteger(totalOtherVatGrosze) + (qCarry?.otherAcquisitionsVatPln ?? 0);
+      roundGroszeHalfUpToPlnInteger(
+        totalOtherVatGrosze + (qGrosze?.otherAcquisitionsVatGrosze ?? 0),
+      ) + (qCarry?.otherAcquisitionsVatPln ?? 0);
 
     const p48 = p39 + p41 + p43;
     const p51 = Math.max(0, p38 - p48);
@@ -767,6 +824,9 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
     lines.push('    <PozycjeSzczegolowe>');
     if (p10 !== 0) {
       lines.push(`      <P_10>${p10}</P_10>`);
+    }
+    if (p11 !== 0) {
+      lines.push(`      <P_11>${p11}</P_11>`);
     }
     if (p13 !== 0) {
       lines.push(`      <P_13>${p13}</P_13>`);
