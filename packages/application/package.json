@@ -43,6 +43,10 @@
     "./ksef": {
       "types": "./dist/ksef/index.d.ts",
       "import": "./dist/ksef/index.js"
+    },
+    "./statutory-filing-facade": {
+      "types": "./dist/statutory-filing-facade.d.ts",
+      "import": "./dist/statutory-filing-facade.js"
     }
   },
   "dependencies": {
