@@ -9,6 +9,8 @@ import {
   type TaxObligationItem,
 } from '@pap/ui';
 import { WorkspaceAccessDeniedCard } from '../../components/access-denied-card';
+import { DueVsPaidObligationsCard } from '../../components/due-vs-paid-obligations-card';
+import { PeriodClosePanel } from '../../components/period-close-panel';
 import { SystemStatusDiagnosticSection } from '../../components/system-status-section';
 import { AcademyDisclaimerBanner } from '../../components/ui-controls';
 import { WorkspaceShell } from '../../components/workspace-shell';
@@ -23,6 +25,10 @@ import {
   getDashboardSnapshot,
   listAccessibleCompaniesForSession,
 } from '../../lib/synthetic-workspace';
+import {
+  getPeriodCloseSnapshot,
+  getTaxObligationsDueVsPaidSnapshot,
+} from '../../lib/wave2-statutory-and-close';
 import { OidcOnboardingClient } from './oidc-onboarding-client';
 
 const SAFE_INVITE_TOKEN_REGEX = /^[A-Za-z0-9_-]{24,256}$/;
@@ -285,6 +291,10 @@ export default async function AppDashboardPage({
   });
 
   const activeCaps = getCompanyCapabilities(snapshot.activeCompany);
+  const [periodClose, dueVsPaid] = await Promise.all([
+    getPeriodCloseSnapshot(session, snapshot.period),
+    getTaxObligationsDueVsPaidSnapshot(session, snapshot.period),
+  ]);
 
   return (
     <WorkspaceShell
@@ -295,6 +305,7 @@ export default async function AppDashboardPage({
       sessionContext={session.context}
       activeCompany={snapshot.activeCompany}
       accessibleCompanies={snapshot.accessibleCompanies}
+      periodStatus={periodClose.status}
       allowSyntheticLogin={allowPersonas}
       pageActions={
         <div className="flex flex-wrap items-center gap-2">
@@ -492,6 +503,16 @@ export default async function AppDashboardPage({
             </ul>
           </Card>
         </div>
+
+        <DueVsPaidObligationsCard snapshot={dueVsPaid} />
+
+        <PeriodClosePanel
+          key={`dash-close-${snapshot.activeCompany.legalEntityId}:${snapshot.period}`}
+          companyName={snapshot.activeCompany.companyName}
+          companyNip={snapshot.activeCompany.nip}
+          canWrite={snapshot.activeCompany.grantedActions.includes('write')}
+          initialSnapshot={periodClose}
+        />
 
         <SystemStatusDiagnosticSection status={systemStatus} />
 

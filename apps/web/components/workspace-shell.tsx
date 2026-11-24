@@ -81,6 +81,7 @@ export interface WorkspaceShellProps {
   sessionContext: SessionContext | null;
   activeCompany: CompanyProfileRecord | null;
   accessibleCompanies?: readonly CompanyProfileRecord[];
+  periodStatus?: 'open' | 'reconciling' | 'closed';
   offlineDemoMode?: boolean;
   allowSyntheticLogin?: boolean;
   children: ReactNode;
@@ -97,6 +98,7 @@ export function WorkspaceShell({
   pageEyebrow,
   pageSubtitle,
   pageTitle,
+  periodStatus,
   sessionContext,
   surface = 'app',
 }: WorkspaceShellProps) {
@@ -105,6 +107,7 @@ export function WorkspaceShell({
   const router = useRouter();
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [isSwitching, setIsSwitching] = useState(false);
+  const [closedPeriodsLocal, setClosedPeriodsLocal] = useState<readonly string[]>([]);
   const [extraCompanies, setExtraCompanies] = useState<readonly CompanyProfileRecord[]>([]);
   const [optimisticSwitch, setOptimisticSwitch] = useState<{
     readonly targetEntityId: string;
@@ -148,6 +151,19 @@ export function WorkspaceShell({
     window.addEventListener('pap:company-switched', onCompanySwitched);
     return () => window.removeEventListener('pap:company-switched', onCompanySwitched);
   }, [activeCompany?.legalEntityId, activeHref, router]);
+
+  useEffect(() => {
+    function onPeriodClosed(event: Event) {
+      const custom = event as CustomEvent<{ period?: string }>;
+      const closedP = custom.detail?.period;
+      if (closedP && activeCompany) {
+        const k = `${activeCompany.legalEntityId}:${closedP}`;
+        setClosedPeriodsLocal((prev) => (prev.includes(k) ? prev : [...prev, k]));
+      }
+    }
+    window.addEventListener('pap:period-closed', onPeriodClosed);
+    return () => window.removeEventListener('pap:period-closed', onPeriodClosed);
+  }, [activeCompany]);
 
   const mergedAccessibleCompanies = [
     ...accessibleCompanies,
@@ -275,6 +291,17 @@ export function WorkspaceShell({
                   ))}
                 </select>
               </div>
+
+              {periodStatus === 'closed' ||
+              (effectiveActiveCompany &&
+                sessionContext &&
+                closedPeriodsLocal.includes(
+                  `${effectiveActiveCompany.legalEntityId}:${sessionContext.period}`,
+                )) ? (
+                <div data-testid="header-period-status-badge">
+                  <StatusBadge size="sm" tone="danger" label="Okres zamknięty" />
+                </div>
+              ) : null}
 
               <StatusBadge
                 size="sm"

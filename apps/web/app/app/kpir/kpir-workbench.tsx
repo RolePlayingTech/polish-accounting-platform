@@ -511,7 +511,12 @@ export function KpirWorkbench({
           title="Dodaj ręczny wpis do KPiR"
           actions={
             <div className="flex items-center gap-1.5">
-              <Button size="sm" variant="secondary" onClick={fillDemoKpirExpense}>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={busy || !canWriteEffective}
+                onClick={fillDemoKpirExpense}
+              >
                 [DEMO] Wypełnij przykładem
               </Button>
               <FieldHelpButton help={helpMap.col7} />
@@ -544,177 +549,179 @@ export function KpirWorkbench({
               );
             }}
           >
-            <div className="grid gap-3 sm:grid-cols-2">
+            <fieldset disabled={busy || !canWriteEffective} className="space-y-3 border-0 p-0">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField
+                  id="kpir-event-date"
+                  label="Data zdarzenia (Kol. 2)"
+                  required
+                  {...(fieldErrors['eventDate'] ? { error: fieldErrors['eventDate'] } : {})}
+                >
+                  {(ctrl) => (
+                    <input
+                      {...ctrl}
+                      type="date"
+                      value={eventDate}
+                      onChange={(e) => {
+                        setEventDate(e.target.value);
+                        if (fieldErrors['eventDate']) {
+                          setFieldErrors((prev) => ({ ...prev, eventDate: '' }));
+                        }
+                      }}
+                      className={`${ctrl.className} font-mono tabular-nums`}
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  id="kpir-doc-num"
+                  label={`Nr dowodu księgowego (Kol. ${String(activeLayout.documentNumberCol)})`}
+                  required
+                  {...(fieldErrors['docNumber'] ? { error: fieldErrors['docNumber'] } : {})}
+                >
+                  {(ctrl) => (
+                    <input
+                      {...ctrl}
+                      type="text"
+                      value={docNumber}
+                      onChange={(e) => {
+                        setDocNumber(e.target.value);
+                        if (fieldErrors['docNumber']) {
+                          setFieldErrors((prev) => ({ ...prev, docNumber: '' }));
+                        }
+                      }}
+                      placeholder={`np. DW/${period}/01`}
+                      className={`${ctrl.className} font-mono`}
+                    />
+                  )}
+                </FormField>
+              </div>
+
               <FormField
-                id="kpir-event-date"
-                label="Data zdarzenia (Kol. 2)"
-                required
-                {...(fieldErrors['eventDate'] ? { error: fieldErrors['eventDate'] } : {})}
-              >
-                {(ctrl) => (
-                  <input
-                    {...ctrl}
-                    type="date"
-                    value={eventDate}
-                    onChange={(e) => {
-                      setEventDate(e.target.value);
-                      if (fieldErrors['eventDate']) {
-                        setFieldErrors((prev) => ({ ...prev, eventDate: '' }));
-                      }
-                    }}
-                    className={`${ctrl.className} font-mono tabular-nums`}
-                  />
-                )}
-              </FormField>
-              <FormField
-                id="kpir-doc-num"
-                label={`Nr dowodu księgowego (Kol. ${String(activeLayout.documentNumberCol)})`}
-                required
-                {...(fieldErrors['docNumber'] ? { error: fieldErrors['docNumber'] } : {})}
+                id="kpir-ksef-ref"
+                label="Numer KSeF (Kol. 3 we wzorze 2026 — opcjonalnie)"
+                hint="Wpisz wyłącznie rzeczywisty numer KSeF faktury ustrukturyzowanej. Dla dowodów wewnętrznych i faktur poza KSeF pozostaw puste."
+                fieldHelp={helpMap.ksefReference}
               >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="text"
-                    value={docNumber}
-                    onChange={(e) => {
-                      setDocNumber(e.target.value);
-                      if (fieldErrors['docNumber']) {
-                        setFieldErrors((prev) => ({ ...prev, docNumber: '' }));
-                      }
-                    }}
-                    placeholder={`np. DW/${period}/01`}
-                    className={`${ctrl.className} font-mono`}
+                    value={ksefRef}
+                    onChange={(e) => setKsefRef(e.target.value)}
+                    placeholder="Pozostaw puste, jeśli dokument nie pochodzi z KSeF"
+                    className={`${ctrl.className} font-mono text-xs tabular-nums`}
                   />
                 )}
               </FormField>
-            </div>
 
-            <FormField
-              id="kpir-ksef-ref"
-              label="Numer KSeF (Kol. 3 we wzorze 2026 — opcjonalnie)"
-              hint="Wpisz wyłącznie rzeczywisty numer KSeF faktury ustrukturyzowanej. Dla dowodów wewnętrznych i faktur poza KSeF pozostaw puste."
-              fieldHelp={helpMap.ksefReference}
-            >
-              {(ctrl) => (
-                <input
-                  {...ctrl}
-                  type="text"
-                  value={ksefRef}
-                  onChange={(e) => setKsefRef(e.target.value)}
-                  placeholder="Pozostaw puste, jeśli dokument nie pochodzi z KSeF"
-                  className={`${ctrl.className} font-mono text-xs tabular-nums`}
-                />
-              )}
-            </FormField>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <FormField
+                  id="kpir-cp-name"
+                  label="Kontrahent"
+                  required
+                  {...(fieldErrors['counterpartyName']
+                    ? { error: fieldErrors['counterpartyName'] }
+                    : {})}
+                >
+                  {(ctrl) => (
+                    <input
+                      {...ctrl}
+                      type="text"
+                      value={counterpartyName}
+                      onChange={(e) => {
+                        setCounterpartyName(e.target.value);
+                        if (fieldErrors['counterpartyName']) {
+                          setFieldErrors((prev) => ({ ...prev, counterpartyName: '' }));
+                        }
+                      }}
+                      placeholder="Nazwa kontrahenta"
+                    />
+                  )}
+                </FormField>
+                <FormField
+                  id="kpir-cp-nip"
+                  label="NIP kontrahenta (Kol. 5 we wzorze 2026)"
+                  {...(fieldErrors['counterpartyNip']
+                    ? { error: fieldErrors['counterpartyNip'] }
+                    : {})}
+                >
+                  {(ctrl) => (
+                    <input
+                      {...ctrl}
+                      type="text"
+                      value={counterpartyNip}
+                      onChange={(e) => {
+                        setCounterpartyNip(e.target.value);
+                        if (fieldErrors['counterpartyNip']) {
+                          setFieldErrors((prev) => ({ ...prev, counterpartyNip: '' }));
+                        }
+                      }}
+                      placeholder="10 cyfr lub puste"
+                      className={`${ctrl.className} font-mono tabular-nums`}
+                    />
+                  )}
+                </FormField>
+              </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
               <FormField
-                id="kpir-cp-name"
-                label="Kontrahent"
+                id="kpir-desc"
+                label="Opis zdarzenia gospodarczego"
                 required
-                {...(fieldErrors['counterpartyName']
-                  ? { error: fieldErrors['counterpartyName'] }
-                  : {})}
+                {...(fieldErrors['eventDesc'] ? { error: fieldErrors['eventDesc'] } : {})}
               >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="text"
-                    value={counterpartyName}
+                    value={eventDesc}
                     onChange={(e) => {
-                      setCounterpartyName(e.target.value);
-                      if (fieldErrors['counterpartyName']) {
-                        setFieldErrors((prev) => ({ ...prev, counterpartyName: '' }));
+                      setEventDesc(e.target.value);
+                      if (fieldErrors['eventDesc']) {
+                        setFieldErrors((prev) => ({ ...prev, eventDesc: '' }));
                       }
                     }}
-                    placeholder="Nazwa kontrahenta"
+                    placeholder="Zwięzły opis przychodu lub kosztu uzyskania przychodów"
                   />
                 )}
               </FormField>
-              <FormField
-                id="kpir-cp-nip"
-                label="NIP kontrahenta (Kol. 5 we wzorze 2026)"
-                {...(fieldErrors['counterpartyNip']
-                  ? { error: fieldErrors['counterpartyNip'] }
-                  : {})}
-              >
-                {(ctrl) => (
-                  <input
-                    {...ctrl}
-                    type="text"
-                    value={counterpartyNip}
-                    onChange={(e) => {
-                      setCounterpartyNip(e.target.value);
-                      if (fieldErrors['counterpartyNip']) {
-                        setFieldErrors((prev) => ({ ...prev, counterpartyNip: '' }));
-                      }
-                    }}
-                    placeholder="10 cyfr lub puste"
-                    className={`${ctrl.className} font-mono tabular-nums`}
-                  />
-                )}
-              </FormField>
-            </div>
 
-            <FormField
-              id="kpir-desc"
-              label="Opis zdarzenia gospodarczego"
-              required
-              {...(fieldErrors['eventDesc'] ? { error: fieldErrors['eventDesc'] } : {})}
-            >
-              {(ctrl) => (
-                <input
-                  {...ctrl}
-                  type="text"
-                  value={eventDesc}
-                  onChange={(e) => {
-                    setEventDesc(e.target.value);
-                    if (fieldErrors['eventDesc']) {
-                      setFieldErrors((prev) => ({ ...prev, eventDesc: '' }));
+              <div className="grid gap-3 sm:grid-cols-2">
+                <MoneyInput
+                  id="kpir-sales-pln"
+                  label={`Przychód ze sprzedaży (Kol. ${String(activeLayout.salesRevenueCol)})`}
+                  value={salesPln}
+                  onChange={(val) => {
+                    setSalesPln(val);
+                    if (fieldErrors['salesPln'] || fieldErrors['expensesPln']) {
+                      setFieldErrors((prev) => ({ ...prev, salesPln: '', expensesPln: '' }));
                     }
                   }}
-                  placeholder="Zwięzły opis przychodu lub kosztu uzyskania przychodów"
+                  fieldHelp={helpMap.col7}
+                  {...(fieldErrors['salesPln'] ? { error: fieldErrors['salesPln'] } : {})}
                 />
-              )}
-            </FormField>
+                <MoneyInput
+                  id="kpir-exp-pln"
+                  label={`Pozostałe wydatki (Kol. ${String(activeLayout.otherExpensesCol)})`}
+                  value={expensesPln}
+                  onChange={(val) => {
+                    setExpensesPln(val);
+                    if (fieldErrors['expensesPln']) {
+                      setFieldErrors((prev) => ({ ...prev, expensesPln: '' }));
+                    }
+                  }}
+                  fieldHelp={helpMap.col13}
+                  {...(fieldErrors['expensesPln'] ? { error: fieldErrors['expensesPln'] } : {})}
+                />
+              </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <MoneyInput
-                id="kpir-sales-pln"
-                label={`Przychód ze sprzedaży (Kol. ${String(activeLayout.salesRevenueCol)})`}
-                value={salesPln}
-                onChange={(val) => {
-                  setSalesPln(val);
-                  if (fieldErrors['salesPln'] || fieldErrors['expensesPln']) {
-                    setFieldErrors((prev) => ({ ...prev, salesPln: '', expensesPln: '' }));
-                  }
-                }}
-                fieldHelp={helpMap.col7}
-                {...(fieldErrors['salesPln'] ? { error: fieldErrors['salesPln'] } : {})}
-              />
-              <MoneyInput
-                id="kpir-exp-pln"
-                label={`Pozostałe wydatki (Kol. ${String(activeLayout.otherExpensesCol)})`}
-                value={expensesPln}
-                onChange={(val) => {
-                  setExpensesPln(val);
-                  if (fieldErrors['expensesPln']) {
-                    setFieldErrors((prev) => ({ ...prev, expensesPln: '' }));
-                  }
-                }}
-                fieldHelp={helpMap.col13}
-                {...(fieldErrors['expensesPln'] ? { error: fieldErrors['expensesPln'] } : {})}
-              />
-            </div>
-
-            <Button type="submit" disabled={busy || !canWriteEffective}>
-              {!isKpirCompany
-                ? 'Zapis zablokowany — aktywna firma nie prowadzi KPiR'
-                : !canWrite
-                  ? 'Tylko odczyt — brak grantu write'
-                  : 'Zapisz pozycję w KPiR'}
-            </Button>
+              <Button type="submit" disabled={busy || !canWriteEffective}>
+                {!isKpirCompany
+                  ? 'Zapis zablokowany — aktywna firma nie prowadzi KPiR'
+                  : !canWrite
+                    ? 'Tylko odczyt — brak grantu write'
+                    : 'Zapisz pozycję w KPiR'}
+              </Button>
+            </fieldset>
           </form>
         </Card>
 
@@ -749,54 +756,56 @@ export function KpirWorkbench({
               );
             }}
           >
-            <FormField id="storno-target" label="Wybierz korygowany wpis KPiR" required>
-              {(ctrl) => (
-                <select
-                  {...ctrl}
-                  value={stornoTargetId}
-                  onChange={(e) => setStornoTargetId(e.target.value)}
-                >
-                  {rows.map(({ entry }) => (
-                    <option key={entry.id} value={entry.id}>
-                      Lp. {String(entry.ordinalNumber)} · {entry.documentNumber} (
-                      {entry.counterpartyName})
-                    </option>
-                  ))}
-                </select>
-              )}
-            </FormField>
+            <fieldset disabled={busy || !canWriteEffective} className="space-y-3 border-0 p-0">
+              <FormField id="storno-target" label="Wybierz korygowany wpis KPiR" required>
+                {(ctrl) => (
+                  <select
+                    {...ctrl}
+                    value={stornoTargetId}
+                    onChange={(e) => setStornoTargetId(e.target.value)}
+                  >
+                    {rows.map(({ entry }) => (
+                      <option key={entry.id} value={entry.id}>
+                        Lp. {String(entry.ordinalNumber)} · {entry.documentNumber} (
+                        {entry.counterpartyName})
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </FormField>
 
-            <FormField
-              id="storno-reason"
-              label="Przyczyna storna / korekty (do dziennika audytu)"
-              required
-              {...(fieldErrors['stornoReason'] ? { error: fieldErrors['stornoReason'] } : {})}
-            >
-              {(ctrl) => (
-                <input
-                  {...ctrl}
-                  type="text"
-                  value={stornoReason}
-                  onChange={(e) => {
-                    setStornoReason(e.target.value);
-                    if (fieldErrors['stornoReason']) {
-                      setFieldErrors((prev) => ({ ...prev, stornoReason: '' }));
-                    }
-                  }}
-                  placeholder="np. Korekta kwoty na podstawie faktury korygującej"
-                />
-              )}
-            </FormField>
+              <FormField
+                id="storno-reason"
+                label="Przyczyna storna / korekty (do dziennika audytu)"
+                required
+                {...(fieldErrors['stornoReason'] ? { error: fieldErrors['stornoReason'] } : {})}
+              >
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    value={stornoReason}
+                    onChange={(e) => {
+                      setStornoReason(e.target.value);
+                      if (fieldErrors['stornoReason']) {
+                        setFieldErrors((prev) => ({ ...prev, stornoReason: '' }));
+                      }
+                    }}
+                    placeholder="np. Korekta kwoty na podstawie faktury korygującej"
+                  />
+                )}
+              </FormField>
 
-            <Button
-              type="submit"
-              variant="danger"
-              disabled={busy || !canWriteEffective || rows.length === 0}
-            >
-              {!isKpirCompany
-                ? 'Storno niedostępne — inna forma opodatkowania'
-                : 'Zaksięguj czerwone storno'}
-            </Button>
+              <Button
+                type="submit"
+                variant="danger"
+                disabled={busy || !canWriteEffective || rows.length === 0}
+              >
+                {!isKpirCompany
+                  ? 'Storno niedostępne — inna forma opodatkowania'
+                  : 'Zaksięguj czerwone storno'}
+              </Button>
+            </fieldset>
           </form>
         </Card>
       </div>

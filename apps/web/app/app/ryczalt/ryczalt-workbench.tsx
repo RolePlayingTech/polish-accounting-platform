@@ -409,172 +409,181 @@ export function RyczaltWorkbench({
         eyebrow="Nowy wpis ewidencyjny (art. 15 PPE)"
         title="Dodaj przychód do ewidencji ryczałtu"
         actions={
-          <Button size="sm" variant="secondary" onClick={fillDemoRyczaltEntry}>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={busy || !canWriteEffective}
+            onClick={fillDemoRyczaltEntry}
+          >
             [DEMO] Wypełnij przykładem (12% IT)
           </Button>
         }
       >
         <form noValidate className="space-y-4" onSubmit={(e) => void handleAddEntry(e)}>
-          <div className="grid gap-3 md:grid-cols-3">
-            <FormField
-              id="ryc-date"
-              label="Data uzyskania przychodu"
-              required
-              {...(fieldErrors['revenueDate'] ? { error: fieldErrors['revenueDate'] } : {})}
-            >
-              {(ctrl) => (
-                <input
-                  {...ctrl}
-                  type="date"
-                  value={revenueDate}
-                  onChange={(e) => {
-                    setRevenueDate(e.target.value);
-                    if (fieldErrors['revenueDate']) {
-                      setFieldErrors((prev) => ({ ...prev, revenueDate: '' }));
-                    }
-                  }}
-                  className={`${ctrl.className} font-mono tabular-nums`}
-                />
-              )}
-            </FormField>
+          <fieldset disabled={busy || !canWriteEffective} className="space-y-4 border-0 p-0">
+            <div className="grid gap-3 md:grid-cols-3">
+              <FormField
+                id="ryc-date"
+                label="Data uzyskania przychodu"
+                required
+                {...(fieldErrors['revenueDate'] ? { error: fieldErrors['revenueDate'] } : {})}
+              >
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="date"
+                    value={revenueDate}
+                    onChange={(e) => {
+                      setRevenueDate(e.target.value);
+                      if (fieldErrors['revenueDate']) {
+                        setFieldErrors((prev) => ({ ...prev, revenueDate: '' }));
+                      }
+                    }}
+                    className={`${ctrl.className} font-mono tabular-nums`}
+                  />
+                )}
+              </FormField>
 
-            <FormField
-              id="ryc-doc"
-              label="Numer dowodu sprzedaży"
-              required
-              {...(fieldErrors['docNumber'] ? { error: fieldErrors['docNumber'] } : {})}
-            >
-              {(ctrl) => (
-                <input
-                  {...ctrl}
-                  type="text"
-                  value={docNumber}
-                  onChange={(e) => {
-                    setDocNumber(e.target.value);
-                    if (fieldErrors['docNumber']) {
-                      setFieldErrors((prev) => ({ ...prev, docNumber: '' }));
-                    }
-                  }}
-                  placeholder={`np. FS/${period}/08`}
-                  className={`${ctrl.className} font-mono`}
-                />
-              )}
-            </FormField>
-
-            <FormField
-              id="ryc-rate"
-              label="Stawka ryczałtu (art. 12 PPE)"
-              required
-              fieldHelp={helpMap.ryczaltRate}
-            >
-              {(ctrl) => (
-                <select
-                  {...ctrl}
-                  value={rate}
-                  onChange={(e) => setRate(e.target.value as RyczaltRateCode)}
-                >
-                  <option value="12">12% — IT / programowanie (PKWiU 62.01)</option>
-                  <option value="8.5">8,5% — działalność usługowa ogólna</option>
-                  <option value="15">15% — doradztwo, reklama, pośrednictwo</option>
-                  <option value="17">17% — wolne zawody</option>
-                  <option value="14">14% — usługi architektoniczne i inżynierskie</option>
-                  <option value="5.5">5,5% — roboty budowlane / wytwórcze</option>
-                  <option value="3">3% — działalność handlowa / gastronomia</option>
-                </select>
-              )}
-            </FormField>
-          </div>
-
-          <RyczaltRateGuideTrigger selectedRate={rate} eventDate={revenueDate} />
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <FormField
-              id="ryc-cp"
-              label="Kontrahent"
-              required
-              {...(fieldErrors['counterpartyName']
-                ? { error: fieldErrors['counterpartyName'] }
-                : {})}
-            >
-              {(ctrl) => (
-                <input
-                  {...ctrl}
-                  type="text"
-                  value={counterpartyName}
-                  onChange={(e) => {
-                    setCounterpartyName(e.target.value);
-                    if (fieldErrors['counterpartyName']) {
-                      setFieldErrors((prev) => ({ ...prev, counterpartyName: '' }));
-                    }
-                  }}
-                  placeholder="Nazwa nabywcy z faktury"
-                />
-              )}
-            </FormField>
-
-            <FormField
-              id="ryc-nip"
-              label="NIP kontrahenta (opcjonalnie)"
-              {...(fieldErrors['counterpartyNip'] ? { error: fieldErrors['counterpartyNip'] } : {})}
-            >
-              {(ctrl) => (
-                <input
-                  {...ctrl}
-                  type="text"
-                  value={counterpartyNip}
-                  onChange={(e) => {
-                    setCounterpartyNip(e.target.value);
-                    if (fieldErrors['counterpartyNip']) {
-                      setFieldErrors((prev) => ({ ...prev, counterpartyNip: '' }));
-                    }
-                  }}
-                  placeholder="10 cyfr lub puste dla B2C"
-                  className={`${ctrl.className} font-mono tabular-nums`}
-                />
-              )}
-            </FormField>
-
-            <MoneyInput
-              id="ryc-amount"
-              label="Kwota przychodu netto"
-              required
-              value={revenuePln}
-              onChange={(val) => {
-                setRevenuePln(val);
-                if (fieldErrors['revenuePln']) {
-                  setFieldErrors((prev) => ({ ...prev, revenuePln: '' }));
-                }
-              }}
-              fieldHelp={helpMap.vatLimit}
-              {...(fieldErrors['revenuePln'] ? { error: fieldErrors['revenuePln'] } : {})}
-            />
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-3">
-            <div className="md:col-span-2">
-              <FormField id="ryc-remarks" label="Klasyfikacja PKWiU / opis wykonanej usługi">
+              <FormField
+                id="ryc-doc"
+                label="Numer dowodu sprzedaży"
+                required
+                {...(fieldErrors['docNumber'] ? { error: fieldErrors['docNumber'] } : {})}
+              >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="text"
-                    value={remarks}
-                    onChange={(e) => setRemarks(e.target.value)}
-                    placeholder="np. PKWiU 62.01 — wytwarzanie oprogramowania"
+                    value={docNumber}
+                    onChange={(e) => {
+                      setDocNumber(e.target.value);
+                      if (fieldErrors['docNumber']) {
+                        setFieldErrors((prev) => ({ ...prev, docNumber: '' }));
+                      }
+                    }}
+                    placeholder={`np. FS/${period}/08`}
+                    className={`${ctrl.className} font-mono`}
                   />
+                )}
+              </FormField>
+
+              <FormField
+                id="ryc-rate"
+                label="Stawka ryczałtu (art. 12 PPE)"
+                required
+                fieldHelp={helpMap.ryczaltRate}
+              >
+                {(ctrl) => (
+                  <select
+                    {...ctrl}
+                    value={rate}
+                    onChange={(e) => setRate(e.target.value as RyczaltRateCode)}
+                  >
+                    <option value="12">12% — IT / programowanie (PKWiU 62.01)</option>
+                    <option value="8.5">8,5% — działalność usługowa ogólna</option>
+                    <option value="15">15% — doradztwo, reklama, pośrednictwo</option>
+                    <option value="17">17% — wolne zawody</option>
+                    <option value="14">14% — usługi architektoniczne i inżynierskie</option>
+                    <option value="5.5">5,5% — roboty budowlane / wytwórcze</option>
+                    <option value="3">3% — działalność handlowa / gastronomia</option>
+                  </select>
                 )}
               </FormField>
             </div>
 
-            <div className="flex items-end">
-              <Button type="submit" disabled={busy || !canWriteEffective} className="w-full">
-                {!isRegimeCompatible
-                  ? 'Zapis zablokowany — inna forma opodatkowania'
-                  : !canWrite
-                    ? 'Brak uprawnień do zapisu (read-only)'
-                    : 'Zapisz w ewidencji ryczałtu'}
-              </Button>
+            <RyczaltRateGuideTrigger selectedRate={rate} eventDate={revenueDate} />
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <FormField
+                id="ryc-cp"
+                label="Kontrahent"
+                required
+                {...(fieldErrors['counterpartyName']
+                  ? { error: fieldErrors['counterpartyName'] }
+                  : {})}
+              >
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    value={counterpartyName}
+                    onChange={(e) => {
+                      setCounterpartyName(e.target.value);
+                      if (fieldErrors['counterpartyName']) {
+                        setFieldErrors((prev) => ({ ...prev, counterpartyName: '' }));
+                      }
+                    }}
+                    placeholder="Nazwa nabywcy z faktury"
+                  />
+                )}
+              </FormField>
+
+              <FormField
+                id="ryc-nip"
+                label="NIP kontrahenta (opcjonalnie)"
+                {...(fieldErrors['counterpartyNip']
+                  ? { error: fieldErrors['counterpartyNip'] }
+                  : {})}
+              >
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    value={counterpartyNip}
+                    onChange={(e) => {
+                      setCounterpartyNip(e.target.value);
+                      if (fieldErrors['counterpartyNip']) {
+                        setFieldErrors((prev) => ({ ...prev, counterpartyNip: '' }));
+                      }
+                    }}
+                    placeholder="10 cyfr lub puste dla B2C"
+                    className={`${ctrl.className} font-mono tabular-nums`}
+                  />
+                )}
+              </FormField>
+
+              <MoneyInput
+                id="ryc-amount"
+                label="Kwota przychodu netto"
+                required
+                value={revenuePln}
+                onChange={(val) => {
+                  setRevenuePln(val);
+                  if (fieldErrors['revenuePln']) {
+                    setFieldErrors((prev) => ({ ...prev, revenuePln: '' }));
+                  }
+                }}
+                fieldHelp={helpMap.vatLimit}
+                {...(fieldErrors['revenuePln'] ? { error: fieldErrors['revenuePln'] } : {})}
+              />
             </div>
-          </div>
+
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="md:col-span-2">
+                <FormField id="ryc-remarks" label="Klasyfikacja PKWiU / opis wykonanej usługi">
+                  {(ctrl) => (
+                    <input
+                      {...ctrl}
+                      type="text"
+                      value={remarks}
+                      onChange={(e) => setRemarks(e.target.value)}
+                      placeholder="np. PKWiU 62.01 — wytwarzanie oprogramowania"
+                    />
+                  )}
+                </FormField>
+              </div>
+
+              <div className="flex items-end">
+                <Button type="submit" disabled={busy || !canWriteEffective} className="w-full">
+                  {!isRegimeCompatible
+                    ? 'Zapis zablokowany — inna forma opodatkowania'
+                    : !canWrite
+                      ? 'Brak uprawnień do zapisu (read-only)'
+                      : 'Zapisz w ewidencji ryczałtu'}
+                </Button>
+              </div>
+            </div>
+          </fieldset>
         </form>
       </Card>
     </div>

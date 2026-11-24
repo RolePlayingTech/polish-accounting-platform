@@ -389,6 +389,23 @@ export function LedgerWorkbench({
     },
   ];
 
+  const bank130Summary = useMemo(() => {
+    const account130Row = trialBalance.rows.find((r) => r.accountCode === '130');
+    const bankJournalVouchers = journalEntries.filter((entry) =>
+      entry.lines.some((line) => line.accountCode === '130' || line.accountCode.startsWith('130-')),
+    );
+    const inflowsWnGrosze = account130Row?.turnoverWnGrosze ?? 0;
+    const outflowsMaGrosze = account130Row?.turnoverMaGrosze ?? 0;
+    const closingNetGrosze =
+      (account130Row?.endingBalanceWnGrosze ?? 0) - (account130Row?.endingBalanceMaGrosze ?? 0);
+    return {
+      inflowsWnGrosze,
+      outflowsMaGrosze,
+      closingNetGrosze,
+      bankJournalVouchers,
+    };
+  }, [journalEntries, trialBalance.rows]);
+
   return (
     <div className="space-y-6">
       <IncompatibleRegimeGateCard
@@ -443,6 +460,7 @@ export function LedgerWorkbench({
                     size="sm"
                     variant="secondary"
                     data-testid="fill-demo-journal-button"
+                    disabled={busy || !canWriteEffective}
                     onClick={fillDemoVoucher}
                   >
                     [DEMO] Wypełnij przykładowym dekretem
@@ -452,315 +470,367 @@ export function LedgerWorkbench({
               }
             >
               <form noValidate className="space-y-4" onSubmit={(e) => void submitJournalVoucher(e)}>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <FormField
-                    id="jrn-date"
-                    label="Data księgowania"
-                    required
-                    {...(fieldErrors['bookingDate'] ? { error: fieldErrors['bookingDate'] } : {})}
-                  >
-                    {(ctrl) => (
-                      <input
-                        {...ctrl}
-                        type="date"
-                        value={bookingDate}
-                        onChange={(e) => {
-                          setBookingDate(e.target.value);
-                          if (fieldErrors['bookingDate']) {
-                            setFieldErrors((prev) => ({ ...prev, bookingDate: '' }));
-                          }
-                        }}
-                        className={`${ctrl.className} font-mono tabular-nums`}
-                      />
-                    )}
-                  </FormField>
-                  <FormField
-                    id="jrn-doc"
-                    label="Numer dowodu źródłowego"
-                    required
-                    {...(fieldErrors['documentNumber']
-                      ? { error: fieldErrors['documentNumber'] }
-                      : {})}
-                  >
-                    {(ctrl) => (
-                      <input
-                        {...ctrl}
-                        type="text"
-                        value={documentNumber}
-                        onChange={(e) => {
-                          setDocumentNumber(e.target.value);
-                          if (fieldErrors['documentNumber']) {
-                            setFieldErrors((prev) => ({ ...prev, documentNumber: '' }));
-                          }
-                        }}
-                        placeholder={`np. PK/${period}/01 lub FV/${period}/12`}
-                        className={`${ctrl.className} font-mono`}
-                      />
-                    )}
-                  </FormField>
-                  <FormField
-                    id="jrn-desc"
-                    label="Treść operacji gospodarczej"
-                    required
-                    {...(fieldErrors['description'] ? { error: fieldErrors['description'] } : {})}
-                  >
-                    {(ctrl) => (
-                      <input
-                        {...ctrl}
-                        type="text"
-                        value={description}
-                        onChange={(e) => {
-                          setDescription(e.target.value);
-                          if (fieldErrors['description']) {
-                            setFieldErrors((prev) => ({ ...prev, description: '' }));
-                          }
-                        }}
-                        placeholder="np. Faktura zakupu usług chmurowych za okres..."
-                      />
-                    )}
-                  </FormField>
-                </div>
+                <fieldset disabled={busy || !canWriteEffective} className="space-y-4 border-0 p-0">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <FormField
+                      id="jrn-date"
+                      label="Data księgowania"
+                      required
+                      {...(fieldErrors['bookingDate'] ? { error: fieldErrors['bookingDate'] } : {})}
+                    >
+                      {(ctrl) => (
+                        <input
+                          {...ctrl}
+                          type="date"
+                          value={bookingDate}
+                          onChange={(e) => {
+                            setBookingDate(e.target.value);
+                            if (fieldErrors['bookingDate']) {
+                              setFieldErrors((prev) => ({ ...prev, bookingDate: '' }));
+                            }
+                          }}
+                          className={`${ctrl.className} font-mono tabular-nums`}
+                        />
+                      )}
+                    </FormField>
+                    <FormField
+                      id="jrn-doc"
+                      label="Numer dowodu źródłowego"
+                      required
+                      {...(fieldErrors['documentNumber']
+                        ? { error: fieldErrors['documentNumber'] }
+                        : {})}
+                    >
+                      {(ctrl) => (
+                        <input
+                          {...ctrl}
+                          type="text"
+                          value={documentNumber}
+                          onChange={(e) => {
+                            setDocumentNumber(e.target.value);
+                            if (fieldErrors['documentNumber']) {
+                              setFieldErrors((prev) => ({ ...prev, documentNumber: '' }));
+                            }
+                          }}
+                          placeholder={`np. PK/${period}/01 lub FV/${period}/12`}
+                          className={`${ctrl.className} font-mono`}
+                        />
+                      )}
+                    </FormField>
+                    <FormField
+                      id="jrn-desc"
+                      label="Treść operacji gospodarczej"
+                      required
+                      {...(fieldErrors['description'] ? { error: fieldErrors['description'] } : {})}
+                    >
+                      {(ctrl) => (
+                        <input
+                          {...ctrl}
+                          type="text"
+                          value={description}
+                          onChange={(e) => {
+                            setDescription(e.target.value);
+                            if (fieldErrors['description']) {
+                              setFieldErrors((prev) => ({ ...prev, description: '' }));
+                            }
+                          }}
+                          placeholder="np. Faktura zakupu usług chmurowych za okres..."
+                        />
+                      )}
+                    </FormField>
+                  </div>
 
-                <div className="space-y-2.5">
-                  {lines.map((line, index) => {
-                    const amtErr = fieldErrors[`line-amt-${String(index)}`];
-                    const descErr = fieldErrors[`line-desc-${String(index)}`];
-                    const amtErrId = `jrn-amt-err-${String(index)}`;
-                    const descErrId = `jrn-ldesc-err-${String(index)}`;
-                    return (
-                      <div
-                        key={index}
-                        className="space-y-2 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3"
-                      >
-                        <div className="grid gap-2.5 sm:grid-cols-12">
-                          <div className="sm:col-span-4">
-                            <label
-                              htmlFor={`jrn-acc-${String(index)}`}
-                              className="block text-[11px] font-medium text-[#191c1a]"
-                            >
-                              Konto syntetyczne <span className="text-[#9e2a25]">*</span>
-                            </label>
-                            <select
-                              id={`jrn-acc-${String(index)}`}
-                              value={line.accountCode}
-                              onChange={(e) => {
-                                const copy = [...lines];
-                                copy[index] = { ...line, accountCode: e.target.value };
-                                setLines(copy);
-                              }}
-                              className="mt-0.5 min-h-9 w-full rounded border border-[#858177] bg-white px-2 text-xs"
-                            >
-                              {chartOfAccounts.map((acc) => (
-                                <option key={acc.code} value={acc.code}>
-                                  {acc.code} — {acc.name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <div className="sm:col-span-2">
-                            <label
-                              htmlFor={`jrn-side-${String(index)}`}
-                              className="block text-[11px] font-medium text-[#191c1a]"
-                            >
-                              Strona <span className="text-[#9e2a25]">*</span>
-                            </label>
-                            <select
-                              id={`jrn-side-${String(index)}`}
-                              value={line.side}
-                              onChange={(e) => {
-                                const copy = [...lines];
-                                copy[index] = {
-                                  ...line,
-                                  side: e.target.value === 'Ma' ? 'Ma' : 'Wn',
-                                };
-                                setLines(copy);
-                              }}
-                              className="mt-0.5 min-h-9 w-full rounded border border-[#858177] bg-white px-2 font-mono text-xs font-semibold"
-                            >
-                              <option value="Wn">Wn (Debet)</option>
-                              <option value="Ma">Ma (Kredyt)</option>
-                            </select>
-                          </div>
-
-                          <div className="sm:col-span-3">
-                            <label
-                              htmlFor={`jrn-amt-${String(index)}`}
-                              className="block text-[11px] font-medium text-[#191c1a]"
-                            >
-                              Kwota (PLN) <span className="text-[#9e2a25]">*</span>
-                            </label>
-                            <input
-                              id={`jrn-amt-${String(index)}`}
-                              type="text"
-                              inputMode="decimal"
-                              aria-required="true"
-                              aria-invalid={Boolean(amtErr)}
-                              aria-describedby={amtErr ? amtErrId : undefined}
-                              value={line.amountPln}
-                              onChange={(e) => {
-                                const copy = [...lines];
-                                copy[index] = { ...line, amountPln: e.target.value };
-                                setLines(copy);
-                                if (amtErr || fieldErrors['balance']) {
-                                  setFieldErrors((prev) => ({
-                                    ...prev,
-                                    [`line-amt-${String(index)}`]: '',
-                                    balance: '',
-                                  }));
-                                }
-                              }}
-                              placeholder="0.00"
-                              className={`mt-0.5 min-h-9 w-full rounded border bg-white px-2 text-right font-mono text-xs tabular-nums ${
-                                amtErr ? 'border-[#9e2a25]' : 'border-[#858177]'
-                              }`}
-                            />
-                            {amtErr ? (
-                              <p
-                                id={amtErrId}
-                                role="alert"
-                                className="mt-1 text-[11px] font-medium text-[#9e2a25]"
+                  <div className="space-y-2.5">
+                    {lines.map((line, index) => {
+                      const amtErr = fieldErrors[`line-amt-${String(index)}`];
+                      const descErr = fieldErrors[`line-desc-${String(index)}`];
+                      const amtErrId = `jrn-amt-err-${String(index)}`;
+                      const descErrId = `jrn-ldesc-err-${String(index)}`;
+                      return (
+                        <div
+                          key={index}
+                          className="space-y-2 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3"
+                        >
+                          <div className="grid gap-2.5 sm:grid-cols-12">
+                            <div className="sm:col-span-4">
+                              <label
+                                htmlFor={`jrn-acc-${String(index)}`}
+                                className="block text-[11px] font-medium text-[#191c1a]"
                               >
-                                {amtErr}
-                              </p>
-                            ) : null}
-                          </div>
-
-                          <div className="sm:col-span-3">
-                            <label
-                              htmlFor={`jrn-ldesc-${String(index)}`}
-                              className="block text-[11px] font-medium text-[#191c1a]"
-                            >
-                              Opis pozycji <span className="text-[#9e2a25]">*</span>
-                            </label>
-                            <div className="mt-0.5 flex items-center gap-1.5">
-                              <input
-                                id={`jrn-ldesc-${String(index)}`}
-                                type="text"
-                                aria-required="true"
-                                aria-invalid={Boolean(descErr)}
-                                aria-describedby={descErr ? descErrId : undefined}
-                                value={line.description}
+                                Konto syntetyczne <span className="text-[#9e2a25]">*</span>
+                              </label>
+                              <select
+                                id={`jrn-acc-${String(index)}`}
+                                value={line.accountCode}
                                 onChange={(e) => {
                                   const copy = [...lines];
-                                  copy[index] = { ...line, description: e.target.value };
+                                  copy[index] = { ...line, accountCode: e.target.value };
                                   setLines(copy);
-                                  if (descErr) {
+                                }}
+                                className="mt-0.5 min-h-9 w-full rounded border border-[#858177] bg-white px-2 text-xs"
+                              >
+                                {chartOfAccounts.map((acc) => (
+                                  <option key={acc.code} value={acc.code}>
+                                    {acc.code} — {acc.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div className="sm:col-span-2">
+                              <label
+                                htmlFor={`jrn-side-${String(index)}`}
+                                className="block text-[11px] font-medium text-[#191c1a]"
+                              >
+                                Strona <span className="text-[#9e2a25]">*</span>
+                              </label>
+                              <select
+                                id={`jrn-side-${String(index)}`}
+                                value={line.side}
+                                onChange={(e) => {
+                                  const copy = [...lines];
+                                  copy[index] = {
+                                    ...line,
+                                    side: e.target.value === 'Ma' ? 'Ma' : 'Wn',
+                                  };
+                                  setLines(copy);
+                                }}
+                                className="mt-0.5 min-h-9 w-full rounded border border-[#858177] bg-white px-2 font-mono text-xs font-semibold"
+                              >
+                                <option value="Wn">Wn (Debet)</option>
+                                <option value="Ma">Ma (Kredyt)</option>
+                              </select>
+                            </div>
+
+                            <div className="sm:col-span-3">
+                              <label
+                                htmlFor={`jrn-amt-${String(index)}`}
+                                className="block text-[11px] font-medium text-[#191c1a]"
+                              >
+                                Kwota (PLN) <span className="text-[#9e2a25]">*</span>
+                              </label>
+                              <input
+                                id={`jrn-amt-${String(index)}`}
+                                type="text"
+                                inputMode="decimal"
+                                aria-required="true"
+                                aria-invalid={Boolean(amtErr)}
+                                aria-describedby={amtErr ? amtErrId : undefined}
+                                value={line.amountPln}
+                                onChange={(e) => {
+                                  const copy = [...lines];
+                                  copy[index] = { ...line, amountPln: e.target.value };
+                                  setLines(copy);
+                                  if (amtErr || fieldErrors['balance']) {
                                     setFieldErrors((prev) => ({
                                       ...prev,
-                                      [`line-desc-${String(index)}`]: '',
+                                      [`line-amt-${String(index)}`]: '',
+                                      balance: '',
                                     }));
                                   }
                                 }}
-                                placeholder="np. Usługi obce netto"
-                                className={`min-h-9 w-full rounded border bg-white px-2 text-xs ${
-                                  descErr ? 'border-[#9e2a25]' : 'border-[#858177]'
+                                placeholder="0.00"
+                                className={`mt-0.5 min-h-9 w-full rounded border bg-white px-2 text-right font-mono text-xs tabular-nums ${
+                                  amtErr ? 'border-[#9e2a25]' : 'border-[#858177]'
                                 }`}
                               />
-                              {lines.length > 2 ? (
-                                <Button
-                                  size="sm"
-                                  variant="danger"
-                                  aria-label={`Usuń wiersz dekretu nr ${String(index + 1)}`}
-                                  onClick={() =>
-                                    setLines((prev) => prev.filter((_, idx) => idx !== index))
-                                  }
+                              {amtErr ? (
+                                <p
+                                  id={amtErrId}
+                                  role="alert"
+                                  className="mt-1 text-[11px] font-medium text-[#9e2a25]"
                                 >
-                                  Usuń
-                                </Button>
+                                  {amtErr}
+                                </p>
                               ) : null}
                             </div>
-                            {descErr ? (
-                              <p
-                                id={descErrId}
-                                role="alert"
-                                className="mt-1 text-[11px] font-medium text-[#9e2a25]"
+
+                            <div className="sm:col-span-3">
+                              <label
+                                htmlFor={`jrn-ldesc-${String(index)}`}
+                                className="block text-[11px] font-medium text-[#191c1a]"
                               >
-                                {descErr}
-                              </p>
-                            ) : null}
+                                Opis pozycji <span className="text-[#9e2a25]">*</span>
+                              </label>
+                              <div className="mt-0.5 flex items-center gap-1.5">
+                                <input
+                                  id={`jrn-ldesc-${String(index)}`}
+                                  type="text"
+                                  aria-required="true"
+                                  aria-invalid={Boolean(descErr)}
+                                  aria-describedby={descErr ? descErrId : undefined}
+                                  value={line.description}
+                                  onChange={(e) => {
+                                    const copy = [...lines];
+                                    copy[index] = { ...line, description: e.target.value };
+                                    setLines(copy);
+                                    if (descErr) {
+                                      setFieldErrors((prev) => ({
+                                        ...prev,
+                                        [`line-desc-${String(index)}`]: '',
+                                      }));
+                                    }
+                                  }}
+                                  placeholder="np. Usługi obce netto"
+                                  className={`min-h-9 w-full rounded border bg-white px-2 text-xs ${
+                                    descErr ? 'border-[#9e2a25]' : 'border-[#858177]'
+                                  }`}
+                                />
+                                {lines.length > 2 ? (
+                                  <Button
+                                    size="sm"
+                                    variant="danger"
+                                    aria-label={`Usuń wiersz dekretu nr ${String(index + 1)}`}
+                                    onClick={() =>
+                                      setLines((prev) => prev.filter((_, idx) => idx !== index))
+                                    }
+                                  >
+                                    Usuń
+                                  </Button>
+                                ) : null}
+                              </div>
+                              {descErr ? (
+                                <p
+                                  id={descErrId}
+                                  role="alert"
+                                  className="mt-1 text-[11px] font-medium text-[#9e2a25]"
+                                >
+                                  {descErr}
+                                </p>
+                              ) : null}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
 
-                {fieldErrors['balance'] ? (
-                  <AlertBanner tone="danger" title="Niezbilansowany dekret księgowy (Wn !== Ma)">
-                    {fieldErrors['balance']}
-                  </AlertBanner>
-                ) : null}
-
-                {balanceCheck.semanticWarnings.length > 0 ? (
-                  <div data-testid="journal-semantic-warnings">
-                    <AlertBanner
-                      tone="warning"
-                      title="Wskazówka kontrolna doboru kont i proporcji VAT (nieblokująca)"
-                    >
-                      <ul className="list-disc space-y-1 pl-4">
-                        {balanceCheck.semanticWarnings.map((w) => (
-                          <li key={w.id}>{w.messagePl}</li>
-                        ))}
-                      </ul>
+                  {fieldErrors['balance'] ? (
+                    <AlertBanner tone="danger" title="Niezbilansowany dekret księgowy (Wn !== Ma)">
+                      {fieldErrors['balance']}
                     </AlertBanner>
-                  </div>
-                ) : null}
+                  ) : null}
 
-                <div className="space-y-2 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-4 py-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex flex-wrap items-center gap-4 text-xs">
-                      <span>
-                        Suma Wn: <MoneyAmount amount={balanceCheck.wnGrosze} inGrosze size="sm" />
-                      </span>
-                      <span>
-                        Suma Ma: <MoneyAmount amount={balanceCheck.maGrosze} inGrosze size="sm" />
-                      </span>
-                      <StatusBadge
-                        size="sm"
-                        tone={balanceCheck.isBalanced ? 'success' : 'danger'}
-                        label={
-                          balanceCheck.isBalanced
-                            ? 'Bilans arytmetyczny zgodny (Wn === Ma)'
-                            : `Niezbilansowany dekret (różnica ${(balanceCheck.diffGrosze / 100).toFixed(2)} PLN)`
-                        }
-                      />
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() =>
-                          setLines([
-                            ...lines,
-                            {
-                              accountCode: '130',
-                              side: 'Ma',
-                              amountPln: '',
-                              description: '',
-                            },
-                          ])
-                        }
+                  {balanceCheck.semanticWarnings.length > 0 ? (
+                    <div data-testid="journal-semantic-warnings">
+                      <AlertBanner
+                        tone="warning"
+                        title="Wskazówka kontrolna doboru kont i proporcji VAT (nieblokująca)"
                       >
-                        + Dodaj wiersz dekretu
-                      </Button>
-                      <Button size="sm" type="submit" disabled={busy || !canWriteEffective}>
-                        {!isRegimeCompatible
-                          ? 'Zapis zablokowany — aktywna firma nie prowadzi pełnych ksiąg'
-                          : !canWrite
-                            ? 'Tylko odczyt — brak grantu write'
-                            : 'Zaksięguj dekret w Dzienniku'}
-                      </Button>
+                        <ul className="list-disc space-y-1 pl-4">
+                          {balanceCheck.semanticWarnings.map((w) => (
+                            <li key={w.id}>{w.messagePl}</li>
+                          ))}
+                        </ul>
+                      </AlertBanner>
                     </div>
+                  ) : null}
+
+                  <div className="space-y-2 rounded-lg border border-[#e5e2d9] bg-[#faf9f5] px-4 py-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-4 text-xs">
+                        <span>
+                          Suma Wn: <MoneyAmount amount={balanceCheck.wnGrosze} inGrosze size="sm" />
+                        </span>
+                        <span>
+                          Suma Ma: <MoneyAmount amount={balanceCheck.maGrosze} inGrosze size="sm" />
+                        </span>
+                        <StatusBadge
+                          size="sm"
+                          tone={balanceCheck.isBalanced ? 'success' : 'danger'}
+                          label={
+                            balanceCheck.isBalanced
+                              ? 'Bilans arytmetyczny zgodny (Wn === Ma)'
+                              : `Niezbilansowany dekret (różnica ${(balanceCheck.diffGrosze / 100).toFixed(2)} PLN)`
+                          }
+                        />
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() =>
+                            setLines([
+                              ...lines,
+                              {
+                                accountCode: '130',
+                                side: 'Ma',
+                                amountPln: '',
+                                description: '',
+                              },
+                            ])
+                          }
+                        >
+                          + Dodaj wiersz dekretu
+                        </Button>
+                        <Button size="sm" type="submit" disabled={busy || !canWriteEffective}>
+                          {!isRegimeCompatible
+                            ? 'Zapis zablokowany — aktywna firma nie prowadzi pełnych ksiąg'
+                            : !canWrite
+                              ? 'Tylko odczyt — brak grantu write'
+                              : 'Zaksięguj dekret w Dzienniku'}
+                        </Button>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-[#636b66]">
+                      Uwaga: zgodność arytmetyczna <code className="font-mono">Wn === Ma</code> jest
+                      warunkiem koniecznym wg UoR, ale nie potwierdza automatycznie merytorycznej
+                      poprawności doboru kont ani kwalifikacji podatkowej dowodu.
+                    </p>
                   </div>
-                  <p className="text-[11px] text-[#636b66]">
-                    Uwaga: zgodność arytmetyczna <code className="font-mono">Wn === Ma</code> jest
-                    warunkiem koniecznym wg UoR, ale nie potwierdza automatycznie merytorycznej
-                    poprawności doboru kont ani kwalifikacji podatkowej dowodu.
-                  </p>
-                </div>
+                </fieldset>
               </form>
+            </Card>
+          </div>
+
+          <div data-testid="ledger-bank-account-130-summary">
+            <Card
+              as="div"
+              eyebrow="Uzgodnienie banku z księgą główną · Konto 130 ↔ Rozrachunki 201 / 202"
+              title="Rachunek bieżący (Konto 130) i dekrety z wyciągów bankowych"
+              actions={
+                <StatusBadge
+                  size="sm"
+                  tone="info"
+                  label={`${String(bank130Summary.bankJournalVouchers.length)} dekret(ów) bankowych`}
+                />
+              }
+            >
+              <div className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3">
+                    <p className="text-xs text-[#636b66]">Obroty Wn konta 130 (wpływy / BO):</p>
+                    <MoneyAmount
+                      amount={bank130Summary.inflowsWnGrosze}
+                      inGrosze
+                      size="md"
+                      variant="income"
+                    />
+                  </div>
+                  <div className="rounded-lg border border-[#e5e2d9] bg-[#faf9f5] p-3">
+                    <p className="text-xs text-[#636b66]">Obroty Ma konta 130 (przelewy wych.):</p>
+                    <MoneyAmount
+                      amount={bank130Summary.outflowsMaGrosze}
+                      inGrosze
+                      size="md"
+                      variant="expense"
+                    />
+                  </div>
+                  <div className="rounded-lg border border-[#1d5c42] bg-[#e7f1ec]/70 p-3">
+                    <p className="text-xs font-medium text-[#1d5c42]">
+                      Saldo końcowe konta 130 (Zespół 1):
+                    </p>
+                    <MoneyAmount amount={bank130Summary.closingNetGrosze} inGrosze size="md" />
+                  </div>
+                </div>
+                <p className="text-xs text-[#464c48]">
+                  Każde potwierdzone uzgodnienie wyciągu CSV/MT940 z fakturą rozrachunkową tworzy
+                  idempotentny dekret <code className="font-mono">Wn 130 / Ma 201</code> (spłata
+                  należności) albo <code className="font-mono">Wn 202 / Ma 130</code> (zapłata
+                  zobowiązania) w Zestawieniu Obrotów i Sald oraz Bilansie.
+                </p>
+              </div>
             </Card>
           </div>
 

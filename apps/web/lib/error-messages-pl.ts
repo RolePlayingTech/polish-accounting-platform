@@ -63,8 +63,22 @@ const REASON_CODE_MESSAGES_PL: Readonly<Record<string, string>> = {
     'Ta operacja gospodarcza została już ujęta w księgach. Aby zmienić kwoty po zaksięgowaniu, wystaw dokument korygujący lub storno.',
   period_closed:
     'Wybrany okres rozliczeniowy jest zamknięty — wsteczne dopisywanie zapisów zostało zablokowane. Wprowadź uzasadnioną korektę w otwartym okresie.',
+  vat_period_finalized:
+    'Rozliczenie VAT (JPK_V7M) za ten okres zostało sfinalizowane — zmiana zapisów wymaga złożenia korekty deklaracji.',
   incompatible_tax_regime:
     'Aktywna firma rozlicza się w innym reżimie podatkowym — zapis w tej ewidencji jest niedozwolony dla jej profilu.',
+  tax_profile_locked_by_posted_entries:
+    'Nie można zmienić formy opodatkowania podmiotu posiadającego już zaksięgowane operacje w księgach bez formalnej procedury przejścia międzyokresowego.',
+  ksef_production_endpoint_blocked:
+    'Połączenie z produkcyjną bramką rządową KSeF / e-Deklaracje jest trwale zablokowane (HTTP 403) — dozwolone są wyłącznie środowiska testowe i lokalny symulator.',
+  jpk_xsd_validation_failed:
+    'Wygenerowany plik XML nie przeszedł walidacji względem urzędowej schemy XSD Ministerstwa Finansów. Sprawdź kompletność danych podmiotu i zapisów.',
+  ksef_xml_prevalidation_failed:
+    'Plik XML faktury nie spełnia wymogów oficjalnej schemy XSD FA(2)/FA(3) (np. brak KodFormularza, prefiks kraju w polu NIP lub niezgodna przestrzeń nazw).',
+  empty_jpk_register:
+    'Wybrana struktura JPK wymaga co najmniej jednego zaksięgowanego wiersza w ewidencji za dany okres.',
+  human_confirmation_required:
+    'Ta operacja wymaga jawnego potwierdzenia człowieka w oknie dialogowym przed wykonaniem.',
   invalid_document_csv_headers:
     'Plik CSV nie zawiera wszystkich wymaganych kolumn. Wymagany nagłówek (średnik lub przecinek): numer_faktury;data_wystawienia;kontrahent;nip;opis;stawka_vat;netto;vat;brutto.',
   invalid_document_csv:

@@ -76,6 +76,10 @@ import { getCompanyCapabilities } from './company-capabilities';
 import { formatUserFacingErrorPl } from './error-messages-pl';
 import type { ActiveWebSession, PersonaId, SessionContext } from './session';
 import {
+  assertBffFallbackPeriodNotClosed,
+  resetWave2FallbackStoreForTests,
+} from './wave2-statutory-and-close';
+import {
   AVAILABLE_PERIODS,
   COMPANY_JDG_KPIR_ID,
   COMPANY_JDG_RYCZALT_ID,
@@ -1145,6 +1149,14 @@ function getStore(): WorkspaceStateStore {
 export function resetSyntheticWorkspaceForTests(): void {
   const globalObj = globalThis as unknown as Record<string, WorkspaceStateStore | undefined>;
   globalObj[GLOBAL_STORE_KEY] = createInitialStore();
+  resetWave2FallbackStoreForTests();
+}
+
+export function getSyntheticIsolationProbeTarget(): {
+  readonly tenantId: string;
+  readonly legalEntityId: string;
+} {
+  return { tenantId: TENANT_1_ID, legalEntityId: COMPANY_JDG_KPIR_ID };
 }
 
 const AUTH_EVALUATION_NOW = new Date('2026-10-25T12:00:00Z');
@@ -4895,6 +4907,11 @@ export async function approveAndPostDocumentMutation(
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
   const safeDocId = assertSafeResourceIdPathParam(input.documentId, 'documentId');
   const validatedIssueDate = assertIsoCalendarDateOrThrow(input.issueDate, 'wystawienia');
+  assertBffFallbackPeriodNotClosed(
+    session.context.tenantId,
+    session.context.legalEntityId,
+    validatedIssueDate.slice(0, 7),
+  );
 
   const docNumTrimmed = input.documentNumber.trim();
   if (!docNumTrimmed) {
@@ -5346,6 +5363,15 @@ export async function addManualKpirEntryMutation(
   assertValidSessionIdentity(session);
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
+  const targetKpirDate =
+    input.mode === 'storno'
+      ? assertIsoCalendarDateOrThrow(input.correctionDate, 'korekty (storno)')
+      : assertIsoCalendarDateOrThrow(input.eventDate, 'zdarzenia gospodarczego');
+  assertBffFallbackPeriodNotClosed(
+    session.context.tenantId,
+    session.context.legalEntityId,
+    targetKpirDate.slice(0, 7),
+  );
 
   if (!isOfflineDemoModeEnabled()) {
     if (input.mode === 'storno') {
@@ -5552,6 +5578,11 @@ export async function addRyczaltEntryMutation(
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
 
   const validatedDate = assertIsoCalendarDateOrThrow(input.revenueDate, 'przychodu (ryczałt)');
+  assertBffFallbackPeriodNotClosed(
+    session.context.tenantId,
+    session.context.legalEntityId,
+    validatedDate.slice(0, 7),
+  );
   let normalizedNip: string | undefined;
   if (input.counterpartyNip?.trim()) {
     const nipCheck = validatePolishNip(input.counterpartyNip.trim());
@@ -5663,6 +5694,11 @@ export async function addJournalEntryMutation(
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
   const validatedDate = assertIsoCalendarDateOrThrow(input.bookingDate, 'księgowania (dekret)');
+  assertBffFallbackPeriodNotClosed(
+    session.context.tenantId,
+    session.context.legalEntityId,
+    validatedDate.slice(0, 7),
+  );
 
   if (!isOfflineDemoModeEnabled()) {
     const mappedLines = input.lines.map((l) => ({
@@ -5760,6 +5796,13 @@ export async function importAndReconcileBankStatementMutation(
 }> {
   assertValidSessionIdentity(session);
   assertPayloadSizeWithinLimit(input.content, 'wyciąg bankowy');
+  if (input.applySettlements) {
+    assertBffFallbackPeriodNotClosed(
+      session.context.tenantId,
+      session.context.legalEntityId,
+      session.context.period,
+    );
+  }
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
 
@@ -5845,6 +5888,54 @@ export async function importAndReconcileBankStatementMutation(
               doc.paidAmountGrosze + match.settledAmountGrosze,
             ),
           };
+          if (company.profileCode === 'spzoo_pelne_ksiegi') {
+            const tx = parsedTx.find((t) => t.transactionId === match.transactionId);
+            const bookingDate = tx?.bookingDate ?? `${session.context.period}-25`;
+            const existingJrn = store.journalEntriesByCompany.get(company.legalEntityId) ?? [];
+            const dedupId = `jrn-wb-${match.transactionId}-${doc.documentId}`;
+            if (!existingJrn.some((j) => j.id === dedupId)) {
+              const nextNo = existingJrn.length + 1;
+              const isSalesSettlement = doc.direction === 'sales';
+              const wbEntry = createValidatedJournalEntry({
+                id: dedupId,
+                entryNumber: `WB/${bookingDate.slice(0, 7)}/${String(nextNo).padStart(3, '0')}`,
+                bookingDate,
+                documentDate: bookingDate,
+                documentNumber: `WB/${match.transactionId}`,
+                description: `Uzgodnienie wyciągu bankowego — rozliczenie ${doc.documentNumber} (${doc.counterpartyName})`,
+                lines: isSalesSettlement
+                  ? [
+                      {
+                        accountCode: '130',
+                        side: 'Wn',
+                        amountGrosze: match.settledAmountGrosze,
+                        description: `Wpływ na rachunek bieżący — ${doc.documentNumber}`,
+                      },
+                      {
+                        accountCode: '201',
+                        side: 'Ma',
+                        amountGrosze: match.settledAmountGrosze,
+                        description: `Rozliczenie należności od odbiorcy — ${doc.counterpartyName}`,
+                      },
+                    ]
+                  : [
+                      {
+                        accountCode: '202',
+                        side: 'Wn',
+                        amountGrosze: match.settledAmountGrosze,
+                        description: `Spłata zobowiązania wobec dostawcy — ${doc.counterpartyName}`,
+                      },
+                      {
+                        accountCode: '130',
+                        side: 'Ma',
+                        amountGrosze: match.settledAmountGrosze,
+                        description: `Przelew wychodzący z rachunku bieżącego — ${doc.documentNumber}`,
+                      },
+                    ],
+              });
+              store.journalEntriesByCompany.set(company.legalEntityId, [...existingJrn, wbEntry]);
+            }
+          }
         }
       }
     }

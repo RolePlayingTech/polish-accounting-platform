@@ -716,4 +716,86 @@ test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', ()
     await page.getByTestId('ryczalt-pkwiu-guide-trigger').click();
     await expect(page.getByTestId('ryczalt-pkwiu-guide-panel')).toBeVisible();
   });
+
+  test('9. weryfikuje eksport JPK XSD bez fikcyjnego UPO (#98), FA(3) XML + KSeF Sandbox + WORM (#82, #99), Naliczone vs Opłacone (#81), Konto 130 (#111), blokadę fieldset (#109) i zamknięcie okresu 409 (#116)', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    await loginAsPersona(page, /Zaloguj jako Jan Testowy/i, 'Jan Testowy');
+    await switchCompanyViaHeader(page, COMPANY_JDG_KPIR_ID);
+
+    // 1. Eksport JPK_V7M(3) zgodny z XSD MF i uczciwy brak numeru UPO (#98, GLD-11)
+    await page.goto('/app/vat');
+    const jpkPanel = page.getByTestId('statutory-jpk-export-panel');
+    await expect(jpkPanel).toBeVisible();
+    await jpkPanel.getByTestId('generate-jpk-xml-button').click();
+    const jpkResult = jpkPanel.getByTestId('exported-jpk-xml-result');
+    await expect(jpkResult).toBeVisible();
+    await expect(jpkResult).toContainText('UPO: brak (nieprzesłano do MF)');
+    await expect(jpkResult).toContainText('http://crd.gov.pl/wzor/2025/12/19/14090/');
+
+    // 2. Eksport e-faktury FA(3) XML + archiwum źródłowe WORM z deduplikacją SHA-256 (#82, #99, GLD-09, GLD-10)
+    await page.goto('/app/documents');
+    const ksefPanel = page.getByTestId('ksef-sandbox-and-fa3-panel');
+    await expect(ksefPanel).toBeVisible();
+    await ksefPanel.getByTestId('export-fa3-xml-button').click();
+    const fa3Result = ksefPanel.getByTestId('exported-fa3-xml-result');
+    await expect(fa3Result).toBeVisible();
+    await expect(fa3Result).toContainText('http://crd.gov.pl/wzor/2025/06/25/13775/');
+
+    const uniqueWormPayload = `DOWOD-WORM-${String(Date.now())}`;
+    await ksefPanel.locator('#worm-archive-content').fill(uniqueWormPayload);
+    await ksefPanel.getByTestId('worm-archive-submit-button').click();
+    await expect(ksefPanel.getByTestId('worm-archive-saved-badge')).toBeVisible();
+
+    // Drugi identyczny zapis WORM -> odmowa 409 duplicate_document_sha256 po polsku
+    await ksefPanel.getByTestId('worm-archive-submit-button').click();
+    await expect(ksefPanel.getByText(/identyczny skrót SHA-256/i)).toBeVisible();
+
+    // 3. Sp. z o.o. -> widoczność uzgodnienia Konta 130 na pełnych księgach (#111)
+    await switchCompanyViaHeader(page, COMPANY_SPZOO_ID);
+    await page.goto('/app/ledger');
+    await expect(page.getByTestId('ledger-bank-account-130-summary')).toBeVisible();
+
+    // 4. JDG Ryczałt na /app/kpir -> twarda blokada <fieldset disabled> na formularzu niezgodnego reżimu (#109)
+    await switchCompanyViaHeader(page, COMPANY_JDG_RYCZALT_ID);
+    await page.goto('/app/kpir');
+    await expect(page.getByTestId('incompatible-regime-banner-kpir')).toBeVisible();
+    await expect(page.locator('#kpir-doc-num')).toBeDisabled();
+
+    // 5. Naliczone vs Opłacone (#81) + Zamknięcie okresu rozliczeniowego 2026-09 (#116, GLD-08) i odmowa wstecznego zapisu 409
+    await switchCompanyViaHeader(page, COMPANY_JDG_KPIR_ID);
+    await page.evaluate(async () => {
+      await fetch('/api/session/context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ period: '2026-09' }),
+      });
+    });
+
+    await page.goto('/app');
+    await expect(page.getByTestId('due-vs-paid-obligations-card')).toBeVisible();
+    const closePanel = page.getByTestId('period-close-panel');
+    await expect(closePanel).toBeVisible();
+    await closePanel.locator('#period-close-note').fill('Zamknięcie E2E września 2026');
+    await closePanel.getByTestId('close-accounting-period-button').click();
+
+    const closeDialog = page.getByRole('alertdialog');
+    await expect(closeDialog).toBeVisible();
+    await closeDialog.getByRole('button', { name: /Potwierdzam zamknięcie 2026-09/i }).click();
+
+    await expect(page.getByTestId('period-closed-active-lock-notice')).toBeVisible();
+    await expect(page.getByTestId('header-period-status-badge')).toContainText('Okres zamknięty');
+
+    // Próba dopisania dowodu wewnętrznego do zamkniętego miesiąca 2026-09 -> odmowa 409 period_closed po polsku
+    await page.goto('/app/kpir');
+    await page.locator('#kpir-event-date').fill('2026-09-25');
+    await page.locator('#kpir-doc-num').fill('DW/2026/09/LOCKED');
+    await page.locator('#kpir-cp-name').fill('Dostawca Testowy');
+    await page.locator('#kpir-desc').fill('Próba zapisu w zamkniętym okresie');
+    await page.locator('#kpir-exp-pln').fill('150.00');
+    await page.getByRole('button', { name: 'Zapisz pozycję w KPiR' }).click();
+    await expect(page.getByText(/okres rozliczeniowy jest zamknięty/i).first()).toBeVisible();
+  });
 });

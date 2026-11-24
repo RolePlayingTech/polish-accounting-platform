@@ -3,11 +3,16 @@ import {
   tryLoadWorkspaceData,
 } from '../../../components/access-denied-shell';
 import { LoginRequiredCard } from '../../../components/login-required-card';
+import { StatutoryJpkExportPanel } from '../../../components/statutory-jpk-export-panel';
 import { AcademyDisclaimerBanner } from '../../../components/ui-controls';
 import { WorkspaceShell } from '../../../components/workspace-shell';
 import { mapDomainExplanationToBasisInfo, mustResolveUiFieldHelp } from '../../../lib/field-help';
 import { readServerSession } from '../../../lib/session';
 import { getFullLedgerSnapshot, getWorkspaceShellContext } from '../../../lib/synthetic-workspace';
+import {
+  getApplicableJpkSnapshot,
+  getPeriodCloseSnapshot,
+} from '../../../lib/wave2-statutory-and-close';
 import { LedgerWorkbench } from './ledger-workbench';
 
 export default async function FullLedgerPage() {
@@ -34,11 +39,13 @@ export default async function FullLedgerPage() {
   }
 
   const loaded = await tryLoadWorkspaceData(async () => {
-    const [dash, ledger] = await Promise.all([
+    const [dash, ledger, applicableJpk, periodClose] = await Promise.all([
       getWorkspaceShellContext(session),
       getFullLedgerSnapshot(session),
+      getApplicableJpkSnapshot(session, session.context.period),
+      getPeriodCloseSnapshot(session, session.context.period),
     ]);
-    return { dash, ledger };
+    return { dash, ledger, applicableJpk, periodClose };
   });
   if (!loaded.ok) {
     return (
@@ -52,7 +59,7 @@ export default async function FullLedgerPage() {
     );
   }
 
-  const { dash, ledger } = loaded.data;
+  const { dash, ledger, applicableJpk, periodClose } = loaded.data;
 
   return (
     <WorkspaceShell
@@ -63,6 +70,7 @@ export default async function FullLedgerPage() {
       sessionContext={session.context}
       activeCompany={dash.activeCompany}
       accessibleCompanies={dash.accessibleCompanies}
+      periodStatus={periodClose.status}
     >
       <div className="space-y-6">
         <LedgerWorkbench
@@ -90,6 +98,12 @@ export default async function FullLedgerPage() {
             wnMa: mustResolveUiFieldHelp('double_entry_wn_ma'),
             cit9: mustResolveUiFieldHelp('cit_small_taxpayer_9'),
           }}
+        />
+        <StatutoryJpkExportPanel
+          key={`led-jpk-${dash.activeCompany.legalEntityId}:${session.context.period}`}
+          period={session.context.period}
+          structures={applicableJpk.structures}
+          vatActive={applicableJpk.vatActive}
         />
         <AcademyDisclaimerBanner />
       </div>

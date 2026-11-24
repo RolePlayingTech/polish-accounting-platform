@@ -1,4 +1,5 @@
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ESLint } from 'eslint';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -300,5 +301,43 @@ describe('architecture dependency boundaries (eslint.config.mjs)', () => {
     expect(result.errorCount).toBe(0);
     expect(result.warningCount).toBe(0);
     expect(result.messages).toEqual([]);
+  });
+
+  describe('#117: blocks hardcoded demo company codes and switchers in apps/web UI surfaces', () => {
+    function collectUiFiles(dirPath: string): string[] {
+      const results: string[] = [];
+      for (const entry of readdirSync(dirPath, { withFileTypes: true })) {
+        const full = join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          if (full.endsWith('/apps/web/app/api')) continue;
+          results.push(...collectUiFiles(full));
+        } else if (entry.isFile() && /\.(ts|tsx)$/.test(entry.name)) {
+          results.push(full);
+        }
+      }
+      return results;
+    }
+
+    it('forbids demo_jdg_*, demo_spzoo_*, demoCompanyCode, switchToDemo*, and COMPANY_JDG_*/COMPANY_SPZOO_* in apps/web/{app,components} UI', () => {
+      const uiFiles = [
+        ...collectUiFiles(resolve(repoRoot, 'apps/web/app')),
+        ...collectUiFiles(resolve(repoRoot, 'apps/web/components')),
+      ];
+      expect(uiFiles.length).toBeGreaterThan(20);
+
+      const forbiddenPattern =
+        /\b(demo_jdg_kpir_alfa|demo_jdg_ryczalt_beta|demo_spzoo_gamma|demoCompanyCode|switchToDemoSpzoo|switchToDemoRyczalt|switchToDemoKpir|COMPANY_JDG_KPIR_ID|COMPANY_JDG_RYCZALT_ID|COMPANY_SPZOO_ID)\b/;
+
+      const violations: string[] = [];
+      for (const filePath of uiFiles) {
+        const text = readFileSync(filePath, 'utf8');
+        const match = forbiddenPattern.exec(text);
+        if (match) {
+          violations.push(`${filePath.slice(repoRoot.length + 1)}: found "${match[1]}"`);
+        }
+      }
+
+      expect(violations).toEqual([]);
+    });
   });
 });

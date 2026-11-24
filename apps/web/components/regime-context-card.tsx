@@ -46,7 +46,7 @@ export interface IncompatibleRegimeGateCardProps {
 
 /**
  * Uczciwy komponent przełączania i informacji o niezgodnym reżimie (#101, #104, #120).
- * Nigdy nie używa sztywnego `demoCompanyCode` — proponuje przełączenie wyłącznie na realnie
+ * Nigdy nie używa sztywnych kodów firm demonstracyjnych — proponuje przełączenie wyłącznie na realnie
  * dostępne firmy w `accessibleCompanies` z zachowaniem pełnej walidacji sesji i komunikatów błędów.
  */
 export function IncompatibleRegimeGateCard({
