@@ -530,13 +530,34 @@ export const McpVatRateBreakdownItemSchema = z
 
 export type McpVatRateBreakdownItem = z.infer<typeof McpVatRateBreakdownItemSchema>;
 
+const POLISH_NIP_WEIGHTS = [6, 5, 7, 2, 3, 4, 5, 6, 7] as const;
+
+export function isValidPolishNip(value: string): boolean {
+  if (!/^\d{10}$/.test(value) || value === '0000000000') {
+    return false;
+  }
+  let weightedSum = 0;
+  for (let idx = 0; idx < 9; idx += 1) {
+    weightedSum += Number(value[idx]) * POLISH_NIP_WEIGHTS[idx]!;
+  }
+  const checkDigit = weightedSum % 11;
+  return checkDigit !== 10 && checkDigit === Number(value[9]);
+}
+
+export const PolishNipSchema = z
+  .string()
+  .regex(/^\d{10}$/)
+  .refine(isValidPolishNip, {
+    message: 'Nieprawidłowa suma kontrolna numeru NIP (modulo 11).',
+  });
+
 export const PrepareInvoiceDraftPayloadSchema = z
   .object({
     direction: z.enum(['purchase', 'sales']),
     invoiceNumber: z.string().min(1).max(128),
     issueDate: IsoDateSchema,
     dueDate: IsoDateSchema,
-    counterpartyNip: z.string().regex(/^\d{10}$/),
+    counterpartyNip: PolishNipSchema,
     counterpartyName: z.string().min(1).max(512),
     netAmountPln: NonNegativePlnDecimalStringSchema,
     vatAmountPln: NonNegativePlnDecimalStringSchema,

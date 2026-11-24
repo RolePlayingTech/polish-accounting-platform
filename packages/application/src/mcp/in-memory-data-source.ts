@@ -1,5 +1,7 @@
+import { randomUUID } from 'node:crypto';
 import type { MonthlyTaxObligation } from '@pap/contracts/mcp-tools';
 import type { LegalEntityId, TenantId, UserId } from '@pap/domain';
+import { formatGroszeToPln, parsePlnToGrosze } from './security-and-redaction.js';
 import type {
   AccountingItemExplanationRecord,
   CompanyDirectoryRecord,
@@ -119,7 +121,10 @@ export class InMemoryPapMcpDataSource implements PapMcpDataSource {
     legalEntityIdVal: LegalEntityId,
   ): Promise<readonly UnpaidInvoiceRecord[]> {
     return this.unpaidInvoices.filter(
-      (i) => i.tenantId === tenantIdVal && i.legalEntityId === legalEntityIdVal,
+      (i) =>
+        i.tenantId === tenantIdVal &&
+        i.legalEntityId === legalEntityIdVal &&
+        parsePlnToGrosze(i.remainingGrossAmountPln) > 0n,
     );
   }
 
@@ -177,34 +182,186 @@ export class InMemoryPapMcpDataSource implements PapMcpDataSource {
     legalEntityIdVal: LegalEntityId,
     period?: string,
   ): Promise<readonly UnreconciledBankTransactionRecord[]> {
-    const explicit = this.bankTransactions.filter(
-      (t) =>
-        t.tenantId === tenantIdVal &&
-        t.legalEntityId === legalEntityIdVal &&
-        (!period || t.bookingDate.startsWith(period)),
+    const entityExplicit = this.bankTransactions.filter(
+      (t) => t.tenantId === tenantIdVal && t.legalEntityId === legalEntityIdVal,
     );
-    if (explicit.length > 0) {
-      return explicit;
-    }
-    if (period) {
-      const fromChecklist = await this.getMonthCloseRawData(tenantIdVal, legalEntityIdVal, period);
-      return fromChecklist.unreconciledBankTransfers.map((tx) => {
-        const isDebit = tx.amountPln.startsWith('-');
-        const absPln = isDebit ? tx.amountPln.slice(1) : tx.amountPln;
-        return {
+    const knownExplicitIds = new Set(entityExplicit.map((t) => t.bankTransactionId.toLowerCase()));
+    const result: UnreconciledBankTransactionRecord[] = entityExplicit.filter(
+      (t) =>
+        (!period || t.bookingDate.startsWith(period)) &&
+        parsePlnToGrosze(t.remainingUnallocatedPln) > 0n,
+    );
+    const seenIds = new Set(result.map((t) => t.bankTransactionId.toLowerCase()));
+
+    const keyPrefix = `${tenantIdVal}:${legalEntityIdVal}:`;
+    for (const [key, rawChecklist] of this.monthCloseData.entries()) {
+      if (!key.startsWith(keyPrefix)) {
+        continue;
+      }
+      const checklistPeriod = key.slice(keyPrefix.length);
+      if (period && checklistPeriod !== period) {
+        continue;
+      }
+      for (const tx of rawChecklist.unreconciledBankTransfers) {
+        const normalizedId = tx.bankTransactionId.toLowerCase();
+        if (knownExplicitIds.has(normalizedId) || seenIds.has(normalizedId)) {
+          continue;
+        }
+        const signedGrosze = parsePlnToGrosze(tx.amountPln);
+        const absGrosze = signedGrosze < 0n ? -signedGrosze : signedGrosze;
+        if (absGrosze <= 0n) {
+          continue;
+        }
+        seenIds.add(normalizedId);
+        result.push({
           bankTransactionId: tx.bankTransactionId,
           tenantId: tenantIdVal,
           legalEntityId: legalEntityIdVal,
           bookingDate: tx.bookingDate,
-          direction: isDebit ? 'debit' : 'credit',
+          direction: signedGrosze < 0n ? 'debit' : 'credit',
           amountPln: tx.amountPln,
-          remainingUnallocatedPln: absPln,
+          remainingUnallocatedPln: formatGroszeToPln(absGrosze),
           counterpartyName: tx.counterpartyName ?? 'Kontrahent przelewu',
           transferTitle: tx.transferTitle,
-        };
+        });
+      }
+    }
+
+    return result;
+  }
+
+  async applyConfirmedBankReconciliation(params: {
+    readonly tenantId: TenantId;
+    readonly legalEntityId: LegalEntityId;
+    readonly bankTransactionId: string;
+    readonly invoiceId: string;
+    readonly allocationGrossPln: string;
+    readonly confirmedByUserId: UserId;
+  }): Promise<{
+    readonly reconciliationEntryId: string;
+    readonly remainingInvoiceGrossAfterPln: string;
+  }> {
+    const allocationGrosze = parsePlnToGrosze(params.allocationGrossPln);
+    if (allocationGrosze <= 0n) {
+      throw new Error('zero_allocation_amount');
+    }
+
+    const normalizedInvoiceId = params.invoiceId.toLowerCase();
+    const normalizedTxId = params.bankTransactionId.toLowerCase();
+
+    const invIdx = this.unpaidInvoices.findIndex(
+      (i) =>
+        i.tenantId === params.tenantId &&
+        i.legalEntityId === params.legalEntityId &&
+        i.invoiceId.toLowerCase() === normalizedInvoiceId,
+    );
+    if (invIdx < 0) {
+      throw new Error('unpaid_invoice_not_found');
+    }
+    const targetInvoice = this.unpaidInvoices[invIdx]!;
+    const invRemGrosze = parsePlnToGrosze(targetInvoice.remainingGrossAmountPln);
+    if (invRemGrosze < allocationGrosze) {
+      throw new Error('concurrent_allocation_exhausted_invoice_balance');
+    }
+
+    const expectedTxDir = targetInvoice.direction === 'purchase' ? 'debit' : 'credit';
+    const explicitTxIdx = this.bankTransactions.findIndex(
+      (t) =>
+        t.tenantId === params.tenantId &&
+        t.legalEntityId === params.legalEntityId &&
+        t.bankTransactionId.toLowerCase() === normalizedTxId,
+    );
+
+    const keyPrefix = `${params.tenantId}:${params.legalEntityId}:`;
+    let checklistCurrentRemGrosze: bigint | null = null;
+    let checklistDirection: 'credit' | 'debit' | null = null;
+    for (const [key, rawChecklist] of this.monthCloseData.entries()) {
+      if (!key.startsWith(keyPrefix)) {
+        continue;
+      }
+      const found = rawChecklist.unreconciledBankTransfers.find(
+        (tx) => tx.bankTransactionId.toLowerCase() === normalizedTxId,
+      );
+      if (found) {
+        const signed = parsePlnToGrosze(found.amountPln);
+        checklistDirection = signed < 0n ? 'debit' : 'credit';
+        checklistCurrentRemGrosze = signed < 0n ? -signed : signed;
+        break;
+      }
+    }
+
+    let txRemGrosze: bigint;
+    let txDirection: 'credit' | 'debit';
+    if (explicitTxIdx >= 0) {
+      const explicitTx = this.bankTransactions[explicitTxIdx]!;
+      txRemGrosze = parsePlnToGrosze(explicitTx.remainingUnallocatedPln);
+      txDirection = explicitTx.direction;
+    } else if (checklistCurrentRemGrosze !== null && checklistDirection !== null) {
+      txRemGrosze = checklistCurrentRemGrosze;
+      txDirection = checklistDirection;
+    } else {
+      throw new Error('unreconciled_bank_transaction_not_found');
+    }
+
+    if (txDirection !== expectedTxDir) {
+      throw new Error('bank_transaction_direction_mismatch');
+    }
+    if (txRemGrosze < allocationGrosze) {
+      throw new Error('concurrent_allocation_exhausted_bank_transaction_balance');
+    }
+
+    const newInvRemPln = formatGroszeToPln(invRemGrosze - allocationGrosze);
+    const newTxRemGrosze = txRemGrosze - allocationGrosze;
+    const newTxRemPln = formatGroszeToPln(newTxRemGrosze);
+
+    this.unpaidInvoices[invIdx] = {
+      ...targetInvoice,
+      remainingGrossAmountPln: newInvRemPln,
+    };
+
+    if (explicitTxIdx >= 0) {
+      const explicitTx = this.bankTransactions[explicitTxIdx]!;
+      this.bankTransactions[explicitTxIdx] = {
+        ...explicitTx,
+        remainingUnallocatedPln: newTxRemPln,
+      };
+    }
+
+    for (const [key, rawChecklist] of this.monthCloseData.entries()) {
+      if (!key.startsWith(keyPrefix)) {
+        continue;
+      }
+      const hasMatch = rawChecklist.unreconciledBankTransfers.some(
+        (tx) => tx.bankTransactionId.toLowerCase() === normalizedTxId,
+      );
+      if (!hasMatch) {
+        continue;
+      }
+      const updatedTransfers = rawChecklist.unreconciledBankTransfers.flatMap((tx) => {
+        if (tx.bankTransactionId.toLowerCase() !== normalizedTxId) {
+          return [tx];
+        }
+        if (newTxRemGrosze <= 0n) {
+          return [];
+        }
+        const isDebit = tx.amountPln.startsWith('-');
+        return [
+          {
+            ...tx,
+            amountPln: isDebit ? `-${newTxRemPln}` : newTxRemPln,
+          },
+        ];
+      });
+      this.monthCloseData.set(key, {
+        ...rawChecklist,
+        unreconciledBankTransfers: updatedTransfers,
       });
     }
-    return [];
+
+    return {
+      reconciliationEntryId: randomUUID(),
+      remainingInvoiceGrossAfterPln: newInvRemPln,
+    };
   }
 
   async getVatPeriodPreviewSnapshot(

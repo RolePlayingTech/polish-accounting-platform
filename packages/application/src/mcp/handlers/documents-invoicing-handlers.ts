@@ -101,10 +101,7 @@ export async function handleListUnpaidInvoices(
     if (grossGrosze < minGrossGrosze) {
       continue;
     }
-    const localAllocated =
-      env.state.invoiceAllocatedGroszeByInvoiceId.get(inv.invoiceId.toLowerCase()) ?? 0n;
-    const baseRemaining = parsePlnToGrosze(inv.remainingGrossAmountPln);
-    const effectiveRemaining = baseRemaining > localAllocated ? baseRemaining - localAllocated : 0n;
+    const effectiveRemaining = parsePlnToGrosze(inv.remainingGrossAmountPln);
     if (effectiveRemaining <= 0n) {
       continue;
     }

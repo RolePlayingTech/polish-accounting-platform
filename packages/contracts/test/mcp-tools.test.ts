@@ -13,12 +13,14 @@ import {
   ListUnreconciledBankTransactionsInputSchema,
   McpToolErrorCodeSchema,
   OfficialHttpsUrlSchema,
+  PolishNipSchema,
   PrepareBankReconciliationInputSchema,
   PrepareInvoiceAndPostingProposalInputSchema,
   PrepareMonthCloseInputSchema,
   PreviewInvoicePostingInputSchema,
   PreviewJpkExportInputSchema,
   UntrustedDocumentTextEnvelopeSchema,
+  isValidPolishNip,
 } from '../src/mcp-tools.js';
 
 describe('MCP tool contracts', () => {
@@ -83,6 +85,22 @@ describe('MCP tool contracts', () => {
         },
       }).success,
     ).toBe(false);
+
+    // [P1-1] Polish NIP modulo-11 checksum validation
+    expect(isValidPolishNip('5260250995')).toBe(true);
+    expect(isValidPolishNip('5260258904')).toBe(true);
+    expect(isValidPolishNip('5250001003')).toBe(true);
+    expect(PolishNipSchema.safeParse('5260250995').success).toBe(true);
+
+    for (const invalidNip of ['1234567890', '0000000000', '5260258901', '1000010000']) {
+      expect(isValidPolishNip(invalidNip)).toBe(false);
+      expect(
+        PrepareInvoiceAndPostingProposalInputSchema.safeParse({
+          ...valid,
+          invoice: { ...valid.invoice, counterpartyNip: invalidNip },
+        }).success,
+      ).toBe(false);
+    }
   });
 
   it('validates real UTC calendar dates in IsoDateSchema and rejects non-existent dates', () => {

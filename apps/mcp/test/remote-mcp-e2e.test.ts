@@ -44,6 +44,7 @@ const ENTITY_B = mcpLegalEntityId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
 const USER_A = mcpUserId('33333333-3333-4333-8333-333333333333');
 
 const SECRET_ACCOUNTANT_TOKEN = 'pap-live-secret-bearer-token-do-not-log-987654';
+const SECRET_HUMAN_UI_TOKEN = 'pap-human-ui-reviewer-bearer-token-do-not-log-777888';
 const SECRET_NO_MCP_SCOPE_TOKEN = 'pap-token-without-mcp-read-scope-123456';
 
 function buildRemoteMcpTestStack() {
@@ -54,6 +55,23 @@ function buildRemoteMcpTestStack() {
     async verifyAccessToken(rawToken, options) {
       if (rawToken === SECRET_ACCOUNTANT_TOKEN) {
         const tokenScopes = ['pap:mcp:read', 'pap:mcp:prepare'];
+        for (const req of options?.requiredScopes ?? []) {
+          if (!tokenScopes.includes(req)) {
+            return { ok: false, reason: 'insufficient_scope' };
+          }
+        }
+        return {
+          ok: true,
+          identity: {
+            issuer: 'https://oidc.pap.local',
+            subject: 'oidc-sub-accountant-a',
+            scopes: tokenScopes,
+            expiresAt: new Date('2026-11-12T11:00:00Z'),
+          },
+        };
+      }
+      if (rawToken === SECRET_HUMAN_UI_TOKEN) {
+        const tokenScopes = ['pap:ui:full', 'pap:mcp:read', 'pap:mcp:prepare'];
         for (const req of options?.requiredScopes ?? []) {
           if (!tokenScopes.includes(req)) {
             return { ok: false, reason: 'insufficient_scope' };
@@ -552,9 +570,21 @@ describe('Remote Streamable HTTP MCP Server (@pap/mcp)', () => {
       'human_confirmation_required',
     );
 
+    // Delegated MCP-only resource token (without 'openid' and without 'pap:ui:*') CANNOT self-issue challenge
+    const selfChallengeDenied = await stack.gateway.issueHumanConfirmationChallenge({
+      humanBearerToken: SECRET_ACCOUNTANT_TOKEN,
+      tenantId: TENANT_A,
+      legalEntityId: ENTITY_A,
+      proposalId: parsedPrepare1.proposalId,
+    });
+    expect(selfChallengeDenied).toEqual({
+      ok: false,
+      reason: 'agent_self_approval_forbidden',
+    });
+
     // Out-of-band human reviewer approves in UI and issues one-time confirmationCode
     const humanChallenge = await stack.gateway.issueHumanConfirmationChallenge({
-      humanBearerToken: SECRET_ACCOUNTANT_TOKEN,
+      humanBearerToken: SECRET_HUMAN_UI_TOKEN,
       tenantId: TENANT_A,
       legalEntityId: ENTITY_A,
       proposalId: parsedPrepare1.proposalId,

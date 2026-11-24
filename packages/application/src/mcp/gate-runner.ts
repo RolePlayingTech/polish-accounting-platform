@@ -41,20 +41,28 @@ const HUMAN_APPROVAL_UI_SCOPES: ReadonlySet<string> = new Set([
   'pap:accounting',
 ]);
 
+const AUTONOMOUS_AGENT_SCOPES: ReadonlySet<string> = new Set([
+  'pap:mcp:agent_autonomous',
+  'pap:mcp:no_human_approval',
+  'pap:mcp:autonomous',
+  'pap:agent',
+]);
+
 /**
  * Hard anti-self-approval helper:
- * 1. Always rejects tokens carrying `pap:mcp:agent_autonomous` or `pap:mcp:no_human_approval`.
- * 2. When a real OIDC access token (`scopes` includes `'openid'`) is presented to issue a human
- *    confirmation challenge, requires at least one human UI scope (`pap:ui:full`, `pap:ui:accounting`,
- *    or `pap:accounting`) so an MCP-only delegated JWT (`['openid', 'pap:mcp:read', 'pap:mcp:prepare']`)
- *    can NEVER mint its own human confirmation challenge!
+ * 1. Always rejects tokens carrying autonomous agent scopes (`pap:mcp:agent_autonomous`,
+ *    `pap:mcp:no_human_approval`, `pap:mcp:autonomous`, `pap:agent`).
+ * 2. Whenever `scopes` are present (`scopes.length > 0`, whether `'openid'` is included or
+ *    omitted as in RFC 9068 OAuth2 resource tokens), requires at least one human UI scope
+ *    (`pap:ui:full`, `pap:ui:accounting`, or `pap:accounting`) so an MCP-only delegated token
+ *    (`['pap:mcp:read', 'pap:mcp:prepare']`) can NEVER mint its own human confirmation challenge!
  */
 export function isSelfApprovalForbiddenForChallengeIssuer(identity: VerifiedOidcIdentity): boolean {
   const scopes = identity.scopes ?? [];
-  if (scopes.includes('pap:mcp:agent_autonomous') || scopes.includes('pap:mcp:no_human_approval')) {
+  if (scopes.some((s) => AUTONOMOUS_AGENT_SCOPES.has(s))) {
     return true;
   }
-  if (scopes.includes('openid')) {
+  if (scopes.length > 0) {
     const hasHumanUiScope = scopes.some((s) => HUMAN_APPROVAL_UI_SCOPES.has(s));
     if (!hasHumanUiScope) {
       return true;
@@ -65,9 +73,7 @@ export function isSelfApprovalForbiddenForChallengeIssuer(identity: VerifiedOidc
 
 export function isAutonomousAgentToken(identity: VerifiedOidcIdentity): boolean {
   const scopes = identity.scopes ?? [];
-  return (
-    scopes.includes('pap:mcp:agent_autonomous') || scopes.includes('pap:mcp:no_human_approval')
-  );
+  return scopes.some((s) => AUTONOMOUS_AGENT_SCOPES.has(s));
 }
 
 export interface McpGateEnvironment {

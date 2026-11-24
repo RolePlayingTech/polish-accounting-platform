@@ -441,7 +441,7 @@ export function evaluateCompanyCapabilities(
       ],
       requiresHumanApproval: true,
       limitationsPl:
-        'Wyłącznie rozrachunki krajowe PLN; brak zlecania przelewów wychodzących do banku.',
+        'Wyłącznie rozrachunki krajowe PLN bez zlecania przelewów wychodzących; confirm_bank_reconciliation_proposal wymaga aktywnego adaptera trwałego zapisu rozrachunków (w przeciwnym razie zwraca capability_unsupported bez pozornego zapisu w RAM).',
       legalBasisCode: null,
     },
     {

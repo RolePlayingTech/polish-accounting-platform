@@ -156,10 +156,7 @@ export async function handleListUnreconciledBankTransactions(
   let anyInjection = false;
 
   for (const tx of allTxs) {
-    const allocatedGrosze =
-      env.state.bankAllocatedGroszeByTxId.get(tx.bankTransactionId.toLowerCase()) ?? 0n;
-    const baseRem = parsePlnToGrosze(tx.remainingUnallocatedPln);
-    const effectiveRem = baseRem > allocatedGrosze ? baseRem - allocatedGrosze : 0n;
+    const effectiveRem = parsePlnToGrosze(tx.remainingUnallocatedPln);
     if (effectiveRem <= 0n) {
       continue;
     }
@@ -443,13 +440,8 @@ export async function handlePrepareBankReconciliation(
         });
       }
 
-      const prevInvAllocated =
-        env.state.invoiceAllocatedGroszeByInvoiceId.get(normalizedInvoiceId) ?? 0n;
-      const prevTxAllocated = env.state.bankAllocatedGroszeByTxId.get(normalizedTxId) ?? 0n;
-      const baseInvRem = parsePlnToGrosze(targetInvoice.remainingGrossAmountPln);
-      const baseTxRem = parsePlnToGrosze(targetTx.remainingUnallocatedPln);
-      const effectiveInvRem = baseInvRem > prevInvAllocated ? baseInvRem - prevInvAllocated : 0n;
-      const effectiveTxRem = baseTxRem > prevTxAllocated ? baseTxRem - prevTxAllocated : 0n;
+      const effectiveInvRem = parsePlnToGrosze(targetInvoice.remainingGrossAmountPln);
+      const effectiveTxRem = parsePlnToGrosze(targetTx.remainingUnallocatedPln);
 
       if (allocationGrosze > effectiveInvRem || allocationGrosze > effectiveTxRem) {
         return denyMcpToolCall(env, {
@@ -631,6 +623,25 @@ export async function handleConfirmBankReconciliationProposal(
       reasonCode: 'autonomous_agent_cannot_confirm_bank_allocation',
       messagePl:
         'Agent autonomiczny MCP nie może samodzielnie zatwierdzić rozliczenia przelewu bankowego.',
+    });
+  }
+
+  const persistBankReconciliation = env.dataSource.applyConfirmedBankReconciliation;
+  if (!persistBankReconciliation) {
+    return denyMcpToolCall(env, {
+      toolName: 'confirm_bank_reconciliation_proposal',
+      correlationId,
+      actorUserId: auth.actor.userId,
+      actorIssuer: auth.actor.identity.issuer,
+      actorSubject: auth.actor.identity.subject,
+      tenantId: auth.actor.tenantId,
+      legalEntityId: auth.actor.legalEntityId,
+      idempotencyKey: normalizedIdemKey,
+      proposalId: normalizedProposalId,
+      errorCode: 'capability_unsupported',
+      reasonCode: 'bank_reconciliation_persistence_adapter_missing',
+      messagePl:
+        'Zatwierdzanie uzgodnień bankowych przez MCP wymaga aktywnego adaptera trwałego zapisu rozrachunków (użyj modułu Finanse w UI/REST — brak pozornego zapisu wyłącznie w RAM).',
     });
   }
 
@@ -821,7 +832,7 @@ export async function handleConfirmBankReconciliationProposal(
         });
       }
 
-      // Atomic live balance re-check (#108 anti-double-allocation!)
+      // Atomic live balance re-check on BOTH invoice AND bank transaction (#108 anti-double-allocation!)
       return env.mutex.runExclusive(
         [`bank-tx:${proposal.bankTransactionId}`, `inv-alloc:${proposal.invoiceId}`],
         async () => {
@@ -831,17 +842,16 @@ export async function handleConfirmBankReconciliationProposal(
             auth.actor.legalEntityId,
           );
           const liveInvoice = unpaidList.find(
-            (i) => i.invoiceId.toLowerCase() === proposal.invoiceId,
+            (i) =>
+              i.tenantId === auth.actor.tenantId &&
+              i.legalEntityId === auth.actor.legalEntityId &&
+              i.invoiceId.toLowerCase() === proposal.invoiceId,
           );
-          const prevInvAllocated =
-            env.state.invoiceAllocatedGroszeByInvoiceId.get(proposal.invoiceId) ?? 0n;
-          const prevTxAllocated =
-            env.state.bankAllocatedGroszeByTxId.get(proposal.bankTransactionId) ?? 0n;
           const liveInvRem = liveInvoice
-            ? parsePlnToGrosze(liveInvoice.remainingGrossAmountPln) - prevInvAllocated
+            ? parsePlnToGrosze(liveInvoice.remainingGrossAmountPln)
             : -1n;
 
-          if (liveInvRem < allocationGrosze) {
+          if (!liveInvoice || liveInvRem < allocationGrosze) {
             return denyMcpToolCall(env, {
               toolName: 'confirm_bank_reconciliation_proposal',
               correlationId,
@@ -856,6 +866,54 @@ export async function handleConfirmBankReconciliationProposal(
               reasonCode: 'concurrent_allocation_exhausted_invoice_balance',
               messagePl:
                 'Saldo rozrachunku faktury uległo zmniejszeniu przed zatwierdzeniem — podwójna alokacja została zablokowana.',
+            });
+          }
+
+          const candidatePeriods = new Set<string>([
+            proposal.createdAtIso.slice(0, 7),
+            liveInvoice.issueDate.slice(0, 7),
+            liveInvoice.dueDate.slice(0, 7),
+          ]);
+          const liveTxCandidates: UnreconciledBankTransactionRecord[] = [
+            ...(await loadEffectiveUnreconciledTransactions(
+              env,
+              auth.actor.tenantId,
+              auth.actor.legalEntityId,
+            )),
+          ];
+          for (const p of candidatePeriods) {
+            liveTxCandidates.push(
+              ...(await loadEffectiveUnreconciledTransactions(
+                env,
+                auth.actor.tenantId,
+                auth.actor.legalEntityId,
+                p,
+              )),
+            );
+          }
+          const liveTx = liveTxCandidates.find(
+            (tx) =>
+              tx.tenantId === auth.actor.tenantId &&
+              tx.legalEntityId === auth.actor.legalEntityId &&
+              tx.bankTransactionId.toLowerCase() === proposal.bankTransactionId,
+          );
+          const liveTxRem = liveTx ? parsePlnToGrosze(liveTx.remainingUnallocatedPln) : -1n;
+
+          if (!liveTx || liveTxRem < allocationGrosze) {
+            return denyMcpToolCall(env, {
+              toolName: 'confirm_bank_reconciliation_proposal',
+              correlationId,
+              actorUserId: auth.actor.userId,
+              actorIssuer: auth.actor.identity.issuer,
+              actorSubject: auth.actor.identity.subject,
+              tenantId: auth.actor.tenantId,
+              legalEntityId: auth.actor.legalEntityId,
+              idempotencyKey: normalizedIdemKey,
+              proposalId: normalizedProposalId,
+              errorCode: 'amount_mismatch',
+              reasonCode: 'concurrent_allocation_exhausted_bank_transaction_balance',
+              messagePl:
+                'Niealokowane saldo transakcji bankowej uległo zmniejszeniu przed zatwierdzeniem — podwójna alokacja przelewu została zablokowana.',
             });
           }
 
@@ -884,11 +942,12 @@ export async function handleConfirmBankReconciliationProposal(
             return buildAuditUnavailableError();
           }
 
-          let reconciliationEntryId: string = randomUUID();
-          let remainingAfterPln = formatGroszeToPln(liveInvRem - allocationGrosze);
-
-          if (env.dataSource.applyConfirmedBankReconciliation) {
-            const applied = await env.dataSource.applyConfirmedBankReconciliation({
+          let applied: {
+            readonly reconciliationEntryId: string;
+            readonly remainingInvoiceGrossAfterPln: string;
+          };
+          try {
+            applied = await persistBankReconciliation.call(env.dataSource, {
               tenantId: auth.actor.tenantId,
               legalEntityId: auth.actor.legalEntityId,
               bankTransactionId: proposal.bankTransactionId,
@@ -896,23 +955,30 @@ export async function handleConfirmBankReconciliationProposal(
               allocationGrossPln: proposal.allocationGrossPln,
               confirmedByUserId: auth.actor.userId,
             });
-            reconciliationEntryId = applied.reconciliationEntryId;
-            remainingAfterPln = applied.remainingInvoiceGrossAfterPln;
-          } else {
-            env.state.invoiceAllocatedGroszeByInvoiceId.set(
-              proposal.invoiceId,
-              prevInvAllocated + allocationGrosze,
-            );
-            env.state.bankAllocatedGroszeByTxId.set(
-              proposal.bankTransactionId,
-              prevTxAllocated + allocationGrosze,
-            );
+          } catch {
+            proposal.status = 'pending_human_approval';
+            challenge.consumingInFlight = false;
+            return denyMcpToolCall(env, {
+              toolName: 'confirm_bank_reconciliation_proposal',
+              correlationId,
+              actorUserId: auth.actor.userId,
+              actorIssuer: auth.actor.identity.issuer,
+              actorSubject: auth.actor.identity.subject,
+              tenantId: auth.actor.tenantId,
+              legalEntityId: auth.actor.legalEntityId,
+              idempotencyKey: normalizedIdemKey,
+              proposalId: normalizedProposalId,
+              errorCode: 'amount_mismatch',
+              reasonCode: 'bank_reconciliation_persistence_rejected',
+              messagePl:
+                'Trwały zapis rozliczenia bankowego został odrzucony z powodu równoległej zmiany salda rozrachunku lub przelewu.',
+            });
           }
 
           challenge.consumingInFlight = false;
           challenge.consumedAtIso = nowIso;
           proposal.status = 'confirmed';
-          proposal.reconciliationEntryId = reconciliationEntryId;
+          proposal.reconciliationEntryId = applied.reconciliationEntryId;
           proposal.confirmedAtIso = nowIso;
           proposal.confirmedByUserId = auth.actor.userId;
 
@@ -922,11 +988,11 @@ export async function handleConfirmBankReconciliationProposal(
             legalEntityId: proposal.legalEntityId,
             status: 'confirmed',
             allocationApplied: true,
-            reconciliationEntryId,
+            reconciliationEntryId: applied.reconciliationEntryId,
             bankTransactionId: proposal.bankTransactionId,
             invoiceId: proposal.invoiceId,
             allocatedGrossPln: proposal.allocationGrossPln,
-            remainingInvoiceGrossAfterPln: remainingAfterPln,
+            remainingInvoiceGrossAfterPln: applied.remainingInvoiceGrossAfterPln,
             confirmedAt: nowIso,
             confirmedPayloadHash: proposal.payloadHash,
             idempotencyKey: normalizedIdemKey,

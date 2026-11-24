@@ -29,7 +29,6 @@ import {
   VatViewResponseSchema,
 } from '@pap/contracts';
 import {
-  ConfirmBankReconciliationOutputSchema,
   ConfirmPreparedProposalOutputSchema,
   ExplainAccountingItemOutputSchema,
   GetAuditLineageOutputSchema,
@@ -996,6 +995,32 @@ describe('Real MCP SDK Client (@modelcontextprotocol/client HTTP + STDIO) + @pap
       expect(bankPrepOut.bankWriteExecuted).toBe(false);
       expect(bankPrepOut.proposalId).toBeTruthy();
 
+      // [P1-1] Invalid Polish NIP modulo-11 checksum -> rejected fail-closed over real MCP transport
+      const invalidNipCall = await agentClient.callTool({
+        name: 'prepare_invoice_and_posting_proposal',
+        arguments: {
+          tenantId: TENANT_1_ID,
+          legalEntityId: COMPANY_JDG_KPIR_ID,
+          idempotencyKey: randomUUID(),
+          invoice: {
+            direction: 'purchase',
+            invoiceNumber: 'FV-BAD-NIP/2026/03/01',
+            issueDate: '2026-03-22',
+            dueDate: '2026-04-05',
+            counterpartyNip: '1234567890',
+            counterpartyName: 'Kontrahent Błędny NIP',
+            netAmountPln: '100.00',
+            vatAmountPln: '23.00',
+            grossAmountPln: '123.00',
+            vatRate: '23',
+            expenseDescription: 'Test walidacji sumy kontrolnej NIP modulo 11',
+            suggestedCategory: 'uslugi_obce',
+          },
+        },
+      });
+      expect(invalidNipCall.isError).toBe(true);
+      expect(JSON.stringify(invalidNipCall.content)).toContain('modulo 11');
+
       // Agent self-approval of bank reconciliation challenge -> DENIED!
       const bankSelfApprove = await liveGateway.issueHumanConfirmationChallenge({
         humanBearerToken: janMcpAgentToken,
@@ -1008,7 +1033,9 @@ describe('Real MCP SDK Client (@modelcontextprotocol/client HTTP + STDIO) + @pap
         reason: 'agent_self_approval_forbidden',
       });
 
-      // Separate human session issues challenge & confirms bank reconciliation
+      // [P0-2] Separate human session issues challenge, and until Wave 2 wires persistent
+      // applyConfirmedBankReconciliation in AccountingWorkspaceService, confirm_bank_reconciliation_proposal
+      // fails closed with capability_unsupported (NEVER fabricating RAM-only allocationApplied=true or split-brain!)
       const bankHumanChallenge = await liveGateway.issueHumanConfirmationChallenge({
         humanBearerToken: janHumanToken,
         tenantId: TENANT_1_ID,
@@ -1017,23 +1044,21 @@ describe('Real MCP SDK Client (@modelcontextprotocol/client HTTP + STDIO) + @pap
       });
       expect(bankHumanChallenge.ok).toBe(true);
       if (bankHumanChallenge.ok) {
-        const bankConfirmed = ConfirmBankReconciliationOutputSchema.parse(
-          (
-            await agentClient.callTool({
-              name: 'confirm_bank_reconciliation_proposal',
-              arguments: {
-                tenantId: TENANT_1_ID,
-                legalEntityId: COMPANY_JDG_KPIR_ID,
-                idempotencyKey: randomUUID(),
-                proposalId: bankPrepOut.proposalId!,
-                expectedPayloadHash: bankPrepOut.payloadHash,
-                confirmationCode: bankHumanChallenge.confirmationCode,
-              },
-            })
-          ).structuredContent,
+        const bankConfirmCall = await agentClient.callTool({
+          name: 'confirm_bank_reconciliation_proposal',
+          arguments: {
+            tenantId: TENANT_1_ID,
+            legalEntityId: COMPANY_JDG_KPIR_ID,
+            idempotencyKey: randomUUID(),
+            proposalId: bankPrepOut.proposalId!,
+            expectedPayloadHash: bankPrepOut.payloadHash,
+            confirmationCode: bankHumanChallenge.confirmationCode,
+          },
+        });
+        expect(bankConfirmCall.isError).toBe(true);
+        expect(McpToolErrorEnvelopeSchema.parse(bankConfirmCall.structuredContent).errorCode).toBe(
+          'capability_unsupported',
         );
-        expect(bankConfirmed.allocationApplied).toBe(true);
-        expect(bankConfirmed.remainingInvoiceGrossAfterPln).toBe('770.00');
       }
 
       // JPK preview (no external submission, no fake UPO) + Month-close checklist & prepare + Redacted audit lineage

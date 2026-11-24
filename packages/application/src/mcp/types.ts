@@ -321,8 +321,6 @@ export interface PapMcpMutableState {
     string,
     StoredIdempotencyRecord<ConfirmBankReconciliationOutput>
   >;
-  readonly bankAllocatedGroszeByTxId: Map<string, bigint>;
-  readonly invoiceAllocatedGroszeByInvoiceId: Map<string, bigint>;
   readonly monthCloseProposalsById: Map<string, StoredMonthCloseProposal>;
   readonly monthCloseIdempotency: Map<string, StoredIdempotencyRecord<PrepareMonthCloseOutput>>;
   readonly humanChallengesByProposal: Map<string, StoredHumanConfirmationChallenge>;

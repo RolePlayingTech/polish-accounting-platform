@@ -196,8 +196,6 @@ export class PapMcpGateway {
         bankProposalsById: new Map(),
         bankPrepareIdempotency: new Map(),
         bankConfirmIdempotency: new Map(),
-        bankAllocatedGroszeByTxId: new Map(),
-        invoiceAllocatedGroszeByInvoiceId: new Map(),
         monthCloseProposalsById: new Map(),
         monthCloseIdempotency: new Map(),
         humanChallengesByProposal: new Map(),

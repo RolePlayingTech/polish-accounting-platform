@@ -380,6 +380,7 @@ export function validateAndResolveMcpInvoiceVat(
     let sumNet = 0n;
     let sumVat = 0n;
     let sumGross = 0n;
+    let oddMixedCarLineCount = 0;
     let anyInjection = false;
     const distinctRates = new Set<McpVatRateCode>();
     const resolvedLines: ResolvedMcpInvoiceLinePreview[] = [];
@@ -480,12 +481,24 @@ export function validateAndResolveMcpInvoiceVat(
         anyInjection = true;
       }
 
+      const isOddMixedCarLine =
+        invoice.direction !== 'sales' &&
+        !isVatExemptCompany &&
+        isMixedCarExpense &&
+        lineVat % 2n === 1n;
       const lineDedVat =
         invoice.direction === 'sales' || isVatExemptCompany
           ? 0n
           : isMixedCarExpense
-            ? (lineVat + 1n) / 2n
+            ? isOddMixedCarLine
+              ? oddMixedCarLineCount % 2 === 0
+                ? (lineVat + 1n) / 2n
+                : lineVat / 2n
+              : lineVat / 2n
             : lineVat;
+      if (isOddMixedCarLine) {
+        oddMixedCarLineCount += 1;
+      }
       const lineNonDedVat = invoice.direction === 'sales' ? 0n : lineVat - lineDedVat;
 
       sumNet += lineNet;
