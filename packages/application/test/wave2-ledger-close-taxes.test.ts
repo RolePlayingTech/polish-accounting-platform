@@ -619,4 +619,259 @@ describe('Wave 2 Financial & Tax Invariants (#109, #111, #116, #81, #112/#108 MC
       ),
     ).toBe(true);
   });
+
+  it('PR #132 Adversarial Regressions (P0-1, P1-1, P2-1): blocks bank transfer double-spend & paidDate spoofing/closed-period mutation, aligns M -> M+1 KPiR/Ryczałt/CIT NKUP, and shifts weekend/holiday due dates', () => {
+    const ws = new AccountingWorkspaceService({ seedDemoData: true });
+    const jan = ws.resolveActorFromPersona('jan-testowy');
+
+    // [P0-1a] Bank transfer double-spend: 2 000,00 PLN debit transfer allocated to ZUS CANNOT also settle a 2 000,00 PLN purchase invoice!
+    const purchaseDoc = ws.createDocument(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+      documentNumber: 'FZ/DOUBLE-SPEND/2026/03/01',
+      direction: 'purchase',
+      issueDate: '2026-03-14',
+      dueDate: '2026-03-28',
+      counterpartyName: 'Dostawca Testowy Double-Spend Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaSprzetu,
+      suggestedCategory: 'uslugi_obce',
+      lines: [{ description: 'Usługa 2 000 zł brutto', netGrosze: 200_000, vatRate: 'zw' }],
+    });
+    const postedPurchase = ws.approveAndPostDocument(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_KPIR_ID,
+      purchaseDoc.documentId,
+    );
+    const debit2000Csv = [
+      'Data księgowania;Data waluty;Kontrahent;Rachunek kontrahenta;Tytuł;Kwota;Waluta;Nr referencyjny',
+      '2026-03-16;2026-03-16;Przelew Wychodzący;;Opłata mieszana;-2000,00;PLN;TX-DBL-2000',
+    ].join('\n');
+    const imp2000 = ws.importBankStatement(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+      format: 'csv',
+      rawContent: debit2000Csv,
+      applySettlements: false,
+    });
+    const tx2000Id = imp2000.finance.bankTransactions.find((t) =>
+      t.title.includes('Opłata mieszana'),
+    )!.transactionId;
+    const targetSettlementId = imp2000.finance.settlements.find(
+      (s) => s.documentId === postedPurchase.documentId,
+    )!.settlementId;
+
+    // Allocate 1 200,00 PLN (120 000 gr) to zus_social -> leaves only 800,00 PLN (80 000 gr) for commercial invoices
+    ws.recordVerifiedTaxPayment(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+      obligationKind: 'zus_social',
+      targetPeriod: '2026-03',
+      paidDate: '2026-03-16',
+      amountGrosze: 120_000,
+      bankTransactionId: tx2000Id,
+    });
+
+    try {
+      ws.reconcileBank(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+        matches: [
+          { transactionId: tx2000Id, settlementId: targetSettlementId, amountGrosze: 200_000 },
+        ],
+      });
+      expect.unreachable('Powinno rzucić 422 allocation_exceeds_transaction_amount');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AccountingWorkspaceValidationError);
+      expect((err as AccountingWorkspaceValidationError).reasonCode).toBe(
+        'allocation_exceeds_transaction_amount',
+      );
+    }
+
+    // Allocating the remaining 800,00 PLN (80 000 gr) succeeds cleanly
+    const afterPartial = ws.reconcileBank(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+      matches: [
+        { transactionId: tx2000Id, settlementId: targetSettlementId, amountGrosze: 80_000 },
+      ],
+    });
+    expect(
+      afterPartial.settlements.find((s) => s.settlementId === targetSettlementId)?.settledGrosze,
+    ).toBe(80_000);
+
+    // [P0-1b] Cash-basis paidDate spoofing & closed-period protection on COMPANY_JDG_RYCZALT_ID
+    ws.closeAccountingPeriod(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, '2026-03', {
+      confirmClose: true,
+    });
+    const ryczClosedMarchBefore = ws.getPeriodTaxObligations(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_RYCZALT_ID,
+      '2026-03',
+    );
+    expect(
+      ryczClosedMarchBefore.items.find((i) => i.obligationKind === 'ryczalt_advance')
+        ?.accruedGrosze,
+    ).toBe(216_000);
+
+    const aprilZusCsv = [
+      'Data księgowania;Data waluty;Kontrahent;Rachunek kontrahenta;Tytuł;Kwota;Waluta;Nr referencyjny',
+      '2026-04-15;2026-04-15;Zakład Ubezpieczeń Społecznych;;ZUS społeczne za 2026-03;-1500,00;PLN;TX-APR-ZUS-1500',
+    ].join('\n');
+    const impAprilZus = ws.importBankStatement(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, {
+      format: 'csv',
+      rawContent: aprilZusCsv,
+      applySettlements: false,
+    });
+    const aprilZusTxId = impAprilZus.finance.bankTransactions.find(
+      (t) => t.bookingDate === '2026-04-15',
+    )!.transactionId;
+
+    // Spoofing paidDate: '2026-03-15' against April 2026-04-15 bank transfer -> 422 payment_date_mismatch_with_bank_transaction!
+    try {
+      ws.recordVerifiedTaxPayment(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, {
+        obligationKind: 'zus_social',
+        targetPeriod: '2026-03',
+        paidDate: '2026-03-15',
+        amountGrosze: 150_000,
+        bankTransactionId: aprilZusTxId,
+      });
+      expect.unreachable('Powinno rzucić 422 payment_date_mismatch_with_bank_transaction');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AccountingWorkspaceValidationError);
+      expect((err as AccountingWorkspaceValidationError).reasonCode).toBe(
+        'payment_date_mismatch_with_bank_transaction',
+      );
+    }
+
+    // Honest April payment (targetPeriod: '2026-03', paidDate: '2026-04-15') succeeds, leaves closed 2026-03 tax untouched (216_000 gr), and deducts in open 2026-04!
+    ws.createRyczaltManualEntry(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, {
+      revenueDate: '2026-04-10',
+      documentNumber: 'FV-RYCZ/2026/04/01',
+      counterpartyName: 'Klient Kwietniowy Sp. z o.o.',
+      rate: '12',
+      revenueGrosze: 1_000_000,
+    });
+    ws.recordVerifiedTaxPayment(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, {
+      obligationKind: 'zus_social',
+      targetPeriod: '2026-03',
+      paidDate: '2026-04-15',
+      amountGrosze: 150_000,
+      bankTransactionId: aprilZusTxId,
+    });
+    const ryczClosedMarchAfter = ws.getPeriodTaxObligations(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_RYCZALT_ID,
+      '2026-03',
+    );
+    expect(
+      ryczClosedMarchAfter.items.find((i) => i.obligationKind === 'ryczalt_advance')?.accruedGrosze,
+    ).toBe(216_000);
+    const ryczAprilView = ws.getRyczaltView(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, '2026-04');
+    const ryczAprilObl = ws.getPeriodTaxObligations(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_RYCZALT_ID,
+      '2026-04',
+    );
+    // 10 000 PLN - 1 500 PLN ZUS paid in April = 8 500 PLN * 12% = 1 020 PLN (102 000 gr) across both views!
+    expect(ryczAprilView.monthlySummary.taxDueRoundedPlnGrosze).toBe(102_000);
+    expect(
+      ryczAprilObl.items.find((i) => i.obligationKind === 'ryczalt_advance')?.accruedGrosze,
+    ).toBe(102_000);
+
+    // [P1-1a] KPiR M -> M+1 zero split-brain across getKpirView, getPeriodTaxObligations, and getCompanyOverview
+    const { company: liniowyCo } = ws.createCompany(jan, TENANT_1_ID, {
+      displayName: 'Test KPiR Liniowy M->M+1',
+      nip: '5252344078',
+      legalForm: 'jdg',
+      taxRegime: 'kpir_liniowy',
+      vatStatus: 'zwolniony',
+      activityStartDate: '2024-01-01',
+    });
+    ws.createKpirManualEntry(jan, TENANT_1_ID, liniowyCo.legalEntityId, {
+      eventDate: '2026-03-10',
+      documentNumber: 'FV-LIN/03/01',
+      entryKind: 'sales_revenue',
+      netGrosze: 2_000_000,
+      vatRate: 'zw',
+      vatGrosze: 0,
+    });
+    ws.createKpirManualEntry(jan, TENANT_1_ID, liniowyCo.legalEntityId, {
+      eventDate: '2026-04-10',
+      documentNumber: 'FV-LIN/04/01',
+      entryKind: 'sales_revenue',
+      netGrosze: 1_000_000,
+      vatRate: 'zw',
+      vatGrosze: 0,
+    });
+    const kpirAprView = ws.getKpirView(jan, TENANT_1_ID, liniowyCo.legalEntityId, '2026-04');
+    const kpirAprObl = ws.getPeriodTaxObligations(
+      jan,
+      TENANT_1_ID,
+      liniowyCo.legalEntityId,
+      '2026-04',
+    );
+    const kpirAprOverview = ws.getCompanyOverview(
+      jan,
+      TENANT_1_ID,
+      liniowyCo.legalEntityId,
+      '2026-04',
+    );
+    expect(kpirAprView.pitAdvance.advanceDueRoundedPlnGrosze).toBe(190_000);
+    expect(kpirAprObl.items.find((i) => i.obligationKind === 'pit_advance')?.accruedGrosze).toBe(
+      190_000,
+    );
+    expect(kpirAprOverview.taxSummary.incomeTaxGrosze).toBe(190_000);
+
+    // [P1-1b] Sp. z o.o. CIT prior-month NKUP is NOT double-taxed in M+1 (1 264 + 1 900 = 3 164 PLN)
+    const { company: nkupSpzoo } = ws.createCompany(jan, TENANT_1_ID, {
+      displayName: 'Test Sp. z o.o. NKUP M->M+1',
+      nip: '5213017228',
+      legalForm: 'sp_z_o_o',
+      taxRegime: 'cit_klasyczny',
+      vatStatus: 'czynny',
+      activityStartDate: '2024-01-01',
+    });
+    const m3Sale = ws.createDocument(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, {
+      documentNumber: 'FV/NKUP-M3/01',
+      direction: 'sales',
+      issueDate: '2026-03-10',
+      counterpartyName: 'Klient M3 Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      lines: [{ description: 'Usługa M3', netGrosze: 1_000_000, vatRate: '23' }],
+    });
+    ws.approveAndPostDocument(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, m3Sale.documentId);
+
+    const m3MixedCar = ws.createDocument(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, {
+      documentNumber: 'FZ/AUTO-M3/01',
+      direction: 'purchase',
+      issueDate: '2026-03-15',
+      counterpartyName: 'Serwis Flotowy Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.stacjaPaliwFlota,
+      suggestedCategory: 'eksploatacja_samochodu_mieszana',
+      vatDeductionMode: 'vehicle_mixed_50',
+      lines: [{ description: 'Eksploatacja auta mieszanego', netGrosze: 400_000, vatRate: '23' }],
+    });
+    ws.approveAndPostDocument(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, m3MixedCar.documentId, {
+      suggestedCategory: 'eksploatacja_samochodu_mieszana',
+      vatDeductionMode: 'vehicle_mixed_50',
+      kpirQualification: 'vehicle_mixed_75_col13',
+    });
+
+    const m4Sale = ws.createDocument(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, {
+      documentNumber: 'FV/NKUP-M4/01',
+      direction: 'sales',
+      issueDate: '2026-04-10',
+      counterpartyName: 'Klient M4 Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      lines: [{ description: 'Usługa M4', netGrosze: 1_000_000, vatRate: '23' }],
+    });
+    ws.approveAndPostDocument(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, m4Sale.documentId);
+
+    const citM3 = ws.getPeriodTaxObligations(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, '2026-03');
+    const citM4 = ws.getPeriodTaxObligations(jan, TENANT_1_ID, nkupSpzoo.legalEntityId, '2026-04');
+    const advM3 = citM3.items.find((i) => i.obligationKind === 'cit_advance')!.accruedGrosze;
+    const advM4 = citM4.items.find((i) => i.obligationKind === 'cit_advance')!.accruedGrosze;
+    expect(advM3).toBe(126_400);
+    expect(advM4).toBe(190_000);
+    expect(advM3 + advM4).toBe(316_400);
+
+    // [P2-1] Statutory due date rolls Saturday 2026-04-25 -> Monday 2026-04-27 per art. 12 § 5 OP
+    expect(citM3.items.find((i) => i.obligationKind === 'vat_settlement')?.statutoryDueDate).toBe(
+      '2026-04-27',
+    );
+  });
 });

@@ -3055,6 +3055,37 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         }
       });
 
+    if ('confirmMonthCloseProposal' in gateway) {
+      const gwWithMonthClose = gateway as unknown as {
+        confirmMonthCloseProposal: (
+          callContext: {
+            readonly rawBearerToken: string | undefined | null;
+            readonly correlationId?: string | undefined;
+          },
+          rawInput: unknown,
+        ) => Promise<{ readonly ok: boolean }>;
+      };
+      if (typeof gwWithMonthClose.confirmMonthCloseProposal === 'function') {
+        const origConfirmMonthClose = gwWithMonthClose.confirmMonthCloseProposal.bind(gateway);
+        gwWithMonthClose.confirmMonthCloseProposal = async (callContext, rawInput) =>
+          this.mutationMutex.runExclusive(async () => {
+            const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
+            try {
+              const result = await this.mcpCallContextStorage.run(callContext, () =>
+                origConfirmMonthClose(callContext, rawInput),
+              );
+              if (!result.ok) {
+                restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+              }
+              return result;
+            } catch (error) {
+              restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+              throw error;
+            }
+          });
+      }
+    }
+
     return gateway;
   }
 }

@@ -184,7 +184,7 @@ export class OperationsAutomationController {
       tenantId,
       legalEntityId,
       period,
-      (body ?? { confirmClose: true }) as CloseAccountingPeriodRequest,
+      (body ?? {}) as CloseAccountingPeriodRequest,
     );
   }
 
@@ -205,7 +205,7 @@ export class OperationsAutomationController {
       tenantId,
       companyId,
       period,
-      (body ?? { confirmClose: true }) as CloseAccountingPeriodRequest,
+      (body ?? {}) as CloseAccountingPeriodRequest,
     );
   }
 

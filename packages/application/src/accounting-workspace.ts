@@ -4386,38 +4386,66 @@ export class AccountingWorkspaceService {
     readonly previousAdvancesPaidYtdGrosze: number;
   } {
     const yearPrefix = period.slice(0, 4);
-    const activePriorPeriods = Array.from(
-      new Set(
-        company.kpirEntries
-          .filter((e) => e.period.startsWith(yearPrefix) && e.period < period)
-          .map((e) => e.period),
-      ),
-    ).sort();
+    const yearStart = `${yearPrefix}-01-01`;
+    const monthNum = Number(period.slice(5, 7));
+    const verifiedPayments = company.verifiedTaxPayments ?? [];
 
-    let paidSocialZusYtdGrosze = 0;
-    let paidHealthInsuranceYtdGrosze = 0;
+    const lastDayOfMonthIso = (targetPeriod: string): string => {
+      const [yStr = '2026', mStr = '01'] = targetPeriod.split('-');
+      const lastDay = new Date(Date.UTC(Number(yStr), Number(mStr), 0)).getUTCDate();
+      return `${yStr}-${mStr}-${String(lastDay).padStart(2, '0')}`;
+    };
+
     let previousAdvancesPaidYtdGrosze = 0;
-
-    for (const priorPeriod of activePriorPeriods) {
-      const priorZus = this.computeCompanyZusInternal(company, priorPeriod);
-      paidSocialZusYtdGrosze += priorZus?.socialContributionsTotalGrosze ?? 0;
-      paidHealthInsuranceYtdGrosze += priorZus?.healthContributionGrosze ?? 0;
+    for (let m = 1; m < monthNum; m += 1) {
+      const priorPeriod = `${yearPrefix}-${String(m).padStart(2, '0')}`;
+      const priorCutOff = lastDayOfMonthIso(priorPeriod);
+      const priorPaidSocialYtd = verifiedPayments
+        .filter(
+          (p) =>
+            p.obligationKind === 'zus_social' &&
+            p.paidDate >= yearStart &&
+            p.paidDate <= priorCutOff,
+        )
+        .reduce((s, p) => s + p.amountGrosze, 0);
+      const priorPaidHealthYtd = verifiedPayments
+        .filter(
+          (p) =>
+            p.obligationKind === 'zus_health' &&
+            p.paidDate >= yearStart &&
+            p.paidDate <= priorCutOff,
+        )
+        .reduce((s, p) => s + p.amountGrosze, 0);
       const priorSummary = summarizeKpirPeriod(company.kpirEntries, priorPeriod);
       const priorPit = calculateKpirPitAdvance({
         period: priorPeriod,
         taxForm,
         ytdRevenueGrosze: priorSummary.yearToDateTotals.col9TotalRevenueGrosze,
         ytdCostsGrosze: priorSummary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-        paidSocialZusYtdGrosze,
-        paidHealthInsuranceYtdGrosze,
+        paidSocialZusYtdGrosze: priorPaidSocialYtd,
+        paidHealthInsuranceYtdGrosze: priorPaidHealthYtd,
         previousAdvancesPaidYtdGrosze,
       });
       previousAdvancesPaidYtdGrosze += priorPit.advanceDueGrosze;
     }
 
-    const currentZus = this.computeCompanyZusInternal(company, period);
-    paidSocialZusYtdGrosze += currentZus?.socialContributionsTotalGrosze ?? 0;
-    paidHealthInsuranceYtdGrosze += currentZus?.healthContributionGrosze ?? 0;
+    const currentCutOff = lastDayOfMonthIso(period);
+    const paidSocialZusYtdGrosze = verifiedPayments
+      .filter(
+        (p) =>
+          p.obligationKind === 'zus_social' &&
+          p.paidDate >= yearStart &&
+          p.paidDate <= currentCutOff,
+      )
+      .reduce((s, p) => s + p.amountGrosze, 0);
+    const paidHealthInsuranceYtdGrosze = verifiedPayments
+      .filter(
+        (p) =>
+          p.obligationKind === 'zus_health' &&
+          p.paidDate >= yearStart &&
+          p.paidDate <= currentCutOff,
+      )
+      .reduce((s, p) => s + p.amountGrosze, 0);
 
     return {
       paidSocialZusYtdGrosze,
@@ -4578,6 +4606,8 @@ export class AccountingWorkspaceService {
       ryczaltEntries: company.ryczaltEntries,
       journalEntries: company.journalEntries,
       ytdCitNkupGrosze: this.computeYtdCitNkupGroszeInternal(company, period),
+      resolveYtdCitNkupGrosze: (targetPeriod) =>
+        this.computeYtdCitNkupGroszeInternal(company, targetPeriod),
       vatJpk,
       verifiedPayments: company.verifiedTaxPayments ?? [],
       requestPreferentialCit9Pct: options?.requestPreferentialCit9Pct,
@@ -4841,10 +4871,11 @@ export class AccountingWorkspaceService {
       paidSocialZusInMonthGrosze: paidSocialInMonth,
       paidHealthInsuranceInMonthGrosze: paidHealthInMonth,
     });
-    const dueTaxGrosze =
+    const ryczaltTaxObl =
       company.taxProfile.profileCode === 'jdg_ryczalt'
-        ? this.computeCompanyPeriodTaxObligationsInternal(company, period).incomeTaxAccruedGrosze
-        : calc.taxDueGrosze;
+        ? this.computeCompanyPeriodTaxObligationsInternal(company, period)
+        : null;
+    const dueTaxGrosze = ryczaltTaxObl ? ryczaltTaxObl.incomeTaxAccruedGrosze : calc.taxDueGrosze;
 
     const revenueByRate: Record<string, number> = {};
     for (const rateCode of RYCZALT_RATE_ORDER) {
@@ -4888,7 +4919,7 @@ export class AccountingWorkspaceService {
         taxDueRoundedPlnGrosze: dueTaxGrosze,
         taxDueFormatted: formatPlnFromGrosze(dueTaxGrosze),
         revenueByRate,
-        explanation: calc.explanation,
+        explanation: ryczaltTaxObl ? ryczaltTaxObl.explanation : calc.explanation,
       },
       vatExemptionLimit: {
         limitGrosze,
@@ -5792,7 +5823,11 @@ export class AccountingWorkspaceService {
 
           workingMatches = workingMatches.filter((m) => m.transactionId !== txId);
 
-          // 2. Wylicz i zwaliduj nowe alokacje dla transakcji tx (suma alokacji <= kwota przelewu, każda <= otwarte saldo dokumentu)
+          // 2. Wylicz i zwaliduj nowe alokacje dla transakcji tx (suma alokacji + zweryfikowanych płatności publicznoprawnych <= kwota przelewu, każda <= otwarte saldo dokumentu)
+          const verifiedTaxAllocatedGrosze = (company.verifiedTaxPayments ?? [])
+            .filter((p) => p.bankTransactionId === tx.transactionId)
+            .reduce((s, p) => s + p.amountGrosze, 0);
+          const availableTxAmountGrosze = Math.max(0, tx.amountGrosze - verifiedTaxAllocatedGrosze);
           let allocatedTxTotalGrosze = 0;
           const plannedAllocations: {
             readonly settlement: SettlementItemContract;
@@ -5804,13 +5839,16 @@ export class AccountingWorkspaceService {
             if (item.amountGrosze === 0) {
               continue;
             }
-            const remainingTxBudget = tx.amountGrosze - allocatedTxTotalGrosze;
+            const remainingTxBudget = availableTxAmountGrosze - allocatedTxTotalGrosze;
             if (item.amountGrosze !== undefined) {
-              if (item.amountGrosze > tx.amountGrosze || item.amountGrosze > remainingTxBudget) {
+              if (
+                item.amountGrosze > availableTxAmountGrosze ||
+                item.amountGrosze > remainingTxBudget
+              ) {
                 throw new AccountingWorkspaceValidationError(
                   422,
                   'allocation_exceeds_transaction_amount',
-                  `Kwota alokacji (${formatPlnFromGrosze(item.amountGrosze)}) przekracza dostępną kwotę transakcji bankowej (${formatPlnFromGrosze(remainingTxBudget)} z ${formatPlnFromGrosze(tx.amountGrosze)}).`,
+                  `Kwota alokacji (${formatPlnFromGrosze(item.amountGrosze)}) przekracza dostępną kwotę transakcji bankowej (${formatPlnFromGrosze(remainingTxBudget)} z ${formatPlnFromGrosze(tx.amountGrosze)}; rozdysponowano na ZUS/podatki: ${formatPlnFromGrosze(verifiedTaxAllocatedGrosze)}).`,
                 );
               }
               if (targetSettlement.remainingGrosze <= 0) {
@@ -5841,7 +5879,7 @@ export class AccountingWorkspaceService {
                 throw new AccountingWorkspaceValidationError(
                   422,
                   'allocation_exceeds_transaction_amount',
-                  `Cała kwota transakcji bankowej (${formatPlnFromGrosze(tx.amountGrosze)}) została już rozdysponowana na wcześniejsze pozycje.`,
+                  `Cała dostępna kwota transakcji bankowej (${formatPlnFromGrosze(availableTxAmountGrosze)} z ${formatPlnFromGrosze(tx.amountGrosze)}) została już rozdysponowana.`,
                 );
               }
               const autoApply = Math.min(targetSettlement.remainingGrosze, remainingTxBudget);
@@ -5869,7 +5907,7 @@ export class AccountingWorkspaceService {
             continue;
           }
 
-          const totalOverpayment = Math.max(0, tx.amountGrosze - allocatedTxTotalGrosze);
+          const totalOverpayment = Math.max(0, availableTxAmountGrosze - allocatedTxTotalGrosze);
           for (let idx = 0; idx < plannedAllocations.length; idx += 1) {
             const alloc = plannedAllocations[idx]!;
             const nextSettled = alloc.settlement.settledGrosze + alloc.applyGrosze;
@@ -6496,6 +6534,14 @@ export class AccountingWorkspaceService {
           );
         }
 
+        if (req.paidDate !== matchedBankTx.bookingDate) {
+          throw new AccountingWorkspaceValidationError(
+            422,
+            'payment_date_mismatch_with_bank_transaction',
+            `Data zapłaty zobowiązania (${req.paidDate}) musi odpowiadać dacie księgowania powiązanego przelewu bankowego (${matchedBankTx.bookingDate}).`,
+          );
+        }
+
         const canonicalTxId = matchedBankTx.transactionId;
         const resolvedPaymentId =
           req.paymentId?.trim() ||
@@ -6526,6 +6572,12 @@ export class AccountingWorkspaceService {
             `Dowód zapłaty "${resolvedPaymentId}" istnieje już z innymi parametrami kwoty lub okresu.`,
           );
         }
+
+        assertPeriodOpenForWrite(
+          company.periodCloseStates,
+          matchedBankTx.bookingDate.slice(0, 7),
+          `rejestracja zapłaty zobowiązania ${req.obligationKind} z przelewu ${canonicalTxId}`,
+        );
 
         const commercialAllocated = company.reconciliationMatches
           .filter((m) => m.transactionId === canonicalTxId && m.settledAmountGrosze > 0)

@@ -10,6 +10,7 @@ import {
   calculateProfileCCitObligations,
   formatPlnFromGrosze,
   generateProfitAndLoss,
+  shiftTaxDeadlineToBusinessDay,
   summarizeKpirPeriod,
   validateVerifiedPaymentRecord,
   type JpkV7mDeclarationSummary,
@@ -42,7 +43,8 @@ function nextMonthDueDateIso(period: string, dueDay: number): string {
     month = 1;
     year += 1;
   }
-  return `${year}-${String(month).padStart(2, '0')}-${String(dueDay).padStart(2, '0')}`;
+  const rawIso = `${year}-${String(month).padStart(2, '0')}-${String(dueDay).padStart(2, '0')}`;
+  return shiftTaxDeadlineToBusinessDay(rawIso).effectiveDueDate;
 }
 
 function lastDayOfPeriodIso(period: string): string {
@@ -144,6 +146,7 @@ export function computeCompanyPeriodTaxObligations(params: {
   readonly ryczaltEntries: readonly RyczaltEntry[];
   readonly journalEntries: readonly JournalEntry[];
   readonly ytdCitNkupGrosze: number;
+  readonly resolveYtdCitNkupGrosze?: ((targetPeriod: string) => number) | undefined;
   readonly vatJpk: JpkV7mDeclarationSummary | null;
   readonly verifiedPayments: readonly VerifiedTaxOrZusPayment[];
   readonly requestPreferentialCit9Pct?: boolean | undefined;
@@ -395,7 +398,11 @@ export function computeCompanyPeriodTaxObligations(params: {
         (je) => je.period >= startPeriod && je.period <= targetPeriod,
       );
       const pnl = generateProfitAndLoss(entriesInYearUpTo);
-      const nkup = targetPeriod === params.period ? params.ytdCitNkupGrosze : 0;
+      const nkup = params.resolveYtdCitNkupGrosze
+        ? params.resolveYtdCitNkupGrosze(targetPeriod)
+        : targetPeriod === params.period
+          ? params.ytdCitNkupGrosze
+          : 0;
       const kupCosts = Math.max(0, pnl.totalOperatingAndFinancialExpensesGrosze - nkup);
       try {
         return calculateProfileCCitObligations({

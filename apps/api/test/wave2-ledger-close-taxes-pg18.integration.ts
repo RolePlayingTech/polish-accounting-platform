@@ -508,6 +508,17 @@ describe('Wave 2 Financial & Tax Invariants — Ephemeral PostgreSQL 18.6 Integr
     );
     expect(f1BlockedClose.status).toBe(422);
 
+    // Empty body {} on POST .../periods/:period/close must fail schema validation (400), never silently default confirmClose=true
+    const emptyBodyClose = await fetch(
+      `${url1}/v1/companies/${COMPANY_SPZOO_ID}/periods/2026-03/close`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({}),
+      },
+    );
+    expect(emptyBodyClose.status).toBe(400);
+
     // Transition COMPANY_SPZOO_ID 2026-03: open -> reconciling, then 2-instance race between close & retroactive approve!
     const recRes = await fetch(`${url1}/v1/companies/${COMPANY_SPZOO_ID}/periods/2026-03/close`, {
       method: 'POST',
@@ -682,6 +693,26 @@ describe('Wave 2 Financial & Tax Invariants — Ephemeral PostgreSQL 18.6 Integr
     expect(impZusRes.status).toBe(200);
     const zusTxId = ImportBankStatementResponseSchema.parse(await impZusRes.json()).finance
       .bankTransactions[0]!.transactionId;
+
+    // Spoofed paidDate !== bank bookingDate -> 422 payment_date_mismatch_with_bank_transaction
+    const spoofedDatePayRes = await fetch(
+      `${url1}/v1/companies/${COMPANY_JDG_RYCZALT_ID}/taxes/payments`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({
+          obligationKind: 'zus_social',
+          targetPeriod: '2026-03',
+          paidDate: '2026-03-10',
+          amountGrosze: zusSocBefore.accruedGrosze,
+          bankTransactionId: zusTxId,
+        }),
+      },
+    );
+    expect(spoofedDatePayRes.status).toBe(422);
+    expect(((await spoofedDatePayRes.json()) as { reasonCode?: string }).reasonCode).toBe(
+      'payment_date_mismatch_with_bank_transaction',
+    );
 
     const payRes = await fetch(`${url1}/v1/companies/${COMPANY_JDG_RYCZALT_ID}/taxes/payments`, {
       method: 'POST',
