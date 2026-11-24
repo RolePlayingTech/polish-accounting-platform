@@ -1,4 +1,5 @@
 import { ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import {
   AccessMutationResponseSchema,
@@ -9,6 +10,7 @@ import {
   type ApproveAndPostDocumentRequest,
   type CalendarObligationItemContract,
   type CalendarViewResponse,
+  type CloseAccountingPeriodRequest,
   type CompanyAccessResponse,
   type CompanyAuditListResponse,
   type CompanyDocumentItemContract,
@@ -44,7 +46,10 @@ import {
   type ListSandboxPersonasResponse,
   type McpProposalsListResponse,
   type NotificationsViewResponse,
+  type PeriodCloseStatusResponse,
+  type PeriodTaxObligationsResponse,
   type ReconcileBankRequest,
+  type RecordVerifiedTaxPaymentRequest,
   type RejectMcpProposalRequest,
   type RejectMcpProposalResponse,
   type RevokeCompanyAccessRequest,
@@ -138,9 +143,12 @@ import {
   persistCalendarObligationStatusMutation,
   persistConfirmMcpProposalMutation,
   persistMcpChallengeMutation,
+  persistNewJournalEntriesForCompany,
   persistNotificationsStateMutation,
+  persistPeriodCloseStateMutation,
   persistSandboxTestEmailMutation,
   persistVatPeriodSettlementMutation,
+  persistVerifiedTaxPaymentMutation,
 } from './postgres-workspace-mutations.js';
 
 type MaybePromise<T> = T | Promise<T>;
@@ -233,7 +241,11 @@ type AsyncableWorkspaceMethodKeys =
   | 'prepareMcpProposal'
   | 'issueMcpProposalChallenge'
   | 'confirmMcpProposal'
-  | 'rejectMcpProposal';
+  | 'rejectMcpProposal'
+  | 'getPeriodCloseStatus'
+  | 'closeAccountingPeriod'
+  | 'getPeriodTaxObligations'
+  | 'recordVerifiedTaxPayment';
 
 export type WorkspaceRuntimePort = {
   readonly store: AccountingWorkspaceStorePort;
@@ -263,6 +275,10 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
   private readonly boundGateways = new Set<PapMcpGateway>();
   private readonly inFlightBatchSync = new Map<string, Promise<boolean>>();
   private readonly lastBatchSyncAtMs = new Map<string, number>();
+  private readonly mcpCallContextStorage = new AsyncLocalStorage<{
+    readonly rawBearerToken: string | undefined | null;
+    readonly correlationId?: string | undefined;
+  }>();
 
   /**
    * Test-only hook invoked inside the active PostgreSQL transaction after business DML
@@ -370,6 +386,83 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         getMonthCloseRawData: async (tId, leId, period) => {
           await this.ensureCompanyHydratedIfValid(tId, leId, undefined, true);
           return base.getMonthCloseRawData(tId, leId, period);
+        },
+        listUnreconciledBankTransactions: async (tId, leId, period) => {
+          await this.ensureCompanyHydratedIfValid(tId, leId, undefined, true);
+          return base.listUnreconciledBankTransactions
+            ? base.listUnreconciledBankTransactions(tId, leId, period)
+            : [];
+        },
+        getVatPeriodPreviewSnapshot: async (tId, leId, period) => {
+          await this.ensureCompanyHydratedIfValid(tId, leId, undefined, true);
+          return base.getVatPeriodPreviewSnapshot
+            ? base.getVatPeriodPreviewSnapshot(tId, leId, period)
+            : null;
+        },
+        listCompanyAuditEvents: async (tId, leId) => {
+          await this.ensureCompanyHydratedIfValid(tId, leId, undefined, true);
+          return base.listCompanyAuditEvents ? base.listCompanyAuditEvents(tId, leId) : [];
+        },
+        isPeriodClosed: async (tId, leId, period) => {
+          await this.ensureCompanyHydratedIfValid(tId, leId, undefined, true);
+          return base.isPeriodClosed ? base.isPeriodClosed(tId, leId, period) : false;
+        },
+        applyConfirmedBankReconciliation: async (params) => {
+          const activeCtx = this.mcpCallContextStorage.getStore();
+          const actor: WorkspaceActorContext = {
+            userId: params.confirmedByUserId,
+            scopes: ['pap:ui:accounting'],
+            ...(activeCtx?.rawBearerToken ? { rawBearerToken: activeCtx.rawBearerToken } : {}),
+            ...(activeCtx?.correlationId ? { requestId: activeCtx.correlationId } : {}),
+          };
+          return this.runCompanyOperation(
+            actor,
+            params.tenantId,
+            params.legalEntityId,
+            'write',
+            async (scope, txWorkspace) => {
+              const compBefore = txWorkspace.store.getCompany(
+                params.tenantId,
+                params.legalEntityId,
+              );
+              const prevSettled = new Map<string, number>(
+                (compBefore?.settlements ?? []).map((s) => [s.settlementId, s.settledGrosze]),
+              );
+              const prevJournalIds = new Set<string>(
+                (compBefore?.journalEntries ?? []).map((je) => je.id),
+              );
+              const txPort = txWorkspace.createWorkspaceMcpDomainPort();
+              const recResult = await txPort.applyConfirmedBankReconciliation!(params);
+              const compAfter = txWorkspace.store.getCompany(params.tenantId, params.legalEntityId);
+              if (compAfter) {
+                await persistBankReconciliationMatchesAndSettlements(scope, compAfter, prevSettled);
+                await persistNewJournalEntriesForCompany(scope, compAfter, prevJournalIds);
+              }
+              return recResult;
+            },
+            { actionKind: 'mcpConfirmBankReconciliation', payload: params },
+          );
+        },
+        applyConfirmedMonthClose: async (params) => {
+          const activeCtx = this.mcpCallContextStorage.getStore();
+          const actor: WorkspaceActorContext = {
+            userId: params.confirmedByUserId,
+            scopes: ['pap:ui:accounting'],
+            ...(activeCtx?.rawBearerToken ? { rawBearerToken: activeCtx.rawBearerToken } : {}),
+            ...(activeCtx?.correlationId ? { requestId: activeCtx.correlationId } : {}),
+          };
+          const closed = await this.closeAccountingPeriod(
+            actor,
+            params.tenantId,
+            params.legalEntityId,
+            params.period,
+            {
+              confirmClose: true,
+              status: 'closed',
+              ...(params.note ? { note: params.note } : {}),
+            },
+          );
+          return { closedAt: closed.closedAt ?? new Date().toISOString() };
         },
         resolveVerifiedIdentity: (identity) =>
           this.runtime.securityServices.identityResolver.resolveVerifiedIdentity(identity),
@@ -2137,6 +2230,9 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         const prevSettled = new Map<string, number>(
           (compBefore?.settlements ?? []).map((s) => [s.settlementId, s.settledGrosze]),
         );
+        const prevJournalIds = new Set<string>(
+          (compBefore?.journalEntries ?? []).map((je) => je.id),
+        );
         const result = txWorkspace.importBankStatement(actor, tenantId, legalEntityId, req);
         const comp = txWorkspace.store.getCompany(
           parseTenantId(tenantId),
@@ -2150,6 +2246,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
             req.rawContent ?? req.content ?? '',
             beforeTxCount,
             prevSettled,
+            prevJournalIds,
           );
         }
         return result;
@@ -2177,6 +2274,9 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         const prevSettled = new Map<string, number>(
           (compBefore?.settlements ?? []).map((s) => [s.settlementId, s.settledGrosze]),
         );
+        const prevJournalIds = new Set<string>(
+          (compBefore?.journalEntries ?? []).map((je) => je.id),
+        );
         const result = txWorkspace.reconcileBank(actor, tenantId, legalEntityId, req);
         const comp = txWorkspace.store.getCompany(
           parseTenantId(tenantId),
@@ -2184,6 +2284,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         );
         if (comp) {
           await persistBankReconciliationMatchesAndSettlements(scope, comp, prevSettled);
+          await persistNewJournalEntriesForCompany(scope, comp, prevJournalIds);
         }
         return result;
       },
@@ -2530,6 +2631,102 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     );
   }
 
+  getPeriodCloseStatus(
+    actor: WorkspaceActorContext,
+    tenantId: string,
+    legalEntityId: string,
+    period: string,
+  ): Promise<PeriodCloseStatusResponse> {
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getPeriodCloseStatus(actor, tenantId, legalEntityId, period),
+    );
+  }
+
+  closeAccountingPeriod(
+    actor: WorkspaceActorContext,
+    tenantId: string,
+    legalEntityId: string,
+    period: string,
+    req: CloseAccountingPeriodRequest,
+  ): Promise<PeriodCloseStatusResponse> {
+    return this.runCompanyOperation(
+      actor,
+      tenantId,
+      legalEntityId,
+      'write',
+      async (scope, txWorkspace) => {
+        const closed = txWorkspace.closeAccountingPeriod(
+          actor,
+          tenantId,
+          legalEntityId,
+          period,
+          req,
+        );
+        const comp = txWorkspace.store.getCompany(
+          parseTenantId(tenantId),
+          parseLegalEntityId(legalEntityId),
+        );
+        const state = comp?.periodCloseStates?.get(period);
+        if (comp && state) {
+          await persistPeriodCloseStateMutation(scope, comp, state);
+        }
+        return closed;
+      },
+      { actionKind: 'closeAccountingPeriod', payload: { period, req } },
+    );
+  }
+
+  getPeriodTaxObligations(
+    actor: WorkspaceActorContext,
+    tenantId: string,
+    legalEntityId: string,
+    period?: string,
+    options?: {
+      readonly requestPreferentialCit9Pct?: boolean | undefined;
+    },
+  ): Promise<PeriodTaxObligationsResponse> {
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getPeriodTaxObligations(actor, tenantId, legalEntityId, period, options),
+    );
+  }
+
+  recordVerifiedTaxPayment(
+    actor: WorkspaceActorContext,
+    tenantId: string,
+    legalEntityId: string,
+    req: RecordVerifiedTaxPaymentRequest,
+  ): Promise<PeriodTaxObligationsResponse> {
+    return this.runCompanyOperation(
+      actor,
+      tenantId,
+      legalEntityId,
+      'write',
+      async (scope, txWorkspace) => {
+        const compBefore = txWorkspace.store.getCompany(
+          parseTenantId(tenantId),
+          parseLegalEntityId(legalEntityId),
+        );
+        const prevPaymentIds = new Set<string>(
+          (compBefore?.verifiedTaxPayments ?? []).map((p) => p.paymentId),
+        );
+        const updated = txWorkspace.recordVerifiedTaxPayment(actor, tenantId, legalEntityId, req);
+        const comp = txWorkspace.store.getCompany(
+          parseTenantId(tenantId),
+          parseLegalEntityId(legalEntityId),
+        );
+        if (comp) {
+          for (const payment of comp.verifiedTaxPayments ?? []) {
+            if (!prevPaymentIds.has(payment.paymentId)) {
+              await persistVerifiedTaxPaymentMutation(scope, comp, payment);
+            }
+          }
+        }
+        return updated;
+      },
+      { actionKind: 'recordVerifiedTaxPayment', payload: req },
+    );
+  }
+
   createBoundMcpGateway(): PapMcpGateway {
     const gateway = this.innerWorkspace.createBoundMcpGateway(this.oidcVerifier);
     this.boundGateways.add(gateway);
@@ -2839,6 +3036,55 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         return result;
       });
     };
+
+    const origConfirmBank = gateway.confirmBankReconciliationProposal.bind(gateway);
+    gateway.confirmBankReconciliationProposal = async (callContext, rawInput) =>
+      this.mutationMutex.runExclusive(async () => {
+        const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
+        try {
+          const result = await this.mcpCallContextStorage.run(callContext, () =>
+            origConfirmBank(callContext, rawInput),
+          );
+          if (!result.ok) {
+            restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+          }
+          return result;
+        } catch (error) {
+          restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+          throw error;
+        }
+      });
+
+    if ('confirmMonthCloseProposal' in gateway) {
+      const gwWithMonthClose = gateway as unknown as {
+        confirmMonthCloseProposal: (
+          callContext: {
+            readonly rawBearerToken: string | undefined | null;
+            readonly correlationId?: string | undefined;
+          },
+          rawInput: unknown,
+        ) => Promise<{ readonly ok: boolean }>;
+      };
+      if (typeof gwWithMonthClose.confirmMonthCloseProposal === 'function') {
+        const origConfirmMonthClose = gwWithMonthClose.confirmMonthCloseProposal.bind(gateway);
+        gwWithMonthClose.confirmMonthCloseProposal = async (callContext, rawInput) =>
+          this.mutationMutex.runExclusive(async () => {
+            const snapshot = captureWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways);
+            try {
+              const result = await this.mcpCallContextStorage.run(callContext, () =>
+                origConfirmMonthClose(callContext, rawInput),
+              );
+              if (!result.ok) {
+                restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+              }
+              return result;
+            } catch (error) {
+              restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+              throw error;
+            }
+          });
+      }
+    }
 
     return gateway;
   }

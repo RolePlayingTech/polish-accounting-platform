@@ -20,14 +20,17 @@ import {
   AccountingWorkspaceConflictError,
   AccountingWorkspaceValidationError,
   DEMO_DEFAULT_PERIOD,
+  type WorkspaceActorContext,
 } from '@pap/application';
 import type { PapMcpGateway } from '@pap/application/mcp-gateway';
 import {
   IssueMcpChallengeResponseSchema,
+  type CloseAccountingPeriodRequest,
   type ConfirmMcpProposalRequest,
   type DispatchDueNotificationsRequest,
   type ImportBankStatementRequest,
   type ReconcileBankRequest,
+  type RecordVerifiedTaxPaymentRequest,
   type RejectMcpProposalRequest,
   type UpdateNotificationPreferencesRequest,
   type UpdateObligationStatusRequest,
@@ -50,6 +53,12 @@ import {
   type WorkspaceRuntimePort,
 } from '../runtime/workspace-runtime.js';
 import { parseOptionalPeriodParam } from './query-helpers.js';
+
+const TENANT_COMPANY_BASE = '/api/v1/tenants/:tenantId/companies/:legalEntityId';
+const SHORTHAND_COMPANY_BASES = [
+  '/api/v1/companies/:companyId',
+  '/v1/companies/:companyId',
+] as const;
 
 const SendTestNotificationBodySchema = z
   .object({
@@ -95,7 +104,20 @@ function parseCalendarQuery(
   return { year, month, period: `${year}-${String(month).padStart(2, '0')}` };
 }
 
-@Controller('/api/v1/tenants/:tenantId/companies/:legalEntityId')
+function parseBooleanQueryFlag(raw?: string): boolean | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (raw === 'true' || raw === '1') {
+    return true;
+  }
+  if (raw === 'false' || raw === '0') {
+    return false;
+  }
+  return undefined;
+}
+
+@Controller()
 @UseGuards(JwtBearerAuthGuard)
 export class OperationsAutomationController {
   constructor(
@@ -105,7 +127,167 @@ export class OperationsAutomationController {
     private readonly mcpGateway: PapMcpGateway,
   ) {}
 
-  @Get('/finance')
+  private async resolveTenantForCompanyShorthand(
+    actor: WorkspaceActorContext,
+    companyId: string,
+  ): Promise<string> {
+    const directory = await this.workspace.getMyCompanies(actor);
+    const matched = directory.companies.find((c) => c.legalEntityId === companyId);
+    if (!matched) {
+      throw new AccountingWorkspaceAccessError(
+        403,
+        'company_not_accessible_or_forbidden',
+        'Brak uprawnień do wskazanej firmy w bieżącej sesji użytkownika.',
+      );
+    }
+    return matched.tenantId;
+  }
+
+  @Get(`${TENANT_COMPANY_BASE}/periods/:period/close-status`)
+  @Header('Cache-Control', 'no-store')
+  getPeriodCloseStatus(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('legalEntityId') legalEntityId: string,
+    @Param('period') period: string,
+  ) {
+    const actor = requireRequestActor(request);
+    return this.workspace.getPeriodCloseStatus(actor, tenantId, legalEntityId, period);
+  }
+
+  @Get(SHORTHAND_COMPANY_BASES.map((base) => `${base}/periods/:period/close-status`))
+  @Header('Cache-Control', 'no-store')
+  async getPeriodCloseStatusShorthand(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('companyId') companyId: string,
+    @Param('period') period: string,
+  ) {
+    const actor = requireRequestActor(request);
+    const tenantId = await this.resolveTenantForCompanyShorthand(actor, companyId);
+    return this.workspace.getPeriodCloseStatus(actor, tenantId, companyId, period);
+  }
+
+  @Post(`${TENANT_COMPANY_BASE}/periods/:period/close`)
+  @RequireHumanApprovalScope()
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  closeAccountingPeriod(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('legalEntityId') legalEntityId: string,
+    @Param('period') period: string,
+    @Body() body: unknown,
+  ) {
+    const actor = requireRequestActor(request);
+    return this.workspace.closeAccountingPeriod(
+      actor,
+      tenantId,
+      legalEntityId,
+      period,
+      (body ?? {}) as CloseAccountingPeriodRequest,
+    );
+  }
+
+  @Post(SHORTHAND_COMPANY_BASES.map((base) => `${base}/periods/:period/close`))
+  @RequireHumanApprovalScope()
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  async closeAccountingPeriodShorthand(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('companyId') companyId: string,
+    @Param('period') period: string,
+    @Body() body: unknown,
+  ) {
+    const actor = requireRequestActor(request);
+    const tenantId = await this.resolveTenantForCompanyShorthand(actor, companyId);
+    return this.workspace.closeAccountingPeriod(
+      actor,
+      tenantId,
+      companyId,
+      period,
+      (body ?? {}) as CloseAccountingPeriodRequest,
+    );
+  }
+
+  @Get(`${TENANT_COMPANY_BASE}/taxes/obligations`)
+  @Header('Cache-Control', 'no-store')
+  getPeriodTaxObligations(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('legalEntityId') legalEntityId: string,
+    @Query('period') period?: string,
+    @Query('requestPreferentialCit9Pct') requestPreferentialCit9Pct?: string,
+  ) {
+    const actor = requireRequestActor(request);
+    const parsedPeriod = parseOptionalPeriodParam(period) ?? DEMO_DEFAULT_PERIOD;
+    const req9Pct = parseBooleanQueryFlag(requestPreferentialCit9Pct);
+    return this.workspace.getPeriodTaxObligations(
+      actor,
+      tenantId,
+      legalEntityId,
+      parsedPeriod,
+      req9Pct !== undefined ? { requestPreferentialCit9Pct: req9Pct } : undefined,
+    );
+  }
+
+  @Get(SHORTHAND_COMPANY_BASES.map((base) => `${base}/taxes/obligations`))
+  @Header('Cache-Control', 'no-store')
+  async getPeriodTaxObligationsShorthand(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('companyId') companyId: string,
+    @Query('period') period?: string,
+    @Query('requestPreferentialCit9Pct') requestPreferentialCit9Pct?: string,
+  ) {
+    const actor = requireRequestActor(request);
+    const tenantId = await this.resolveTenantForCompanyShorthand(actor, companyId);
+    const parsedPeriod = parseOptionalPeriodParam(period) ?? DEMO_DEFAULT_PERIOD;
+    const req9Pct = parseBooleanQueryFlag(requestPreferentialCit9Pct);
+    return this.workspace.getPeriodTaxObligations(
+      actor,
+      tenantId,
+      companyId,
+      parsedPeriod,
+      req9Pct !== undefined ? { requestPreferentialCit9Pct: req9Pct } : undefined,
+    );
+  }
+
+  @Post(`${TENANT_COMPANY_BASE}/taxes/payments`)
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  recordVerifiedTaxPayment(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('legalEntityId') legalEntityId: string,
+    @Body() body: unknown,
+  ) {
+    const actor = requireRequestActor(request);
+    return this.workspace.recordVerifiedTaxPayment(
+      actor,
+      tenantId,
+      legalEntityId,
+      (body ?? {}) as RecordVerifiedTaxPaymentRequest,
+    );
+  }
+
+  @Post(SHORTHAND_COMPANY_BASES.map((base) => `${base}/taxes/payments`))
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  async recordVerifiedTaxPaymentShorthand(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('companyId') companyId: string,
+    @Body() body: unknown,
+  ) {
+    const actor = requireRequestActor(request);
+    const tenantId = await this.resolveTenantForCompanyShorthand(actor, companyId);
+    return this.workspace.recordVerifiedTaxPayment(
+      actor,
+      tenantId,
+      companyId,
+      (body ?? {}) as RecordVerifiedTaxPaymentRequest,
+    );
+  }
+
+  @Get(`${TENANT_COMPANY_BASE}/finance`)
   @Header('Cache-Control', 'no-store')
   getFinance(
     @Req() request: JwtAuthenticatedRequest,
@@ -116,7 +298,7 @@ export class OperationsAutomationController {
     return this.workspace.getFinanceView(actor, tenantId, legalEntityId);
   }
 
-  @Post('/finance/bank-import')
+  @Post(`${TENANT_COMPANY_BASE}/finance/bank-import`)
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   importBank(
@@ -134,7 +316,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Post('/finance/reconcile')
+  @Post(`${TENANT_COMPANY_BASE}/finance/reconcile`)
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   async reconcileBank(
@@ -193,7 +375,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Get('/calendar')
+  @Get(`${TENANT_COMPANY_BASE}/calendar`)
   @Header('Cache-Control', 'no-store')
   getCalendar(
     @Req() request: JwtAuthenticatedRequest,
@@ -214,7 +396,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Post('/calendar/obligations/:obligationId/toggle-paid')
+  @Post(`${TENANT_COMPANY_BASE}/calendar/obligations/:obligationId/toggle-paid`)
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   async toggleObligationPaid(
@@ -263,7 +445,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Patch('/calendar/obligations/:obligationId/status')
+  @Patch(`${TENANT_COMPANY_BASE}/calendar/obligations/:obligationId/status`)
   @Header('Cache-Control', 'no-store')
   patchObligationStatus(
     @Req() request: JwtAuthenticatedRequest,
@@ -284,7 +466,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Get('/notifications')
+  @Get(`${TENANT_COMPANY_BASE}/notifications`)
   @Header('Cache-Control', 'no-store')
   getNotifications(
     @Req() request: JwtAuthenticatedRequest,
@@ -295,7 +477,7 @@ export class OperationsAutomationController {
     return this.workspace.getNotificationsView(actor, tenantId, legalEntityId);
   }
 
-  @Get('/notifications/preferences')
+  @Get(`${TENANT_COMPANY_BASE}/notifications/preferences`)
   @Header('Cache-Control', 'no-store')
   async getNotificationPreferences(
     @Req() request: JwtAuthenticatedRequest,
@@ -306,7 +488,7 @@ export class OperationsAutomationController {
     return (await this.workspace.getNotificationsView(actor, tenantId, legalEntityId)).preferences;
   }
 
-  @Put('/notifications/preferences')
+  @Put(`${TENANT_COMPANY_BASE}/notifications/preferences`)
   @Header('Cache-Control', 'no-store')
   async updateNotificationPreferences(
     @Req() request: JwtAuthenticatedRequest,
@@ -323,7 +505,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Post('/notifications/dispatch-due')
+  @Post(`${TENANT_COMPANY_BASE}/notifications/dispatch-due`)
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   async dispatchDueNotifications(
@@ -338,7 +520,7 @@ export class OperationsAutomationController {
     return this.workspace.dispatchDueNotifications(actor, tenantId, legalEntityId, payload);
   }
 
-  @Get('/notifications/sandbox-mailbox')
+  @Get(`${TENANT_COMPANY_BASE}/notifications/sandbox-mailbox`)
   @Header('Cache-Control', 'no-store')
   async getSandboxMailbox(
     @Req() request: JwtAuthenticatedRequest,
@@ -354,7 +536,7 @@ export class OperationsAutomationController {
     };
   }
 
-  @Post('/notifications/send-test')
+  @Post(`${TENANT_COMPANY_BASE}/notifications/send-test`)
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
   async sendSandboxTestEmail(
@@ -380,7 +562,7 @@ export class OperationsAutomationController {
     });
   }
 
-  @Get('/mcp/proposals')
+  @Get(`${TENANT_COMPANY_BASE}/mcp/proposals`)
   @Header('Cache-Control', 'no-store')
   listMcpProposals(
     @Req() request: JwtAuthenticatedRequest,
@@ -391,7 +573,7 @@ export class OperationsAutomationController {
     return this.workspace.listMcpProposals(actor, tenantId, legalEntityId);
   }
 
-  @Post(['/mcp/proposals', '/mcp/proposals/prepare'])
+  @Post([`${TENANT_COMPANY_BASE}/mcp/proposals`, `${TENANT_COMPANY_BASE}/mcp/proposals/prepare`])
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')
   prepareMcpProposal(
@@ -450,7 +632,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Post('/mcp/proposals/:proposalId/challenge')
+  @Post(`${TENANT_COMPANY_BASE}/mcp/proposals/:proposalId/challenge`)
   @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
@@ -518,7 +700,7 @@ export class OperationsAutomationController {
     });
   }
 
-  @Post('/mcp/proposals/:proposalId/confirm')
+  @Post(`${TENANT_COMPANY_BASE}/mcp/proposals/:proposalId/confirm`)
   @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
@@ -539,7 +721,7 @@ export class OperationsAutomationController {
     );
   }
 
-  @Post('/mcp/proposals/:proposalId/reject')
+  @Post(`${TENANT_COMPANY_BASE}/mcp/proposals/:proposalId/reject`)
   @RequireHumanApprovalScope()
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')

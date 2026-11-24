@@ -13,6 +13,7 @@ export type {
 } from './tenant-authorization.js';
 export * from './demo-seed.js';
 export * from './document-import-parsers.js';
+export * from './accounting/index.js';
 export * from './accounting-workspace.js';
 export * from './web-session-store.js';
 export * from './identity-lifecycle.js';

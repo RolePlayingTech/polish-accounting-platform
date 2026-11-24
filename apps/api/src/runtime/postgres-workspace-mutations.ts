@@ -6,6 +6,7 @@ import type {
 } from '@pap/contracts';
 import {
   AccountingWorkspaceConflictError,
+  type PeriodCloseState,
   type VatPeriodSettlementState,
   type WorkspaceCompanyState,
   type WorkspaceHumanChallenge,
@@ -13,6 +14,7 @@ import {
 } from '@pap/application';
 import type { BankReconciliationMatchContract } from '@pap/contracts/accounting';
 import type { PostgresAccountingScope } from '@pap/db';
+import type { VerifiedTaxOrZusPayment } from '@pap/domain';
 import {
   computeMcpProposalSealHash,
   encodeBankMatchesNotes,
@@ -213,6 +215,19 @@ export async function persistBankReconciliationMatchesAndSettlements(
   }
 }
 
+export async function persistNewJournalEntriesForCompany(
+  scope: PostgresAccountingScope,
+  company: WorkspaceCompanyState,
+  prevJournalIds: ReadonlySet<string>,
+): Promise<void> {
+  for (const je of company.journalEntries) {
+    if (prevJournalIds.has(je.id)) {
+      continue;
+    }
+    await persistJournalEntryToScope(scope, company, je, null);
+  }
+}
+
 export async function persistBankImportMutation(
   scope: PostgresAccountingScope,
   company: WorkspaceCompanyState,
@@ -220,6 +235,7 @@ export async function persistBankImportMutation(
   rawContent: string,
   beforeTxCount: number,
   prevSettledById: ReadonlyMap<string, number>,
+  prevJournalIds: ReadonlySet<string> = new Set(),
 ): Promise<void> {
   const newTxs = company.bankTransactions.slice(beforeTxCount);
   if (newTxs.length > 0) {
@@ -250,6 +266,7 @@ export async function persistBankImportMutation(
   }
 
   await persistBankReconciliationMatchesAndSettlements(scope, company, prevSettledById);
+  await persistNewJournalEntriesForCompany(scope, company, prevJournalIds);
 }
 
 export async function persistCalendarObligationStatusMutation(
@@ -400,6 +417,74 @@ export async function persistVatPeriodSettlementMutation(
       _papVatPeriodSettlement: settlement,
     },
     paidAt: null,
+  });
+}
+
+export async function persistPeriodCloseStateMutation(
+  scope: PostgresAccountingScope,
+  company: WorkspaceCompanyState,
+  state: PeriodCloseState,
+): Promise<void> {
+  const [yearStr = '2026', monthStr = '01'] = state.period.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const duePeriod =
+    month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`;
+  const dueDate = `${duePeriod}-25`;
+
+  await scope.upsertTaxObligation({
+    id: toUuidOrDeterministic(
+      `period-close:${company.tenantId}:${company.legalEntityId}`,
+      state.period,
+    ),
+    period: state.period,
+    obligationCode: 'ACCOUNTING_PERIOD_CLOSE_STATE',
+    category: 'jpk_income_tax',
+    titlePl: `Stan zamknięcia ksiąg okresu ${state.period} (${state.status}, v${state.version})`,
+    statutoryDueDate: dueDate,
+    adjustedDueDate: dueDate,
+    estimatedAmountGrosze: 0,
+    status: state.status === 'closed' ? 'paid' : 'upcoming',
+    legalBasisJson: {
+      _papPeriodCloseState: state,
+    },
+    paidAt: state.closedAt ? new Date(state.closedAt) : null,
+  });
+}
+
+export async function persistVerifiedTaxPaymentMutation(
+  scope: PostgresAccountingScope,
+  company: WorkspaceCompanyState,
+  payment: VerifiedTaxOrZusPayment,
+): Promise<void> {
+  const category =
+    payment.obligationKind === 'vat_settlement'
+      ? 'vat'
+      : payment.obligationKind === 'cit_advance'
+        ? 'cit'
+        : payment.obligationKind === 'pit_advance'
+          ? 'pit'
+          : payment.obligationKind === 'ryczalt_advance'
+            ? 'ryczalt'
+            : 'zus';
+
+  await scope.upsertTaxObligation({
+    id: toUuidOrDeterministic(
+      `verified-tax-payment:${company.tenantId}:${company.legalEntityId}`,
+      payment.paymentId,
+    ),
+    period: payment.targetPeriod,
+    obligationCode: `VERIFIED_TAX_PAYMENT:${payment.paymentId}`,
+    category,
+    titlePl: `Zweryfikowana wpłata ${payment.obligationKind} za ${payment.targetPeriod}`,
+    statutoryDueDate: payment.paidDate,
+    adjustedDueDate: payment.paidDate,
+    estimatedAmountGrosze: payment.amountGrosze,
+    status: 'paid',
+    legalBasisJson: {
+      _papVerifiedTaxPayment: payment,
+    },
+    paidAt: new Date(`${payment.paidDate}T12:00:00.000Z`),
   });
 }
 

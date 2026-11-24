@@ -11,6 +11,7 @@ import {
   TENANT_1_ID,
   TENANT_2_ID,
   type AuditLogEntry,
+  type PeriodCloseState,
   type VatPeriodSettlementState,
   type WorkspaceActorContext,
   type WorkspaceCompanyState,
@@ -51,6 +52,7 @@ import {
   type KpirEntry,
   type RyczaltEntry,
   type VatRegisterEntry,
+  type VerifiedTaxOrZusPayment,
 } from '@pap/domain';
 import {
   INTERNAL_MCP_PROPOSAL_INDEX_CATEGORY,
@@ -777,6 +779,8 @@ export async function hydrateSingleCompanyFromScope(
   const obligationRows = await scope.listTaxObligations();
   const paidObligationsByKey = new Map<string, string>();
   const vatPeriodSettlements = new Map<string, VatPeriodSettlementState>();
+  const periodCloseStates = new Map<string, PeriodCloseState>();
+  const verifiedTaxPayments: VerifiedTaxOrZusPayment[] = [];
   for (const ob of obligationRows) {
     if (ob.obligationCode === 'VAT_JPK_V7M_SETTLEMENT') {
       const jsonObj = (ob.legalBasisJson ?? {}) as Record<string, unknown>;
@@ -789,6 +793,55 @@ export async function hydrateSingleCompanyFromScope(
         typeof savedVatSettlement.version === 'number'
       ) {
         vatPeriodSettlements.set(savedVatSettlement.period, savedVatSettlement);
+      }
+      continue;
+    }
+    if (ob.obligationCode === 'ACCOUNTING_PERIOD_CLOSE_STATE') {
+      const jsonObj = (ob.legalBasisJson ?? {}) as Record<string, unknown>;
+      const savedClose = jsonObj._papPeriodCloseState as PeriodCloseState | undefined;
+      if (
+        savedClose &&
+        typeof savedClose === 'object' &&
+        typeof savedClose.period === 'string' &&
+        (savedClose.status === 'open' ||
+          savedClose.status === 'reconciling' ||
+          savedClose.status === 'closed')
+      ) {
+        periodCloseStates.set(savedClose.period, savedClose);
+        auditEvents.push({
+          auditEventId: `pg-period-close-${savedClose.period}-v${savedClose.version}`,
+          occurredAt: savedClose.updatedAt,
+          channel: 'accounting',
+          action:
+            savedClose.status === 'closed'
+              ? 'accounting_period_closed'
+              : 'accounting_period_reconciling',
+          actorUserId: savedClose.updatedByUserId,
+          actorDisplayLabel: resolvePersonaDisplayLabel(savedClose.updatedByUserId),
+          tenantId: rawTenantId,
+          legalEntityId: rawLegalEntityId,
+          outcome: 'allow',
+          reasonCode:
+            savedClose.status === 'closed' ? 'period_closed_by_human' : 'period_marked_reconciling',
+          summaryPl:
+            savedClose.status === 'closed'
+              ? `Zamknięto okres sprawozdawczy ${savedClose.period} (v${savedClose.version}).`
+              : `Oznaczono okres sprawozdawczy ${savedClose.period} jako w trakcie uzgadniania (v${savedClose.version}).`,
+        });
+      }
+      continue;
+    }
+    if (ob.obligationCode.startsWith('VERIFIED_TAX_PAYMENT:')) {
+      const jsonObj = (ob.legalBasisJson ?? {}) as Record<string, unknown>;
+      const savedPayment = jsonObj._papVerifiedTaxPayment as VerifiedTaxOrZusPayment | undefined;
+      if (
+        savedPayment &&
+        typeof savedPayment === 'object' &&
+        typeof savedPayment.paymentId === 'string' &&
+        typeof savedPayment.amountGrosze === 'number' &&
+        typeof savedPayment.bankTransactionId === 'string'
+      ) {
+        verifiedTaxPayments.push(savedPayment);
       }
       continue;
     }
@@ -945,6 +998,8 @@ export async function hydrateSingleCompanyFromScope(
       paidObligationsByKey,
       explanationsById,
       vatPeriodSettlements,
+      periodCloseStates,
+      verifiedTaxPayments,
     },
     mcpProposals,
     mcpChallenges,
