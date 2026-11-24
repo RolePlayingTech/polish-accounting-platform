@@ -43,6 +43,7 @@ export interface CreateVatRegisterEntryInput {
   readonly vatTotalGrosze: number;
   readonly deductionMode?: VatDeductionMode;
   readonly annex15Item?: boolean;
+  readonly invoiceTotalGrossGrosze?: number;
   readonly hasVat26AndMileageLog?: boolean;
   readonly isFixedAssetPurchase?: boolean;
   readonly ksefReferenceNumber?: string;
@@ -83,6 +84,9 @@ export function createVatRegisterEntry(input: CreateVatRegisterEntryInput): VatR
   assertValidIsoCalendarDate(input.issueDate, 'issueDate');
   assertSafeGrosze(input.netGrosze, 'netGrosze');
   assertSafeGrosze(input.vatTotalGrosze, 'vatTotalGrosze');
+  if (input.invoiceTotalGrossGrosze !== undefined) {
+    assertSafeGrosze(input.invoiceTotalGrossGrosze, 'invoiceTotalGrossGrosze');
+  }
 
   let normalizedNip: string | undefined;
   if (input.counterpartyNip !== undefined) {
@@ -118,15 +122,16 @@ export function createVatRegisterEntry(input: CreateVatRegisterEntryInput): VatR
   const warnings: ExplanationWarning[] = [];
 
   const grossGrosze = addGrosze(input.netGrosze, input.vatTotalGrosze);
+  const effectiveInvoiceGrossGrosze = input.invoiceTotalGrossGrosze ?? grossGrosze;
   const mppThreshold = getRequiredNumericParameter(mppRule, 'thresholdGrossGroszeExclusive');
   const mandatorySplitPaymentMpp =
-    input.annex15Item === true && Math.abs(grossGrosze) > mppThreshold;
+    input.annex15Item === true && Math.abs(effectiveInvoiceGrossGrosze) > mppThreshold;
 
   if (mandatorySplitPaymentMpp) {
     warnings.push({
       code: 'MANDATORY_MPP_ART_108A',
       severity: 'warning',
-      message: `Faktura przekracza 15 000,00 zł brutto (${formatPlnFromGrosze(grossGrosze)}) i obejmuje pozycje z załącznika nr 15 — obowiązkowy Mechanizm Podzielonej Płatności (MPP).`,
+      message: `Faktura przekracza 15 000,00 zł brutto (${formatPlnFromGrosze(effectiveInvoiceGrossGrosze)}) i obejmuje pozycje z załącznika nr 15 — obowiązkowy Mechanizm Podzielonej Płatności (MPP).`,
     });
   }
 
@@ -229,10 +234,11 @@ export function createVatRegisterEntry(input: CreateVatRegisterEntryInput): VatR
     {
       stepNumber: 3,
       label: 'Weryfikacja progu obowiązkowego MPP (> 15 000,00 zł brutto i załącznik nr 15)',
-      formula: 'mandatoryMpp = annex15Item && abs(grossGrosze) > 1_500_000',
+      formula: 'mandatoryMpp = annex15Item && abs(invoiceTotalGrossGrosze) > 1_500_000',
       inputs: {
         annex15Item: input.annex15Item === true,
         grossGrosze,
+        invoiceTotalGrossGrosze: effectiveInvoiceGrossGrosze,
         thresholdGrossGroszeExclusive: mppThreshold,
       },
       resultFormatted: mandatorySplitPaymentMpp ? 'TAK — obowiązkowy MPP' : 'NIE',

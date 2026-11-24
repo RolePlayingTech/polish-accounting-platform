@@ -752,6 +752,8 @@ export const CompanyDocumentItemSchema = z
     document: AccountingDocumentSchema,
     aiProposal: DocumentAiProposalSchema,
     postingResult: DocumentPostingResultSchema.nullable(),
+    economicOperationKey: z.string().min(1).optional(),
+    economicSnapshotHash: Sha256HexSchema.optional(),
   })
   .strict();
 
@@ -915,6 +917,7 @@ export const ApproveAndPostDocumentRequestSchema = z
       .optional(),
     correctedEntryId: z.string().min(1).optional(),
     correctionReason: z.string().min(1).max(500).optional(),
+    lines: z.array(CreateDocumentLineInputSchema).min(1).optional(),
   })
   .strict();
 
@@ -1075,11 +1078,18 @@ export const JpkV7mPreviewSchema = z
     fields: JpkV7mFieldsMapSchema,
     outputVatRoundedPlnGrosze: SafeGroszeSchema,
     inputVatDeductibleRoundedPlnGrosze: SafeGroszeSchema,
+    carryOverFromPreviousPeriodP39Grosze: NonNegativeGroszeSchema.optional(),
     taxDueP51Grosze: NonNegativeGroszeSchema,
     taxDueP51Formatted: z.string().min(1),
     excessInputVatP53Grosze: NonNegativeGroszeSchema,
     excessInputVatP53Formatted: z.string().min(1),
+    refundToBankAccountP54Grosze: NonNegativeGroszeSchema.optional(),
+    refundToBankAccountP54Formatted: z.string().min(1).optional(),
     carryForwardToNextPeriodP62Grosze: NonNegativeGroszeSchema,
+    carryForwardToNextPeriodP62Formatted: z.string().min(1).optional(),
+    settlementStatus: z.enum(['draft', 'finalized']).optional(),
+    settlementVersion: z.number().int().positive().optional(),
+    requiresCorrection: z.boolean().optional(),
     ksefMarkersSummary: z
       .object({
         NrKSeF: z.number().int().nonnegative(),
@@ -1091,6 +1101,20 @@ export const JpkV7mPreviewSchema = z
     explanation: LegalExplanationSchema,
   })
   .strict();
+
+export const ConfigureVatPeriodSettlementRequestSchema = z
+  .object({
+    period: TaxPeriodMonthSchema,
+    refundRequestedP54Grosze: NonNegativeGroszeSchema.optional(),
+    finalize: z.boolean().optional(),
+    isCorrection: z.boolean().optional(),
+    correctionReason: z.string().min(3).max(500).optional(),
+  })
+  .strict();
+
+export type ConfigureVatPeriodSettlementRequest = z.infer<
+  typeof ConfigureVatPeriodSettlementRequestSchema
+>;
 
 export const VatViewResponseSchema = z
   .object({
@@ -1714,7 +1738,10 @@ export type TenantInvitationStatusContract = z.infer<typeof TenantInvitationStat
 export const InvitationCompanyGrantDraftSchema = z
   .object({
     legalEntityId: UuidSelectorSchema,
-    actions: z.array(z.enum(['read', 'write'])).min(1).max(2),
+    actions: z
+      .array(z.enum(['read', 'write']))
+      .min(1)
+      .max(2),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -1729,7 +1756,8 @@ export const InvitationCompanyGrantDraftSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['actions'],
-        message: 'Uprawnienie zapisu (write) do firmy wymaga jednoczesnego uprawnienia odczytu (read).',
+        message:
+          'Uprawnienie zapisu (write) do firmy wymaga jednoczesnego uprawnienia odczytu (read).',
       });
     }
   });

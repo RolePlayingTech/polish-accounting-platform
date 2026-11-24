@@ -166,6 +166,8 @@ export async function persistDocumentItemToScope(
     aiProposalJson: {
       ...docItem.aiProposal,
       _papDocSnapshot: docItem,
+      _papEconomicOpKey: docItem.economicOperationKey ?? null,
+      _papEconomicSnapshotHash: docItem.economicSnapshotHash ?? null,
       _papExplanations: buildExplanationMapSnapshot(company, docItem),
     },
     ...(docItem.approvedAt ? { verifiedAt: new Date(docItem.approvedAt) } : {}),

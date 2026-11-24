@@ -1,8 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  ConfirmedTransactionRollbackError,
-  type CompanyRlsSessionContext,
-} from '@pap/application';
+import { ConfirmedTransactionRollbackError, type CompanyRlsSessionContext } from '@pap/application';
 import {
   legalEntityId as parseLegalEntityId,
   tenantId as parseTenantId,
@@ -147,6 +144,7 @@ export interface VerifyAccountingDocumentInput {
   readonly description?: string;
   readonly ksefReference?: string | null;
   readonly ksefMarker?: AccountingDocumentRecord['ksefMarker'];
+  readonly aiProposalJson?: Readonly<Record<string, unknown>> | null;
   readonly verifiedAt?: Date;
 }
 
@@ -267,6 +265,13 @@ export interface ApplySettlementPaymentInput {
   readonly settlementId: string;
   readonly paidAmountGrosze: GroszeInput;
   readonly settledAt?: Date;
+}
+
+export interface SetSettlementRemainingBalanceInput {
+  readonly settlementId: string;
+  readonly remainingGrossGrosze: GroszeInput;
+  readonly expectedPreviousRemainingGrosze?: GroszeInput;
+  readonly updatedAt?: Date;
 }
 
 export interface ImportBankTransactionItemInput {
@@ -452,6 +457,9 @@ export interface PostgresAccountingScope extends PostgresCompanyActionScope {
   }): Promise<readonly SettlementItemRecord[]>;
   createSettlementItem(input: CreateSettlementItemInput): Promise<SettlementItemRecord>;
   applySettlementPayment(input: ApplySettlementPaymentInput): Promise<SettlementItemRecord>;
+  setSettlementRemainingBalance(
+    input: SetSettlementRemainingBalanceInput,
+  ): Promise<SettlementItemRecord>;
 
   importBankStatement(input: ImportBankStatementInput): Promise<{
     readonly statement: BankStatementImportRecord;
@@ -974,6 +982,8 @@ export function createPostgresAccountingScope(
           ksefReference:
             input.ksefReference === undefined ? current.ksefReference : input.ksefReference,
           ksefMarker: input.ksefMarker ?? current.ksefMarker,
+          aiProposalJson:
+            input.aiProposalJson === undefined ? current.aiProposalJson : input.aiProposalJson,
           verifiedBy: context.actorUserId,
           verifiedAt,
         })
@@ -1689,6 +1699,84 @@ export function createPostgresAccountingScope(
             inArray(settlementItem.status, ['open', 'partial']),
             eq(settlementItem.remainingGrossGrosze, current.remainingGrossGrosze),
             gte(settlementItem.remainingGrossGrosze, paidAmountGrosze),
+          ),
+        )
+        .returning();
+      assertActive();
+      if (!updated) {
+        throw new Error(
+          'Nie udało się zaktualizować salda rozrachunku — wykryto równoległą zmianę.',
+        );
+      }
+      return deepFreeze(updated);
+    },
+
+    async setSettlementRemainingBalance(input) {
+      const probe = await ensureWriteOperationProbe();
+      const targetRemaining = toSafeGrosze(input.remainingGrossGrosze, 'remainingGrossGrosze');
+      if (targetRemaining < 0) {
+        throw new Error('Pozostałe saldo rozrachunku nie może być ujemne (w groszach).');
+      }
+
+      const [current] = await tx
+        .select()
+        .from(settlementItem)
+        .where(
+          and(
+            eq(settlementItem.tenantId, context.tenantId),
+            eq(settlementItem.legalEntityId, context.legalEntityId),
+            eq(settlementItem.id, input.settlementId),
+          ),
+        )
+        .for('update');
+      assertActive();
+      if (!current) {
+        throw new Error('Nie znaleziono pozycji rozrachunkowej.');
+      }
+      if (!probe.inserted) {
+        return deepFreeze(current);
+      }
+      if (targetRemaining > current.originalGrossGrosze) {
+        throw new Error(
+          'Pozostałe saldo rozrachunku nie może przekraczać pierwotnej kwoty brutto dokumentu.',
+        );
+      }
+      if (input.expectedPreviousRemainingGrosze !== undefined) {
+        const expectedPrev = toSafeGrosze(
+          input.expectedPreviousRemainingGrosze,
+          'expectedPreviousRemainingGrosze',
+        );
+        if (current.remainingGrossGrosze !== expectedPrev) {
+          throw new Error(
+            'Nie udało się zaktualizować salda rozrachunku — wykryto równoległą zmianę.',
+          );
+        }
+      }
+      if (current.remainingGrossGrosze === targetRemaining) {
+        return deepFreeze(current);
+      }
+
+      const nextStatus: SettlementItemRecord['status'] =
+        targetRemaining === 0
+          ? 'settled'
+          : targetRemaining === current.originalGrossGrosze
+            ? 'open'
+            : 'partial';
+      const now = input.updatedAt ?? decisionTimestamp();
+      const [updated] = await tx
+        .update(settlementItem)
+        .set({
+          remainingGrossGrosze: targetRemaining,
+          status: nextStatus,
+          settledAt: nextStatus === 'settled' ? now : null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(settlementItem.tenantId, context.tenantId),
+            eq(settlementItem.legalEntityId, context.legalEntityId),
+            eq(settlementItem.id, input.settlementId),
+            eq(settlementItem.remainingGrossGrosze, current.remainingGrossGrosze),
           ),
         )
         .returning();
@@ -2709,10 +2797,7 @@ export async function listTenantCompanyGrantsForAdminFacts(
       actorUserId: canonicalActorId,
       tenantId: canonicalTenantId,
     });
-    const [actorUserRow] = await tx
-      .select()
-      .from(appUser)
-      .where(eq(appUser.id, canonicalActorId));
+    const [actorUserRow] = await tx.select().from(appUser).where(eq(appUser.id, canonicalActorId));
     if (!actorUserRow || actorUserRow.status !== 'active' || actorUserRow.disabledAt !== null) {
       return deepFreeze({
         memberships: [],
@@ -2812,8 +2897,7 @@ export interface ProvisionCompanyInPostgresInput {
   readonly nip: string;
   readonly decisionAt?: Date;
   readonly onProvisionedInTransaction?:
-    | ((scope: PostgresAccountingScope) => Promise<void>)
-    | undefined;
+    ((scope: PostgresAccountingScope) => Promise<void>) | undefined;
 }
 
 export type ProvisionCompanyDeniedReason =
@@ -2840,8 +2924,7 @@ export type ProvisionCompanyInPostgresResult =
     };
 
 export function isDuplicateCompanyNipRollbackError(error: unknown): boolean {
-  let current: unknown =
-    error instanceof ConfirmedTransactionRollbackError ? error.cause : error;
+  let current: unknown = error instanceof ConfirmedTransactionRollbackError ? error.cause : error;
   for (let depth = 0; depth < 4 && typeof current === 'object' && current !== null; depth += 1) {
     const rec = current as {
       readonly code?: unknown;

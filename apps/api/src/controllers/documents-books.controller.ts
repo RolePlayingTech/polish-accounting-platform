@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import type {
   ApproveAndPostDocumentRequest,
+  ConfigureVatPeriodSettlementRequest,
   CreateDocumentRequest,
   CreateJournalEntryRequest,
   CreateKpirEntryRequest,
@@ -217,6 +218,24 @@ export class DocumentsBooksController {
       tenantId,
       legalEntityId,
       parseOptionalPeriodParam(period),
+    );
+  }
+
+  @Post('/vat/settlement')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  configureVatSettlement(
+    @Req() request: JwtAuthenticatedRequest,
+    @Param('tenantId') tenantId: string,
+    @Param('legalEntityId') legalEntityId: string,
+    @Body() body: unknown,
+  ) {
+    const actor = requireRequestActor(request);
+    return this.workspace.configureVatPeriodSettlement(
+      actor,
+      tenantId,
+      legalEntityId,
+      (body ?? {}) as ConfigureVatPeriodSettlementRequest,
     );
   }
 

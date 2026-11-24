@@ -11,6 +11,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { legalEntity } from './core-schema.js';
@@ -164,6 +165,15 @@ export const accountingDocument = pgTable(
       table.status,
       table.issueDate,
     ),
+    uniqueIndex('accounting_document_economic_op_uidx')
+      .on(
+        table.tenantId,
+        table.legalEntityId,
+        sql`(btrim(${table.aiProposalJson}->>'_papEconomicOpKey'))`,
+      )
+      .where(
+        sql`${table.status} <> 'archived' AND btrim(COALESCE(${table.aiProposalJson}->>'_papEconomicOpKey', '')) <> ''`,
+      ),
     foreignKey({
       name: 'accounting_document_entity_fk',
       columns: [table.tenantId, table.legalEntityId],
@@ -266,6 +276,9 @@ export const kpirEntry = pgTable(
       table.lp,
     ),
     index('kpir_entry_period_idx').on(table.tenantId, table.legalEntityId, table.period),
+    uniqueIndex('kpir_entry_unique_document_posting_uidx')
+      .on(table.tenantId, table.legalEntityId, table.documentId)
+      .where(sql`${table.documentId} IS NOT NULL AND ${table.isStorno} = false`),
     foreignKey({
       name: 'kpir_entry_entity_fk',
       columns: [table.tenantId, table.legalEntityId],
@@ -351,6 +364,9 @@ export const ryczaltEntry = pgTable(
       table.lp,
     ),
     index('ryczalt_entry_period_idx').on(table.tenantId, table.legalEntityId, table.period),
+    uniqueIndex('ryczalt_entry_unique_document_posting_uidx')
+      .on(table.tenantId, table.legalEntityId, table.documentId)
+      .where(sql`${table.documentId} IS NOT NULL AND ${table.isCorrection} = false`),
     foreignKey({
       name: 'ryczalt_entry_entity_fk',
       columns: [table.tenantId, table.legalEntityId],
@@ -443,6 +459,9 @@ export const vatRegisterEntry = pgTable(
       table.period,
       table.direction,
     ),
+    uniqueIndex('vat_register_entry_unique_doc_rate_uidx')
+      .on(table.tenantId, table.legalEntityId, table.documentId, table.direction, table.vatRateCode)
+      .where(sql`${table.documentId} IS NOT NULL`),
     foreignKey({
       name: 'vat_register_entry_entity_fk',
       columns: [table.tenantId, table.legalEntityId],
@@ -571,6 +590,9 @@ export const journalEntry = pgTable(
       table.entryNumber,
     ),
     index('journal_entry_period_idx').on(table.tenantId, table.legalEntityId, table.period),
+    uniqueIndex('journal_entry_unique_document_posting_uidx')
+      .on(table.tenantId, table.legalEntityId, table.documentId)
+      .where(sql`${table.documentId} IS NOT NULL AND ${table.isStorno} = false`),
     foreignKey({
       name: 'journal_entry_entity_fk',
       columns: [table.tenantId, table.legalEntityId],
@@ -713,6 +735,9 @@ export const settlementItem = pgTable(
       table.status,
       table.dueDate,
     ),
+    uniqueIndex('settlement_item_unique_document_uidx')
+      .on(table.tenantId, table.legalEntityId, table.documentId)
+      .where(sql`${table.documentId} IS NOT NULL`),
     foreignKey({
       name: 'settlement_item_entity_fk',
       columns: [table.tenantId, table.legalEntityId],

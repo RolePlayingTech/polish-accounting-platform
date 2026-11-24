@@ -14,6 +14,7 @@ import {
   type CompanyDocumentItemContract,
   type CompanyOverviewResponse,
   type CompanySettingsResponse,
+  type ConfigureVatPeriodSettlementRequest,
   type ConfirmMcpProposalRequest,
   type ConfirmMcpProposalResponse,
   type CreateCompanyRequest,
@@ -139,9 +140,38 @@ import {
   persistMcpChallengeMutation,
   persistNotificationsStateMutation,
   persistSandboxTestEmailMutation,
+  persistVatPeriodSettlementMutation,
 } from './postgres-workspace-mutations.js';
 
 type MaybePromise<T> = T | Promise<T>;
+
+function isDuplicateEconomicOperationDbError(error: unknown): boolean {
+  let cursor: unknown = error;
+  for (let depth = 0; depth < 6 && cursor && typeof cursor === 'object'; depth += 1) {
+    const rec = cursor as {
+      code?: unknown;
+      constraint?: unknown;
+      constraint_name?: unknown;
+      message?: unknown;
+      cause?: unknown;
+    };
+    const constraintName = String(rec.constraint ?? rec.constraint_name ?? '');
+    const msg = String(rec.message ?? '');
+    if (
+      rec.code === '23505' &&
+      (constraintName.includes('_economic_op_uidx') ||
+        constraintName.includes('_unique_document_posting_uidx') ||
+        constraintName.includes('settlement_item_unique_document_uidx') ||
+        constraintName.includes('vat_register_entry_unique_doc_rate_uidx') ||
+        msg.includes('_economic_op_uidx') ||
+        msg.includes('_unique_document_posting_uidx'))
+    ) {
+      return true;
+    }
+    cursor = rec.cause;
+  }
+  return false;
+}
 type WorkspacePeriodParam = typeof DEMO_DEFAULT_PERIOD;
 
 export interface CompanyOperationOptions {
@@ -187,6 +217,7 @@ type AsyncableWorkspaceMethodKeys =
   | 'getRyczaltView'
   | 'createRyczaltManualEntry'
   | 'getVatView'
+  | 'configureVatPeriodSettlement'
   | 'getLedgerView'
   | 'createJournalEntry'
   | 'getFinanceView'
@@ -452,8 +483,9 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     const afterCommitHook = this.afterDbCommitFaultHook;
     const unitOfWork = afterCommitHook
       ? {
-          recordDeniedDecision: (event: Parameters<typeof baseUnitOfWork.recordDeniedDecision>[0]) =>
-            baseUnitOfWork.recordDeniedDecision(event),
+          recordDeniedDecision: (
+            event: Parameters<typeof baseUnitOfWork.recordDeniedDecision>[0],
+          ) => baseUnitOfWork.recordDeniedDecision(event),
           runCompanyActionInTransaction: async <TResult>(
             txWork: Parameters<typeof baseUnitOfWork.runCompanyActionInTransaction<TResult>>[0],
             shouldCommit: Parameters<
@@ -522,9 +554,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
               existingReceiptDoc.categoryCode === INTERNAL_COMMAND_RECEIPT_INDEX_CATEGORY
             ) {
               const storedReceipt = existingReceiptDoc.aiProposalJson as
-                | Partial<StoredCommandIdempotencyReceipt>
-                | null
-                | undefined;
+                Partial<StoredCommandIdempotencyReceipt> | null | undefined;
               if (
                 !storedReceipt ||
                 storedReceipt.actionKind !== options?.actionKind ||
@@ -630,6 +660,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         throw new AccountingWorkspaceConflictError(
           'duplicate_company_nip',
           'W tej organizacji istnieje już podmiot z tym numerem NIP.',
+        );
+      }
+      if (isDuplicateEconomicOperationDbError(capturedDomainError)) {
+        throw new AccountingWorkspaceConflictError(
+          'duplicate_economic_operation',
+          'Ta operacja ekonomiczna lub dokument źródłowy został już zaksięgowany w bazie PostgreSQL.',
         );
       }
       throw capturedDomainError;
@@ -1246,13 +1282,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     period?: WorkspacePeriodParam,
   ): Promise<CompanyOverviewResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) =>
-        txWorkspace.getCompanyOverview(actor, tenantId, legalEntityId, period),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getCompanyOverview(actor, tenantId, legalEntityId, period),
     );
   }
 
@@ -1261,12 +1292,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     tenantId: string,
     legalEntityId: string,
   ): Promise<CompanySettingsResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getCompanySettings(actor, tenantId, legalEntityId),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getCompanySettings(actor, tenantId, legalEntityId),
     );
   }
 
@@ -1282,12 +1309,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       legalEntityId,
       'write',
       async (scope, txWorkspace) => {
-        const updated = txWorkspace.updateCompanySettings(
-          actor,
-          tenantId,
-          legalEntityId,
-          req,
-        );
+        const updated = txWorkspace.updateCompanySettings(actor, tenantId, legalEntityId, req);
         const comp = txWorkspace.store.getCompany(
           parseTenantId(tenantId),
           parseLegalEntityId(legalEntityId),
@@ -1323,7 +1345,11 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     for (const member of directoryMembers) {
       const mUserId = parseUserId(member.userId);
       const existing = this.store.getUserById(mUserId);
-      if (!existing || existing.displayName !== member.displayName || existing.active !== member.userActive) {
+      if (
+        !existing ||
+        existing.displayName !== member.displayName ||
+        existing.active !== member.userActive
+      ) {
         this.store.upsertUser({
           userId: mUserId,
           issuer: existing?.issuer,
@@ -1577,7 +1603,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         statusCode: 503,
         error: 'service_unavailable',
         reasonCode: 'auth_service_unavailable',
-        message: 'Magazyn sesji BFF jest chwilowo niedostępny podczas cofania dostępu (fail-closed).',
+        message:
+          'Magazyn sesji BFF jest chwilowo niedostępny podczas cofania dostępu (fail-closed).',
       });
     }
   }
@@ -1586,7 +1613,10 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     actor: WorkspaceActorContext,
     rawTenantId: string,
     rawTargetUserId: string,
-    rawRequest?: { readonly operationId?: string | undefined; readonly reason?: string | undefined },
+    rawRequest?: {
+      readonly operationId?: string | undefined;
+      readonly reason?: string | undefined;
+    },
   ): Promise<AccessMutationResponse> {
     return this.runAtomicMutation(async () => {
       const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -1825,12 +1855,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     tenantId: string,
     legalEntityId: string,
   ): Promise<CompanyAuditListResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getAuditLog(actor, tenantId, legalEntityId),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getAuditLog(actor, tenantId, legalEntityId),
     );
   }
 
@@ -1840,12 +1866,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     period?: string,
   ): Promise<DocumentsListResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.listDocuments(actor, tenantId, legalEntityId, period),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.listDocuments(actor, tenantId, legalEntityId, period),
     );
   }
 
@@ -1884,12 +1906,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     documentId: string,
   ): Promise<CompanyDocumentItemContract> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getDocument(actor, tenantId, legalEntityId, documentId),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getDocument(actor, tenantId, legalEntityId, documentId),
     );
   }
 
@@ -1935,12 +1953,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     period?: WorkspacePeriodParam,
   ): Promise<KpirViewResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getKpirView(actor, tenantId, legalEntityId, period),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getKpirView(actor, tenantId, legalEntityId, period),
     );
   }
 
@@ -1976,13 +1990,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     period?: WorkspacePeriodParam,
   ): Promise<ReturnType<AccountingWorkspaceService['calculateCompanyZus']>> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) =>
-        txWorkspace.calculateCompanyZus(actor, tenantId, legalEntityId, period),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.calculateCompanyZus(actor, tenantId, legalEntityId, period),
     );
   }
 
@@ -1992,12 +2001,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     period?: WorkspacePeriodParam,
   ): Promise<RyczaltViewResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getRyczaltView(actor, tenantId, legalEntityId, period),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getRyczaltView(actor, tenantId, legalEntityId, period),
     );
   }
 
@@ -2013,12 +2018,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
       legalEntityId,
       'write',
       async (scope, txWorkspace) => {
-        const entry = txWorkspace.createRyczaltManualEntry(
-          actor,
-          tenantId,
-          legalEntityId,
-          req,
-        );
+        const entry = txWorkspace.createRyczaltManualEntry(actor, tenantId, legalEntityId, req);
         const comp = txWorkspace.store.getCompany(
           parseTenantId(tenantId),
           parseLegalEntityId(legalEntityId),
@@ -2036,14 +2036,37 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     actor: WorkspaceActorContext,
     tenantId: string,
     legalEntityId: string,
-    period?: WorkspacePeriodParam,
+    period?: string,
+  ): Promise<VatViewResponse> {
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getVatView(actor, tenantId, legalEntityId, period),
+    );
+  }
+
+  configureVatPeriodSettlement(
+    actor: WorkspaceActorContext,
+    tenantId: string,
+    legalEntityId: string,
+    req: ConfigureVatPeriodSettlementRequest,
   ): Promise<VatViewResponse> {
     return this.runCompanyOperation(
       actor,
       tenantId,
       legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getVatView(actor, tenantId, legalEntityId, period),
+      'write',
+      async (scope, txWorkspace) => {
+        const view = txWorkspace.configureVatPeriodSettlement(actor, tenantId, legalEntityId, req);
+        const comp = txWorkspace.store.getCompany(
+          parseTenantId(tenantId),
+          parseLegalEntityId(legalEntityId),
+        );
+        const state = comp?.vatPeriodSettlements?.get(req.period);
+        if (comp && state) {
+          await persistVatPeriodSettlementMutation(scope, comp, state);
+        }
+        return view;
+      },
+      { actionKind: 'configureVatPeriodSettlement', payload: req },
     );
   }
 
@@ -2053,12 +2076,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     legalEntityId: string,
     period?: WorkspacePeriodParam,
   ): Promise<LedgerViewResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getLedgerView(actor, tenantId, legalEntityId, period),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getLedgerView(actor, tenantId, legalEntityId, period),
     );
   }
 
@@ -2093,12 +2112,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     tenantId: string,
     legalEntityId: string,
   ): Promise<FinanceViewResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.getFinanceView(actor, tenantId, legalEntityId),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getFinanceView(actor, tenantId, legalEntityId),
     );
   }
 
@@ -2183,13 +2198,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     year?: number,
     month?: number | null,
   ): Promise<CalendarViewResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) =>
-        txWorkspace.getCalendarView(actor, tenantId, legalEntityId, year, month),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.getCalendarView(actor, tenantId, legalEntityId, year, month),
     );
   }
 
@@ -2380,12 +2390,8 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     tenantId: string,
     legalEntityId: string,
   ): Promise<McpProposalsListResponse> {
-    return this.runCompanyOperation(
-      actor,
-      tenantId,
-      legalEntityId,
-      'read',
-      (_scope, txWorkspace) => txWorkspace.listMcpProposals(actor, tenantId, legalEntityId),
+    return this.runCompanyOperation(actor, tenantId, legalEntityId, 'read', (_scope, txWorkspace) =>
+      txWorkspace.listMcpProposals(actor, tenantId, legalEntityId),
     );
   }
 
@@ -2460,7 +2466,11 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
           parseTenantId(tenantId),
           parseLegalEntityId(legalEntityId),
         );
-        const prevDocIds = new Set((compBefore?.documents ?? []).map((d) => d.documentId));
+        const prevPostedDocIds = new Set(
+          (compBefore?.documents ?? [])
+            .filter((d) => d.status === 'posted')
+            .map((d) => d.documentId),
+        );
 
         const confirmed = txWorkspace.confirmMcpProposal(
           actor,
@@ -2476,9 +2486,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
             parseLegalEntityId(legalEntityId),
           );
           const stored = txWorkspace.store.getMcpProposal(proposalId);
-          const postedDoc = comp?.documents.find((d) => !prevDocIds.has(d.documentId)) ?? null;
+          const newlyPostedDoc =
+            comp?.documents.find(
+              (d) => d.status === 'posted' && !prevPostedDocIds.has(d.documentId),
+            ) ?? null;
           if (comp && stored) {
-            await persistConfirmMcpProposalMutation(scope, comp, stored, postedDoc);
+            await persistConfirmMcpProposalMutation(scope, comp, stored, newlyPostedDoc);
           }
         }
         return confirmed;
@@ -2524,7 +2537,12 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
     const origIssueChallenge = gateway.issueHumanConfirmationChallenge.bind(gateway);
     gateway.issueHumanConfirmationChallenge = async (input) => {
       if (typeof input.tenantId === 'string' && typeof input.legalEntityId === 'string') {
-        await this.ensureCompanyHydratedIfValid(input.tenantId, input.legalEntityId, undefined, true);
+        await this.ensureCompanyHydratedIfValid(
+          input.tenantId,
+          input.legalEntityId,
+          undefined,
+          true,
+        );
       }
       return this.runAtomicMutation(async () => {
         const res = await origIssueChallenge(input);
@@ -2688,7 +2706,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
           typeof parsedConfirmObj.legalEntityId === 'string'
             ? parsedConfirmObj.legalEntityId
             : null;
-        const prevDocIds = new Set<string>();
+        const prevPostedDocIds = new Set<string>();
         if (rawTenantId && rawLeId) {
           try {
             const compBefore = this.store.getCompany(
@@ -2696,7 +2714,9 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
               parseLegalEntityId(rawLeId),
             );
             for (const d of compBefore?.documents ?? []) {
-              prevDocIds.add(d.documentId);
+              if (d.status === 'posted') {
+                prevPostedDocIds.add(d.documentId);
+              }
             }
           } catch {
             // Zostanie odrzucone przez walidator kontraktu w gateway.
@@ -2709,6 +2729,10 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
         } catch (error) {
           restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
           throw error;
+        }
+        if (!result.ok) {
+          restoreWorkspaceRamSnapshot(this.innerWorkspace, this.boundGateways, snapshot);
+          return result;
         }
 
         if (result.ok && !result.data.idempotentReplay) {
@@ -2731,7 +2755,10 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
             parseLegalEntityId(result.data.legalEntityId),
           );
           const stored = this.store.getMcpProposal(result.data.proposalId);
-          const postedDoc = comp?.documents.find((d) => !prevDocIds.has(d.documentId)) ?? null;
+          const newlyPostedDoc =
+            comp?.documents.find(
+              (d) => d.status === 'posted' && !prevPostedDocIds.has(d.documentId),
+            ) ?? null;
           if (comp && stored) {
             let dbError: unknown = null;
             let txRes: ExecuteAuthorizedCompanyActionResult<void> | null = null;
@@ -2752,7 +2779,7 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
                 async (_ctx, scope) => {
                   try {
                     await scope.lockCompanyTaxSettingsForUpdate();
-                    await persistConfirmMcpProposalMutation(scope, comp, stored, postedDoc);
+                    await persistConfirmMcpProposalMutation(scope, comp, stored, newlyPostedDoc);
                     await scope.recordOperationProbe();
                   } catch (err) {
                     dbError = err;
