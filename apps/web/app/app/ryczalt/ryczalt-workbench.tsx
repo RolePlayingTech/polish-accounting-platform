@@ -25,7 +25,7 @@ import {
 import { IncompatibleRegimeGateCard } from '../../../components/regime-context-card';
 import { RyczaltRateGuideTrigger } from '../../../components/tax-guide-drawer';
 import { AlertBanner, Button, MoneyInput } from '../../../components/ui-controls';
-import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
+import { formatUserFacingErrorPl, isValidIsoCalendarDate } from '../../../lib/error-messages-pl';
 import type { CompanyProfileRecord } from '../../../lib/workspace-types';
 
 export interface RyczaltWorkbenchProps {
@@ -111,6 +111,13 @@ export function RyczaltWorkbench({
       }
     };
 
+    if (!isValidIsoCalendarDate(revenueDate)) {
+      mark(
+        'revenueDate',
+        'ryc-date',
+        `Wskaż poprawną datę uzyskania przychodu w formacie RRRR-MM-DD (np. ${period}-22).`,
+      );
+    }
     if (!docNumber.trim()) {
       mark('docNumber', 'ryc-doc', `Podaj numer dowodu sprzedaży (np. FS/${period}/08).`);
     }
@@ -409,13 +416,23 @@ export function RyczaltWorkbench({
       >
         <form noValidate className="space-y-4" onSubmit={(e) => void handleAddEntry(e)}>
           <div className="grid gap-3 md:grid-cols-3">
-            <FormField id="ryc-date" label="Data uzyskania przychodu" required>
+            <FormField
+              id="ryc-date"
+              label="Data uzyskania przychodu"
+              required
+              {...(fieldErrors['revenueDate'] ? { error: fieldErrors['revenueDate'] } : {})}
+            >
               {(ctrl) => (
                 <input
                   {...ctrl}
                   type="date"
                   value={revenueDate}
-                  onChange={(e) => setRevenueDate(e.target.value)}
+                  onChange={(e) => {
+                    setRevenueDate(e.target.value);
+                    if (fieldErrors['revenueDate']) {
+                      setFieldErrors((prev) => ({ ...prev, revenueDate: '' }));
+                    }
+                  }}
                   className={`${ctrl.className} font-mono tabular-nums`}
                 />
               )}

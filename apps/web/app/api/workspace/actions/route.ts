@@ -329,6 +329,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       case 'approve_and_post_document': {
         const ryczaltRate = str(payload['ryczaltRate']).trim() as RyczaltRateCode | '';
+        const correctedEntryId = str(payload['correctedEntryId']).trim();
+        const correctionReason = str(payload['correctionReason']).trim();
         const updated = await approveAndPostDocumentMutation(session, {
           documentId: str(payload['documentId']),
           documentNumber: str(payload['documentNumber']),
@@ -341,6 +343,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           ...(typeof payload['amountsEdited'] === 'boolean'
             ? { amountsEdited: payload['amountsEdited'] }
             : {}),
+          ...(typeof payload['isCorrection'] === 'boolean'
+            ? { isCorrection: payload['isCorrection'] }
+            : {}),
+          ...(correctedEntryId ? { correctedEntryId } : {}),
+          ...(correctionReason ? { correctionReason } : {}),
           expenseQualification: (str(payload['expenseQualification']) ||
             'other_expenses_100_col13') as KpirExpenseQualificationKind,
           vatDeductionMode: (str(payload['vatDeductionMode']) || 'full_100') as VatDeductionMode,

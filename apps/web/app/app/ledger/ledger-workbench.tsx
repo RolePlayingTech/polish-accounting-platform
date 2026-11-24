@@ -28,6 +28,7 @@ import { AlertBanner, Button } from '../../../components/ui-controls';
 import {
   evaluateJournalSemanticWarnings,
   formatUserFacingErrorPl,
+  isValidIsoCalendarDate,
 } from '../../../lib/error-messages-pl';
 import type { CompanyProfileRecord } from '../../../lib/workspace-types';
 
@@ -175,8 +176,12 @@ export function LedgerWorkbench({
       }
     };
 
-    if (!bookingDate.trim()) {
-      markError('bookingDate', 'jrn-date', 'Wskaż datę księgowania w formacie RRRR-MM-DD.');
+    if (!isValidIsoCalendarDate(bookingDate)) {
+      markError(
+        'bookingDate',
+        'jrn-date',
+        `Wskaż poprawną datę księgowania w formacie RRRR-MM-DD (np. ${period}-25).`,
+      );
     }
     if (!documentNumber.trim()) {
       markError(

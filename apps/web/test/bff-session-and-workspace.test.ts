@@ -1226,6 +1226,7 @@ describe('Online BFF Unification (#57, #58, #59, #60, #62, #63) & Offline Demo M
       issueDate: imported.issueDate,
       netPln: '2400,00',
       vatPln: '552,00',
+      amountsEdited: true,
       expenseQualification: 'vehicle_mixed_75_col13',
       vatDeductionMode: 'vehicle_mixed_50',
     });
@@ -1239,6 +1240,31 @@ describe('Online BFF Unification (#57, #58, #59, #60, #62, #63) & Offline Demo M
       vatPln: '552.00',
     });
     expect(approveCall?.body).not.toHaveProperty('documentId');
+
+    capturedCalls.length = 0;
+    await approveAndPostDocumentMutation(janSession, {
+      documentId: imported.documentId,
+      documentNumber: 'KOR/2026/03/99',
+      counterpartyName: imported.counterpartyName,
+      counterpartyNip: imported.counterpartyNip,
+      issueDate: imported.issueDate,
+      netPln: '-100.00',
+      vatPln: '-23.00',
+      isCorrection: true,
+      correctedEntryId: 'kpir-orig-1',
+      correctionReason: 'Rabat potransakcyjny',
+      expenseQualification: 'other_expenses_100_col13',
+      vatDeductionMode: 'full_100',
+    });
+    const korApproveCall = capturedCalls.find((c) =>
+      c.url.endsWith(`/documents/${remoteUuid}/approve-and-post`),
+    );
+    expect(korApproveCall?.body).toMatchObject({
+      correctedEntryId: 'kpir-orig-1',
+      correctionReason: 'Rabat potransakcyjny',
+    });
+    expect(korApproveCall?.body).not.toHaveProperty('netPln');
+    expect(korApproveCall?.body).not.toHaveProperty('vatPln');
 
     const bankRes = await importAndReconcileBankStatementMutation(janSession, {
       format: 'csv',

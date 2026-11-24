@@ -2890,12 +2890,102 @@ export async function getDocumentsForActiveCompany(
   );
 }
 
+function buildGroupedVatEntriesForDocument(params: {
+  readonly idPrefix: string;
+  readonly registerType: 'sales' | 'purchase';
+  readonly period: string;
+  readonly taxPointDate: string;
+  readonly issueDate: string;
+  readonly documentNumber: string;
+  readonly counterpartyName: string;
+  readonly counterpartyNip: string;
+  readonly deductionMode: VatDeductionMode;
+  readonly fallbackVatRate: VatRateCode;
+  readonly fallbackNetGrosze: number;
+  readonly fallbackVatGrosze: number;
+  readonly fallbackAnnex15Item?: boolean;
+  readonly lines?: readonly WorkspaceDocumentLineItem[] | undefined;
+  readonly useLines: boolean;
+  readonly ksefMarker?: 'NrKSeF' | 'OFF' | 'BFK' | 'DI' | undefined;
+  readonly ksefReferenceNumber?: string | undefined;
+}): {
+  readonly primaryVatEntry: VatRegisterEntry;
+  readonly vatEntries: readonly VatRegisterEntry[];
+  readonly totalDeductibleVatGrosze: number;
+  readonly totalNonDeductibleVatGrosze: number;
+} {
+  const rateBuckets = new Map<
+    VatRateCode,
+    { netGrosze: number; vatTotalGrosze: number; hasAnnex15: boolean }
+  >();
+  if (params.useLines && params.lines && params.lines.length > 0) {
+    for (const line of params.lines) {
+      const prev = rateBuckets.get(line.vatRate) ?? {
+        netGrosze: 0,
+        vatTotalGrosze: 0,
+        hasAnnex15: false,
+      };
+      rateBuckets.set(line.vatRate, {
+        netGrosze: prev.netGrosze + line.netGrosze,
+        vatTotalGrosze: prev.vatTotalGrosze + line.vatGrosze,
+        hasAnnex15: prev.hasAnnex15 || Boolean(line.annex15Item),
+      });
+    }
+  }
+  if (rateBuckets.size === 0) {
+    rateBuckets.set(params.fallbackVatRate, {
+      netGrosze: params.fallbackNetGrosze,
+      vatTotalGrosze: params.fallbackVatGrosze,
+      hasAnnex15: Boolean(params.fallbackAnnex15Item),
+    });
+  }
+
+  const vatEntries: VatRegisterEntry[] = [];
+  let totalDeductibleVatGrosze = 0;
+  let totalNonDeductibleVatGrosze = 0;
+  let idx = 0;
+
+  for (const [vatRate, group] of rateBuckets.entries()) {
+    idx += 1;
+    const entry = createVatRegisterEntry({
+      id: `${params.idPrefix}-${String(idx)}`,
+      registerType: params.registerType,
+      period: params.period,
+      taxPointDate: params.taxPointDate,
+      issueDate: params.issueDate,
+      documentNumber: params.documentNumber,
+      counterpartyName: params.counterpartyName,
+      counterpartyNip: params.counterpartyNip || 'BrakID',
+      vatRate,
+      netGrosze: group.netGrosze,
+      vatTotalGrosze: group.vatTotalGrosze,
+      deductionMode: params.registerType === 'sales' ? 'full_100' : params.deductionMode,
+      annex15Item: group.hasAnnex15,
+      ...(params.ksefMarker !== undefined ? { ksefMarker: params.ksefMarker } : {}),
+      ...(params.ksefReferenceNumber !== undefined
+        ? { ksefReferenceNumber: params.ksefReferenceNumber }
+        : {}),
+    });
+    vatEntries.push(entry);
+    totalDeductibleVatGrosze += entry.deductibleVatGrosze;
+    totalNonDeductibleVatGrosze += entry.nonDeductibleVatGrosze;
+  }
+
+  return {
+    primaryVatEntry: vatEntries[0]!,
+    vatEntries,
+    totalDeductibleVatGrosze,
+    totalNonDeductibleVatGrosze,
+  };
+}
+
 export async function getDocumentDetailSnapshot(
   session: ActiveWebSession,
   documentId: string,
 ): Promise<{
   readonly activeCompany: CompanyProfileRecord;
   readonly document: WorkspaceDocumentRecord;
+  readonly resolvedCorrectedEntryId?: string | undefined;
   readonly kupQualification: ReturnType<typeof qualifyKpirExpense> | null;
   readonly vatEntryPreview: VatRegisterEntry;
 }> {
@@ -2907,6 +2997,7 @@ export async function getDocumentDetailSnapshot(
   );
 
   let document: WorkspaceDocumentRecord | undefined;
+  let resolvedCorrectedEntryId: string | undefined;
   if (!isOfflineDemoModeEnabled()) {
     const safeTenantId = assertUuidPathParam(activeCompany.tenantId, 'tenantId');
     const safeEntityId = assertUuidPathParam(activeCompany.legalEntityId, 'legalEntityId');
@@ -2925,6 +3016,19 @@ export async function getDocumentDetailSnapshot(
       );
     }
     document = mapRemoteDocumentToWorkspaceRecord(remote.data);
+    if (
+      (document.isCorrection || document.documentKind === 'correction') &&
+      document.correctedDocumentNumber
+    ) {
+      const allDocs = await getDocumentsForActiveCompany(session);
+      const matchedOriginal = allDocs.find(
+        (d) =>
+          d.documentId !== document!.documentId &&
+          d.documentNumber === document!.correctedDocumentNumber &&
+          d.postedEntryId,
+      );
+      resolvedCorrectedEntryId = matchedOriginal?.postedEntryId ?? document.correctedDocumentNumber;
+    }
   } else {
     const store = getStore();
     document = store.documents.find(
@@ -2933,6 +3037,20 @@ export async function getDocumentDetailSnapshot(
         d.tenantId === activeCompany.tenantId &&
         d.legalEntityId === activeCompany.legalEntityId,
     );
+    if (
+      document &&
+      (document.isCorrection || document.documentKind === 'correction') &&
+      document.correctedDocumentNumber
+    ) {
+      const matchedOriginal = store.documents.find(
+        (d) =>
+          d.legalEntityId === activeCompany.legalEntityId &&
+          d.documentId !== document!.documentId &&
+          d.documentNumber === document!.correctedDocumentNumber &&
+          d.postedEntryId,
+      );
+      resolvedCorrectedEntryId = matchedOriginal?.postedEntryId ?? document.correctedDocumentNumber;
+    }
   }
 
   if (!document) {
@@ -2943,8 +3061,8 @@ export async function getDocumentDetailSnapshot(
     );
   }
 
-  const vatEntryPreview = createVatRegisterEntry({
-    id: `preview-vat-${document.documentId}`,
+  const groupedVat = buildGroupedVatEntriesForDocument({
+    idPrefix: `preview-vat-${document.documentId}`,
     registerType: document.direction,
     period: document.period,
     taxPointDate: document.eventDate,
@@ -2952,15 +3070,15 @@ export async function getDocumentDetailSnapshot(
     documentNumber: document.documentNumber,
     counterpartyName: document.counterpartyName,
     counterpartyNip: document.counterpartyNip,
-    vatRate: document.vatRate,
-    netGrosze: document.netGrosze,
-    vatTotalGrosze: document.vatGrosze,
     deductionMode: document.vatDeductionMode,
-    annex15Item: document.annex15Item,
+    fallbackVatRate: document.vatRate,
+    fallbackNetGrosze: document.netGrosze,
+    fallbackVatGrosze: document.vatGrosze,
+    fallbackAnnex15Item: document.annex15Item,
+    lines: document.lines,
+    useLines: true,
     ksefMarker: document.ksefMarker,
-    ...(document.ksefReferenceNumber !== undefined
-      ? { ksefReferenceNumber: document.ksefReferenceNumber }
-      : {}),
+    ksefReferenceNumber: document.ksefReferenceNumber,
   });
 
   const kupQualification =
@@ -2971,15 +3089,16 @@ export async function getDocumentDetailSnapshot(
           netGrosze: document.netGrosze,
           vatGrosze: document.vatGrosze,
           taxpayerVatActive: activeCompany.vatStatus === 'czynny',
-          deductibleVatGrosze: vatEntryPreview.deductibleVatGrosze,
+          deductibleVatGrosze: groupedVat.totalDeductibleVatGrosze,
         })
       : null;
 
   return {
     activeCompany,
     document,
+    resolvedCorrectedEntryId,
     kupQualification,
-    vatEntryPreview,
+    vatEntryPreview: groupedVat.primaryVatEntry,
   };
 }
 
@@ -4763,6 +4882,9 @@ export async function approveAndPostDocumentMutation(
     readonly netPln: string;
     readonly vatPln: string;
     readonly amountsEdited?: boolean;
+    readonly isCorrection?: boolean;
+    readonly correctedEntryId?: string;
+    readonly correctionReason?: string;
     readonly expenseQualification: KpirExpenseQualificationKind;
     readonly vatDeductionMode: VatDeductionMode;
     readonly ryczaltRate?: RyczaltRateCode;
@@ -4808,9 +4930,52 @@ export async function approveAndPostDocumentMutation(
   const netGrosze = parsePlnToGroszeOrThrow(input.netPln, 'kwota netto');
   const vatGrosze = parsePlnToGroszeOrThrow(input.vatPln, 'kwota VAT');
   const grossGrosze = netGrosze + vatGrosze;
-  const shouldSendAmountOverrides = input.amountsEdited !== false;
+  const shouldSendAmountOverrides = input.amountsEdited === true;
+
+  if (shouldSendAmountOverrides && (netGrosze < 0 || vatGrosze < 0)) {
+    throw new WorkspaceAccessError(
+      400,
+      'correction_line_amounts_locked',
+      'Kwoty ujemne faktury korygującej (KOR) wynikają bezpośrednio z pozycji dokumentu — zatwierdź dokument bez ręcznego nadpisywania sumy nagłówka.',
+    );
+  }
 
   if (!isOfflineDemoModeEnabled()) {
+    let resolvedRemoteCorrectedEntryId = input.correctedEntryId?.trim() || undefined;
+    let resolvedRemoteCorrectionReason = input.correctionReason?.trim() || undefined;
+
+    if (
+      (input.isCorrection === true || netGrosze < 0 || vatGrosze < 0) &&
+      (!resolvedRemoteCorrectedEntryId || !resolvedRemoteCorrectionReason)
+    ) {
+      const targetRemote = await papBffFetch<RemoteDocumentItem>(
+        `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/documents/${safeDocId}`,
+        {
+          method: 'GET',
+          bearerToken: session.oidcToken,
+        },
+      );
+      if (targetRemote.kind === 'ok' && targetRemote.data.isCorrection) {
+        if (!resolvedRemoteCorrectionReason) {
+          resolvedRemoteCorrectionReason =
+            targetRemote.data.correctionReason?.trim() || 'Faktura korygująca (KOR)';
+        }
+        if (!resolvedRemoteCorrectedEntryId) {
+          const origDocNum = targetRemote.data.correctedDocumentNumber?.trim();
+          if (origDocNum) {
+            const listRes = await getDocumentsForActiveCompany(session);
+            const matchedOrig = listRes.find(
+              (d) =>
+                d.documentId !== safeDocId && d.documentNumber === origDocNum && d.postedEntryId,
+            );
+            resolvedRemoteCorrectedEntryId = matchedOrig?.postedEntryId ?? origDocNum;
+          } else {
+            resolvedRemoteCorrectedEntryId = `kor-ref-${safeDocId}`;
+          }
+        }
+      }
+    }
+
     const remote = await papBffFetch<
       CompanyDocumentItem | { readonly document: CompanyDocumentItem }
     >(
@@ -4825,9 +4990,15 @@ export async function approveAndPostDocumentMutation(
           issueDate: validatedIssueDate,
           ...(shouldSendAmountOverrides
             ? {
-                netPln: (Math.abs(netGrosze) / 100).toFixed(2),
-                vatPln: (Math.abs(vatGrosze) / 100).toFixed(2),
+                netPln: (netGrosze / 100).toFixed(2),
+                vatPln: (vatGrosze / 100).toFixed(2),
               }
+            : {}),
+          ...(resolvedRemoteCorrectedEntryId !== undefined
+            ? { correctedEntryId: resolvedRemoteCorrectedEntryId }
+            : {}),
+          ...(resolvedRemoteCorrectionReason !== undefined
+            ? { correctionReason: resolvedRemoteCorrectionReason }
             : {}),
           expenseQualification: input.expenseQualification,
           vatDeductionMode: input.vatDeductionMode,
@@ -4871,6 +5042,26 @@ export async function approveAndPostDocumentMutation(
   const postedPeriod = validatedIssueDate.slice(0, 7);
   let postedEntryId = current.postedEntryId ?? `post-${randomUUID().slice(0, 8)}`;
   const effectiveNipForLedger = normalizedNip ?? 'BrakID';
+  const isCorrectionDoc =
+    Boolean(current.isCorrection) || current.documentKind === 'correction' || grossGrosze < 0;
+  const matchedOfflineOriginal = current.correctedDocumentNumber
+    ? store.documents.find(
+        (d) =>
+          d.legalEntityId === company.legalEntityId &&
+          d.documentId !== current.documentId &&
+          d.documentNumber === current.correctedDocumentNumber &&
+          d.postedEntryId,
+      )
+    : undefined;
+  const offlineCorrectedEntryId =
+    input.correctedEntryId?.trim() ||
+    matchedOfflineOriginal?.postedEntryId ||
+    current.correctedDocumentNumber?.trim() ||
+    `kor-ref-${current.documentId}`;
+  const offlineCorrectionReason =
+    input.correctionReason?.trim() ||
+    current.correctionReason?.trim() ||
+    'Faktura korygująca (KOR)';
 
   if (current.status !== 'approved_posted') {
     if (company.profileCode === 'jdg_kpir_skala' || company.profileCode === 'jdg_kpir_liniowy') {
@@ -4893,11 +5084,18 @@ export async function approveAndPostDocumentMutation(
           eventDescription: current.description,
           col7SalesRevenueGrosze: netGrosze,
           qualificationKind: 'none',
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId: offlineCorrectedEntryId,
+                correctionReason: offlineCorrectionReason,
+              }
+            : {}),
         });
         store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
       } else if (input.expenseQualification !== 'none') {
-        const vatEntry = createVatRegisterEntry({
-          id: `vat-post-${current.documentId}`,
+        const groupedPurchaseVat = buildGroupedVatEntriesForDocument({
+          idPrefix: `vat-post-${current.documentId}`,
           registerType: 'purchase',
           period: postedPeriod,
           taxPointDate: validatedIssueDate,
@@ -4905,10 +5103,15 @@ export async function approveAndPostDocumentMutation(
           documentNumber: docNumTrimmed,
           counterpartyName: cpNameTrimmed,
           counterpartyNip: effectiveNipForLedger,
-          vatRate: current.vatRate,
-          netGrosze,
-          vatTotalGrosze: vatGrosze,
           deductionMode: input.vatDeductionMode,
+          fallbackVatRate: current.vatRate,
+          fallbackNetGrosze: netGrosze,
+          fallbackVatGrosze: vatGrosze,
+          fallbackAnnex15Item: current.annex15Item,
+          lines: current.lines,
+          useLines: !shouldSendAmountOverrides,
+          ksefMarker: current.ksefMarker,
+          ksefReferenceNumber: current.ksefReferenceNumber,
         });
 
         const qualified = qualifyKpirExpense({
@@ -4917,7 +5120,7 @@ export async function approveAndPostDocumentMutation(
           netGrosze,
           vatGrosze,
           taxpayerVatActive: company.vatStatus === 'czynny',
-          deductibleVatGrosze: vatEntry.deductibleVatGrosze,
+          deductibleVatGrosze: groupedPurchaseVat.totalDeductibleVatGrosze,
         });
 
         const entry = createKpirEntry({
@@ -4938,11 +5141,18 @@ export async function approveAndPostDocumentMutation(
           col13OtherExpensesGrosze: qualified.col13OtherExpensesGrosze,
           col16ResearchDevelopmentCostGrosze: qualified.col16ResearchDevelopmentCostGrosze,
           qualificationKind: input.expenseQualification,
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId: offlineCorrectedEntryId,
+                correctionReason: offlineCorrectionReason,
+              }
+            : {}),
         });
         store.kpirEntriesByCompany.set(company.legalEntityId, [...existingKpir, entry]);
       }
     } else if (company.profileCode === 'jdg_ryczalt') {
-      if (current.direction === 'sales' && netGrosze > 0) {
+      if (current.direction === 'sales' && netGrosze !== 0) {
         const existingRyczalt = store.ryczaltEntriesByCompany.get(company.legalEntityId) ?? [];
         const nextOrd = existingRyczalt.length + 1;
         postedEntryId = `ryczalt-${postedPeriod}-${String(nextOrd)}`;
@@ -4957,6 +5167,13 @@ export async function approveAndPostDocumentMutation(
           rate: input.ryczaltRate ?? current.ryczaltRate ?? '12',
           revenueGrosze: netGrosze,
           remarks: current.description,
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId: offlineCorrectedEntryId,
+                correctionReason: offlineCorrectionReason,
+              }
+            : {}),
         });
         store.ryczaltEntriesByCompany.set(company.legalEntityId, [...existingRyczalt, rycEntry]);
       } else {
@@ -4967,9 +5184,8 @@ export async function approveAndPostDocumentMutation(
       const nextNo = existingJournal.length + 1;
       const entryNumber = `DK/${postedPeriod}/${String(nextNo).padStart(3, '0')}`;
       postedEntryId = `jrn-${postedPeriod}-${String(nextNo)}`;
-      const isCorrection = grossGrosze < 0;
-      const stornoMeta = isCorrection
-        ? { isRedStorno: true, stornoReason: 'Faktura korygująca' }
+      const stornoMeta = isCorrectionDoc
+        ? { isRedStorno: true, stornoReason: offlineCorrectionReason }
         : {};
 
       const journalLines: {
@@ -5008,8 +5224,8 @@ export async function approveAndPostDocumentMutation(
           });
         }
       } else {
-        const vatEntry = createVatRegisterEntry({
-          id: `vat-jrn-${current.documentId}`,
+        const groupedJrnVat = buildGroupedVatEntriesForDocument({
+          idPrefix: `vat-jrn-${current.documentId}`,
           registerType: 'purchase',
           period: postedPeriod,
           taxPointDate: validatedIssueDate,
@@ -5017,12 +5233,18 @@ export async function approveAndPostDocumentMutation(
           documentNumber: docNumTrimmed,
           counterpartyName: cpNameTrimmed,
           counterpartyNip: effectiveNipForLedger,
-          vatRate: current.vatRate,
-          netGrosze,
-          vatTotalGrosze: vatGrosze,
           deductionMode: company.vatStatus === 'czynny' ? input.vatDeductionMode : 'none_0',
+          fallbackVatRate: current.vatRate,
+          fallbackNetGrosze: netGrosze,
+          fallbackVatGrosze: vatGrosze,
+          fallbackAnnex15Item: current.annex15Item,
+          lines: current.lines,
+          useLines: !shouldSendAmountOverrides,
+          ksefMarker: current.ksefMarker,
+          ksefReferenceNumber: current.ksefReferenceNumber,
         });
-        const deductibleVat = company.vatStatus === 'czynny' ? vatEntry.deductibleVatGrosze : 0;
+        const deductibleVat =
+          company.vatStatus === 'czynny' ? groupedJrnVat.totalDeductibleVatGrosze : 0;
         const costAmount = grossGrosze - deductibleVat;
         const expenseAccount =
           input.expenseQualification === 'goods_and_materials_col10' ? '330' : '402';

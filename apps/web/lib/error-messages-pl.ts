@@ -7,6 +7,24 @@ export interface FormatErrorInput {
   readonly fallbackPl?: string | undefined;
 }
 
+export function isValidIsoCalendarDate(candidate: string): boolean {
+  const trimmed = candidate.trim();
+  const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(trimmed);
+  if (!match) {
+    return false;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const utc = new Date(Date.UTC(year, month - 1, day));
+  return (
+    !Number.isNaN(utc.getTime()) &&
+    utc.getUTCFullYear() === year &&
+    utc.getUTCMonth() === month - 1 &&
+    utc.getUTCDate() === day
+  );
+}
+
 const TECHNICAL_LEAK_PATTERNS = [
   /\bSELECT\b.+\bFROM\b/i,
   /\bINSERT\s+INTO\b/i,
@@ -60,6 +78,8 @@ const REASON_CODE_MESSAGES_PL: Readonly<Record<string, string>> = {
   multiple_documents_in_single_csv_import:
     'Pojedynczy import CSV w tym formularzu reprezentuje jedną fakturę (może mieć wiele wierszy z różnymi stawkami VAT dla tego samego numeru dokumentu i NIP).',
   payload_too_large: 'Przesyłany plik przekracza dopuszczalny limit 256 KB.',
+  correction_line_amounts_locked:
+    'Kwoty ujemne faktury korygującej (KOR) wynikają bezpośrednio z pozycji dokumentu — zatwierdź dokument bez ręcznego nadpisywania sumy nagłówka.',
   double_entry_violation:
     'Dekret księgowy musi być zbilansowany (suma strony Wn musi być równa sumie strony Ma co do grosza) i zawierać co najmniej dwie pozycje.',
 };

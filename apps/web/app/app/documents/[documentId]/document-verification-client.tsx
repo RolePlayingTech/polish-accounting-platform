@@ -32,30 +32,12 @@ import {
   VatRateGuideTrigger,
 } from '../../../../components/tax-guide-drawer';
 import { AlertBanner } from '../../../../components/ui-controls';
-import { formatUserFacingErrorPl } from '../../../../lib/error-messages-pl';
+import { formatUserFacingErrorPl, isValidIsoCalendarDate } from '../../../../lib/error-messages-pl';
 import { mapDomainExplanationToBasisInfo } from '../../../../lib/field-help';
 import type {
   CompanyProfileRecord,
   WorkspaceDocumentRecord,
 } from '../../../../lib/workspace-types';
-
-function isValidIsoCalendarDate(candidate: string): boolean {
-  const trimmed = candidate.trim();
-  const match = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(trimmed);
-  if (!match) {
-    return false;
-  }
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const utc = new Date(Date.UTC(year, month - 1, day));
-  return (
-    !Number.isNaN(utc.getTime()) &&
-    utc.getUTCFullYear() === year &&
-    utc.getUTCMonth() === month - 1 &&
-    utc.getUTCDate() === day
-  );
-}
 
 function formatVatRateLabel(rate: VatRateCode): string {
   return rate === 'zw' ? 'zw.' : rate === 'np' ? 'np.' : `${rate}%`;
@@ -64,6 +46,7 @@ function formatVatRateLabel(rate: VatRateCode): string {
 export interface DocumentVerificationClientProps {
   company: CompanyProfileRecord;
   document: WorkspaceDocumentRecord;
+  resolvedCorrectedEntryId?: string | undefined;
   helpMap: {
     readonly nip: FieldHelpInfo;
     readonly ksefReference: FieldHelpInfo;
@@ -77,12 +60,15 @@ export interface DocumentVerificationClientProps {
 export function DocumentVerificationClient({
   company,
   document,
+  resolvedCorrectedEntryId,
   helpMap,
 }: DocumentVerificationClientProps) {
   const router = useRouter();
   const canWrite = company.grantedActions.includes('write');
   const isAlreadyPosted = document.status === 'approved_posted';
   const hasMultipleLines = Boolean(document.lines && document.lines.length > 1);
+  const isCorrectionDoc = Boolean(document.isCorrection) || document.documentKind === 'correction';
+  const lockHeaderAmounts = hasMultipleLines || isCorrectionDoc;
 
   const [docNumber, setDocNumber] = useState(document.documentNumber);
   const [issueDate, setIssueDate] = useState(document.issueDate);
@@ -91,6 +77,14 @@ export function DocumentVerificationClient({
   const [noPolishNip, setNoPolishNip] = useState(!document.counterpartyNip);
   const [netPln, setNetPln] = useState((document.netGrosze / 100).toFixed(2));
   const [vatPln, setVatPln] = useState((document.vatGrosze / 100).toFixed(2));
+  const [correctedEntryId, setCorrectedEntryId] = useState(
+    resolvedCorrectedEntryId ??
+      document.correctedDocumentNumber ??
+      `kor-ref-${document.documentId}`,
+  );
+  const [correctionReason, setCorrectionReason] = useState(
+    document.correctionReason ?? 'Faktura korygująca (KOR)',
+  );
   const [expenseQualification, setExpenseQualification] = useState<KpirExpenseQualificationKind>(
     document.expenseQualification,
   );
@@ -110,14 +104,17 @@ export function DocumentVerificationClient({
   const liveCalculation = useMemo(() => {
     let netGrosze = document.netGrosze;
     let vatGrosze = document.vatGrosze;
-    try {
-      netGrosze = parsePlnToGrosze(netPln);
-      vatGrosze = parsePlnToGrosze(vatPln);
-    } catch {
-      // Pozostaw poprzednią kwotę przy niepełnym wpisywaniu
+    if (!lockHeaderAmounts) {
+      try {
+        netGrosze = parsePlnToGrosze(netPln);
+        vatGrosze = parsePlnToGrosze(vatPln);
+      } catch {
+        // Pozostaw poprzednią kwotę przy niepełnym wpisywaniu
+      }
     }
 
-    const amountsEdited = netGrosze !== document.netGrosze || vatGrosze !== document.vatGrosze;
+    const amountsEdited =
+      !lockHeaderAmounts && (netGrosze !== document.netGrosze || vatGrosze !== document.vatGrosze);
     const safeIssueDate = isValidIsoCalendarDate(issueDate) ? issueDate.trim() : document.issueDate;
     const nipValidation = validatePolishNip(counterpartyNip);
     const safeNip = noPolishNip
@@ -128,25 +125,66 @@ export function DocumentVerificationClient({
     const safeDocNum = docNumber.trim() || document.documentNumber;
     const safeCounterpartyName = counterpartyName.trim() || document.counterpartyName;
 
-    const vatEntry = createVatRegisterEntry({
-      id: `live-vat-${document.documentId}`,
-      registerType: document.direction,
-      period: safeIssueDate.slice(0, 7),
-      taxPointDate: safeIssueDate,
-      issueDate: safeIssueDate,
-      documentNumber: safeDocNum,
-      counterpartyName: safeCounterpartyName,
-      counterpartyNip: safeNip,
-      vatRate: document.vatRate,
-      netGrosze,
-      vatTotalGrosze: vatGrosze,
-      deductionMode: vatDeductionMode,
-      annex15Item: document.annex15Item,
-      ksefMarker: document.ksefMarker,
-      ...(document.ksefReferenceNumber !== undefined
-        ? { ksefReferenceNumber: document.ksefReferenceNumber }
-        : {}),
-    });
+    const rateBuckets = new Map<
+      VatRateCode,
+      { netGrosze: number; vatTotalGrosze: number; hasAnnex15: boolean }
+    >();
+    if (!amountsEdited && document.lines && document.lines.length > 0) {
+      for (const line of document.lines) {
+        const prev = rateBuckets.get(line.vatRate) ?? {
+          netGrosze: 0,
+          vatTotalGrosze: 0,
+          hasAnnex15: false,
+        };
+        rateBuckets.set(line.vatRate, {
+          netGrosze: prev.netGrosze + line.netGrosze,
+          vatTotalGrosze: prev.vatTotalGrosze + line.vatGrosze,
+          hasAnnex15: prev.hasAnnex15 || Boolean(line.annex15Item),
+        });
+      }
+    }
+    if (rateBuckets.size === 0) {
+      rateBuckets.set(document.vatRate, {
+        netGrosze,
+        vatTotalGrosze: vatGrosze,
+        hasAnnex15: document.annex15Item,
+      });
+    }
+
+    let primaryVatEntry: ReturnType<typeof createVatRegisterEntry> | null = null;
+    let totalDeductibleVatGrosze = 0;
+    let totalNonDeductibleVatGrosze = 0;
+    let idx = 0;
+
+    for (const [rate, group] of rateBuckets.entries()) {
+      idx += 1;
+      const entry = createVatRegisterEntry({
+        id: `live-vat-${document.documentId}-${String(idx)}`,
+        registerType: document.direction,
+        period: safeIssueDate.slice(0, 7),
+        taxPointDate: safeIssueDate,
+        issueDate: safeIssueDate,
+        documentNumber: safeDocNum,
+        counterpartyName: safeCounterpartyName,
+        counterpartyNip: safeNip,
+        vatRate: rate,
+        netGrosze: group.netGrosze,
+        vatTotalGrosze: group.vatTotalGrosze,
+        deductionMode: document.direction === 'sales' ? 'full_100' : vatDeductionMode,
+        annex15Item: group.hasAnnex15,
+        ksefMarker: document.ksefMarker,
+        ...(document.ksefReferenceNumber !== undefined
+          ? { ksefReferenceNumber: document.ksefReferenceNumber }
+          : {}),
+      });
+      if (!primaryVatEntry) {
+        primaryVatEntry = entry;
+      }
+      totalDeductibleVatGrosze += entry.deductibleVatGrosze;
+      totalNonDeductibleVatGrosze += entry.nonDeductibleVatGrosze;
+    }
+
+    const vatEntry = primaryVatEntry!;
 
     const kup =
       document.direction === 'purchase' && expenseQualification !== 'none'
@@ -156,7 +194,7 @@ export function DocumentVerificationClient({
             netGrosze,
             vatGrosze,
             taxpayerVatActive: company.vatStatus === 'czynny',
-            deductibleVatGrosze: vatEntry.deductibleVatGrosze,
+            deductibleVatGrosze: totalDeductibleVatGrosze,
           })
         : null;
 
@@ -176,6 +214,8 @@ export function DocumentVerificationClient({
       grossGrosze: netGrosze + vatGrosze,
       amountsEdited,
       vatEntry,
+      totalDeductibleVatGrosze,
+      totalNonDeductibleVatGrosze,
       kup,
       basis,
     };
@@ -187,6 +227,7 @@ export function DocumentVerificationClient({
     document,
     expenseQualification,
     issueDate,
+    lockHeaderAmounts,
     netPln,
     noPolishNip,
     vatDeductionMode,
@@ -211,6 +252,16 @@ export function DocumentVerificationClient({
           netPln,
           vatPln,
           amountsEdited: liveCalculation.amountsEdited,
+          isCorrection: isCorrectionDoc,
+          ...(isCorrectionDoc
+            ? {
+                correctedEntryId:
+                  correctedEntryId.trim() ||
+                  document.correctedDocumentNumber ||
+                  `kor-ref-${document.documentId}`,
+                correctionReason: correctionReason.trim() || 'Faktura korygująca (KOR)',
+              }
+            : {}),
           expenseQualification,
           vatDeductionMode,
           ...(document.direction === 'sales' && company.profileCode === 'jdg_ryczalt'
@@ -464,7 +515,7 @@ export function DocumentVerificationClient({
               onChange={setNetPln}
               confidence={document.aiConfidence}
               numeric
-              readOnly={isAlreadyPosted || !canWrite}
+              readOnly={isAlreadyPosted || !canWrite || lockHeaderAmounts}
             />
             <AiProposalField
               id="verify-vat-pln"
@@ -478,9 +529,52 @@ export function DocumentVerificationClient({
               onChange={setVatPln}
               confidence={document.aiConfidence}
               numeric
-              readOnly={isAlreadyPosted || !canWrite}
+              readOnly={isAlreadyPosted || !canWrite || lockHeaderAmounts}
             />
           </div>
+
+          {lockHeaderAmounts ? (
+            <p className="rounded-md border border-[#e5e2d9] bg-[#faf9f5] px-3 py-2 text-xs text-[#464c48]">
+              {isCorrectionDoc
+                ? 'Kwoty ujemne faktury korygującej (KOR) są zablokowane do odczytu w podsumowaniu nagłówka — wynikają bezpośrednio z pozycji korekty widocznych po lewej stronie.'
+                : 'Suma nagłówka wynika z podziału pozycji na stawki VAT w tabeli po lewej stronie — zaksięgowanie zachowuje wszystkie stawki bez spłaszczania.'}
+            </p>
+          ) : null}
+
+          {isCorrectionDoc ? (
+            <div
+              data-testid="verify-correction-metadata-panel"
+              className="grid gap-3 rounded-lg border border-[#dcd3b8] bg-[#faf8f1] p-3 sm:grid-cols-2"
+            >
+              <FormField
+                id="verify-corrected-entry-id"
+                label="Dowód / wpis korygowany (art. 106j VAT)"
+                required
+              >
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    disabled={isAlreadyPosted || !canWrite}
+                    value={correctedEntryId}
+                    onChange={(e) => setCorrectedEntryId(e.target.value)}
+                    className={`${ctrl.className} font-mono text-xs`}
+                  />
+                )}
+              </FormField>
+              <FormField id="verify-correction-reason" label="Przyczyna korekty" required>
+                {(ctrl) => (
+                  <input
+                    {...ctrl}
+                    type="text"
+                    disabled={isAlreadyPosted || !canWrite}
+                    value={correctionReason}
+                    onChange={(e) => setCorrectionReason(e.target.value)}
+                  />
+                )}
+              </FormField>
+            </div>
+          ) : null}
 
           <VatRateGuideTrigger
             selectedRate={document.vatRate}
@@ -577,7 +671,7 @@ export function DocumentVerificationClient({
                     VAT do odliczenia
                   </p>
                   <MoneyAmount
-                    amount={liveCalculation.vatEntry.deductibleVatGrosze}
+                    amount={liveCalculation.totalDeductibleVatGrosze}
                     inGrosze
                     size="sm"
                     variant="tax"
@@ -588,7 +682,7 @@ export function DocumentVerificationClient({
                     VAT nieodliczony
                   </p>
                   <MoneyAmount
-                    amount={liveCalculation.vatEntry.nonDeductibleVatGrosze}
+                    amount={liveCalculation.totalNonDeductibleVatGrosze}
                     inGrosze
                     size="sm"
                     variant="neutral"

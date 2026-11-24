@@ -21,6 +21,8 @@ async function startOidcE2eStack(): Promise<{
   readonly child: ChildProcess;
   readonly meta: E2eStackMetadata;
 }> {
+  const webPort = Number(process.env['PAP_E2E_WEB_PORT'] || 31_608);
+  const apiPortA = Number(process.env['PAP_E2E_API_PORT_A'] || 41_608);
   const child = spawn(
     process.execPath,
     ['--import', 'tsx', resolve(repositoryRoot, 'apps/api/test/helpers/e2e-oidc-stack.ts')],
@@ -31,6 +33,10 @@ async function startOidcE2eStack(): Promise<{
         NODE_OPTIONS: '--max-old-space-size=192',
         UV_THREADPOOL_SIZE: '2',
         TSX_TSCONFIG_PATH: resolve(repositoryRoot, 'apps/api/test/tsconfig.json'),
+        PAP_E2E_WEB_CALLBACK_URI:
+          process.env['PAP_E2E_WEB_CALLBACK_URI'] ??
+          `http://localhost:${String(webPort)}/api/session/oidc/callback`,
+        PAP_E2E_API_PORT_B: process.env['PAP_E2E_API_PORT_B'] ?? String(apiPortA + 1),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     },

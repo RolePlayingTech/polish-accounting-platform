@@ -25,7 +25,7 @@ import {
 } from '@pap/ui';
 import { IncompatibleRegimeGateCard } from '../../../components/regime-context-card';
 import { AlertBanner, Button, MoneyInput } from '../../../components/ui-controls';
-import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
+import { formatUserFacingErrorPl, isValidIsoCalendarDate } from '../../../lib/error-messages-pl';
 import type { CompanyProfileRecord } from '../../../lib/workspace-types';
 
 export interface KpirEntryRowView {
@@ -123,6 +123,13 @@ export function KpirWorkbench({
       }
     };
 
+    if (!isValidIsoCalendarDate(eventDate)) {
+      mark(
+        'eventDate',
+        'kpir-event-date',
+        `Wskaż poprawną datę zdarzenia gospodarczego w formacie RRRR-MM-DD (np. ${period}-21).`,
+      );
+    }
     if (!docNumber.trim()) {
       mark('docNumber', 'kpir-doc-num', `Podaj numer dowodu księgowego (np. DW/${period}/01).`);
     }
@@ -538,13 +545,23 @@ export function KpirWorkbench({
             }}
           >
             <div className="grid gap-3 sm:grid-cols-2">
-              <FormField id="kpir-event-date" label="Data zdarzenia (Kol. 2)" required>
+              <FormField
+                id="kpir-event-date"
+                label="Data zdarzenia (Kol. 2)"
+                required
+                {...(fieldErrors['eventDate'] ? { error: fieldErrors['eventDate'] } : {})}
+              >
                 {(ctrl) => (
                   <input
                     {...ctrl}
                     type="date"
                     value={eventDate}
-                    onChange={(e) => setEventDate(e.target.value)}
+                    onChange={(e) => {
+                      setEventDate(e.target.value);
+                      if (fieldErrors['eventDate']) {
+                        setFieldErrors((prev) => ({ ...prev, eventDate: '' }));
+                      }
+                    }}
                     className={`${ctrl.className} font-mono tabular-nums`}
                   />
                 )}

@@ -73,6 +73,7 @@ export default async function KpirPage() {
     >
       <div className="space-y-6">
         <KpirWorkbench
+          key={`${kpir.activeCompany.legalEntityId}:${session.context.period}`}
           activeCompany={kpir.activeCompany}
           accessibleCompanies={dash.accessibleCompanies}
           period={session.context.period}

@@ -3,6 +3,7 @@ import { NextRequest } from 'next/server';
 import { describe, expect, it, vi } from 'vitest';
 import { STANDARD_SPZOO_CHART_OF_ACCOUNTS } from '@pap/domain';
 import { POST as postSessionContext } from '../app/api/session/context/route.js';
+import { DocumentVerificationClient } from '../app/app/documents/[documentId]/document-verification-client.js';
 import { DocumentsWorkbench } from '../app/app/documents/documents-workbench.js';
 import { IncompatibleRegimeGateCard } from '../components/regime-context-card.js';
 import {
@@ -20,6 +21,7 @@ import {
 import {
   evaluateJournalSemanticWarnings,
   formatUserFacingErrorPl,
+  isValidIsoCalendarDate,
 } from '../lib/error-messages-pl.js';
 import { mustResolveUiFieldHelp } from '../lib/field-help.js';
 import {
@@ -333,5 +335,120 @@ describe('Wave 1 UX, profile-aware navigation, editable invoicing & Polish tax g
     );
     expect(purchaseNoticeHtml).toContain('Dwie niezależne decyzje podatkowe przy zakupie');
     expect(purchaseNoticeHtml).toContain('art. 88');
+  });
+
+  it('QA rev 2 (#102, #105): waliduje daty kalendarzowe lutego (2026-02-28) i blokuje sumy nagłówka dla faktur KOR oraz wielopozycyjnych w Split-View', () => {
+    expect(isValidIsoCalendarDate('2026-02-28')).toBe(true);
+    expect(isValidIsoCalendarDate('2026-02-29')).toBe(false);
+    expect(isValidIsoCalendarDate('2026-02-30')).toBe(false);
+    expect(isValidIsoCalendarDate('')).toBe(false);
+
+    expect(buildEmptyDocumentCsvTemplate('2026-02')).toContain('2026-02-28');
+    expect(buildEmptyDocumentCsvTemplate('2026-02')).not.toContain('2026-02-29');
+    expect(buildSampleMultiRateDocumentCsv('2026-02')).toContain('2026-02-28');
+    expect(buildSampleDocumentJson('2026-02')).toContain('2026-02-28');
+
+    const febWorkbenchHtml = renderToStaticMarkup(
+      <DocumentsWorkbench
+        activeCompany={MOCK_KPIR_COMPANY}
+        documents={[]}
+        period="2026-02"
+        canWrite={true}
+        helpMap={{
+          nip: mustResolveUiFieldHelp('nip'),
+          ksefReference: mustResolveUiFieldHelp('ksef_reference'),
+          gtuCode: mustResolveUiFieldHelp('gtu_code'),
+          mpp: mustResolveUiFieldHelp('split_payment_mpp'),
+        }}
+      />,
+    );
+    expect(febWorkbenchHtml).toContain('value="2026-02-28"');
+    expect(febWorkbenchHtml).not.toContain('2026-02-30');
+
+    const korSplitHtml = renderToStaticMarkup(
+      <DocumentVerificationClient
+        company={MOCK_KPIR_COMPANY}
+        resolvedCorrectedEntryId="kpir-2026-03-1"
+        document={{
+          documentId: 'doc-kor-1',
+          tenantId: TENANT_1_ID,
+          legalEntityId: COMPANY_JDG_KPIR_ID,
+          period: '2026-03',
+          status: 'ai_proposal',
+          documentKind: 'correction',
+          direction: 'purchase',
+          documentNumber: 'KOR/2026/03/01',
+          issueDate: '2026-03-20',
+          eventDate: '2026-03-20',
+          dueDate: '2026-03-28',
+          counterpartyName: 'Dostawca Korekty Sp. z o.o.',
+          counterpartyNip: '5261040828',
+          counterpartyAddress: 'Warszawa',
+          counterpartyIban: '',
+          description: 'Rabat potransakcyjny',
+          vatRate: '23',
+          lines: [
+            {
+              lineNumber: 1,
+              description: 'Rabat potransakcyjny (23%)',
+              quantity: '1',
+              unit: 'usł.',
+              netGrosze: -10_000,
+              vatRate: '23',
+              vatGrosze: -2_300,
+              grossGrosze: -12_300,
+              annex15Item: false,
+            },
+          ],
+          netGrosze: -10_000,
+          vatGrosze: -2_300,
+          grossGrosze: -12_300,
+          paidAmountGrosze: 0,
+          sha256: 'a'.repeat(64),
+          isDuplicateSha256: false,
+          fileName: 'kor.json',
+          mimeLabel: 'application/json',
+          sourceChannel: 'Formularz ręczny',
+          ksefMarker: 'BFK',
+          ksefVerificationStatus: 'not_applicable',
+          isCorrection: true,
+          correctedDocumentNumber: 'FV/2026/03/01',
+          correctionReason: 'Rabat potransakcyjny',
+          gtuCodes: [],
+          procedureCodes: [],
+          annex15Item: false,
+          whiteListStatus: 'not_checked',
+          aiConfidence: 'high',
+          aiConfidencePercent: null,
+          aiProposed: {
+            documentNumber: 'KOR/2026/03/01',
+            issueDate: '2026-03-20',
+            eventDate: '2026-03-20',
+            dueDate: '2026-03-28',
+            counterpartyName: 'Dostawca Korekty Sp. z o.o.',
+            counterpartyNip: '5261040828',
+            netGrosze: -10_000,
+            vatGrosze: -2_300,
+            grossGrosze: -12_300,
+          },
+          expenseQualification: 'other_expenses_100_col13',
+          vatDeductionMode: 'full_100',
+          rawPreviewText: 'KOR preview',
+          uploadedAtLabel: '2026-03-20 12:00',
+        }}
+        helpMap={{
+          nip: mustResolveUiFieldHelp('nip'),
+          ksefReference: mustResolveUiFieldHelp('ksef_reference'),
+          gtuCode: mustResolveUiFieldHelp('gtu_code'),
+          vehicle75Kup: mustResolveUiFieldHelp('vehicle_75_kup'),
+          kupDeductibility: mustResolveUiFieldHelp('kup_deductibility'),
+          vat50Vehicle: mustResolveUiFieldHelp('vat_50_vehicle'),
+        }}
+      />,
+    );
+    expect(korSplitHtml).toContain('value="-100.00"');
+    expect(korSplitHtml).toContain('value="-23.00"');
+    expect(korSplitHtml).toContain('verify-correction-metadata-panel');
+    expect(korSplitHtml).toContain('value="kpir-2026-03-1"');
   });
 });

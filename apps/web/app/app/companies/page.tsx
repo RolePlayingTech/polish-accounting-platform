@@ -70,6 +70,7 @@ export default async function CompaniesPage() {
     >
       <div className="space-y-6">
         <CompaniesWorkbench
+          key={`${snapshot.activeCompany.legalEntityId}:${session.context.period}`}
           activeCompany={snapshot.activeCompany}
           accessibleCompanies={snapshot.accessibleCompanies}
           grants={snapshot.grants}

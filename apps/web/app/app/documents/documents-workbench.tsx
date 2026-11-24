@@ -30,7 +30,7 @@ import {
   VatRateGuideTrigger,
 } from '../../../components/tax-guide-drawer';
 import { AlertBanner, Button, MoneyInput, NipInput } from '../../../components/ui-controls';
-import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
+import { formatUserFacingErrorPl, isValidIsoCalendarDate } from '../../../lib/error-messages-pl';
 import {
   CANONICAL_DOCUMENT_CSV_HEADERS,
   buildEmptyDocumentCsvTemplate,
@@ -124,7 +124,7 @@ export function DocumentsWorkbench({
   const [docNumber, setDocNumber] = useState('');
   const [issueDate, setIssueDate] = useState(`${period}-18`);
   const [saleDate, setSaleDate] = useState(`${period}-18`);
-  const [dueDate, setDueDate] = useState(`${period}-30`);
+  const [dueDate, setDueDate] = useState(`${period}-28`);
   const [counterpartyName, setCounterpartyName] = useState('');
   const [counterpartyNip, setCounterpartyNip] = useState('');
   const [noPolishNip, setNoPolishNip] = useState(false);
@@ -231,7 +231,7 @@ export function DocumentsWorkbench({
     setDocNumber(`FV-DEMO/${period}/204`);
     setIssueDate(`${period}-18`);
     setSaleDate(`${period}-18`);
-    setDueDate(`${period}-30`);
+    setDueDate(`${period}-28`);
     setCounterpartyName('Centrum Szkoleniowo-Wydawnicze Syntetyk Sp. z o.o. [DEMO]');
     setCounterpartyNip('5213004125');
     setNoPolishNip(false);
@@ -309,7 +309,27 @@ export function DocumentsWorkbench({
         );
       }
     }
-    if (dueDate && issueDate && dueDate < issueDate) {
+    if (!isValidIsoCalendarDate(issueDate)) {
+      markError(
+        'issueDate',
+        'manual-issue-date',
+        `Wskaż poprawną datę wystawienia w formacie RRRR-MM-DD (np. ${period}-18).`,
+      );
+    }
+    if (!isValidIsoCalendarDate(saleDate)) {
+      markError(
+        'saleDate',
+        'manual-sale-date',
+        `Wskaż poprawną datę sprzedaży / wykonania w formacie RRRR-MM-DD (np. ${period}-18).`,
+      );
+    }
+    if (!isValidIsoCalendarDate(dueDate)) {
+      markError(
+        'dueDate',
+        'manual-due-date',
+        `Wskaż poprawny termin płatności w formacie RRRR-MM-DD (np. ${period}-28).`,
+      );
+    } else if (isValidIsoCalendarDate(issueDate) && dueDate < issueDate) {
       markError(
         'dueDate',
         'manual-due-date',
@@ -930,24 +950,44 @@ export function DocumentsWorkbench({
               ) : null}
 
               <div className="grid gap-3 sm:grid-cols-3">
-                <FormField id="manual-issue-date" label="Data wystawienia" required>
+                <FormField
+                  id="manual-issue-date"
+                  label="Data wystawienia"
+                  required
+                  {...(fieldErrors['issueDate'] ? { error: fieldErrors['issueDate'] } : {})}
+                >
                   {(ctrl) => (
                     <input
                       {...ctrl}
                       type="date"
                       value={issueDate}
-                      onChange={(e) => setIssueDate(e.target.value)}
+                      onChange={(e) => {
+                        setIssueDate(e.target.value);
+                        if (fieldErrors['issueDate']) {
+                          setFieldErrors((prev) => ({ ...prev, issueDate: '' }));
+                        }
+                      }}
                       className={`${ctrl.className} font-mono tabular-nums`}
                     />
                   )}
                 </FormField>
-                <FormField id="manual-sale-date" label="Data sprzedaży / wykonania" required>
+                <FormField
+                  id="manual-sale-date"
+                  label="Data sprzedaży / wykonania"
+                  required
+                  {...(fieldErrors['saleDate'] ? { error: fieldErrors['saleDate'] } : {})}
+                >
                   {(ctrl) => (
                     <input
                       {...ctrl}
                       type="date"
                       value={saleDate}
-                      onChange={(e) => setSaleDate(e.target.value)}
+                      onChange={(e) => {
+                        setSaleDate(e.target.value);
+                        if (fieldErrors['saleDate']) {
+                          setFieldErrors((prev) => ({ ...prev, saleDate: '' }));
+                        }
+                      }}
                       className={`${ctrl.className} font-mono tabular-nums`}
                     />
                   )}
@@ -963,7 +1003,12 @@ export function DocumentsWorkbench({
                       {...ctrl}
                       type="date"
                       value={dueDate}
-                      onChange={(e) => setDueDate(e.target.value)}
+                      onChange={(e) => {
+                        setDueDate(e.target.value);
+                        if (fieldErrors['dueDate']) {
+                          setFieldErrors((prev) => ({ ...prev, dueDate: '' }));
+                        }
+                      }}
                       className={`${ctrl.className} font-mono tabular-nums`}
                     />
                   )}

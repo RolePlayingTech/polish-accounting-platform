@@ -627,6 +627,50 @@ test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', ()
       page.getByText(/Dokument zatwierdzony przez człowieka i zaksięgowany/i),
     ).toBeVisible();
 
+    // Faktura korygująca KOR (in minus, kwoty ujemne) — utworzenie, blokada sumy w Split-View i zaksięgowanie do KPiR bez błędu 500 (#102, #105)
+    await page.goto('/app/documents');
+    const uniqueKorNum = `KOR/2026/${String(Date.now()).slice(-4)}`;
+    await page.locator('#manual-doc-kind').selectOption('correction');
+    await page.locator('#manual-doc-number').fill(uniqueKorNum);
+    await page.locator('#manual-corrected-doc-number').fill(uniqueDocNum);
+    await page
+      .locator('#manual-correction-reason')
+      .fill('Rabat potransakcyjny do licencji elektronicznej');
+    await page.locator('#manual-counterparty-name').fill('Wydawnictwo Techniczne Alfa Sp. z o.o.');
+    await page.locator('#manual-counterparty-nip').fill('5261040828');
+    await page
+      .locator('#manual-line-desc-0')
+      .fill('Korekta ceny licencji elektronicznej (in minus)');
+    await page.locator('#manual-line-net-0').fill('100.00');
+    await page.locator('#manual-line-vat-rate-0').selectOption('23');
+    await expect(page.getByTestId('invoice-totals-summary')).toContainText('-100,00 zł');
+    await expect(page.getByTestId('invoice-totals-summary')).toContainText('-123,00 zł');
+
+    await page
+      .getByRole('button', { name: 'Dodaj dokument do obiegu (do weryfikacji Split-View)' })
+      .click();
+    const openKorSplitLink = page.getByRole('link', { name: /Otwórz Split-View weryfikacji/i });
+    await expect(openKorSplitLink).toBeVisible();
+    await openKorSplitLink.click();
+
+    await page.waitForURL('**/app/documents/**', { timeout: 30_000 });
+    await expect(page.locator('#verify-net-pln')).toHaveValue('-100.00');
+    await expect(page.locator('#verify-net-pln')).toHaveAttribute('readonly', '');
+    await expect(page.getByTestId('verify-correction-metadata-panel')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Zatwierdź i zaksięguj dokument' }).first().click();
+    const korPostDialog = page.getByRole('alertdialog');
+    await expect(korPostDialog).toBeVisible();
+    await korPostDialog.getByRole('button', { name: 'Zatwierdź i zaksięguj dokument' }).click();
+    await expect(
+      page.getByText(/Dokument zatwierdzony przez człowieka i zaksięgowany/i),
+    ).toBeVisible();
+
+    await page.goto('/app/kpir');
+    await expect(
+      page.getByTestId('kpir-ledger-table').getByText(uniqueKorNum).first(),
+    ).toBeVisible();
+
     // Bezpośrednie wejście na /app/ledger na firmie JDG KPiR -> bramka niezgodnego reżimu (#101, #104)
     await page.goto('/app/ledger');
     const gateBanner = page.getByTestId('incompatible-regime-banner-full_ledger');

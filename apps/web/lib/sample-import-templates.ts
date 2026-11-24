@@ -76,7 +76,7 @@ export function buildCanonicalDocumentCsv(spec: SampleDocumentCsvSpec): string {
 export function buildEmptyDocumentCsvTemplate(period = '2026-03'): string {
   return [
     CANONICAL_DOCUMENT_CSV_HEADERS.join(';'),
-    `FV/${period}/001;purchase;${period}-15;${period}-29;Nazwa Kontrahenta Sp. z o.o.;5213004125;Opis towaru lub usługi;1;usł.;23;1000.00;230.00;1230.00`,
+    `FV/${period}/001;purchase;${period}-15;${period}-28;Nazwa Kontrahenta Sp. z o.o.;5213004125;Opis towaru lub usługi;1;usł.;23;1000.00;230.00;1230.00`,
   ].join('\n');
 }
 
@@ -105,7 +105,7 @@ export function buildSampleMultiRateDocumentCsv(period = '2026-03'): string {
     documentNumber: `FV-DEMO-MIX/${period}/024`,
     direction: 'purchase',
     issueDate: `${period}-19`,
-    dueDate: `${period}-29`,
+    dueDate: `${period}-28`,
     counterpartyName: 'Centrum Konferencyjno-Szkoleniowe Syntetyk Sp. z o.o. [DEMO]',
     counterpartyNip: '5213004125',
     lines: [
@@ -144,7 +144,7 @@ export function buildSampleDocumentJson(period = '2026-03'): string {
       direction: 'purchase',
       issueDate: `${period}-19`,
       saleDate: `${period}-19`,
-      dueDate: `${period}-29`,
+      dueDate: `${period}-28`,
       counterpartyName: 'Audyt Systemowy Syntetyk Sp. z o.o. [DEMO]',
       counterpartyNip: '5250004007',
       lines: [

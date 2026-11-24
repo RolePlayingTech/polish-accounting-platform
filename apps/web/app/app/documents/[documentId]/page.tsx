@@ -115,8 +115,12 @@ export default async function DocumentDetailPage({
     >
       <div className="space-y-6">
         <DocumentVerificationClient
+          key={`${detail.activeCompany.legalEntityId}:${detail.document.documentId}`}
           company={detail.activeCompany}
           document={detail.document}
+          {...(detail.resolvedCorrectedEntryId !== undefined
+            ? { resolvedCorrectedEntryId: detail.resolvedCorrectedEntryId }
+            : {})}
           helpMap={{
             nip: mustResolveUiFieldHelp('nip'),
             ksefReference: mustResolveUiFieldHelp('ksef_reference'),
