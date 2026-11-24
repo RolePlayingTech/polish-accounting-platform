@@ -2805,6 +2805,11 @@ export class PostgresBackedWorkspaceService implements WorkspaceRuntimePort {
                     : 'proposal_already_processed';
                 messagePl = dbError.message;
                 retryable = false;
+              } else if (isDuplicateEconomicOperationDbError(dbError)) {
+                errorCode = 'proposal_already_processed';
+                messagePl =
+                  'Ta operacja ekonomiczna lub dokument źródłowy został już zaksięgowany w bazie PostgreSQL.';
+                retryable = false;
               } else if (txRes && !txRes.allowed) {
                 if (txRes.status === 'forbidden') {
                   errorCode = 'forbidden';

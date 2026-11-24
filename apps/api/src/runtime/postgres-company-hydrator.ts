@@ -106,7 +106,7 @@ function overlaySqlDocumentColumns(
             unit: firstLine?.unit ?? 'usł.',
             netGrosze,
             vatRate:
-              vatGrosze > 0
+              vatGrosze !== 0
                 ? firstLine?.vatRate && firstLine.vatRate !== 'zw' && firstLine.vatRate !== '0'
                   ? firstLine.vatRate
                   : '23'
@@ -236,7 +236,7 @@ function hydrateDocumentFromRecord(
           quantity: '1',
           unit: 'usł.',
           netGrosze,
-          vatRate: vatGrosze > 0 ? '23' : 'zw',
+          vatRate: vatGrosze !== 0 ? '23' : 'zw',
           vatGrosze,
           grossGrosze,
           annex15Item: false,

@@ -601,4 +601,267 @@ describe('Wave 1 P0 Financial Invariants (#106, #118, #110, #107, #113, #108)', 
       }),
     ).toThrow(AccountingWorkspaceValidationError);
   });
+
+  it('#106 & #118 (GLD-01 / GLD-02): Multi-rate in-minus correction invoices (isCorrection: true) approve cleanly with echoed negative netPln/vatPln across KPiR, Ryczałt, and Sp. z o.o. KH, reject negative amounts when !isCorrection, and flag requiresCorrection when clamped P_54 changes', () => {
+    const ws = new AccountingWorkspaceService({ seedDemoData: true });
+    const jan = ws.resolveActorFromPersona('jan-testowy');
+
+    // 1. Negative amounts on non-correction document -> 422 negative_amount_requires_correction
+    expect(() =>
+      ws.createDocument(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+        documentNumber: 'FV/NON-CORR-NEG/2026/05/01',
+        direction: 'sales',
+        issueDate: '2026-05-05',
+        counterpartyName: 'Odbiorca Testowy Sp. z o.o.',
+        counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+        lines: [
+          { description: 'Błędna ujemna kwota bez korekty', netGrosze: -10_000, vatRate: '23' },
+        ],
+      }),
+    ).toThrow(AccountingWorkspaceValidationError);
+
+    const regularDoc = ws.createDocument(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+      documentNumber: 'FV/ORIG-KPIR/2026/05/01',
+      direction: 'sales',
+      issueDate: '2026-05-05',
+      eventDate: '2026-05-05',
+      counterpartyName: 'Odbiorca KPiR Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      lines: [
+        { description: 'Usługa wdrożeniowa 23%', netGrosze: 200_000, vatRate: '23' },
+        { description: 'Dokumentacja 8%', netGrosze: 100_000, vatRate: '8' },
+      ],
+    });
+    expect(() =>
+      ws.approveAndPostDocument(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, regularDoc.documentId, {
+        netPln: '-2000.00',
+        vatPln: '-460.00',
+      }),
+    ).toThrow(AccountingWorkspaceValidationError);
+
+    const postedOrigKpir = ws.approveAndPostDocument(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_KPIR_ID,
+      regularDoc.documentId,
+      {},
+    );
+
+    // 2. KPiR multi-rate in-minus correction referencing in-system invoice with Split-View echoed negative netPln/vatPln and omitted correctedEntryId/correctionReason
+    const corrKpirInSystem = ws.createDocument(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+      documentNumber: 'FK/ORIG-KPIR/2026/05/01',
+      direction: 'sales',
+      issueDate: '2026-05-12',
+      eventDate: '2026-05-12',
+      counterpartyName: 'Odbiorca KPiR Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      isCorrection: true,
+      correctedDocumentNumber: 'FV/ORIG-KPIR/2026/05/01',
+      lines: [
+        { description: 'Rabat potransakcyjny 23%', netGrosze: -100_000, vatRate: '23' },
+        { description: 'Zwrot egzemplarzy 8%', netGrosze: -50_000, vatRate: '8' },
+      ],
+    });
+    const postedCorrKpir = ws.approveAndPostDocument(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_KPIR_ID,
+      corrKpirInSystem.documentId,
+      {
+        netPln: '-1500.00',
+        vatPln: '-270.00',
+        suggestedCategory: 'przychod_sprzedaz',
+      },
+    );
+    expect(postedCorrKpir.status).toBe('posted');
+    expect(postedCorrKpir.document.lines).toHaveLength(2);
+    expect(postedCorrKpir.postingResult?.settlementId).toBeNull();
+    const kpirEntriesMay = ws.getKpirView(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, '2026-05').entries;
+    const corrKpirRow = kpirEntriesMay.find(
+      (e) => e.id === postedCorrKpir.postingResult?.kpirEntryId,
+    )!;
+    expect(corrKpirRow.isCorrection).toBe(true);
+    expect(corrKpirRow.correctedEntryId).toBe(postedOrigKpir.postingResult?.kpirEntryId);
+    expect(corrKpirRow.col7SalesRevenueGrosze).toBe(-150_000);
+
+    // KPiR external prior-year purchase correction (correctedDocumentNumber not in PAP)
+    const corrKpirExternal = ws.createDocument(jan, TENANT_1_ID, COMPANY_JDG_KPIR_ID, {
+      documentNumber: 'FK/EXT-2025/2026/05/02',
+      direction: 'purchase',
+      issueDate: '2026-05-15',
+      eventDate: '2026-05-15',
+      counterpartyName: 'Dostawca Zewnętrzny S.A.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+      isCorrection: true,
+      correctedDocumentNumber: 'FV/2025/12/EXT-999',
+      lines: [
+        { description: 'Korekta zakupu z poprzedniego roku', netGrosze: -40_000, vatRate: '23' },
+      ],
+    });
+    const postedCorrExt = ws.approveAndPostDocument(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_KPIR_ID,
+      corrKpirExternal.documentId,
+      { netPln: '-400.00', vatPln: '-92.00' },
+    );
+    expect(postedCorrExt.status).toBe('posted');
+
+    // 3. Ryczałt sales in-minus correction without explicit correctedEntryId
+    const corrRyczalt = ws.createDocument(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, {
+      documentNumber: 'FK/RYCZ/2026/05/01',
+      direction: 'sales',
+      issueDate: '2026-05-18',
+      eventDate: '2026-05-18',
+      counterpartyName: 'Klient Ryczałtowy Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      isCorrection: true,
+      correctedDocumentNumber: 'FV/RYCZ-EXT/2025/11/07',
+      ryczaltRate: '12',
+      lines: [
+        { description: 'Korekta usługi IT (ryczałt 12%)', netGrosze: -80_000, vatRate: 'zw' },
+      ],
+    });
+    const postedCorrRycz = ws.approveAndPostDocument(
+      jan,
+      TENANT_1_ID,
+      COMPANY_JDG_RYCZALT_ID,
+      corrRyczalt.documentId,
+      { netPln: '-800.00', vatPln: '0.00', ryczaltRate: '12' },
+    );
+    expect(postedCorrRycz.status).toBe('posted');
+    const ryczView = ws.getRyczaltView(jan, TENANT_1_ID, COMPANY_JDG_RYCZALT_ID, '2026-05');
+    const ryczCorrRow = ryczView.entries.find(
+      (e) => e.id === postedCorrRycz.postingResult?.ryczaltEntryId,
+    )!;
+    expect(ryczCorrRow.isCorrection).toBe(true);
+    expect(ryczCorrRow.revenueGrosze).toBe(-80_000);
+
+    // 4. Sp. z o.o. Full Ledger (spzoo_pelne_ksiegi) multi-rate sales & car-mixed purchase in-minus corrections (red storno Wn === Ma)
+    const corrSpzooSales = ws.createDocument(jan, TENANT_1_ID, COMPANY_SPZOO_ID, {
+      documentNumber: 'FK/SPZOO-S/2026/05/01',
+      direction: 'sales',
+      issueDate: '2026-05-20',
+      eventDate: '2026-05-20',
+      counterpartyName: 'Kontrahent Korporacyjny S.A.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+      isCorrection: true,
+      correctedDocumentNumber: 'FV/SPZOO-ORIG/2026/04/10',
+      lines: [
+        { description: 'Korekta licencji 23%', netGrosze: -100_000, vatRate: '23' },
+        { description: 'Korekta szkolenia 8%', netGrosze: -50_000, vatRate: '8' },
+      ],
+    });
+    const postedSpzooSales = ws.approveAndPostDocument(
+      jan,
+      TENANT_1_ID,
+      COMPANY_SPZOO_ID,
+      corrSpzooSales.documentId,
+      { netPln: '-1500.00', vatPln: '-270.00' },
+    );
+    expect(postedSpzooSales.status).toBe('posted');
+
+    const corrSpzooPurchaseCar = ws.createDocument(jan, TENANT_1_ID, COMPANY_SPZOO_ID, {
+      documentNumber: 'FK/SPZOO-P/2026/05/02',
+      direction: 'purchase',
+      issueDate: '2026-05-21',
+      eventDate: '2026-05-21',
+      counterpartyName: 'Flota Leasing S.A.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaSprzetu,
+      suggestedCategory: 'eksploatacja_samochodu_mieszana',
+      isCorrection: true,
+      correctedDocumentNumber: 'FV/FLOTA/2026/04/02',
+      lines: [
+        {
+          description: 'Korekta serwisu pojazdu mieszanego 50%',
+          netGrosze: -100_000,
+          vatRate: '23',
+        },
+      ],
+    });
+    const postedSpzooPurch = ws.approveAndPostDocument(
+      jan,
+      TENANT_1_ID,
+      COMPANY_SPZOO_ID,
+      corrSpzooPurchaseCar.documentId,
+      {
+        netPln: '-1000.00',
+        vatPln: '-230.00',
+        suggestedCategory: 'eksploatacja_samochodu_mieszana',
+      },
+    );
+    expect(postedSpzooPurch.status).toBe('posted');
+
+    const ledgerMay = ws.getLedgerView(jan, TENANT_1_ID, COMPANY_SPZOO_ID, '2026-05');
+    expect(ledgerMay.trialBalance.isBalanced).toBe(true);
+    const salesJe = ledgerMay.journalEntries.find(
+      (je) => je.id === postedSpzooSales.postingResult?.journalEntryId,
+    )!;
+    expect(salesJe.totalWnGrosze).toBe(-177_000);
+    expect(salesJe.totalMaGrosze).toBe(-177_000);
+    expect(salesJe.lines.every((l) => l.isRedStorno && Boolean(l.stornoReason))).toBe(true);
+    expect(salesJe.lines.find((l) => l.accountCode === '221-1')?.amountGrosze).toBe(-27_000);
+
+    const purchJe = ledgerMay.journalEntries.find(
+      (je) => je.id === postedSpzooPurch.postingResult?.journalEntryId,
+    )!;
+    expect(purchJe.totalWnGrosze).toBe(-123_000);
+    expect(purchJe.totalMaGrosze).toBe(-123_000);
+    expect(purchJe.lines.find((l) => l.accountCode === '221-2')?.amountGrosze).toBe(-11_500);
+
+    // 5. [P2-1]: Finalized period with P_54 = P_53 flags requiresCorrection=true when an in-minus purchase correction shrinks P_53 (even though P_62=0 and P_51=0 remain 0)
+    const { company: refundComp } = ws.createCompany(jan, TENANT_1_ID, {
+      displayName: 'Test Refund Clamp Sp. z o.o.',
+      nip: '5261040828',
+      legalForm: 'sp_z_o_o',
+      taxRegime: 'cit_klasyczny',
+      vatStatus: 'czynny',
+      activityStartDate: '2026-01-01',
+    });
+    const p1 = ws.createDocument(jan, TENANT_1_ID, refundComp.legalEntityId, {
+      documentNumber: 'FZ/REFUND/2026/06/01',
+      direction: 'purchase',
+      issueDate: '2026-06-05',
+      eventDate: '2026-06-05',
+      counterpartyName: 'Dostawca Zwrotu Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+      lines: [{ description: 'Zakup z nadwyżką VAT 230 zł', netGrosze: 100_000, vatRate: '23' }],
+    });
+    ws.approveAndPostDocument(jan, TENANT_1_ID, refundComp.legalEntityId, p1.documentId, {});
+    const finalizedJune = ws.configureVatPeriodSettlement(
+      jan,
+      TENANT_1_ID,
+      refundComp.legalEntityId,
+      {
+        period: '2026-06',
+        refundRequestedP54Grosze: 23_000,
+        finalize: true,
+      },
+    );
+    expect(finalizedJune.jpkV7m?.refundToBankAccountP54Grosze).toBe(23_000);
+    expect(finalizedJune.jpkV7m?.carryForwardToNextPeriodP62Grosze).toBe(0);
+    expect(finalizedJune.jpkV7m?.requiresCorrection).toBe(false);
+
+    const p1Corr = ws.createDocument(jan, TENANT_1_ID, refundComp.legalEntityId, {
+      documentNumber: 'FK/REFUND/2026/06/02',
+      direction: 'purchase',
+      issueDate: '2026-06-20',
+      eventDate: '2026-06-20',
+      counterpartyName: 'Dostawca Zwrotu Sp. z o.o.',
+      counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.dostawcaChmura,
+      isCorrection: true,
+      correctedDocumentNumber: 'FZ/REFUND/2026/06/01',
+      correctionReason: 'Rabat zmniejszający nadwyżkę VAT naliczonego o połowę',
+      lines: [{ description: 'Korekta in minus 50%', netGrosze: -50_000, vatRate: '23' }],
+    });
+    ws.approveAndPostDocument(jan, TENANT_1_ID, refundComp.legalEntityId, p1Corr.documentId, {
+      netPln: '-500.00',
+      vatPln: '-115.00',
+    });
+    const juneAfterCorr = ws.getVatView(jan, TENANT_1_ID, refundComp.legalEntityId, '2026-06');
+    expect(juneAfterCorr.jpkV7m?.refundToBankAccountP54Grosze).toBe(11_500);
+    expect(juneAfterCorr.jpkV7m?.carryForwardToNextPeriodP62Grosze).toBe(0);
+    expect(juneAfterCorr.jpkV7m?.taxDueP51Grosze).toBe(0);
+    expect(juneAfterCorr.jpkV7m?.requiresCorrection).toBe(true);
+  });
 });

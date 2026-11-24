@@ -2682,6 +2682,20 @@ export class AccountingWorkspaceService {
     const totalVatGrosze = lineItems.reduce((acc, l) => acc + l.vatGrosze, 0);
     const totalGrossGrosze = totalNetGrosze + totalVatGrosze;
 
+    if (
+      !params.isCorrection &&
+      (totalNetGrosze < 0 ||
+        totalVatGrosze < 0 ||
+        totalGrossGrosze < 0 ||
+        lineItems.some((l) => l.netGrosze < 0 || l.vatGrosze < 0 || l.grossGrosze < 0))
+    ) {
+      throw new AccountingWorkspaceValidationError(
+        422,
+        'negative_amount_requires_correction',
+        'Ujemne kwoty netto, VAT lub brutto są dozwolone wyłącznie dla faktur korygujących (isCorrection = true).',
+      );
+    }
+
     const defaultCategory: ProposedPostingCategory =
       params.direction === 'sales'
         ? 'przychod_sprzedaz'
@@ -3069,6 +3083,10 @@ export class AccountingWorkspaceService {
         suggestedCategory: 'suggestedCategory' in req ? req.suggestedCategory : undefined,
         vatDeductionMode: 'vatDeductionMode' in req ? req.vatDeductionMode : undefined,
         ryczaltRate: 'ryczaltRate' in req ? req.ryczaltRate : undefined,
+        isCorrection: 'isCorrection' in req ? req.isCorrection : undefined,
+        correctedDocumentNumber:
+          'correctedDocumentNumber' in req ? req.correctedDocumentNumber : undefined,
+        correctionReason: 'correctionReason' in req ? req.correctionReason : undefined,
         verificationSource: 'deterministic_parser',
         kasWhiteListStatus: 'not_checked',
         gtuReviewStatus: 'requires_human_review',
@@ -3179,6 +3197,9 @@ export class AccountingWorkspaceService {
         suggestedCategory: bffReq.suggestedCategory,
         vatDeductionMode: bffReq.vatDeductionMode,
         ryczaltRate: bffReq.ryczaltRate,
+        isCorrection: bffReq.isCorrection,
+        correctedDocumentNumber: bffReq.correctedDocumentNumber,
+        correctionReason: bffReq.correctionReason,
         lines: bffLines,
       });
     } else {
@@ -3503,6 +3524,20 @@ export class AccountingWorkspaceService {
       };
     }
 
+    if (
+      !existing.isCorrection &&
+      (doc.totalNetGrosze < 0 ||
+        doc.totalVatGrosze < 0 ||
+        doc.totalGrossGrosze < 0 ||
+        doc.lines.some((l) => l.netGrosze < 0 || l.vatGrosze < 0 || l.grossGrosze < 0))
+    ) {
+      throw new AccountingWorkspaceValidationError(
+        422,
+        'negative_amount_requires_correction',
+        'Ujemne kwoty netto, VAT lub brutto przy zatwierdzaniu dokumentu są dozwolone wyłącznie dla faktur korygujących (isCorrection = true).',
+      );
+    }
+
     const nextEconomicOperationKey = computeEconomicOperationKey({
       tenantId: company.tenantId,
       legalEntityId: company.legalEntityId,
@@ -3639,6 +3674,32 @@ export class AccountingWorkspaceService {
     let nkupGrosze = 0;
 
     const combinedDescription = doc.lines.map((l) => l.description).join('; ');
+    const effectiveCorrectionReason: string | undefined = existing.isCorrection
+      ? overrides?.correctionReason?.trim() ||
+        existing.correctionReason?.trim() ||
+        (existing.correctedDocumentNumber
+          ? `Faktura korygująca do ${existing.correctedDocumentNumber}`
+          : `Korekta dokumentu ${doc.documentNumber}`)
+      : overrides?.correctionReason?.trim() || existing.correctionReason?.trim() || undefined;
+    const correctedDocNorm = existing.correctedDocumentNumber
+      ? normalizeCanonicalDocNumber(existing.correctedDocumentNumber)
+      : null;
+    const originalPostedDoc = correctedDocNorm
+      ? (company.documents.find(
+          (d) =>
+            d.documentId !== existing.documentId &&
+            d.status === 'posted' &&
+            !d.isCorrection &&
+            d.document.direction === doc.direction &&
+            normalizeCanonicalDocNumber(d.document.documentNumber) === correctedDocNorm,
+        ) ??
+        company.documents.find(
+          (d) =>
+            d.documentId !== existing.documentId &&
+            d.status === 'posted' &&
+            normalizeCanonicalDocNumber(d.document.documentNumber) === correctedDocNorm,
+        ))
+      : undefined;
 
     if (
       company.taxProfile.profileCode === 'jdg_kpir_skala' ||
@@ -3646,6 +3707,19 @@ export class AccountingWorkspaceService {
     ) {
       const nextOrdinal = company.kpirEntries.length + 1;
       const entryId = randomUUID();
+      const resolvedKpirCorrectedEntryId: string | undefined = existing.isCorrection
+        ? overrides?.correctedEntryId?.trim() ||
+          originalPostedDoc?.postingResult?.kpirEntryId ||
+          (correctedDocNorm
+            ? company.kpirEntries.find(
+                (e) =>
+                  !e.isCorrection &&
+                  normalizeCanonicalDocNumber(e.documentNumber) === correctedDocNorm,
+              )?.id
+            : undefined) ||
+          `corr-ref:${correctedDocNorm ?? existing.documentId}`
+        : overrides?.correctedEntryId?.trim();
+
       if (doc.direction === 'sales') {
         const revGrosze = vatActive ? doc.totalNetGrosze : doc.totalGrossGrosze;
         const kpirEntry = createKpirEntry({
@@ -3661,12 +3735,10 @@ export class AccountingWorkspaceService {
           col7SalesRevenueGrosze: revGrosze,
           qualificationKind: 'none',
           isCorrection: existing.isCorrection,
-          ...(overrides?.correctedEntryId ? { correctedEntryId: overrides.correctedEntryId } : {}),
-          ...(overrides?.correctionReason
-            ? { correctionReason: overrides.correctionReason }
-            : existing.correctionReason
-              ? { correctionReason: existing.correctionReason }
-              : {}),
+          ...(resolvedKpirCorrectedEntryId
+            ? { correctedEntryId: resolvedKpirCorrectedEntryId }
+            : {}),
+          ...(effectiveCorrectionReason ? { correctionReason: effectiveCorrectionReason } : {}),
         });
         company.kpirEntries.push(kpirEntry);
         kpirEntryId = kpirEntry.id;
@@ -3680,16 +3752,60 @@ export class AccountingWorkspaceService {
               : category === 'towary_i_materialy'
                 ? 'goods_and_materials_col10'
                 : 'other_expenses_100_col13';
-        const qualified = qualifyKpirExpense({
-          eventDate: doc.eventDate,
-          qualificationKind: qualKind,
-          netGrosze: doc.totalNetGrosze,
-          vatGrosze: doc.totalVatGrosze,
-          taxpayerVatActive: vatActive,
-          deductibleVatGrosze: totalDeductibleVatGrosze,
-        });
-        kupGrosze = qualified.deductibleKupGrosze;
-        nkupGrosze = qualified.nonDeductibleNkupGrosze;
+        const hasOppositeSignTotals =
+          (doc.totalNetGrosze > 0 && doc.totalVatGrosze < 0) ||
+          (doc.totalNetGrosze < 0 && doc.totalVatGrosze > 0);
+        let col10 = 0;
+        let col11 = 0;
+        let col12 = 0;
+        let col13 = 0;
+        let col16 = 0;
+        if (hasOppositeSignTotals) {
+          let lastExp: LegalExplanation | null = null;
+          for (const line of doc.lines) {
+            const lineDedVat = !vatActive
+              ? 0
+              : vatDeductionMode === 'none_0'
+                ? 0
+                : vatDeductionMode === 'vehicle_mixed_50'
+                  ? multiplyGroszeByBps(line.vatGrosze, 5000, 'half_up')
+                  : line.vatGrosze;
+            const q = qualifyKpirExpense({
+              eventDate: doc.eventDate,
+              qualificationKind: qualKind,
+              netGrosze: line.netGrosze,
+              vatGrosze: line.vatGrosze,
+              taxpayerVatActive: vatActive,
+              deductibleVatGrosze: lineDedVat,
+            });
+            kupGrosze += q.deductibleKupGrosze;
+            nkupGrosze += q.nonDeductibleNkupGrosze;
+            col10 += q.col10GoodsAndMaterialsGrosze;
+            col11 += q.col11IncidentalCostsGrosze;
+            col12 += q.col12RemunerationGrosze;
+            col13 += q.col13OtherExpensesGrosze;
+            col16 += q.col16ResearchDevelopmentCostGrosze;
+            lastExp = q.explanation;
+          }
+          postingExplanation = lastExp!;
+        } else {
+          const qualified = qualifyKpirExpense({
+            eventDate: doc.eventDate,
+            qualificationKind: qualKind,
+            netGrosze: doc.totalNetGrosze,
+            vatGrosze: doc.totalVatGrosze,
+            taxpayerVatActive: vatActive,
+            deductibleVatGrosze: totalDeductibleVatGrosze,
+          });
+          kupGrosze = qualified.deductibleKupGrosze;
+          nkupGrosze = qualified.nonDeductibleNkupGrosze;
+          col10 = qualified.col10GoodsAndMaterialsGrosze;
+          col11 = qualified.col11IncidentalCostsGrosze;
+          col12 = qualified.col12RemunerationGrosze;
+          col13 = qualified.col13OtherExpensesGrosze;
+          col16 = qualified.col16ResearchDevelopmentCostGrosze;
+          postingExplanation = qualified.explanation;
+        }
         const kpirEntry = createKpirEntry({
           id: entryId,
           ordinalNumber: nextOrdinal,
@@ -3700,27 +3816,36 @@ export class AccountingWorkspaceService {
           ...(doc.counterpartyNip ? { counterpartyNip: doc.counterpartyNip } : {}),
           counterpartyAddress: doc.counterpartyAddress ?? 'Polska',
           eventDescription: combinedDescription,
-          col10GoodsAndMaterialsGrosze: qualified.col10GoodsAndMaterialsGrosze,
-          col11IncidentalCostsGrosze: qualified.col11IncidentalCostsGrosze,
-          col12RemunerationGrosze: qualified.col12RemunerationGrosze,
-          col13OtherExpensesGrosze: qualified.col13OtherExpensesGrosze,
-          col16ResearchDevelopmentCostGrosze: qualified.col16ResearchDevelopmentCostGrosze,
+          col10GoodsAndMaterialsGrosze: col10,
+          col11IncidentalCostsGrosze: col11,
+          col12RemunerationGrosze: col12,
+          col13OtherExpensesGrosze: col13,
+          col16ResearchDevelopmentCostGrosze: col16,
           qualificationKind: qualKind,
           isCorrection: existing.isCorrection,
-          ...(overrides?.correctedEntryId ? { correctedEntryId: overrides.correctedEntryId } : {}),
-          ...(overrides?.correctionReason
-            ? { correctionReason: overrides.correctionReason }
-            : existing.correctionReason
-              ? { correctionReason: existing.correctionReason }
-              : {}),
+          ...(resolvedKpirCorrectedEntryId
+            ? { correctedEntryId: resolvedKpirCorrectedEntryId }
+            : {}),
+          ...(effectiveCorrectionReason ? { correctionReason: effectiveCorrectionReason } : {}),
         });
         company.kpirEntries.push(kpirEntry);
         kpirEntryId = kpirEntry.id;
-        postingExplanation = qualified.explanation;
       }
     } else if (company.taxProfile.profileCode === 'jdg_ryczalt') {
       const rate: RyczaltRateCode =
         effectiveRyczaltRateOverride ?? existing.aiProposal.ryczaltRate ?? '12';
+      const resolvedRyczaltCorrectedEntryId: string | undefined = existing.isCorrection
+        ? overrides?.correctedEntryId?.trim() ||
+          originalPostedDoc?.postingResult?.ryczaltEntryId ||
+          (correctedDocNorm
+            ? company.ryczaltEntries.find(
+                (e) =>
+                  !e.isCorrection &&
+                  normalizeCanonicalDocNumber(e.documentNumber) === correctedDocNorm,
+              )?.id
+            : undefined) ||
+          `corr-ref:${correctedDocNorm ?? existing.documentId}`
+        : overrides?.correctedEntryId?.trim();
       if (doc.direction === 'sales') {
         const revGrosze = vatActive ? doc.totalNetGrosze : doc.totalGrossGrosze;
         const ryczEntry = createRyczaltEntry({
@@ -3736,12 +3861,10 @@ export class AccountingWorkspaceService {
           revenueGrosze: revGrosze,
           remarks: combinedDescription,
           isCorrection: existing.isCorrection,
-          ...(overrides?.correctedEntryId ? { correctedEntryId: overrides.correctedEntryId } : {}),
-          ...(overrides?.correctionReason
-            ? { correctionReason: overrides.correctionReason }
-            : existing.correctionReason
-              ? { correctionReason: existing.correctionReason }
-              : {}),
+          ...(resolvedRyczaltCorrectedEntryId
+            ? { correctedEntryId: resolvedRyczaltCorrectedEntryId }
+            : {}),
+          ...(effectiveCorrectionReason ? { correctionReason: effectiveCorrectionReason } : {}),
         });
         company.ryczaltEntries.push(ryczEntry);
         ryczaltEntryId = ryczEntry.id;
@@ -3782,25 +3905,56 @@ export class AccountingWorkspaceService {
         side: 'Wn' | 'Ma';
         amountGrosze: number;
         description: string;
+        isRedStorno?: boolean;
+        stornoReason?: string;
       }[] = [];
+
+      const pushSignedJournalLine = (params: {
+        accountCode: string;
+        side: 'Wn' | 'Ma';
+        amountGrosze: number;
+        description: string;
+      }): void => {
+        if (params.amountGrosze === 0) {
+          return;
+        }
+        if (params.amountGrosze < 0) {
+          lines.push({
+            accountCode: params.accountCode,
+            side: params.side,
+            amountGrosze: params.amountGrosze,
+            description: params.description,
+            isRedStorno: true,
+            stornoReason:
+              effectiveCorrectionReason ?? `Storno czerwone dokumentu ${doc.documentNumber}`,
+          });
+          return;
+        }
+        lines.push({
+          accountCode: params.accountCode,
+          side: params.side,
+          amountGrosze: params.amountGrosze,
+          description: params.description,
+        });
+      };
 
       if (doc.direction === 'sales') {
         const revAccount = overrides?.ledgerAccountCode ?? '700';
         const revAmount = vatActive ? doc.totalNetGrosze : doc.totalGrossGrosze;
-        lines.push({
+        pushSignedJournalLine({
           accountCode: '201',
           side: 'Wn',
           amountGrosze: doc.totalGrossGrosze,
           description: `Należność od odbiorcy ${doc.counterpartyName} (${doc.documentNumber})`,
         });
-        lines.push({
+        pushSignedJournalLine({
           accountCode: revAccount,
           side: 'Ma',
           amountGrosze: revAmount,
           description: `Przychód ze sprzedaży — ${doc.documentNumber}`,
         });
-        if (vatActive && doc.totalVatGrosze > 0) {
-          lines.push({
+        if (vatActive && doc.totalVatGrosze !== 0) {
+          pushSignedJournalLine({
             accountCode: '221-1',
             side: 'Ma',
             amountGrosze: doc.totalVatGrosze,
@@ -3813,21 +3967,21 @@ export class AccountingWorkspaceService {
         const costBase = doc.totalNetGrosze + totalNonDeductibleVatGrosze;
         kupGrosze = isCarMixed ? multiplyGroszeByBps(costBase, 7500, 'half_up') : costBase;
         nkupGrosze = costBase - kupGrosze;
-        lines.push({
+        pushSignedJournalLine({
           accountCode: costAccount,
           side: 'Wn',
           amountGrosze: costBase,
           description: `Koszt zakupu (${doc.documentNumber}) — ${combinedDescription}`,
         });
-        if (vatActive && totalDeductibleVatGrosze > 0) {
-          lines.push({
+        if (vatActive && totalDeductibleVatGrosze !== 0) {
+          pushSignedJournalLine({
             accountCode: '221-2',
             side: 'Wn',
             amountGrosze: totalDeductibleVatGrosze,
             description: `VAT naliczony podlegający odliczeniu — ${doc.documentNumber}`,
           });
         }
-        lines.push({
+        pushSignedJournalLine({
           accountCode: '202',
           side: 'Ma',
           amountGrosze: doc.totalGrossGrosze,
@@ -3835,68 +3989,92 @@ export class AccountingWorkspaceService {
         });
       }
 
-      const journalEntry = createValidatedJournalEntry({
-        id: jeId,
-        entryNumber,
-        bookingDate: doc.eventDate,
-        documentDate: doc.issueDate,
-        documentNumber: doc.documentNumber,
-        description: `${doc.direction === 'sales' ? 'Faktura sprzedaży' : 'Faktura zakupu'} ${doc.documentNumber} (${doc.counterpartyName})`,
-        lines,
-      });
-      company.journalEntries.push(journalEntry);
-      journalEntryId = journalEntry.id;
-
       const uorRule = resolveRuleAtDate('UOR_DOUBLE_ENTRY_AND_BALANCE', doc.eventDate);
-      postingExplanation = buildLegalExplanation({
-        calculationType: 'uor_journal_posting',
-        summary: `Zaksięgowano dekret ${entryNumber} z zachowaniem równowagi podwójnego zapisu Wn === Ma (${formatPlnFromGrosze(journalEntry.totalWnGrosze)}).`,
-        eventDate: doc.eventDate,
-        rules: [uorRule],
-        steps: [
-          {
-            stepNumber: 1,
-            label: 'Kontrola równowagi obrotów Wn i Ma dekretu (art. 15 UoR)',
-            formula: 'SUM(Wn) === SUM(Ma)',
-            inputs: {
-              totalWnGrosze: journalEntry.totalWnGrosze,
-              totalMaGrosze: journalEntry.totalMaGrosze,
+      if (existing.isCorrection && lines.length === 0) {
+        postingExplanation = buildLegalExplanation({
+          calculationType: 'uor_journal_posting',
+          summary: `Zarejestrowano korektę formalną ${doc.documentNumber} bez zmiany kwot księgowych (SUM(Wn) === SUM(Ma) === 0,00 zł).`,
+          eventDate: doc.eventDate,
+          rules: [uorRule],
+          steps: [
+            {
+              stepNumber: 1,
+              label: 'Korekta formalna bez zmiany obrotów Wn i Ma (art. 15 UoR)',
+              formula: 'SUM(Wn) === SUM(Ma) === 0',
+              inputs: { totalWnGrosze: 0, totalMaGrosze: 0 },
+              resultFormatted: formatPlnFromGrosze(0),
+              resultGrosze: 0,
             },
-            resultFormatted: formatPlnFromGrosze(journalEntry.totalWnGrosze),
-            resultGrosze: journalEntry.totalWnGrosze,
-          },
-        ],
-        inputs: { entryNumber, documentNumber: doc.documentNumber },
-        outputs: { journalEntryId: jeId },
-      });
+          ],
+          inputs: { entryNumber: 'none', documentNumber: doc.documentNumber },
+          outputs: { journalEntryId: 'none' },
+        });
+      } else {
+        const journalEntry = createValidatedJournalEntry({
+          id: jeId,
+          entryNumber,
+          bookingDate: doc.eventDate,
+          documentDate: doc.issueDate,
+          documentNumber: doc.documentNumber,
+          description: `${existing.isCorrection ? 'Faktura korygująca' : doc.direction === 'sales' ? 'Faktura sprzedaży' : 'Faktura zakupu'} ${doc.documentNumber} (${doc.counterpartyName})`,
+          lines,
+        });
+        company.journalEntries.push(journalEntry);
+        journalEntryId = journalEntry.id;
+
+        postingExplanation = buildLegalExplanation({
+          calculationType: 'uor_journal_posting',
+          summary: `Zaksięgowano dekret ${entryNumber} z zachowaniem równowagi podwójnego zapisu Wn === Ma (${formatPlnFromGrosze(journalEntry.totalWnGrosze)}).`,
+          eventDate: doc.eventDate,
+          rules: [uorRule],
+          steps: [
+            {
+              stepNumber: 1,
+              label: 'Kontrola równowagi obrotów Wn i Ma dekretu (art. 15 UoR)',
+              formula: 'SUM(Wn) === SUM(Ma)',
+              inputs: {
+                totalWnGrosze: journalEntry.totalWnGrosze,
+                totalMaGrosze: journalEntry.totalMaGrosze,
+              },
+              resultFormatted: formatPlnFromGrosze(journalEntry.totalWnGrosze),
+              resultGrosze: journalEntry.totalWnGrosze,
+            },
+          ],
+          inputs: { entryNumber, documentNumber: doc.documentNumber },
+          outputs: { journalEntryId: jeId },
+        });
+      }
     }
 
-    const settlementId = randomUUID();
-    const dueDate = doc.dueDate ?? addDaysIso(doc.issueDate, 14);
-    const settlementState = deriveSettlementStatus(
-      Math.max(0, doc.totalGrossGrosze),
-      0,
-      dueDate,
-      this.todayIso(),
-    );
-    const settlementItem: SettlementItemContract = {
-      settlementId,
-      documentId: existing.documentId,
-      documentNumber: doc.documentNumber,
-      direction: doc.direction === 'sales' ? 'receivable' : 'payable',
-      counterpartyName: doc.counterpartyName,
-      counterpartyNip: doc.counterpartyNip ?? null,
-      issueDate: doc.issueDate,
-      dueDate,
-      grossGrosze: Math.max(0, doc.totalGrossGrosze),
-      settledGrosze: 0,
-      remainingGrosze: Math.max(0, doc.totalGrossGrosze),
-      remainingFormatted: formatPlnFromGrosze(Math.max(0, doc.totalGrossGrosze)),
-      status: settlementState.status,
-      daysOverdue: settlementState.daysOverdue,
-      ksefReferenceNumber: doc.ksefReferenceNumber ?? null,
-    };
-    company.settlements.unshift(settlementItem);
+    let settlementId: string | null = null;
+    if (doc.totalGrossGrosze > 0) {
+      settlementId = randomUUID();
+      const dueDate = doc.dueDate ?? addDaysIso(doc.issueDate, 14);
+      const settlementState = deriveSettlementStatus(
+        doc.totalGrossGrosze,
+        0,
+        dueDate,
+        this.todayIso(),
+      );
+      const settlementItem: SettlementItemContract = {
+        settlementId,
+        documentId: existing.documentId,
+        documentNumber: doc.documentNumber,
+        direction: doc.direction === 'sales' ? 'receivable' : 'payable',
+        counterpartyName: doc.counterpartyName,
+        counterpartyNip: doc.counterpartyNip ?? null,
+        issueDate: doc.issueDate,
+        dueDate,
+        grossGrosze: doc.totalGrossGrosze,
+        settledGrosze: 0,
+        remainingGrosze: doc.totalGrossGrosze,
+        remainingFormatted: formatPlnFromGrosze(doc.totalGrossGrosze),
+        status: settlementState.status,
+        daysOverdue: settlementState.daysOverdue,
+        ksefReferenceNumber: doc.ksefReferenceNumber ?? null,
+      };
+      company.settlements.unshift(settlementItem);
+    }
 
     const accountingItemId = existing.documentId;
     const appliedRuleRefs: LegalBasisReference[] = postingExplanation.appliedRules.map((ar) => ({
@@ -3966,6 +4144,7 @@ export class AccountingWorkspaceService {
     const nowIso = this.nowIso();
     const updatedDoc = CompanyDocumentItemSchema.parse({
       ...existing,
+      correctionReason: effectiveCorrectionReason ?? existing.correctionReason,
       document: doc,
       economicOperationKey: nextEconomicOperationKey,
       economicSnapshotHash: nextEconomicSnapshotHash,
@@ -4697,7 +4876,8 @@ export class AccountingWorkspaceService {
       storedSettlement?.status === 'finalized' &&
       (storedSettlement.taxDueP51Grosze !== jpk.taxDueToPayP51Grosze ||
         storedSettlement.carryForwardP62Grosze !== jpk.carryForwardToNextPeriodP62Grosze ||
-        storedSettlement.carryOverFromPreviousP39Grosze !== jpk.carryOverFromPreviousPlnGrosze);
+        storedSettlement.carryOverFromPreviousP39Grosze !== jpk.carryOverFromPreviousPlnGrosze ||
+        storedSettlement.refundRequestedP54Grosze !== jpk.refundToBankAccountP54Grosze);
 
     return { jpk, storedSettlement, requiresCorrection };
   }

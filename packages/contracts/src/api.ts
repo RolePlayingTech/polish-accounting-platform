@@ -830,6 +830,9 @@ export const CreateDocumentImportInputSchema = z
     suggestedCategory: ProposedPostingCategorySchema.optional(),
     vatDeductionMode: VatDeductionModeSchema.optional(),
     ryczaltRate: RyczaltRateCodeSchema.optional(),
+    isCorrection: z.boolean().optional(),
+    correctedDocumentNumber: z.string().min(1).max(128).optional(),
+    correctionReason: z.string().min(1).max(500).optional(),
   })
   .strict();
 
@@ -859,6 +862,9 @@ export const CreateDocumentBffQuickInputSchema = z
     suggestedCategory: ProposedPostingCategorySchema.optional(),
     vatDeductionMode: VatDeductionModeSchema.optional(),
     ryczaltRate: RyczaltRateCodeSchema.optional(),
+    isCorrection: z.boolean().optional(),
+    correctedDocumentNumber: z.string().min(1).max(128).optional(),
+    correctionReason: z.string().min(1).max(500).optional(),
     lines: z.array(CreateDocumentLineInputSchema).min(1).optional(),
   })
   .strict();
@@ -884,12 +890,12 @@ export const ApproveAndPostDocumentRequestSchema = z
     netPln: z
       .string()
       .max(15, 'Kwota PLN nie może przekraczać 15 znaków.')
-      .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 100.00')
+      .regex(/^-?\d+(\.\d{1,2})?$/, 'Wymagana kwota PLN, np. 100.00 (lub -100.00 dla korekty)')
       .optional(),
     vatPln: z
       .string()
       .max(15, 'Kwota PLN nie może przekraczać 15 znaków.')
-      .regex(/^\d+(\.\d{1,2})?$/, 'Wymagana nieujemna kwota PLN, np. 23.00')
+      .regex(/^-?\d+(\.\d{1,2})?$/, 'Wymagana kwota PLN, np. 23.00 (lub -23.00 dla korekty)')
       .optional(),
     vatRate: VatRateCodeSchema.optional(),
     vatRateCode: VatRateCodeSchema.optional(),

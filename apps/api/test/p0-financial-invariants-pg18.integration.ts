@@ -6,6 +6,8 @@ import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import {
   COMPANY_JDG_KPIR_ID,
+  COMPANY_JDG_RYCZALT_ID,
+  COMPANY_SPZOO_ID,
   COMPANY_TENANT_2_ID,
   SYNTHETIC_COUNTERPARTY_NIPS,
   TENANT_1_ID,
@@ -20,6 +22,8 @@ import {
   IssueMcpChallengeResponseSchema,
   IssueSandboxTokenResponseSchema,
   KpirViewResponseSchema,
+  LedgerViewResponseSchema,
+  RyczaltViewResponseSchema,
   VatViewResponseSchema,
 } from '@pap/contracts';
 import {
@@ -862,5 +866,215 @@ describe('Wave 1 P0 Financial Invariants — Ephemeral PostgreSQL 18.6 Integrati
 
     await app.close();
     openApps.delete(app);
+  });
+
+  it('GLD-01 & GLD-02 Corrections: Multi-rate in-minus correction invoices (isCorrection: true) with Split-View echoed negative netPln/vatPln persist & survive cold restart across KPiR, Ryczałt, and Sp. z o.o. KH (both in-system and external prior-period refs)', async () => {
+    const runtimeEnv: Record<string, string> = {
+      DATABASE_URL: runtimeUrl,
+      PAP_MIGRATOR_DATABASE_URL: migratorUrl,
+      PAP_DATABASE_ENV: 'test',
+      PAP_DB_SCHEMA: dataSchema,
+      PAP_DB_CONTEXT_SECRET: `${keyId}:${keyHex}`,
+      PAP_ENFORCE_RUNTIME_DB_SECURITY: 'true',
+      PAP_SEED_SYNTHETIC_DEMO: 'true',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+    };
+
+    const { app: app1, baseUrl: url1 } = await bootApiInstance(runtimeEnv);
+    openApps.add(app1);
+    const janHeaders = await issuePersonaHeaders(url1, 'jan-testowy');
+
+    // Negative amounts on non-correction document fail closed with 422
+    const negNonCorrRes = await fetch(
+      `${url1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({
+          documentNumber: 'FV/PG18-NEG-ILLEGAL/2026/05/01',
+          direction: 'sales',
+          issueDate: '2026-05-04',
+          counterpartyName: 'Odbiorca Testowy Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+          lines: [{ description: 'Nielegalna kwota ujemna', netGrosze: -10_000, vatRate: '23' }],
+        }),
+      },
+    );
+    expect(negNonCorrRes.status).toBe(422);
+
+    // 1. KPiR external prior-period multi-rate in-minus correction (verifies storno_of_entry_id FK safety when original entry is external)
+    const kpirCorrCreate = await fetch(
+      `${url1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({
+          documentNumber: 'FK/PG18-KPIR/2026/05/01',
+          direction: 'sales',
+          issueDate: '2026-05-10',
+          eventDate: '2026-05-10',
+          counterpartyName: 'Odbiorca KPiR Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+          isCorrection: true,
+          correctedDocumentNumber: 'FV/EXTERNAL-2025/12/77',
+          lines: [
+            { description: 'Korekta licencji 23%', netGrosze: -100_000, vatRate: '23' },
+            { description: 'Korekta publikacji 8%', netGrosze: -50_000, vatRate: '8' },
+          ],
+        }),
+      },
+    );
+    expect(kpirCorrCreate.status).toBe(201);
+    const kpirCorrDoc = CompanyDocumentItemSchema.parse(await kpirCorrCreate.json());
+
+    const kpirCorrPost = await fetch(
+      `${url1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/documents/${kpirCorrDoc.documentId}/approve-and-post`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({
+          netPln: '-1500.00',
+          vatPln: '-270.00',
+          suggestedCategory: 'przychod_sprzedaz',
+        }),
+      },
+    );
+    expect(kpirCorrPost.status).toBe(200);
+    const postedKpirCorr = CompanyDocumentItemSchema.parse(await kpirCorrPost.json());
+    expect(postedKpirCorr.document.lines).toHaveLength(2);
+    expect(postedKpirCorr.postingResult?.settlementId).toBeNull();
+
+    // 2. Ryczałt sales in-minus correction
+    const ryczCorrCreate = await fetch(
+      `${url1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_RYCZALT_ID}/documents`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({
+          documentNumber: 'FK/PG18-RYCZ/2026/05/01',
+          direction: 'sales',
+          issueDate: '2026-05-11',
+          eventDate: '2026-05-11',
+          counterpartyName: 'Klient Ryczałt Sp. z o.o.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+          isCorrection: true,
+          correctedDocumentNumber: 'FV/EXTERNAL-RYCZ/2025/11/19',
+          ryczaltRate: '12',
+          lines: [{ description: 'Korekta usługi IT 12%', netGrosze: -60_000, vatRate: 'zw' }],
+        }),
+      },
+    );
+    expect(ryczCorrCreate.status).toBe(201);
+    const ryczCorrDoc = CompanyDocumentItemSchema.parse(await ryczCorrCreate.json());
+    const ryczCorrPost = await fetch(
+      `${url1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_RYCZALT_ID}/documents/${ryczCorrDoc.documentId}/approve-and-post`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({ netPln: '-600.00', vatPln: '0.00', ryczaltRate: '12' }),
+      },
+    );
+    expect(ryczCorrPost.status).toBe(200);
+
+    // 3. Sp. z o.o. Full Ledger (KH) multi-rate sales & purchase in-minus corrections (red storno)
+    const spzooCorrCreate = await fetch(
+      `${url1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_SPZOO_ID}/documents`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({
+          documentNumber: 'FK/PG18-SPZOO/2026/05/01',
+          direction: 'sales',
+          issueDate: '2026-05-12',
+          eventDate: '2026-05-12',
+          counterpartyName: 'Kontrahent Spzoo S.A.',
+          counterpartyNip: SYNTHETIC_COUNTERPARTY_NIPS.klientSoftwareHouse,
+          isCorrection: true,
+          correctedDocumentNumber: 'FV/SPZOO-EXT/2025/12/05',
+          lines: [
+            { description: 'Rabat potransakcyjny 23%', netGrosze: -100_000, vatRate: '23' },
+            { description: 'Rabat potransakcyjny 8%', netGrosze: -50_000, vatRate: '8' },
+          ],
+        }),
+      },
+    );
+    expect(spzooCorrCreate.status).toBe(201);
+    const spzooCorrDoc = CompanyDocumentItemSchema.parse(await spzooCorrCreate.json());
+    const spzooCorrPost = await fetch(
+      `${url1}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_SPZOO_ID}/documents/${spzooCorrDoc.documentId}/approve-and-post`,
+      {
+        method: 'POST',
+        headers: janHeaders,
+        body: JSON.stringify({ netPln: '-1500.00', vatPln: '-270.00' }),
+      },
+    );
+    expect(spzooCorrPost.status).toBe(200);
+
+    // Cold restart app1 -> app2 and verify KPiR, VAT, Ryczałt, and Sp. z o.o. KH red-storno state survived intact
+    await app1.close();
+    openApps.delete(app1);
+
+    const { app: app2, baseUrl: url2 } = await bootApiInstance(runtimeEnv);
+    openApps.add(app2);
+    const janHeaders2 = await issuePersonaHeaders(url2, 'jan-testowy');
+
+    const kpirMay = KpirViewResponseSchema.parse(
+      await (
+        await fetch(
+          `${url2}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/kpir?period=2026-05`,
+          { headers: janHeaders2 },
+        )
+      ).json(),
+    );
+    const hydratedKpirCorr = kpirMay.entries.find(
+      (e) => e.documentNumber === 'FK/PG18-KPIR/2026/05/01',
+    )!;
+    expect(hydratedKpirCorr.isCorrection).toBe(true);
+    expect(hydratedKpirCorr.col7SalesRevenueGrosze).toBe(-150_000);
+
+    const vatMay = VatViewResponseSchema.parse(
+      await (
+        await fetch(
+          `${url2}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_KPIR_ID}/vat?period=2026-05`,
+          { headers: janHeaders2 },
+        )
+      ).json(),
+    );
+    expect(
+      vatMay.salesEntries.filter((e) => e.documentNumber === 'FK/PG18-KPIR/2026/05/01'),
+    ).toHaveLength(2);
+
+    const ryczMay = RyczaltViewResponseSchema.parse(
+      await (
+        await fetch(
+          `${url2}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_JDG_RYCZALT_ID}/ryczalt?period=2026-05`,
+          { headers: janHeaders2 },
+        )
+      ).json(),
+    );
+    const hydratedRyczCorr = ryczMay.entries.find(
+      (e) => e.documentNumber === 'FK/PG18-RYCZ/2026/05/01',
+    )!;
+    expect(hydratedRyczCorr.isCorrection).toBe(true);
+    expect(hydratedRyczCorr.revenueGrosze).toBe(-60_000);
+
+    const ledgerMay = LedgerViewResponseSchema.parse(
+      await (
+        await fetch(
+          `${url2}/api/v1/tenants/${TENANT_1_ID}/companies/${COMPANY_SPZOO_ID}/ledger?period=2026-05`,
+          { headers: janHeaders2 },
+        )
+      ).json(),
+    );
+    expect(ledgerMay.trialBalance.isBalanced).toBe(true);
+    const hydratedSpzooJe = ledgerMay.journalEntries.find(
+      (je) => je.documentNumber === 'FK/PG18-SPZOO/2026/05/01',
+    )!;
+    expect(hydratedSpzooJe.totalWnGrosze).toBe(-177_000);
+    expect(hydratedSpzooJe.totalMaGrosze).toBe(-177_000);
+    expect(hydratedSpzooJe.lines.every((l) => l.isRedStorno)).toBe(true);
+
+    await app2.close();
+    openApps.delete(app2);
   });
 });
