@@ -43,16 +43,116 @@ const STRICT_UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const PERIOD_YEAR_MONTH_REGEX = /^\d{4}-(0[1-9]|1[0-2])$/;
 
+const ALLOWED_NON_PRODUCTION_KSEF_HOSTS = new Set([
+  'api-test.ksef.mf.gov.pl',
+  'api-demo.ksef.mf.gov.pl',
+]);
+
 const FORBIDDEN_PRODUCTION_KSEF_HOSTS = new Set([
   'ksef.mf.gov.pl',
   'api.ksef.mf.gov.pl',
   'prd.ksef.mf.gov.pl',
+  'api-prd.ksef.mf.gov.pl',
   'ksef-prod.mf.gov.pl',
   'www.podatki.gov.pl',
+  'podatki.gov.pl',
   'e-deklaracje.mf.gov.pl',
   'klient-eformularz.mf.gov.pl',
   'pue.zus.pl',
+  'zus.pl',
 ]);
+
+function validateAndCanonicalizeKsefTargetEndpointUrl(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed || /\s/.test(trimmed)) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_ksef_endpoint',
+      'Nieprawidłowy adres URL punktu końcowego KSeF.',
+    );
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(trimmed);
+  } catch {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_ksef_endpoint',
+      'Nieprawidłowy adres URL punktu końcowego KSeF.',
+    );
+  }
+
+  if (parsedUrl.username.length > 0 || parsedUrl.password.length > 0 || parsedUrl.hash.length > 0) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_ksef_endpoint',
+      'Adres URL punktu końcowego KSeF nie może zawierać poświadczeń ani fragmentu (#).',
+    );
+  }
+
+  const parsedHost = parsedUrl.hostname.toLowerCase().replace(/\.+$/, '');
+  if (!parsedHost) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_ksef_endpoint',
+      'Nieprawidłowa nazwa hosta punktu końcowego KSeF.',
+    );
+  }
+
+  const isPolishGovHost =
+    FORBIDDEN_PRODUCTION_KSEF_HOSTS.has(parsedHost) ||
+    parsedHost === 'mf.gov.pl' ||
+    parsedHost.endsWith('.mf.gov.pl') ||
+    parsedHost === 'podatki.gov.pl' ||
+    parsedHost.endsWith('.podatki.gov.pl') ||
+    parsedHost === 'zus.pl' ||
+    parsedHost.endsWith('.zus.pl') ||
+    parsedHost === 'gov.pl' ||
+    parsedHost.endsWith('.gov.pl');
+
+  if (isPolishGovHost && !ALLOWED_NON_PRODUCTION_KSEF_HOSTS.has(parsedHost)) {
+    throw new WorkspaceAccessError(
+      403,
+      'ksef_production_endpoint_blocked',
+      `Połączenie z produkcyjną bramką rządową (${parsedHost}) jest trwale zablokowane (HTTP 403). Dozwolone są wyłącznie środowiska testowe/demo oraz lokalny mock.`,
+    );
+  }
+
+  const isAllowedMfSandbox =
+    parsedUrl.protocol === 'https:' &&
+    ALLOWED_NON_PRODUCTION_KSEF_HOSTS.has(parsedHost) &&
+    (parsedUrl.port === '' || parsedUrl.port === '443');
+
+  const isAllowedTestLoopback =
+    process.env.NODE_ENV === 'test' &&
+    parsedUrl.protocol === 'http:' &&
+    (parsedHost === '127.0.0.1' || parsedHost === 'localhost');
+
+  if (!isAllowedMfSandbox && !isAllowedTestLoopback) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_ksef_endpoint',
+      'Niedozwolony adres docelowy KSeF — dozwolone są wyłącznie oficjalne bramki HTTPS api-test.ksef.mf.gov.pl oraz api-demo.ksef.mf.gov.pl.',
+    );
+  }
+
+  parsedUrl.hostname = parsedHost;
+  return parsedUrl.toString();
+}
+
+function withSessionPeriod(session: ActiveWebSession, period: string): ActiveWebSession {
+  if (session.context.period === period) {
+    return session;
+  }
+  return {
+    ...session,
+    context: {
+      ...session.context,
+      period,
+    },
+  };
+}
 
 export type AccountingPeriodStatus = 'open' | 'reconciling' | 'closed';
 
@@ -459,9 +559,10 @@ export async function getPeriodCloseSnapshot(
     fallbackErrorPl: 'Nie udało się pobrać statusu zamknięcia okresu rozliczeniowego.',
   });
 
+  const scopedSession = withSessionPeriod(session, period);
   const [dash, fin] = await Promise.all([
-    getDashboardSnapshot(session),
-    getFinanceSnapshot(session),
+    getDashboardSnapshot(scopedSession),
+    getFinanceSnapshot(scopedSession),
   ]);
 
   const matchedTxIds = new Set(
@@ -516,7 +617,9 @@ export async function getPeriodCloseSnapshot(
     }
     const blocking =
       remote.data.blockingItemsCount ??
-      checklist.pendingDocumentsCount + checklist.pendingMcpProposalsCount;
+      checklist.pendingDocumentsCount +
+        checklist.pendingMcpProposalsCount +
+        checklist.unreconciledBankTransactionsCount;
     return {
       period,
       status,
@@ -532,7 +635,7 @@ export async function getPeriodCloseSnapshot(
 
   const key = `${dash.activeCompany.tenantId}:${dash.activeCompany.legalEntityId}:${period}`;
   const fallbackClosed = getWave2FallbackStore().closedPeriods.get(key);
-  const blockingItemsCount = pendingDocsInPeriod + pendingMcpCount;
+  const blockingItemsCount = pendingDocsInPeriod + pendingMcpCount + unreconciledBankCount;
   const warningsPl: string[] = [];
   if (pendingDocsInPeriod > 0) {
     warningsPl.push(
@@ -665,7 +768,8 @@ export async function getTaxObligationsDueVsPaidSnapshot(
     fallbackErrorPl: 'Nie udało się pobrać rozliczenia zobowiązań (naliczone vs opłacone).',
   });
 
-  const dash = await getDashboardSnapshot(session);
+  const scopedSession = withSessionPeriod(session, period);
+  const dash = await getDashboardSnapshot(scopedSession);
   const company = dash.activeCompany;
 
   if (
@@ -714,8 +818,8 @@ export async function getTaxObligationsDueVsPaidSnapshot(
   }
 
   const [fin, vat] = await Promise.all([
-    getFinanceSnapshot(session),
-    buildVatRegistersForCompany(company, period, session),
+    getFinanceSnapshot(scopedSession),
+    buildVatRegistersForCompany(company, period, scopedSession),
   ]);
 
   const cutOffDate = lastDayOfPeriodIso(period);
@@ -751,7 +855,7 @@ export async function getTaxObligationsDueVsPaidSnapshot(
   let summaryPl: string;
 
   if (company.profileCode === 'jdg_kpir_skala' || company.profileCode === 'jdg_kpir_liniowy') {
-    const kpir = await getKpirSnapshot(session);
+    const kpir = await getKpirSnapshot(scopedSession);
     const taxForm = company.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala';
     const profileA = calculateProfileAKpirObligations({
       period,
@@ -826,7 +930,7 @@ export async function getTaxObligationsDueVsPaidSnapshot(
       },
     );
   } else if (company.profileCode === 'jdg_ryczalt') {
-    const ryc = await getRyczaltSnapshot(session);
+    const ryc = await getRyczaltSnapshot(scopedSession);
     const profileB = calculateProfileBRyczaltObligations({
       period,
       zusScheme: company.zusScheme === 'not_applicable' ? 'preferencyjny_zus' : company.zusScheme,
@@ -878,7 +982,7 @@ export async function getTaxObligationsDueVsPaidSnapshot(
       },
     );
   } else {
-    const ledger = await getFullLedgerSnapshot(session);
+    const ledger = await getFullLedgerSnapshot(scopedSession);
     const hasVerified9PctAttestation =
       company.smallTaxpayer && company.priorYearGrossSalesGrosze > 0;
     const taxYear = period.slice(0, 4);
@@ -1084,7 +1188,8 @@ export async function exportValidatedJpkXmlMutation(
     };
   }
 
-  const company = await authorizeCompanyForFallback(session, 'read');
+  const scopedSession = withSessionPeriod(session, period);
+  const company = await authorizeCompanyForFallback(scopedSession, 'read');
   const [yearStr = '2026', monthStr = '03'] = period.split('-');
   const year = Number(yearStr);
   const month = Number(monthStr);
@@ -1092,7 +1197,7 @@ export async function exportValidatedJpkXmlMutation(
   const dateTo = lastDayOfPeriodIso(period);
   const generatedAtIso = `${new Date().toISOString().slice(0, 19)}Z`;
   const taxOfficeCode = '1435';
-  const subject = buildJpkSubjectFromCompany(company, session.context.email);
+  const subject = buildJpkSubjectFromCompany(company, scopedSession.context.email);
 
   let xmlContent = '';
   let officialNamespace = '';
@@ -1108,7 +1213,8 @@ export async function exportValidatedJpkXmlMutation(
           'Podatnik zwolniony podmiotowo z VAT (art. 113) nie składa rutynowej deklaracji JPK_V7.',
         );
       }
-      const vat = await buildVatRegistersForCompany(company, period, session);
+      const vat = await buildVatRegistersForCompany(company, period, scopedSession);
+      const hasNpSales = vat.salesEntries.some((s) => s.vatRate === 'np' && s.netGrosze !== 0);
       xmlContent = generateJpkV7Xml({
         variant: input.structureCode,
         generatedAtIso,
@@ -1117,6 +1223,8 @@ export async function exportValidatedJpkXmlMutation(
         year,
         month,
         subject,
+        priorExcessCarryoverPln: Math.round(vat.jpkSummary.carryOverFromPreviousPlnGrosze / 100),
+        requestedRefundPln: Math.round(vat.jpkSummary.refundToBankAccountP54Grosze / 100),
         salesRows: vat.salesEntries.map((s) => ({
           counterpartyName: s.counterpartyName,
           ...(s.counterpartyNip && s.counterpartyNip !== 'BrakID'
@@ -1127,6 +1235,9 @@ export async function exportValidatedJpkXmlMutation(
           saleDate: s.taxPointDate,
           ksefMarker: mapMarkerForJpkV7(s.ksefMarker, s.ksefReferenceNumber),
           ...(s.vatRate === 'zw' ? { exemptNetGrosze: s.netGrosze } : {}),
+          ...(s.vatRate === 'np'
+            ? ({ outsideCountryNetGrosze: s.netGrosze } as Record<string, number>)
+            : {}),
           ...(s.vatRate === '0' ? { zeroDomesticNetGrosze: s.netGrosze } : {}),
           ...(s.vatRate === '5'
             ? { net5Grosze: s.netGrosze, vat5Grosze: s.deductibleVatGrosze }
@@ -1150,6 +1261,13 @@ export async function exportValidatedJpkXmlMutation(
         })),
         ...(purpose === 2 ? { correctionJustification: 'Korekta ewidencji i deklaracji VAT' } : {}),
       });
+      if (hasNpSales && !xmlContent.includes('<K_11>')) {
+        throw new WorkspaceAccessError(
+          422,
+          'jpk_xsd_validation_failed',
+          'Eksport sprzedaży poza terytorium kraju (stawka „np.” — pola K_11 / P_11) wymaga aktywnego silnika XSD API (/jpk/export).',
+        );
+      }
       officialNamespace =
         input.structureCode === 'JPK_V7M(2)'
           ? 'http://crd.gov.pl/wzor/2021/12/27/11148/'
@@ -1157,8 +1275,9 @@ export async function exportValidatedJpkXmlMutation(
       break;
     }
     case 'JPK_PKPIR(3)': {
-      const kpir = await getKpirSnapshot(session);
-      if (kpir.entries.length === 0) {
+      const kpir = await getKpirSnapshot(scopedSession);
+      const periodEntries = kpir.entries.filter((e) => e.eventDate.startsWith(period));
+      if (periodEntries.length === 0) {
         throw new WorkspaceAccessError(
           422,
           'empty_jpk_register',
@@ -1174,7 +1293,7 @@ export async function exportValidatedJpkXmlMutation(
         subject,
         openingInventoryGrosze: 0,
         closingInventoryGrosze: 0,
-        rows: kpir.entries.map((e) => ({
+        rows: periodEntries.map((e) => ({
           entryDate: e.eventDate,
           documentNumber: e.documentNumber,
           ...(e.ksefReferenceNumber && validateKsefNumber(e.ksefReferenceNumber).valid
@@ -1202,8 +1321,9 @@ export async function exportValidatedJpkXmlMutation(
       break;
     }
     case 'JPK_EWP(4)': {
-      const ryc = await getRyczaltSnapshot(session);
-      if (ryc.entries.length === 0) {
+      const ryc = await getRyczaltSnapshot(scopedSession);
+      const periodEntries = ryc.entries.filter((e) => e.revenueDate.startsWith(period));
+      if (periodEntries.length === 0) {
         throw new WorkspaceAccessError(
           422,
           'empty_jpk_register',
@@ -1217,7 +1337,7 @@ export async function exportValidatedJpkXmlMutation(
         dateTo,
         taxOfficeCode,
         subject,
-        rows: ryc.entries.map((e) => ({
+        rows: periodEntries.map((e) => ({
           entryDate: e.entryDate,
           revenueDate: e.revenueDate,
           documentNumber: e.documentNumber,
@@ -1261,8 +1381,11 @@ export async function exportValidatedJpkXmlMutation(
       break;
     }
     case 'JPK_KR_PD(1)': {
-      const ledger = await getFullLedgerSnapshot(session);
-      if (ledger.journalEntries.length === 0) {
+      const ledger = await getFullLedgerSnapshot(scopedSession);
+      const periodJournalEntries = ledger.journalEntries.filter((je) =>
+        je.bookingDate.startsWith(period),
+      );
+      if (periodJournalEntries.length === 0) {
         throw new WorkspaceAccessError(
           422,
           'empty_jpk_register',
@@ -1304,7 +1427,7 @@ export async function exportValidatedJpkXmlMutation(
           closingCreditGrosze: row.endingBalanceMaGrosze,
           balanceSheetTagS12_1: 'BAAI1_W',
         })),
-        journalEntries: ledger.journalEntries.map((je) => ({
+        journalEntries: periodJournalEntries.map((je) => ({
           journalName: 'Dziennik główny',
           documentNumber: je.documentNumber,
           documentKind: 'PK',
@@ -1439,6 +1562,27 @@ export async function exportInvoiceFa3XmlMutation(
 
   const hasZwLine = sourceLines.some((l) => l.vatRate === 'zw');
   const isCorr = Boolean(doc.isCorrection) || doc.documentKind === 'correction';
+  let originalIssueDate = doc.issueDate;
+  let originalKsefNumber: string | undefined;
+  if (isCorr && doc.correctedDocumentNumber) {
+    const companyDocs = await getDocumentsForActiveCompany(session);
+    const normalizedRef = doc.correctedDocumentNumber.trim();
+    const matchedOriginal = companyDocs.find(
+      (candidate) =>
+        candidate.documentId !== doc.documentId &&
+        candidate.documentNumber.trim() === normalizedRef,
+    );
+    if (matchedOriginal) {
+      originalIssueDate = matchedOriginal.issueDate;
+      if (
+        matchedOriginal.ksefMarker === 'NrKSeF' &&
+        matchedOriginal.ksefReferenceNumber &&
+        validateKsefNumber(matchedOriginal.ksefReferenceNumber).valid
+      ) {
+        originalKsefNumber = matchedOriginal.ksefReferenceNumber;
+      }
+    }
+  }
 
   const generated = generateKsefFaXml({
     schemaVersion: 'FA(3)',
@@ -1466,8 +1610,9 @@ export async function exportInvoiceFa3XmlMutation(
             reason: doc.correctionReason || 'Korekta faktury',
             correctedInvoices: [
               {
-                originalIssueDate: doc.issueDate,
+                originalIssueDate,
                 originalInvoiceNumber: doc.correctedDocumentNumber || `REF-${doc.documentNumber}`,
+                ...(originalKsefNumber ? { originalKsefNumber } : {}),
               },
             ],
           },
@@ -1556,25 +1701,9 @@ export async function issueToKsefSandboxMutation(
     );
   }
 
-  if (input.targetEndpointUrl) {
-    let parsedHost: string;
-    try {
-      parsedHost = new URL(input.targetEndpointUrl).hostname.toLowerCase();
-    } catch {
-      throw new WorkspaceAccessError(
-        400,
-        'invalid_ksef_endpoint',
-        'Nieprawidłowy adres URL punktu końcowego KSeF.',
-      );
-    }
-    if (FORBIDDEN_PRODUCTION_KSEF_HOSTS.has(parsedHost)) {
-      throw new WorkspaceAccessError(
-        403,
-        'ksef_production_endpoint_blocked',
-        `Połączenie z produkcyjną bramką rządową (${parsedHost}) jest trwale zablokowane (HTTP 403). Dozwolone są wyłącznie środowiska testowe/demo oraz lokalny mock.`,
-      );
-    }
-  }
+  const canonicalTargetEndpointUrl = input.targetEndpointUrl
+    ? validateAndCanonicalizeKsefTargetEndpointUrl(input.targetEndpointUrl)
+    : undefined;
 
   const remote = await callWave2CompanyEndpoint<
     Partial<KsefSandboxIssueResult> & {
@@ -1589,7 +1718,7 @@ export async function issueToKsefSandboxMutation(
     body: {
       documentId: input.documentId,
       environment: input.environment,
-      ...(input.targetEndpointUrl ? { targetBaseUrl: input.targetEndpointUrl } : {}),
+      ...(canonicalTargetEndpointUrl ? { targetBaseUrl: canonicalTargetEndpointUrl } : {}),
       humanConfirmation: {
         confirmedByHuman: true,
         confirmationNote:

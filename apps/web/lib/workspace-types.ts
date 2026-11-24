@@ -1,10 +1,11 @@
-import type {
-  KpirExpenseQualificationKind,
-  KsefInvoiceMarker,
-  RyczaltRateCode,
-  TaxProfileCode,
-  VatDeductionMode,
-  VatRateCode,
+import {
+  generateKsefFaXml,
+  type KpirExpenseQualificationKind,
+  type KsefInvoiceMarker,
+  type RyczaltRateCode,
+  type TaxProfileCode,
+  type VatDeductionMode,
+  type VatRateCode,
 } from '@pap/domain';
 import type { AiConfidenceLevel } from '@pap/ui';
 import {
@@ -401,106 +402,69 @@ export const MCP_TOOLS_CATALOG: readonly McpToolCatalogItem[] = [
   },
 ];
 
-export const SAMPLE_KSEF_FA3_XML = `<?xml version="1.0" encoding="UTF-8"?>
-<Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/">
-  <Naglowek>
-    <KodFormularza kodSystemowy="FA (3)" wersjaSchemy="1-0E">FA</KodFormularza>
-    <WariantFormularza>3</WariantFormularza>
-    <DataWytworzeniaFa>2026-03-16T09:30:00Z</DataWytworzeniaFa>
-    <SystemInfo>Syntetyczny Generator KSeF 2.0</SystemInfo>
-  </Naglowek>
-  <Podmiot1>
-    <DaneIdentyfikacyjne>
-      <NIP>5213004125</NIP>
-      <Nazwa>Chmura Obliczeniowa Syntetyk Sp. z o.o.</Nazwa>
-    </DaneIdentyfikacyjne>
-    <Adres>
-      <KodKraju>PL</KodKraju>
-      <AdresL1>ul. Cybernetyki 19, 02-677 Warszawa</AdresL1>
-    </Adres>
-  </Podmiot1>
-  <Podmiot2>
-    <DaneIdentyfikacyjne>
-      <NIP>5250001003</NIP>
-      <Nazwa>Pracownia Projektowa Jan Testowy</Nazwa>
-    </DaneIdentyfikacyjne>
-  </Podmiot2>
-  <Fa>
-    <KodWaluty>PLN</KodWaluty>
-    <P_1>2026-10-16</P_1>
-    <P_2>FA3/10/2026/084</P_2>
-    <P_6>2026-10-16</P_6>
-    <P_13_1>2400.00</P_13_1>
-    <P_14_1>552.00</P_14_1>
-    <P_15>2952.00</P_15>
-    <NrKSeF>5213004125-20261016-FA3084-99A1B2-44</NrKSeF>
-    <FaWiersz>
-      <NrWierszaFa>1</NrWierszaFa>
-      <P_7>Infrastruktura serwerowa CI/CD i kopie zapasowe — październik 2026 (dane syntetyczne)</P_7>
-      <P_8A>usł.</P_8A>
-      <P_8B>1</P_8B>
-      <P_11>2400.00</P_11>
-      <P_12>23</P_12>
-    </FaWiersz>
-    <Platnosc>
-      <TerminPlatnosci>
-        <Termin>2026-10-30</Termin>
-      </TerminPlatnosci>
-      <RachunekBankowy>
-        <NrRB>PL61109010140000071219812874</NrRB>
-      </RachunekBankowy>
-    </Platnosc>
-  </Fa>
-</Faktura>`;
+export const SAMPLE_KSEF_FA3_XML = generateKsefFaXml({
+  schemaVersion: 'FA(3)',
+  createdAtIsoUtc: '2026-03-16T09:30:00Z',
+  systemInfo: 'Syntetyczny Generator KSeF 2.0',
+  seller: {
+    nip: '5213004125',
+    name: 'Chmura Obliczeniowa Syntetyk Sp. z o.o.',
+    address: { countryCode: 'PL', addressLine1: 'ul. Cybernetyki 19, 02-677 Warszawa' },
+  },
+  buyer: {
+    identifier: { kind: 'nip', nip: '5250001003' },
+    name: 'Pracownia Projektowa Jan Testowy',
+    address: { countryCode: 'PL', addressLine1: 'ul. Wspólna 40/12, 00-684 Warszawa' },
+  },
+  invoiceNumber: 'FA3/10/2026/084',
+  issueDate: '2026-10-16',
+  saleDate: '2026-10-16',
+  dueDate: '2026-10-30',
+  sellerBankAccountIban: 'PL61109010140000071219812874',
+  lines: [
+    {
+      lineNumber: 1,
+      description:
+        'Infrastruktura serwerowa CI/CD i kopie zapasowe — październik 2026 (dane syntetyczne)',
+      quantity: '1',
+      unit: 'usł.',
+      netGrosze: 240_000,
+      vatRate: '23',
+      vatGrosze: 55_200,
+    },
+  ],
+}).xml;
 
-export const SAMPLE_KSEF_FA2_XML = `<?xml version="1.0" encoding="UTF-8"?>
-<Faktura xmlns="http://crd.gov.pl/wzor/2023/06/29/12648/">
-  <Naglowek>
-    <KodFormularza kodSystemowy="FA (2)" wersjaSchemy="1-0E">FA</KodFormularza>
-    <WariantFormularza>2</WariantFormularza>
-    <DataWytworzeniaFa>2026-03-14T11:15:00Z</DataWytworzeniaFa>
-    <SystemInfo>Syntetyczny Generator KSeF FA(2)</SystemInfo>
-  </Naglowek>
-  <Podmiot1>
-    <DaneIdentyfikacyjne>
-      <NIP>5250006006</NIP>
-      <Nazwa>Dostawca Sprzętu Test Sp. z o.o.</Nazwa>
-    </DaneIdentyfikacyjne>
-    <Adres>
-      <KodKraju>PL</KodKraju>
-      <AdresL1>ul. Prosta 51, 00-838 Warszawa</AdresL1>
-    </Adres>
-  </Podmiot1>
-  <Podmiot2>
-    <DaneIdentyfikacyjne>
-      <NIP>5250001003</NIP>
-      <Nazwa>Pracownia Projektowa Jan Testowy</Nazwa>
-    </DaneIdentyfikacyjne>
-  </Podmiot2>
-  <Fa>
-    <KodWaluty>PLN</KodWaluty>
-    <P_1>2026-03-14</P_1>
-    <P_2>FA2/03/2026/051</P_2>
-    <P_6>2026-03-14</P_6>
-    <P_13_1>1600.00</P_13_1>
-    <P_14_1>368.00</P_14_1>
-    <P_15>1968.00</P_15>
-    <NrKSeF>5250006006-20260314-FA2051-77C3D4-22</NrKSeF>
-    <FaWiersz>
-      <NrWierszaFa>1</NrWierszaFa>
-      <P_7>Stacja dokująca USB-C i akcesoria stanowiskowe (dane syntetyczne)</P_7>
-      <P_8A>szt.</P_8A>
-      <P_8B>1</P_8B>
-      <P_11>1600.00</P_11>
-      <P_12>23</P_12>
-    </FaWiersz>
-    <Platnosc>
-      <TerminPlatnosci>
-        <Termin>2026-03-28</Termin>
-      </TerminPlatnosci>
-    </Platnosc>
-  </Fa>
-</Faktura>`;
+export const SAMPLE_KSEF_FA2_XML = generateKsefFaXml({
+  schemaVersion: 'FA(2)',
+  createdAtIsoUtc: '2026-03-14T11:15:00Z',
+  systemInfo: 'Syntetyczny Generator KSeF FA(2)',
+  seller: {
+    nip: '5250006006',
+    name: 'Dostawca Sprzętu Test Sp. z o.o.',
+    address: { countryCode: 'PL', addressLine1: 'ul. Prosta 51, 00-838 Warszawa' },
+  },
+  buyer: {
+    identifier: { kind: 'nip', nip: '5250001003' },
+    name: 'Pracownia Projektowa Jan Testowy',
+    address: { countryCode: 'PL', addressLine1: 'ul. Wspólna 40/12, 00-684 Warszawa' },
+  },
+  invoiceNumber: 'FA2/03/2026/051',
+  issueDate: '2026-03-14',
+  saleDate: '2026-03-14',
+  dueDate: '2026-03-28',
+  lines: [
+    {
+      lineNumber: 1,
+      description: 'Stacja dokująca USB-C i akcesoria stanowiskowe (dane syntetyczne)',
+      quantity: '1',
+      unit: 'szt.',
+      netGrosze: 160_000,
+      vatRate: '23',
+      vatGrosze: 36_800,
+    },
+  ],
+}).xml;
 
 export const SAMPLE_INVOICE_CSV = buildSampleSingleRateDocumentCsv('2026-03');
 

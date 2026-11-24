@@ -282,6 +282,7 @@ interface WorkspaceStateStore {
   ryczaltEntriesByCompany: Map<string, RyczaltEntry[]>;
   journalEntriesByCompany: Map<string, JournalEntry[]>;
   bankTransactionsByCompany: Map<string, BankStatementTransaction[]>;
+  settledBankMatchesByCompany: Map<string, BankReconciliationMatch[]>;
   paidObligationCodesByCompany: Map<string, Set<string>>;
   notificationPrefsByCompany: Map<string, NotificationPrefsState>;
   outboxByCompany: Map<string, NotificationOutboxEntry[]>;
@@ -959,6 +960,8 @@ function createInitialStore(): WorkspaceStateStore {
     [COMPANY_JDG_KPIR_ID, [...parsePolishBankCsv(SAMPLE_BANK_CSV).slice(0, 1)]],
   ]);
 
+  const settledBankMatchesByCompany = new Map<string, BankReconciliationMatch[]>();
+
   const paidObligationCodesByCompany = new Map<string, Set<string>>();
 
   const defaultPrefs: NotificationPrefsState = {
@@ -1128,6 +1131,7 @@ function createInitialStore(): WorkspaceStateStore {
     ryczaltEntriesByCompany,
     journalEntriesByCompany,
     bankTransactionsByCompany,
+    settledBankMatchesByCompany,
     paidObligationCodesByCompany,
     notificationPrefsByCompany,
     outboxByCompany,
@@ -2248,6 +2252,10 @@ export async function buildVatRegistersForCompany(
     const remote = await papBffFetch<{
       salesEntries: readonly VatRegisterEntry[];
       purchaseEntries: readonly VatRegisterEntry[];
+      jpkV7m?: {
+        readonly carryOverFromPreviousPeriodP39Grosze?: number;
+        readonly refundToBankAccountP54Grosze?: number;
+      } | null;
     }>(
       `/api/v1/tenants/${safeTenantId}/companies/${safeEntityId}/vat?period=${encodeURIComponent(period)}`,
       {
@@ -2263,44 +2271,75 @@ export async function buildVatRegistersForCompany(
     }
     const salesEntries = remote.data.salesEntries ?? [];
     const purchaseEntries = remote.data.purchaseEntries ?? [];
+    const carryOverP39 = remote.data.jpkV7m?.carryOverFromPreviousPeriodP39Grosze;
+    const refundP54 = remote.data.jpkV7m?.refundToBankAccountP54Grosze;
     const jpkSummary = calculateJpkV7mSummary({
       period,
       entries: [...salesEntries, ...purchaseEntries],
+      ...(carryOverP39 !== undefined
+        ? { carryOverInputVatFromPreviousPeriodGrosze: carryOverP39 }
+        : {}),
+      ...(refundP54 !== undefined ? { refundRequestedP54Grosze: refundP54 } : {}),
     });
     return { salesEntries, purchaseEntries, jpkSummary };
   }
 
   const store = getStore();
-  const docs = store.documents.filter(
+  const companyActiveDocs = store.documents.filter(
     (d) =>
       d.tenantId === company.tenantId &&
       d.legalEntityId === company.legalEntityId &&
-      d.period === period &&
       d.status !== 'archived',
   );
 
-  const allEntries: VatRegisterEntry[] = docs.flatMap((doc) => {
-    const safeNip = doc.counterpartyNip?.trim() || 'BrakID';
-    if (doc.lines && doc.lines.length > 1) {
-      const groupedByRate = new Map<
-        VatRateCode,
-        { netGrosze: number; vatGrosze: number; annex15: boolean }
-      >();
-      for (const line of doc.lines) {
-        const cur = groupedByRate.get(line.vatRate) ?? {
-          netGrosze: 0,
-          vatGrosze: 0,
-          annex15: false,
-        };
-        groupedByRate.set(line.vatRate, {
-          netGrosze: cur.netGrosze + line.netGrosze,
-          vatGrosze: cur.vatGrosze + line.vatGrosze,
-          annex15: cur.annex15 || line.annex15Item,
-        });
+  const mapDocsToVatEntries = (
+    periodDocs: readonly WorkspaceDocumentRecord[],
+  ): VatRegisterEntry[] =>
+    periodDocs.flatMap((doc) => {
+      const safeNip = doc.counterpartyNip?.trim() || 'BrakID';
+      if (doc.lines && doc.lines.length > 1) {
+        const groupedByRate = new Map<
+          VatRateCode,
+          { netGrosze: number; vatGrosze: number; annex15: boolean }
+        >();
+        for (const line of doc.lines) {
+          const cur = groupedByRate.get(line.vatRate) ?? {
+            netGrosze: 0,
+            vatGrosze: 0,
+            annex15: false,
+          };
+          groupedByRate.set(line.vatRate, {
+            netGrosze: cur.netGrosze + line.netGrosze,
+            vatGrosze: cur.vatGrosze + line.vatGrosze,
+            annex15: cur.annex15 || line.annex15Item,
+          });
+        }
+        return Array.from(groupedByRate.entries()).map(([rate, bucket]) =>
+          createVatRegisterEntry({
+            id: `vat-${doc.documentId}-${rate}`,
+            registerType: doc.direction,
+            period: doc.period,
+            taxPointDate: doc.eventDate,
+            issueDate: doc.issueDate,
+            documentNumber: doc.documentNumber,
+            counterpartyName: doc.counterpartyName,
+            counterpartyNip: safeNip,
+            vatRate: rate,
+            netGrosze: bucket.netGrosze,
+            vatTotalGrosze: bucket.vatGrosze,
+            deductionMode: doc.vatDeductionMode,
+            annex15Item: bucket.annex15 || doc.annex15Item,
+            ksefMarker: doc.ksefMarker,
+            ...(doc.ksefReferenceNumber !== undefined
+              ? { ksefReferenceNumber: doc.ksefReferenceNumber }
+              : {}),
+          }),
+        );
       }
-      return Array.from(groupedByRate.entries()).map(([rate, bucket]) =>
+
+      return [
         createVatRegisterEntry({
-          id: `vat-${doc.documentId}-${rate}`,
+          id: `vat-${doc.documentId}`,
           registerType: doc.direction,
           period: doc.period,
           taxPointDate: doc.eventDate,
@@ -2308,47 +2347,42 @@ export async function buildVatRegistersForCompany(
           documentNumber: doc.documentNumber,
           counterpartyName: doc.counterpartyName,
           counterpartyNip: safeNip,
-          vatRate: rate,
-          netGrosze: bucket.netGrosze,
-          vatTotalGrosze: bucket.vatGrosze,
+          vatRate: doc.vatRate,
+          netGrosze: doc.netGrosze,
+          vatTotalGrosze: doc.vatGrosze,
           deductionMode: doc.vatDeductionMode,
-          annex15Item: bucket.annex15 || doc.annex15Item,
+          annex15Item: doc.annex15Item,
           ksefMarker: doc.ksefMarker,
           ...(doc.ksefReferenceNumber !== undefined
             ? { ksefReferenceNumber: doc.ksefReferenceNumber }
             : {}),
         }),
-      );
-    }
+      ];
+    });
 
-    return [
-      createVatRegisterEntry({
-        id: `vat-${doc.documentId}`,
-        registerType: doc.direction,
-        period: doc.period,
-        taxPointDate: doc.eventDate,
-        issueDate: doc.issueDate,
-        documentNumber: doc.documentNumber,
-        counterpartyName: doc.counterpartyName,
-        counterpartyNip: safeNip,
-        vatRate: doc.vatRate,
-        netGrosze: doc.netGrosze,
-        vatTotalGrosze: doc.vatGrosze,
-        deductionMode: doc.vatDeductionMode,
-        annex15Item: doc.annex15Item,
-        ksefMarker: doc.ksefMarker,
-        ...(doc.ksefReferenceNumber !== undefined
-          ? { ksefReferenceNumber: doc.ksefReferenceNumber }
-          : {}),
-      }),
-    ];
-  });
+  const priorPeriods = Array.from(
+    new Set(companyActiveDocs.filter((d) => d.period < period).map((d) => d.period)),
+  ).sort();
+  let carryOverGrosze = 0;
+  for (const priorPeriod of priorPeriods) {
+    const priorEntries = mapDocsToVatEntries(
+      companyActiveDocs.filter((d) => d.period === priorPeriod),
+    );
+    const priorSummary = calculateJpkV7mSummary({
+      period: priorPeriod,
+      entries: priorEntries,
+      carryOverInputVatFromPreviousPeriodGrosze: carryOverGrosze,
+    });
+    carryOverGrosze = priorSummary.carryForwardToNextPeriodP62Grosze;
+  }
 
+  const allEntries = mapDocsToVatEntries(companyActiveDocs.filter((d) => d.period === period));
   const salesEntries = allEntries.filter((e) => e.registerType === 'sales');
   const purchaseEntries = allEntries.filter((e) => e.registerType === 'purchase');
   const jpkSummary = calculateJpkV7mSummary({
     period,
     entries: allEntries,
+    ...(carryOverGrosze > 0 ? { carryOverInputVatFromPreviousPeriodGrosze: carryOverGrosze } : {}),
   });
 
   return { salesEntries, purchaseEntries, jpkSummary };
@@ -3458,7 +3492,14 @@ export async function getFinanceSnapshot(session: ActiveWebSession): Promise<{
       remainingAmountGrosze: Math.max(0, d.grossGrosze - d.paidAmountGrosze),
     }));
 
-  const reconciliationMatches = reconcileBankTransactions(bankTransactions, openItems);
+  const existingSettled = store.settledBankMatchesByCompany.get(activeCompany.legalEntityId) ?? [];
+  const settledByTxId = new Map(existingSettled.map((m) => [m.transactionId, m]));
+  const unsettledTransactions = bankTransactions.filter((t) => !settledByTxId.has(t.transactionId));
+  const freshMatches = reconcileBankTransactions(unsettledTransactions, openItems);
+  const freshByTxId = new Map(freshMatches.map((m) => [m.transactionId, m]));
+  const reconciliationMatches = bankTransactions
+    .map((t) => settledByTxId.get(t.transactionId) ?? freshByTxId.get(t.transactionId))
+    .filter((m): m is BankReconciliationMatch => Boolean(m));
 
   return {
     activeCompany,
@@ -5796,13 +5837,29 @@ export async function importAndReconcileBankStatementMutation(
 }> {
   assertValidSessionIdentity(session);
   assertPayloadSizeWithinLimit(input.content, 'wyciąg bankowy');
-  if (input.applySettlements) {
+
+  let parsedTx: readonly BankStatementTransaction[];
+  try {
+    parsedTx =
+      input.format === 'mt940'
+        ? parseMt940Statement(input.content).transactions
+        : parsePolishBankCsv(input.content);
+  } catch (err) {
+    throw new WorkspaceAccessError(
+      400,
+      'invalid_bank_statement',
+      err instanceof Error ? err.message : 'Nie udało się sparsować wyciągu bankowego.',
+    );
+  }
+
+  for (const tx of parsedTx) {
     assertBffFallbackPeriodNotClosed(
       session.context.tenantId,
       session.context.legalEntityId,
-      session.context.period,
+      tx.bookingDate.slice(0, 7),
     );
   }
+
   const safeTenantId = assertUuidPathParam(session.context.tenantId, 'tenantId');
   const safeEntityId = assertUuidPathParam(session.context.legalEntityId, 'legalEntityId');
 
@@ -5840,21 +5897,18 @@ export async function importAndReconcileBankStatementMutation(
     'write',
   );
 
-  let parsedTx: readonly BankStatementTransaction[];
-  try {
-    parsedTx =
-      input.format === 'mt940'
-        ? parseMt940Statement(input.content).transactions
-        : parsePolishBankCsv(input.content);
-  } catch (err) {
-    throw new WorkspaceAccessError(
-      400,
-      'invalid_bank_statement',
-      err instanceof Error ? err.message : 'Nie udało się sparsować wyciągu bankowego.',
-    );
-  }
-
   const store = getStore();
+  const existingTx = store.bankTransactionsByCompany.get(company.legalEntityId) ?? [];
+  const seenTxIds = new Set(existingTx.map((t) => t.transactionId));
+  const mergedTx: BankStatementTransaction[] = [...existingTx];
+  for (const tx of parsedTx) {
+    if (!seenTxIds.has(tx.transactionId)) {
+      seenTxIds.add(tx.transactionId);
+      mergedTx.push(tx);
+    }
+  }
+  store.bankTransactionsByCompany.set(company.legalEntityId, mergedTx);
+
   const companyDocs = store.documents.filter(
     (d) => d.tenantId === company.tenantId && d.legalEntityId === company.legalEntityId,
   );
@@ -5869,15 +5923,17 @@ export async function importAndReconcileBankStatementMutation(
       remainingAmountGrosze: Math.max(0, d.grossGrosze - d.paidAmountGrosze),
     }));
 
-  const matches = reconcileBankTransactions(parsedTx, openItems);
+  const existingSettled = store.settledBankMatchesByCompany.get(company.legalEntityId) ?? [];
+  const settledByTxId = new Map(existingSettled.map((m) => [m.transactionId, m]));
+  const unsettledMergedTx = mergedTx.filter((t) => !settledByTxId.has(t.transactionId));
+  const freshMatches = reconcileBankTransactions(unsettledMergedTx, openItems);
   let matchedCount = 0;
 
-  store.bankTransactionsByCompany.set(company.legalEntityId, [...parsedTx]);
-
   if (input.applySettlements) {
-    for (const match of matches) {
+    for (const match of freshMatches) {
       if (match.matchedDocumentId && match.settledAmountGrosze > 0) {
         matchedCount += 1;
+        settledByTxId.set(match.transactionId, match);
         const idx = store.documents.findIndex((d) => d.documentId === match.matchedDocumentId);
         if (idx >= 0) {
           const doc = store.documents[idx]!;
@@ -5889,7 +5945,7 @@ export async function importAndReconcileBankStatementMutation(
             ),
           };
           if (company.profileCode === 'spzoo_pelne_ksiegi') {
-            const tx = parsedTx.find((t) => t.transactionId === match.transactionId);
+            const tx = mergedTx.find((t) => t.transactionId === match.transactionId);
             const bookingDate = tx?.bookingDate ?? `${session.context.period}-25`;
             const existingJrn = store.journalEntriesByCompany.get(company.legalEntityId) ?? [];
             const dedupId = `jrn-wb-${match.transactionId}-${doc.documentId}`;
@@ -5939,7 +5995,13 @@ export async function importAndReconcileBankStatementMutation(
         }
       }
     }
+    store.settledBankMatchesByCompany.set(company.legalEntityId, [...settledByTxId.values()]);
   }
+
+  const freshByTxId = new Map(freshMatches.map((m) => [m.transactionId, m]));
+  const allMatches = mergedTx
+    .map((t) => settledByTxId.get(t.transactionId) ?? freshByTxId.get(t.transactionId))
+    .filter((m): m is BankReconciliationMatch => Boolean(m));
 
   appendAudit(
     session,
@@ -5951,8 +6013,8 @@ export async function importAndReconcileBankStatementMutation(
   return {
     importedCount: parsedTx.length,
     matchedCount,
-    bankTransactions: parsedTx,
-    reconciliationMatches: matches,
+    bankTransactions: mergedTx,
+    reconciliationMatches: allMatches,
   };
 }
 

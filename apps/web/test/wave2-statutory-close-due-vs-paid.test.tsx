@@ -16,7 +16,12 @@ import {
   addJournalEntryMutation,
   addManualKpirEntryMutation,
   addRyczaltEntryMutation,
+  approveAndPostDocumentMutation,
+  buildVatRegistersForCompany,
+  createOrImportDocumentMutation,
+  getDashboardSnapshot,
   getDocumentsForActiveCompany,
+  getFinanceSnapshot,
   getFullLedgerSnapshot,
   getPersonaById,
   importAndReconcileBankStatementMutation,
@@ -412,5 +417,224 @@ describe('Wave 2: Statutory JPK XSD exports, FA(3) & KSeF 2.0 Sandbox, WORM Arch
     expect(
       formatUserFacingErrorPl({ status: 403, reasonCode: 'ksef_production_endpoint_blocked' }),
     ).toContain('zablokowane');
+  });
+
+  it('[P1-1] hard-blocks trailing-dot FQDN & subdomain production KSeF URLs (403) and SSRF / non-HTTPS targets (400)', async () => {
+    const session = makeOfflineSession({ legalEntityId: COMPANY_JDG_KPIR_ID, period: '2026-10' });
+    const docs = await getDocumentsForActiveCompany(session);
+    const docId = docs[0]!.documentId;
+
+    for (const prodUrl of [
+      'https://ksef.mf.gov.pl./api/v2/sessions/online',
+      'https://sub.ksef.mf.gov.pl/api/v2/sessions/online',
+      'https://api-prd.ksef.mf.gov.pl/v2',
+      'https://e-deklaracje.mf.gov.pl./submit',
+    ]) {
+      await expect(
+        issueToKsefSandboxMutation(session, {
+          documentId: docId,
+          environment: 'test',
+          confirmHumanSend: true,
+          targetEndpointUrl: prodUrl,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 403,
+        reasonCode: 'ksef_production_endpoint_blocked',
+      });
+    }
+
+    for (const ssrfOrInvalidUrl of [
+      'http://169.254.169.254/latest/meta-data/',
+      'http://api-test.ksef.mf.gov.pl/v2',
+      'https://attacker.example.com/v2',
+      'https://user:secret@api-test.ksef.mf.gov.pl/v2',
+    ]) {
+      await expect(
+        issueToKsefSandboxMutation(session, {
+          documentId: docId,
+          environment: 'test',
+          confirmHumanSend: true,
+          targetEndpointUrl: ssrfOrInvalidUrl,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        reasonCode: 'invalid_ksef_endpoint',
+      });
+    }
+
+    const trailingDotAllowedSandbox = await issueToKsefSandboxMutation(session, {
+      documentId: docId,
+      environment: 'test',
+      confirmHumanSend: true,
+      targetEndpointUrl: 'https://api-test.ksef.mf.gov.pl./v2',
+    });
+    expect(trailingDotAllowedSandbox.status).toBe('external_token_not_configured');
+  });
+
+  it('[P1-2] scopes explicit period JPK exports, carries P_39 excess VAT into JPK_V7M(3) XML, and resolves KOR originalIssueDate', async () => {
+    const sessionOct = makeOfflineSession({
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      period: '2026-10',
+    });
+
+    // Cross-period export: session is on 2026-10, explicit period is empty 2026-11 -> 422 empty_jpk_register (no Oct row leak)
+    await expect(
+      exportValidatedJpkXmlMutation(sessionOct, {
+        period: '2026-11',
+        structureCode: 'JPK_PKPIR(3)',
+        purpose: 1,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      reasonCode: 'empty_jpk_register',
+    });
+
+    // Post a large 50 000 PLN net (11 500 PLN VAT) purchase in 2026-10 so 2026-11 has P_39 carry-over > 0
+    const bigPurchase = await createOrImportDocumentMutation(sessionOct, {
+      mode: 'manual',
+      documentKind: 'purchase',
+      direction: 'purchase',
+      documentNumber: 'FZ/BIG/2026/10/01',
+      issueDate: '2026-10-15',
+      saleDate: '2026-10-15',
+      dueDate: '2026-10-28',
+      counterpartyName: 'Hurtownia Serwerów Test Sp. z o.o.',
+      counterpartyNip: '5261040828',
+      description: 'Zakup klastra obliczeniowego',
+      netPln: '50000.00',
+      vatRate: '23',
+      expenseQualification: 'other_expenses_100_col13',
+      vatDeductionMode: 'full_100',
+    });
+    await approveAndPostDocumentMutation(sessionOct, {
+      documentId: bigPurchase.documentId,
+      documentNumber: bigPurchase.documentNumber,
+      counterpartyName: bigPurchase.counterpartyName,
+      counterpartyNip: bigPurchase.counterpartyNip,
+      issueDate: bigPurchase.issueDate,
+      netPln: '50000.00',
+      vatPln: '11500.00',
+      expenseQualification: 'other_expenses_100_col13',
+      vatDeductionMode: 'full_100',
+    });
+
+    const dash = await getDashboardSnapshot(sessionOct);
+    const sessionNov = makeOfflineSession({
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      period: '2026-11',
+    });
+    const vatNov = await buildVatRegistersForCompany(dash.activeCompany, '2026-11', sessionNov);
+    const expectedP39Pln = Math.round(vatNov.jpkSummary.carryOverFromPreviousPlnGrosze / 100);
+    expect(expectedP39Pln).toBeGreaterThan(0);
+
+    const exportedNovV7 = await exportValidatedJpkXmlMutation(sessionOct, {
+      period: '2026-11',
+      structureCode: 'JPK_V7M(3)',
+      purpose: 1,
+    });
+    expect(exportedNovV7.xmlContent).toContain(`<P_39>${String(expectedP39Pln)}</P_39>`);
+
+    // KOR FA(3) XML resolves originalIssueDate from the referenced original invoice (2026-10-04 != 2026-10-27)
+    const origSales = await createOrImportDocumentMutation(sessionOct, {
+      mode: 'manual',
+      documentKind: 'sales',
+      direction: 'sales',
+      documentNumber: 'FV/ORIG/2026/10/04',
+      issueDate: '2026-10-04',
+      saleDate: '2026-10-04',
+      dueDate: '2026-10-18',
+      counterpartyName: 'Odbiorca Projektu Sp. z o.o.',
+      counterpartyNip: '5261040828',
+      description: 'Usługa wdrożeniowa',
+      netPln: '2000.00',
+      vatRate: '23',
+    });
+    const korSales = await createOrImportDocumentMutation(sessionOct, {
+      mode: 'manual',
+      documentKind: 'correction',
+      direction: 'sales',
+      isCorrection: true,
+      correctedDocumentNumber: origSales.documentNumber,
+      correctionReason: 'Rabat jakościowy',
+      documentNumber: 'KOR/ORIG/2026/10/27',
+      issueDate: '2026-10-27',
+      saleDate: '2026-10-04',
+      dueDate: '2026-11-10',
+      counterpartyName: 'Odbiorca Projektu Sp. z o.o.',
+      counterpartyNip: '5261040828',
+      description: 'Korekta usługi wdrożeniowej',
+      netPln: '-200.00',
+      vatRate: '23',
+    });
+    const korFa3 = await exportInvoiceFa3XmlMutation(sessionOct, korSales.documentId);
+    expect(korFa3.xmlContent).toContain(
+      '<DataWystFaKorygowanej>2026-10-04</DataWystFaKorygowanej>',
+    );
+    expect(korFa3.xmlContent).toContain('<NrFaKorygowanej>FV/ORIG/2026/10/04</NrFaKorygowanej>');
+  });
+
+  it('[P1-3] blocks closed-period bank statement imports across applySettlements/header periods, preserves multi-period bank history, and marks unreconciled bank items as blocking in readyToClose', async () => {
+    const sessionSep = makeOfflineSession({
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      period: '2026-09',
+    });
+    const sessionNov = makeOfflineSession({
+      legalEntityId: COMPANY_JDG_KPIR_ID,
+      period: '2026-11',
+    });
+
+    await closeAccountingPeriodMutation(sessionSep, { confirmClose: true });
+
+    const sepBankCsv = [
+      'Data księgowania;Data waluty;Kontrahent;Rachunek kontrahenta;Tytuł;Kwota;Waluta;Nr referencyjny',
+      '2026-09-22;2026-09-22;Dostawca Wrześniowy;PL61109010140000071219812874;Zapłata FZ/09;-500,00;PLN;REF-SEP-01',
+    ].join('\n');
+
+    // 1. applySettlements: false in closed 2026-09 -> rejected 409 period_closed
+    await expect(
+      importAndReconcileBankStatementMutation(sessionSep, {
+        format: 'csv',
+        content: sepBankCsv,
+        applySettlements: false,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, reasonCode: 'period_closed' });
+
+    // 2. Header on open 2026-11, but CSV contains 2026-09-22 row -> rejected 409 period_closed
+    await expect(
+      importAndReconcileBankStatementMutation(sessionNov, {
+        format: 'csv',
+        content: sepBankCsv,
+        applySettlements: true,
+      }),
+    ).rejects.toMatchObject({ statusCode: 409, reasonCode: 'period_closed' });
+
+    // 3. Header on closed 2026-09, but CSV contains open 2026-11-14 row -> allowed AND preserves seeded 2026-03 bank tx
+    const finBefore = await getFinanceSnapshot(sessionNov);
+    const marTxCountBefore = finBefore.bankTransactions.filter((t) =>
+      t.bookingDate.startsWith('2026-03'),
+    ).length;
+    expect(marTxCountBefore).toBeGreaterThan(0);
+
+    const novUnmatchedBankCsv = [
+      'Data księgowania;Data waluty;Kontrahent;Rachunek kontrahenta;Tytuł;Kwota;Waluta;Nr referencyjny',
+      '2026-11-14;2026-11-14;Nieznany Dostawca Listopadowy;PL27114020040000300201355387;Przelew bez faktury;-321,00;PLN;REF-NOV-UNMATCHED-01',
+    ].join('\n');
+
+    const importedNov = await importAndReconcileBankStatementMutation(sessionSep, {
+      format: 'csv',
+      content: novUnmatchedBankCsv,
+      applySettlements: false,
+    });
+    expect(importedNov.bankTransactions.some((t) => t.bookingDate.startsWith('2026-03'))).toBe(
+      true,
+    );
+    expect(importedNov.bankTransactions.some((t) => t.bookingDate === '2026-11-14')).toBe(true);
+
+    // 4. Unreconciled 2026-11 bank transaction makes readyToClose: false and status: 'reconciling'
+    const novCloseStatus = await getPeriodCloseSnapshot(sessionNov, '2026-11');
+    expect(novCloseStatus.checklist.unreconciledBankTransactionsCount).toBeGreaterThanOrEqual(1);
+    expect(novCloseStatus.blockingItemsCount).toBeGreaterThanOrEqual(1);
+    expect(novCloseStatus.readyToClose).toBe(false);
+    expect(novCloseStatus.status).toBe('reconciling');
   });
 });

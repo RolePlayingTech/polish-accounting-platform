@@ -59,6 +59,8 @@ const REASON_CODE_MESSAGES_PL: Readonly<Record<string, string>> = {
   document_not_found: 'Nie znaleziono wskazanego dokumentu w ewidencji bieżącej firmy.',
   duplicate_document_sha256:
     'Ten sam plik lub dokument (identyczny skrót SHA-256) został już wcześniej zarejestrowany w tej firmie. Sprawdź istniejący wpis na liście dokumentów.',
+  duplicate_source_artifact_sha256:
+    'Plik źródłowy o identycznym skrócie SHA-256 znajduje się już w niemutowalnym archiwum WORM tej firmy.',
   duplicate_economic_operation:
     'Ta operacja gospodarcza została już ujęta w księgach. Aby zmienić kwoty po zaksięgowaniu, wystaw dokument korygujący lub storno.',
   period_closed:

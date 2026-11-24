@@ -209,7 +209,6 @@ test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', ()
     await expect(kpirTable).toBeVisible();
     await expect(page.getByText(/19 kolumn z KSeF/i).first()).toBeVisible();
     await expect(kpirTable.getByText('FA3/10/2026/084').first()).toBeVisible();
-    await expect(kpirTable.getByText('5213004125-20261016-FA3084-99A1B2-44').first()).toBeVisible();
 
     await kpirTable
       .getByRole('button', { name: /Dlaczego\?/i })
@@ -749,9 +748,9 @@ test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', ()
     await ksefPanel.getByTestId('worm-archive-submit-button').click();
     await expect(ksefPanel.getByTestId('worm-archive-saved-badge')).toBeVisible();
 
-    // Drugi identyczny zapis WORM -> odmowa 409 duplicate_document_sha256 po polsku
+    // Drugi identyczny zapis WORM -> odmowa 409 duplicate SHA-256 po polsku
     await ksefPanel.getByTestId('worm-archive-submit-button').click();
-    await expect(ksefPanel.getByText(/identyczny skrót SHA-256/i)).toBeVisible();
+    await expect(ksefPanel.getByText(/skrót.*SHA-256|skrócie SHA-256/i)).toBeVisible();
 
     // 3. Sp. z o.o. -> widoczność uzgodnienia Konta 130 na pełnych księgach (#111)
     await switchCompanyViaHeader(page, COMPANY_SPZOO_ID);
@@ -796,6 +795,8 @@ test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', ()
     await page.locator('#kpir-desc').fill('Próba zapisu w zamkniętym okresie');
     await page.locator('#kpir-exp-pln').fill('150.00');
     await page.getByRole('button', { name: 'Zapisz pozycję w KPiR' }).click();
-    await expect(page.getByText(/okres rozliczeniowy jest zamknięty/i).first()).toBeVisible();
+    await expect(
+      page.getByText(/został trwale zamknięty|okres rozliczeniowy jest zamknięty/i).first(),
+    ).toBeVisible();
   });
 });

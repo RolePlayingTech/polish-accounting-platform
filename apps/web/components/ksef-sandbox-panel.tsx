@@ -32,8 +32,14 @@ export function KsefSandboxPanel({
   preselectedDocumentId,
   status,
 }: KsefSandboxPanelProps) {
+  const salesDocuments = documents.filter((d) => d.direction === 'sales');
+  const preselectedDoc = preselectedDocumentId
+    ? (documents.find((d) => d.documentId === preselectedDocumentId) ?? null)
+    : null;
   const [selectedDocId, setSelectedDocId] = useState(
-    preselectedDocumentId ?? documents[0]?.documentId ?? '',
+    preselectedDoc?.direction === 'sales'
+      ? preselectedDoc.documentId
+      : (salesDocuments[0]?.documentId ?? ''),
   );
   const [environment, setEnvironment] = useState<'local_mock' | 'test' | 'demo'>(
     status.defaultEnvironment,
@@ -44,11 +50,15 @@ export function KsefSandboxPanel({
   const [issueResult, setIssueResult] = useState<KsefSandboxIssueResult | null>(null);
   const [syncResult, setSyncResult] = useState<KsefSandboxSyncResult | null>(null);
   const [wormResult, setWormResult] = useState<SourceArchiveWormRecord | null>(null);
-  const [wormName, setWormName] = useState(`skan-faktury-${period}.pdf`);
+  const [wormName, setWormName] = useState(`zalacznik-zrodlowy-${period}.csv`);
   const [wormContent, setWormContent] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const selectedDoc = documents.find((d) => d.documentId === selectedDocId) ?? documents[0] ?? null;
+  const selectedDoc = preselectedDocumentId
+    ? preselectedDoc?.direction === 'sales'
+      ? preselectedDoc
+      : null
+    : (salesDocuments.find((d) => d.documentId === selectedDocId) ?? salesDocuments[0] ?? null);
 
   async function handleGenerateFa3Xml() {
     if (!selectedDoc) return;
@@ -191,7 +201,19 @@ export function KsefSandboxPanel({
         body: JSON.stringify({
           action: 'archive_source_document_worm',
           fileName: wormName,
-          mimeType: wormName.toLowerCase().endsWith('.jpg') ? 'image/jpeg' : 'application/pdf',
+          mimeType: wormName.toLowerCase().endsWith('.xml')
+            ? 'application/xml'
+            : wormName.toLowerCase().endsWith('.json')
+              ? 'application/json'
+              : wormName.toLowerCase().endsWith('.png')
+                ? 'image/png'
+                : wormName.toLowerCase().endsWith('.jpg') ||
+                    wormName.toLowerCase().endsWith('.jpeg')
+                  ? 'image/jpeg'
+                  : wormName.toLowerCase().endsWith('.pdf') &&
+                      wormContent.trimStart().startsWith('%PDF-')
+                    ? 'application/pdf'
+                    : 'text/csv',
           content: wormContent,
         }),
       });
@@ -264,25 +286,35 @@ export function KsefSandboxPanel({
 
           <div className="grid gap-3 rounded-xl border border-[#e5e2d9] bg-[#faf9f5] p-3.5 md:grid-cols-3">
             {!preselectedDocumentId ? (
-              <FormField id="ksef-panel-doc-select" label="Dokument źródłowy do eksportu FA(3)">
+              <FormField id="ksef-panel-doc-select" label="Faktura sprzedaży do eksportu FA(3)">
                 {(ctrl) => (
                   <select
                     {...ctrl}
                     value={selectedDoc?.documentId ?? ''}
+                    disabled={salesDocuments.length === 0}
                     onChange={(e) => {
                       setSelectedDocId(e.target.value);
                       setFa3Export(null);
                       setIssueResult(null);
                     }}
                   >
-                    {documents.map((d) => (
-                      <option key={d.documentId} value={d.documentId}>
-                        {d.documentNumber} · {d.counterpartyName}
-                      </option>
-                    ))}
+                    {salesDocuments.length > 0 ? (
+                      salesDocuments.map((d) => (
+                        <option key={d.documentId} value={d.documentId}>
+                          {d.documentNumber} · {d.counterpartyName}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">Brak faktur sprzedaży do eksportu FA(3)</option>
+                    )}
                   </select>
                 )}
               </FormField>
+            ) : preselectedDoc?.direction === 'purchase' ? (
+              <div className="flex items-center text-xs text-[#464c48]">
+                Dokument zakupu (Podmiot2) — wystawianie XML FA(3) dotyczy wyłącznie faktur
+                sprzedaży.
+              </div>
             ) : null}
 
             <FormField id="ksef-sandbox-env-select" label="Środowisko nieprodukcyjne KSeF 2.0">
