@@ -10,7 +10,7 @@ import {
   publicEncrypt,
   randomBytes,
 } from 'node:crypto';
-import { validateKsefNumber } from '@pap/domain';
+import { validateKsefNumber, validatePolishNip } from '@pap/domain';
 
 import { AccountingWorkspaceError } from '../accounting-workspace.js';
 
@@ -131,6 +131,13 @@ export function assertAllowedKsefNonProductionEndpoint(
     throw new KsefProductionEndpointBlockedError(rawUrl, 'Malformed KSeF endpoint URL.');
   }
 
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new KsefProductionEndpointBlockedError(
+      rawUrl,
+      'Embedded URL credentials (username/password) are strictly forbidden on KSeF endpoints.',
+    );
+  }
+
   const host = parsed.hostname.toLowerCase();
 
   if (FORBIDDEN_PRODUCTION_HOSTS.has(host)) {
@@ -152,10 +159,14 @@ export function assertAllowedKsefNonProductionEndpoint(
   }
 
   if (environment === 'test') {
-    if (parsed.protocol !== 'https:' || host !== 'api-test.ksef.mf.gov.pl') {
+    if (
+      parsed.protocol !== 'https:' ||
+      host !== 'api-test.ksef.mf.gov.pl' ||
+      (parsed.port !== '' && parsed.port !== '443')
+    ) {
       throw new KsefProductionEndpointBlockedError(
         rawUrl,
-        'Environment "test" may only connect to https://api-test.ksef.mf.gov.pl.',
+        'Environment "test" may only connect to https://api-test.ksef.mf.gov.pl on standard port 443.',
       );
     }
     if (!parsed.pathname.startsWith('/v2') && !parsed.pathname.startsWith('/docs/v2')) {
@@ -168,10 +179,14 @@ export function assertAllowedKsefNonProductionEndpoint(
   }
 
   if (environment === 'demo') {
-    if (parsed.protocol !== 'https:' || host !== 'api-demo.ksef.mf.gov.pl') {
+    if (
+      parsed.protocol !== 'https:' ||
+      host !== 'api-demo.ksef.mf.gov.pl' ||
+      (parsed.port !== '' && parsed.port !== '443')
+    ) {
       throw new KsefProductionEndpointBlockedError(
         rawUrl,
-        'Environment "demo" may only connect to https://api-demo.ksef.mf.gov.pl.',
+        'Environment "demo" may only connect to https://api-demo.ksef.mf.gov.pl on standard port 443.',
       );
     }
     if (!parsed.pathname.startsWith('/v2') && !parsed.pathname.startsWith('/docs/v2')) {
@@ -596,6 +611,7 @@ export function validateAndParseKsefUpoXml(
   expectedInvoice?: {
     ksefNumber: string;
     invoiceHashBase64: string;
+    sessionReferenceNumber?: string;
   },
 ): ValidatedKsefUpoSummary {
   const xsdResult = validateOfficialMfXml(upoXml, 'KSEF_UPO(4-3)');
@@ -641,6 +657,14 @@ export function validateAndParseKsefUpoXml(
   );
 
   if (expectedInvoice) {
+    if (
+      expectedInvoice.sessionReferenceNumber !== undefined &&
+      sessionReferenceNumber !== expectedInvoice.sessionReferenceNumber
+    ) {
+      throw new Error(
+        `KSeF UPO NumerReferencyjnySesji mismatch: expected "${expectedInvoice.sessionReferenceNumber}", got "${sessionReferenceNumber}".`,
+      );
+    }
     const matched = documents.find((d) => d.ksefNumber === expectedInvoice.ksefNumber);
     if (!matched) {
       throw new Error(
@@ -799,6 +823,34 @@ export class KsefIdempotentOutbox {
     return `${tenantId}::${legalEntityId}::${idempotencyKey}`;
   }
 
+  peekOrVerifyExisting(params: {
+    tenantId: string;
+    legalEntityId: string;
+    idempotencyKey: string;
+    payloadSha256Hex: string;
+    sellerNip: string;
+  }): OutboxRecordState | undefined {
+    const scopeKey = this.buildScopeKey(
+      params.tenantId,
+      params.legalEntityId,
+      params.idempotencyKey,
+    );
+    const existing = this.records.get(scopeKey);
+    if (!existing) {
+      return undefined;
+    }
+    if (
+      existing.payloadSha256Hex !== params.payloadSha256Hex ||
+      existing.sellerNip !== params.sellerNip
+    ) {
+      throw new KsefIdempotencyConflictError(
+        params.idempotencyKey,
+        `Idempotency key "${params.idempotencyKey}" was already used with a different FA(3) XML payload or seller NIP (${existing.payloadSha256Hex} !== ${params.payloadSha256Hex}).`,
+      );
+    }
+    return existing;
+  }
+
   acquireOrVerify(params: {
     tenantId: string;
     legalEntityId: string;
@@ -806,22 +858,16 @@ export class KsefIdempotentOutbox {
     payloadSha256Hex: string;
     sellerNip: string;
   }): OutboxRecordState {
+    const existing = this.peekOrVerifyExisting(params);
+    if (existing) {
+      return existing;
+    }
+
     const scopeKey = this.buildScopeKey(
       params.tenantId,
       params.legalEntityId,
       params.idempotencyKey,
     );
-    const existing = this.records.get(scopeKey);
-    if (existing) {
-      if (existing.payloadSha256Hex !== params.payloadSha256Hex) {
-        throw new KsefIdempotencyConflictError(
-          params.idempotencyKey,
-          `Idempotency key "${params.idempotencyKey}" was already used with a different FA(3) XML payload (${existing.payloadSha256Hex} !== ${params.payloadSha256Hex}).`,
-        );
-      }
-      return existing;
-    }
-
     const created: OutboxRecordState = {
       tenantId: params.tenantId,
       legalEntityId: params.legalEntityId,
@@ -1046,8 +1092,13 @@ export class Ksef2SandboxAdapterService {
     pollMaxAttempts?: number;
     pollIntervalMs?: number;
   }): Promise<KsefTokensResponseDto> {
-    if (!/^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/.test(params.contextNip)) {
-      throw new Error(`Invalid Polish 10-digit NIP for KSeF context: "${params.contextNip}".`);
+    if (
+      !/^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/.test(params.contextNip) ||
+      !validatePolishNip(params.contextNip).valid
+    ) {
+      throw new Error(
+        `Invalid Polish 10-digit NIP (or modulo-11 checksum) for KSeF context: "${params.contextNip}".`,
+      );
     }
 
     const challengeResp = await this.requestWithRetry({
@@ -1193,11 +1244,21 @@ export class Ksef2SandboxAdapterService {
    * returned UPO XML against official `ksef_upo_v4-3.xsd` (NEVER fabricating UPOs).
    */
   async issueFa3InvoiceOnline(input: KsefIssueFa3InvoiceInput): Promise<KsefIssueFa3InvoiceResult> {
+    if (
+      !/^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/.test(input.sellerNip) ||
+      !validatePolishNip(input.sellerNip).valid
+    ) {
+      throw new KsefXmlPreValidationError(
+        `Invalid KSeF session seller NIP "${input.sellerNip}" (must be 10 digits with valid modulo-11 checksum).`,
+      );
+    }
+
     const xmlBytes = Buffer.from(input.fa3Xml, 'utf8');
     const payloadSha256Hex = computeKsefHexSha256(xmlBytes);
     const payloadSha256Base64 = computeKsefBase64Sha256(xmlBytes);
 
-    const record = this.outbox.acquireOrVerify({
+    // Check existing outbox record first without poisoning idempotencyKey on invalid XML
+    const existingRecord = this.outbox.peekOrVerifyExisting({
       tenantId: input.tenantId,
       legalEntityId: input.legalEntityId,
       idempotencyKey: input.idempotencyKey,
@@ -1205,14 +1266,14 @@ export class Ksef2SandboxAdapterService {
       sellerNip: input.sellerNip,
     });
 
-    if (record.completedResult) {
+    if (existingRecord?.completedResult) {
       return {
-        ...record.completedResult,
+        ...existingRecord.completedResult,
         replayedFromOutbox: true,
       };
     }
 
-    // Fail-closed pre-validation against official MF FA(3) XSD before touching the network!
+    // Fail-closed pre-validation against official MF FA(3) XSD BEFORE acquiring outbox slot or touching network!
     const xsdValidation = validateOfficialMfXml(input.fa3Xml, 'FA(3)');
     if (!xsdValidation.valid) {
       throw new KsefXmlPreValidationError(
@@ -1226,6 +1287,14 @@ export class Ksef2SandboxAdapterService {
         `FA(3) Podmiot1 NIP (${parsedInvoice.sellerNip}) does not match KSeF session seller NIP (${input.sellerNip}).`,
       );
     }
+
+    const record = this.outbox.acquireOrVerify({
+      tenantId: input.tenantId,
+      legalEntityId: input.legalEntityId,
+      idempotencyKey: input.idempotencyKey,
+      payloadSha256Hex,
+      sellerNip: input.sellerNip,
+    });
 
     if (!record.encryptionMaterial) {
       record.encryptionMaterial = createKsefSessionEncryptionMaterial(
@@ -1468,6 +1537,7 @@ export class Ksef2SandboxAdapterService {
     const validatedUpo = validateAndParseKsefUpoXml(upoXml, {
       ksefNumber: params.expectedKsefNumber,
       invoiceHashBase64: params.expectedInvoiceHashBase64,
+      sessionReferenceNumber: params.sessionReferenceNumber,
     });
 
     return { upoXml, validatedUpo };
@@ -1492,8 +1562,13 @@ export class Ksef2SandboxAdapterService {
     archive?: ImmutableSourceDocumentArchive;
     actorUserId?: string;
   }): Promise<KsefSyncIncomingInvoicesResult> {
-    if (!/^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/.test(params.buyerNip)) {
-      throw new Error(`Invalid Polish 10-digit buyer NIP: "${params.buyerNip}".`);
+    if (
+      !/^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/.test(params.buyerNip) ||
+      !validatePolishNip(params.buyerNip).valid
+    ) {
+      throw new Error(
+        `Invalid Polish 10-digit buyer NIP (or modulo-11 checksum): "${params.buyerNip}".`,
+      );
     }
 
     const pageOffset = params.pageOffset ?? 0;
@@ -1555,9 +1630,9 @@ export class Ksef2SandboxAdapterService {
         throw new Error(`Unexpected KSeF schema version for ${meta.ksefNumber}.`);
       }
 
-      if (parsedXml.buyerNip !== undefined && parsedXml.buyerNip !== params.buyerNip) {
+      if (parsedXml.buyerIdentifierKind !== 'nip' || parsedXml.buyerNip !== params.buyerNip) {
         throw new Error(
-          `Incoming KSeF invoice ${meta.ksefNumber} buyer NIP (${parsedXml.buyerNip}) does not match company NIP (${params.buyerNip}).`,
+          `Incoming KSeF Subject2 invoice ${meta.ksefNumber} buyer identity (${parsedXml.buyerIdentifierKind ?? 'none'}:${parsedXml.buyerNip ?? 'missing'}) does not match Polish company NIP (${params.buyerNip}).`,
         );
       }
 

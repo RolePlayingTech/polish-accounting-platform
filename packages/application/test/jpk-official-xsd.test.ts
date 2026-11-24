@@ -101,7 +101,7 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
         subject: NATURAL_SUBJECT,
         priorExcessCarryoverPln: 500,
         requestedRefundPln: 1_000,
-        refundTimeframe: '60_days',
+        refundTimeframe: '40_days',
         salesRows: [
           {
             counterpartyCountryCode: 'PL',
@@ -152,6 +152,44 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
     expect(v7m3.xmlContent).toContain('<P_54>1000</P_54>');
     expect(v7m3.xmlContent).toContain('<P_560>1</P_560>');
     expect(v7m3.xmlContent).toContain('<P_62>1710</P_62>');
+
+    // [P0-3] 60-day refund (P_57) is abolished in JPK_V7M(3)/V7K(3), whereas 25-day art. 87 ust. 6 maps to P_56
+    expect(() =>
+      prepareValidatedJpkExport({
+        structureCode: 'JPK_V7M(3)',
+        payload: {
+          generatedAtIso: '2026-03-10T09:00:00Z',
+          purpose: 1,
+          taxOfficeCode: '1435',
+          year: 2026,
+          month: 2,
+          subject: NATURAL_SUBJECT,
+          priorExcessCarryoverPln: 500,
+          requestedRefundPln: 200,
+          refundTimeframe: '60_days',
+          salesRows: [],
+          purchaseRows: [],
+        },
+      }),
+    ).toThrow(/P_57|60-day/);
+
+    const v7m3Art87 = prepareValidatedJpkExport({
+      structureCode: 'JPK_V7M(3)',
+      payload: {
+        generatedAtIso: '2026-03-10T09:00:00Z',
+        purpose: 1,
+        taxOfficeCode: '1435',
+        year: 2026,
+        month: 2,
+        subject: NATURAL_SUBJECT,
+        priorExcessCarryoverPln: 500,
+        requestedRefundPln: 200,
+        refundTimeframe: '25_days_art87_6',
+        salesRows: [],
+        purchaseRows: [],
+      },
+    });
+    expect(v7m3Art87.xmlContent).toContain('<P_56>1</P_56>');
 
     // 2. JPK_V7K(3) month 2 (February — Ewidencja only, NO Deklaracja)
     const v7kMonth2 = prepareValidatedJpkExport({
@@ -222,7 +260,7 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
     expect(v7kMonth3.xmlContent).toContain('<KodFormularzaDekl kodSystemowy="VAT-7K (17)"');
     expect(v7kMonth3.xmlContent).toContain('<Kwartal>1</Kwartal>');
 
-    // 4. Archival JPK_V7M(2) for January 2026
+    // 4. Archival JPK_V7M(2) for January 2026 (including archival 60-day P_57 refund tag)
     const v7m2 = prepareValidatedJpkExport({
       structureCode: 'JPK_V7M(2)',
       payload: {
@@ -232,6 +270,9 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
         year: 2026,
         month: 1,
         subject: NATURAL_SUBJECT,
+        priorExcessCarryoverPln: 1_000,
+        requestedRefundPln: 100,
+        refundTimeframe: '60_days',
         salesRows: [
           {
             counterpartyTin: '9542752600',
@@ -247,6 +288,7 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
       },
     });
     expect(v7m2.xsdValidation.valid).toBe(true);
+    expect(v7m2.xmlContent).toContain('<P_57>1</P_57>');
   });
 
   it('generates and offline-validates JPK_PKPIR(3), JPK_EWP(4), JPK_ST(1) (PKPIR & EWP), JPK_KR_PD(1), and JPK_ST_KR(1), and rejects invalid/tampered payloads', () => {
@@ -372,12 +414,20 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
             initialValueGrosze: 1_500_000,
             annualTaxDepreciationGrosze: 375_000,
             cumulativeTaxDepreciationGrosze: 375_000,
-            hasKsefDocument: 1,
+            disposal: {
+              disposalDate: '2026-11-30',
+              reasonCode: 'S',
+              disposalDocumentNumber: 'FV/ZBYCIE/2026/11',
+              ksefNumbers: [ksefNo],
+            },
+            kstReclassifiedInYear: 2,
           },
         ],
       },
     });
     expect(stPkpir.xsdValidation.valid).toBe(true);
+    expect(stPkpir.xmlContent).toContain(`<G_21>${ksefNo}</G_21>`);
+    expect(stPkpir.xmlContent).toContain('<G_22>2</G_22>');
 
     const stEwp = prepareValidatedJpkExport({
       structureCode: 'JPK_ST(1)',
@@ -427,7 +477,7 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
           {
             accountId: '201',
             accountName: 'Rozrachunki z odbiorcami',
-            accountTypeLabel: 'Bilansowe aktywne',
+            parentAccountId: '200',
             openingDebitGrosze: 0,
             openingCreditGrosze: 0,
             turnoverPeriodDebitGrosze: 1_230_000,
@@ -441,7 +491,7 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
           {
             accountId: '700',
             accountName: 'Przychody ze sprzedaży usług',
-            accountTypeLabel: 'Wynikowe',
+            parentAccountId: '70',
             openingDebitGrosze: 0,
             openingCreditGrosze: 0,
             turnoverPeriodDebitGrosze: 0,
@@ -454,6 +504,11 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
             taxTagS12_3: 'PD1',
           },
         ],
+        rpd: {
+          k1ExemptRevenuesPermanentGrosze: 10_000,
+          k4NonDeductibleCostsPermanentGrosze: 25_000,
+          k8OffLedgerDeductibleCostsGrosze: 5_000,
+        },
         journalEntries: [
           {
             journalName: 'Dziennik główny',
@@ -492,8 +547,12 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
       },
     });
     expect(krPd.xsdValidation.valid).toBe(true);
+    expect(krPd.xmlContent).toContain('<S_3>200</S_3>');
+    expect(krPd.xmlContent).toContain('<K_1>100.00</K_1>');
+    expect(krPd.xmlContent).toContain('<K_4>250.00</K_4>');
+    expect(krPd.xmlContent).toContain('<K_8>50.00</K_8>');
 
-    // 5. JPK_ST_KR(1)
+    // 5. JPK_ST_KR(1) — [P0-1] verify E_10A..E_20 = TAX (podatkowa) vs E_21..E_27 = ACCOUNTING (rachunkowa) & E_32 = Reklasyfikacja
     const stKr = prepareValidatedJpkExport({
       structureCode: 'JPK_ST_KR(1)',
       payload: {
@@ -516,23 +575,82 @@ describe('Official MF JPK XML Exports & Offline XSD Validation (#98, GLD-11)', (
             assetName: 'Klaster obliczeniowy',
             kstSymbol: '487',
             depreciationMethod: 'L',
-            accountingRatePercent: 20,
-            accountingAnnualAmountGrosze: 400_000,
-            accountingInitialValueGrosze: 2_000_000,
-            depreciationFrequency: 'M',
-            accountingPeriodDepreciationGrosze: 400_000,
-            accountingCumulativeDepreciationGrosze: 400_000,
-            taxInitialValueGrosze: 2_000_000,
             taxRatePercent: 30,
             taxAnnualAmountGrosze: 600_000,
+            taxInitialValueGrosze: 2_000_000,
+            depreciationFrequency: 'M',
             taxPeriodDepreciationGrosze: 600_000,
             taxCumulativeDepreciationGrosze: 600_000,
-            hasKsefDocument: 1,
+            accountingInitialValueGrosze: 2_200_000,
+            accountingRatePercent: 20,
+            accountingAnnualAmountGrosze: 440_000,
+            accountingPeriodDepreciationGrosze: 440_000,
+            accountingCumulativeDepreciationGrosze: 440_000,
+            disposal: {
+              disposalDate: '2026-12-15',
+              reasonCode: 'S',
+              disposalDocumentNumber: 'FV/SPRZ-ST/2026/12',
+              ksefNumbers: [ksefNo],
+            },
+            kstReclassifiedInYear: 2,
           },
         ],
       },
     });
     expect(stKr.xsdValidation.valid).toBe(true);
+    expect(stKr.xmlContent).toContain('<E_10A>30.00</E_10A>');
+    expect(stKr.xmlContent).toContain('<E_10B>6000.00</E_10B>');
+    expect(stKr.xmlContent).toContain('<E_12>20000.00</E_12>');
+    expect(stKr.xmlContent).toContain('<E_19>6000.00</E_19>');
+    expect(stKr.xmlContent).toContain('<E_20>6000.00</E_20>');
+    expect(stKr.xmlContent).toContain('<E_21>22000.00</E_21>');
+    expect(stKr.xmlContent).toContain('<E_25A>20.00</E_25A>');
+    expect(stKr.xmlContent).toContain('<E_25B>4400.00</E_25B>');
+    expect(stKr.xmlContent).toContain('<E_26>4400.00</E_26>');
+    expect(stKr.xmlContent).toContain('<E_27>4400.00</E_27>');
+    expect(stKr.xmlContent).toContain(`<E_31>${ksefNo}</E_31>`);
+    expect(stKr.xmlContent).toContain('<E_32>2</E_32>');
+
+    // [P1-4] Empty rows on JPK_PKPIR(3)/JPK_EWP(4), invalid modulo-11 NIP, and impossible calendar dates fail closed
+    expect(() =>
+      prepareValidatedJpkExport({
+        structureCode: 'JPK_PKPIR(3)',
+        payload: {
+          purpose: 1,
+          generatedAtIso: '2027-02-10T10:00:00Z',
+          dateFrom: '2026-01-01',
+          dateTo: '2026-12-31',
+          taxOfficeCode: '1435',
+          subject: NATURAL_SUBJECT,
+          openingInventoryGrosze: 0,
+          closingInventoryGrosze: 0,
+          rows: [],
+        },
+      }),
+    ).toThrow(/LiczbaWierszy/);
+
+    expect(() =>
+      prepareValidatedJpkExport({
+        structureCode: 'JPK_EWP(4)',
+        payload: {
+          purpose: 1,
+          generatedAtIso: '2027-02-10T10:00:00Z',
+          dateFrom: '2026-02-31', // impossible calendar date!
+          dateTo: '2026-12-31',
+          taxOfficeCode: '1435',
+          subject: { ...NATURAL_SUBJECT, nip: '5260001009' }, // invalid modulo-11!
+          rows: [
+            {
+              entryDate: '2026-05-12',
+              revenueDate: '2026-05-12',
+              documentNumber: 'FV/1',
+              revenueGrosze: 10_000,
+              ratePercent: '12',
+            },
+          ],
+        },
+      }),
+    ).toThrow();
 
     // 6. Tampered JPK XML must fail offline XSD validation closed
     const tamperedV7Xml = pkpir.xmlContent.replace(

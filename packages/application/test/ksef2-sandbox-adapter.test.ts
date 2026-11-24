@@ -78,6 +78,8 @@ describe('KSeF 2.0 Test/Demo Sandbox Adapter, Crypto, Production Blocker & Idemp
       'https://e-deklaracje.mf.gov.pl/ws',
       'https://pue.zus.pl/api',
       'http://api-test.ksef.mf.gov.pl/v2', // insecure http blocked on test!
+      'https://attacker:pass@api-test.ksef.mf.gov.pl/v2', // [P1-3] URL userinfo blocked!
+      'https://api-test.ksef.mf.gov.pl:8443/v2', // [P1-3] non-443 port blocked!
     ];
 
     for (const badUrl of blockedUrls) {
@@ -185,6 +187,13 @@ describe('KSeF 2.0 Test/Demo Sandbox Adapter, Crypto, Production Blocker & Idemp
         invoiceHashBase64: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
       }),
     ).toThrow(/SkrotDokumentu mismatch/);
+    expect(() =>
+      validateAndParseKsefUpoXml(upoXml, {
+        ksefNumber: assignedKsefNo,
+        invoiceHashBase64: expectedHashBase64,
+        sessionReferenceNumber: '20260320-SE-0000000000-0000000000-99',
+      }),
+    ).toThrow(/NumerReferencyjnySesji mismatch/);
 
     const calls: KsefHttpRequest[] = [];
     let authPollCount = 0;
@@ -361,13 +370,13 @@ describe('KSeF 2.0 Test/Demo Sandbox Adapter, Crypto, Production Blocker & Idemp
     expect(probe.hasKsefTokenEncryptionKey).toBe(true);
     expect(probe.verificationMode).toBe('live_readonly_probe_ok_auth_not_configured');
 
-    // 2. Invalid FA(3) XML is rejected offline BEFORE making any KSeF session call!
+    // 2. [P1-3] Invalid FA(3) XML is rejected offline BEFORE making any KSeF session call AND without poisoning idempotencyKey!
     const callsBeforeInvalid = calls.length;
     await expect(
       service.issueFa3InvoiceOnline({
         tenantId: '11111111-1111-4111-8111-111111111111',
         legalEntityId: 'aaaaaaaa-1111-4111-8111-111111111111',
-        idempotencyKey: 'idem-invalid-xml',
+        idempotencyKey: 'idem-inv-001',
         sellerNip: SELLER_NIP,
         accessToken: 'access-jwt-1',
         fa3Xml: '<Faktura xmlns="http://crd.gov.pl/wzor/2025/06/25/13775/"><Bad/></Faktura>',
@@ -375,6 +384,15 @@ describe('KSeF 2.0 Test/Demo Sandbox Adapter, Crypto, Production Blocker & Idemp
       }),
     ).rejects.toThrow(KsefXmlPreValidationError);
     expect(calls.length).toBe(callsBeforeInvalid);
+
+    // [P1-1] Invalid modulo-11 NIP is rejected before any network call
+    await expect(
+      service.authenticateWithKsefToken({
+        contextNip: '5260001009',
+        ksefToken: 'test-token-xyz',
+        tokenEncryptionCertOrPem: TEST_RSA_PUBLIC_PEM,
+      }),
+    ).rejects.toThrow(/modulo-11/);
 
     // 3. Token auth flow
     const tokens = await service.authenticateWithKsefToken({
@@ -575,5 +593,72 @@ describe('KSeF 2.0 Test/Demo Sandbox Adapter, Crypto, Production Blocker & Idemp
     });
     expect(sync2.items[0]?.deduplicatedInArchive).toBe(true);
     expect(sync2.items[0]?.archivedArtifactId).toBe(sync1.items[0]?.archivedArtifactId);
+
+    // [P1-1] Subject2 sync MUST reject B2C <BrakID>1</BrakID> invoices where buyerNip is absent!
+    const b2cIncomingXml = generateKsefFaXml({
+      schemaVersion: 'FA(3)',
+      createdAtIsoUtc: '2026-03-22T09:00:00Z',
+      seller: {
+        nip: SELLER_NIP,
+        name: 'Dostawca Energii Sp. z o.o.',
+        address: { countryCode: 'PL', addressLine1: 'ul. Energetyczna 1, 00-001 Warszawa' },
+      },
+      buyer: {
+        identifier: { kind: 'brak_id' },
+        name: 'Konsument Prywatny',
+      },
+      invoiceNumber: 'FV/B2C-SPOOF/01',
+      issueDate: '2026-03-22',
+      lines: [{ description: 'Usługa B2C', netGrosze: 10_000, vatRate: '23' }],
+    }).xml;
+    const b2cKsefNo = buildSyntheticTestKsefNumber(SELLER_NIP, '2026-03-22', 'FFEEDDCCBBAA');
+    const b2cAdapter = new Ksef2SandboxAdapterService({
+      environment: 'local_mock',
+      baseUrl: 'http://127.0.0.1:18082/v2',
+      transport: {
+        async send(req): Promise<KsefHttpResponse> {
+          const p = new URL(req.url).pathname;
+          if (req.method === 'POST' && p === '/v2/invoices/query/metadata') {
+            return {
+              status: 200,
+              headers: {},
+              bodyText: JSON.stringify({
+                hasMore: false,
+                isTruncated: false,
+                invoices: [
+                  {
+                    ksefNumber: b2cKsefNo,
+                    invoiceNumber: 'FV/B2C-SPOOF/01',
+                    issueDate: '2026-03-22',
+                    invoicingDate: '2026-03-22T09:00:00Z',
+                    seller: { nip: SELLER_NIP },
+                    buyer: { identifier: { type: 'None', value: null } },
+                    netAmount: 100,
+                    grossAmount: 123,
+                    vatAmount: 23,
+                    currency: 'PLN',
+                  },
+                ],
+              }),
+            };
+          }
+          if (req.method === 'GET' && p === `/v2/invoices/ksef/${b2cKsefNo}`) {
+            return { status: 200, headers: {}, bodyText: b2cIncomingXml };
+          }
+          throw new Error(`Unexpected route ${req.url}`);
+        },
+      },
+    });
+    await expect(
+      b2cAdapter.syncIncomingInvoices({
+        tenantId: '11111111-1111-4111-8111-111111111111',
+        legalEntityId: 'aaaaaaaa-1111-4111-8111-111111111111',
+        buyerNip: BUYER_NIP,
+        accessToken: 'tok',
+        fromIso: '2026-03-01T00:00:00Z',
+        toIso: '2026-03-31T23:59:59Z',
+        archive,
+      }),
+    ).rejects.toThrow(/Subject2 invoice/);
   });
 });

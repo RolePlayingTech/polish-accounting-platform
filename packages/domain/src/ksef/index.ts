@@ -525,6 +525,15 @@ export function generateKsefFaXml(input: GenerateKsefFaXmlInput): GeneratedKsefF
     (l) => l.line.vatRate === 'np' && l.line.vatRateXmlCode === 'np II',
   );
 
+  const netOo = sumGrosze(
+    computedLines
+      .filter((l) => l.line.vatRate === 'np' && l.line.vatRateXmlCode === 'oo')
+      .map((l) => l.effectiveNetContribution),
+  );
+  const hasOo = computedLines.some(
+    (l) => l.line.vatRate === 'np' && l.line.vatRateXmlCode === 'oo',
+  );
+
   const totalNetGrosze = sumGrosze(computedLines.map((l) => l.effectiveNetContribution));
   const totalVatGrosze = sumGrosze(computedLines.map((l) => l.effectiveVatContribution));
   const totalGrossGrosze = addGrosze(totalNetGrosze, totalVatGrosze);
@@ -631,6 +640,7 @@ export function generateKsefFaXml(input: GenerateKsefFaXmlInput): GeneratedKsefF
     ...(hasZw ? [`    <P_13_7>${formatGroszeForXsdDecimal(netZw)}</P_13_7>`] : []),
     ...(hasNp1 ? [`    <P_13_8>${formatGroszeForXsdDecimal(netNp1)}</P_13_8>`] : []),
     ...(hasNp2 ? [`    <P_13_9>${formatGroszeForXsdDecimal(netNp2)}</P_13_9>`] : []),
+    ...(hasOo ? [`    <P_13_10>${formatGroszeForXsdDecimal(netOo)}</P_13_10>`] : []),
     `    <P_15>${formatGroszeForXsdDecimal(totalGrossGrosze)}</P_15>`,
     '    <Adnotacje>',
     `      <P_16>${input.cashAccountingMethodP16 ? '1' : '2'}</P_16>`,

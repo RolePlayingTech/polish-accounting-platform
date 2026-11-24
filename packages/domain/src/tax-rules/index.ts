@@ -980,6 +980,14 @@ export function calculateProfileCCitObligations(
       );
     }
     taxYearMonths = countTaxYearFullMonths(input.taxYearStartDate, input.taxYearEndDate);
+    const startPeriod = input.taxYearStartDate.slice(0, 7);
+    const endPeriod = input.taxYearEndDate.slice(0, 7);
+    if (input.period < startPeriod || input.period > endPeriod) {
+      throw new CitPreferentialEligibilityError(
+        'cit_period_outside_tax_year',
+        `Okres zaliczki CIT (${input.period}) wykracza poza zadeklarowany rok podatkowy spółki (${input.taxYearStartDate}..${input.taxYearEndDate}).`,
+      );
+    }
   } else if (input.requestPreferential9PctRate === true) {
     throw new CitPreferentialEligibilityError(
       'missing_cit_tax_year_dates',
@@ -1129,13 +1137,15 @@ export function calculateProfileCCitObligations(
     verifiedPayments: input.verifiedPayments,
   });
 
-  const taxYearPrefix = (input.taxYearStartDate ?? `${input.period.slice(0, 4)}-01-01`).slice(0, 4);
+  const taxYearStartPeriod = input.taxYearStartDate
+    ? input.taxYearStartDate.slice(0, 7)
+    : `${input.period.slice(0, 4)}-01`;
   const prevAdvancesPaidYtd = sumGrosze(
     input.verifiedPayments
       .filter(
         (p) =>
           p.obligationKind === 'cit_advance' &&
-          p.targetPeriod >= `${taxYearPrefix}-01` &&
+          p.targetPeriod >= taxYearStartPeriod &&
           p.targetPeriod < input.period &&
           p.paidDate <= evaluationDate,
       )

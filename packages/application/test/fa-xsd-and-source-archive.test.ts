@@ -214,6 +214,55 @@ describe('Official MF FA(2) & FA(3) XSD Validation, XXE Hardening, and WORM Sour
     });
     expect(validateOfficialMfXml(archivalFa2.xml, 'FA(2)').valid).toBe(true);
     expect(parseOfficialKsefFaXml(archivalFa2.xml).ksefSchemaVersion).toBe('FA(2)');
+
+    // 6. [P0-4] Reverse-charge ('oo' -> <P_13_10>) + 'np I' (<P_13_8>) + 'np II' (<P_13_9>) round-trip on FA(3) and FA(2)
+    for (const version of ['FA(3)', 'FA(2)'] as const) {
+      const mixedRc = generateKsefFaXml({
+        schemaVersion: version,
+        createdAtIsoUtc: '2026-03-26T11:00:00Z',
+        seller: {
+          nip: SELLER_NIP,
+          name: 'Księga Współczesna Sp. z o.o.',
+          address: { countryCode: 'PL', addressLine1: 'ul. Marszałkowska 100, 00-026 Warszawa' },
+        },
+        buyer: {
+          identifier: { kind: 'nip', nip: BUYER_NIP },
+          name: 'Odbiorca Przemysłowy Sp. z o.o.',
+          address: { countryCode: 'PL', addressLine1: 'ul. Chorzowska 50, 40-121 Katowice' },
+        },
+        invoiceNumber: `FV/OO/${version}/01`,
+        issueDate: '2026-03-26',
+        reverseChargeP18: true,
+        lines: [
+          {
+            description: 'Odwrotne obciążenie krajowe',
+            netGrosze: 200_000,
+            vatRate: 'np',
+            vatRateXmlCode: 'oo',
+          },
+          {
+            description: 'Usługa poza terytorium kraju (np I)',
+            netGrosze: 100_000,
+            vatRate: 'np',
+            vatRateXmlCode: 'np I',
+          },
+          {
+            description: 'Usługa art. 100 ust. 1 pkt 4 (np II)',
+            netGrosze: 50_000,
+            vatRate: 'np',
+            vatRateXmlCode: 'np II',
+          },
+        ],
+      });
+      expect(mixedRc.xml).toContain('<P_13_8>1000.00</P_13_8>');
+      expect(mixedRc.xml).toContain('<P_13_9>500.00</P_13_9>');
+      expect(mixedRc.xml).toContain('<P_13_10>2000.00</P_13_10>');
+      expect(validateOfficialMfXml(mixedRc.xml, version).valid).toBe(true);
+      const parsedMixedRc = parseOfficialKsefFaXml(mixedRc.xml, { companyNip: SELLER_NIP });
+      expect(parsedMixedRc.totalNetGrosze).toBe(350_000);
+      expect(parsedMixedRc.totalVatGrosze).toBe(0);
+      expect(parsedMixedRc.totalGrossGrosze).toBe(350_000);
+    }
   });
 
   it('rejects PL-prefixed NIP, BrakID in Podmiot1, missing/mismatched Naglowek/WariantFormularza, wrong xmlns, comma decimals, and XXE/entity expansion (GLD-09)', () => {

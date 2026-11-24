@@ -447,6 +447,60 @@ describe('2026 Deterministic Tax Calculators — Accrued/Due vs Paid (#81)', () 
           (w) => w.code === 'CIT_CURRENT_TAX_YEAR_LIMIT_EXCEEDED',
         ),
       ).toBe(true);
+
+      // [P1-2] Prior-tax-year CIT advance payments MUST NOT bleed into multi-calendar-year CIT arrears, and out-of-range period fails closed
+      const multiYearWithPriorTaxYearPayment = calculateProfileCCitObligations({
+        period: '2026-03',
+        taxYearStartDate: '2025-10-01',
+        taxYearEndDate: '2026-12-31',
+        operatingRevenuesYtdGrosze: 30_000_000,
+        operatingTaxDeductibleCostsYtdGrosze: 10_000_000,
+        previousAdvancesAccruedDueYtdGrosze: 500_000,
+        verifiedPayments: [
+          {
+            paymentId: 'prior-tax-year-cit-2025-05',
+            obligationKind: 'cit_advance',
+            targetPeriod: '2025-05', // belongs to prior tax year ending 2025-09-30!
+            paidDate: '2025-06-18',
+            amountGrosze: 500_000,
+            bankTransactionId: 'TX-CIT-PRIOR-YEAR',
+          },
+        ],
+      });
+      expect(multiYearWithPriorTaxYearPayment.cumulativeCitArrearsFromPriorMonthsGrosze).toBe(
+        500_000,
+      );
+
+      const multiYearWithCurrentTaxYearPayment = calculateProfileCCitObligations({
+        period: '2026-03',
+        taxYearStartDate: '2025-10-01',
+        taxYearEndDate: '2026-12-31',
+        operatingRevenuesYtdGrosze: 30_000_000,
+        operatingTaxDeductibleCostsYtdGrosze: 10_000_000,
+        previousAdvancesAccruedDueYtdGrosze: 500_000,
+        verifiedPayments: [
+          {
+            paymentId: 'curr-tax-year-cit-2025-11',
+            obligationKind: 'cit_advance',
+            targetPeriod: '2025-11', // inside 2025-10..2026-12 tax year
+            paidDate: '2025-12-18',
+            amountGrosze: 500_000,
+            bankTransactionId: 'TX-CIT-CURR-YEAR',
+          },
+        ],
+      });
+      expect(multiYearWithCurrentTaxYearPayment.cumulativeCitArrearsFromPriorMonthsGrosze).toBe(0);
+
+      expect(() =>
+        calculateProfileCCitObligations({
+          period: '2026-03',
+          taxYearStartDate: '2026-07-01',
+          taxYearEndDate: '2026-12-31',
+          operatingRevenuesYtdGrosze: 10_000_000,
+          operatingTaxDeductibleCostsYtdGrosze: 5_000_000,
+          verifiedPayments: [],
+        }),
+      ).toThrow(CitPreferentialEligibilityError);
     });
   });
 

@@ -1376,6 +1376,8 @@ export function parseSafeKsefXml(
     );
   }
 
+  const npSubBuckets = { np1: 0, np2: 0, oo: 0 };
+
   const lines: DocumentLineItemContract[] = wierszeNodes.map((wiersz, idx) => {
     const lineNoRaw = getOptionalChildText(wiersz, 'NrWierszaFa', targetNs);
     const lineNumber =
@@ -1494,6 +1496,17 @@ export function parseSafeKsefXml(
       (!strictXsd ? getOptionalChildText(wiersz, 'Zalacznik15', targetNs) : undefined);
     const annex15Item = globalAnnex15 || lineZal15 === '1' || lineZal15?.toLowerCase() === 'true';
 
+    if (vatRate === 'np') {
+      const p12Norm = vatRateRaw.trim().toLowerCase();
+      if (p12Norm === 'np ii') {
+        npSubBuckets.np2 += netGrosze;
+      } else if (p12Norm === 'oo') {
+        npSubBuckets.oo += netGrosze;
+      } else {
+        npSubBuckets.np1 += netGrosze;
+      }
+    }
+
     return {
       lineNumber,
       description,
@@ -1518,7 +1531,7 @@ export function parseSafeKsefXml(
     { rate: '5', netTags: ['P_13_3'], vatTags: ['P_14_3'] },
     { rate: '0', netTags: ['P_13_6_1', 'P_13_6_2', 'P_13_6_3'], vatTags: [] },
     { rate: 'zw', netTags: ['P_13_7'], vatTags: [] },
-    { rate: 'np', netTags: ['P_13_8', 'P_13_9'], vatTags: [] },
+    { rate: 'np', netTags: ['P_13_8', 'P_13_9', 'P_13_10'], vatTags: [] },
   ];
 
   for (const mapping of rateSummaryMappings) {
@@ -1558,6 +1571,61 @@ export function parseSafeKsefXml(
           );
         }
       }
+    }
+  }
+
+  // Dodatkowa weryfikacja pod-koszyków P_13_8 ('np I'), P_13_9 ('np II') i P_13_10 ('oo')
+  const rawP13_8 = getOptionalChildText(faNode, 'P_13_8', targetNs);
+  const rawP13_9 = getOptionalChildText(faNode, 'P_13_9', targetNs);
+  const rawP13_10 = getOptionalChildText(faNode, 'P_13_10', targetNs);
+  if (rawP13_10 !== undefined) {
+    const val = parseXsdKwotowyToGroszeStrict(rawP13_10, 'P_13_10', isCorrectionInvoice);
+    if (val !== npSubBuckets.oo) {
+      throw new AccountingWorkspaceError(
+        422,
+        'ksef_summary_net_mismatch',
+        `Suma netto odwrotnego obciążenia w <P_13_10> (${formatPlnFromGrosze(val)} PLN) nie zgadza się z sumą wierszy "oo" (${formatPlnFromGrosze(npSubBuckets.oo)} PLN).`,
+      );
+    }
+  }
+  if (nsSchemaVersion === 'FA(3)') {
+    if (rawP13_9 !== undefined) {
+      const val = parseXsdKwotowyToGroszeStrict(rawP13_9, 'P_13_9', isCorrectionInvoice);
+      if (val !== npSubBuckets.np2) {
+        throw new AccountingWorkspaceError(
+          422,
+          'ksef_summary_net_mismatch',
+          `Suma netto w <P_13_9> (${formatPlnFromGrosze(val)} PLN) nie zgadza się z sumą wierszy "np II" (${formatPlnFromGrosze(npSubBuckets.np2)} PLN).`,
+        );
+      }
+    }
+    if (rawP13_8 !== undefined && (npSubBuckets.np2 !== 0 || npSubBuckets.oo !== 0 || strictXsd)) {
+      const val = parseXsdKwotowyToGroszeStrict(rawP13_8, 'P_13_8', isCorrectionInvoice);
+      if (val !== npSubBuckets.np1) {
+        throw new AccountingWorkspaceError(
+          422,
+          'ksef_summary_net_mismatch',
+          `Suma netto w <P_13_8> (${formatPlnFromGrosze(val)} PLN) nie zgadza się z sumą wierszy "np I" (${formatPlnFromGrosze(npSubBuckets.np1)} PLN).`,
+        );
+      }
+    }
+  } else if (rawP13_8 !== undefined || rawP13_9 !== undefined) {
+    // W FA(2) zarówno <P_13_8> jak i <P_13_9> odpowiadają wierszom ze stawką <P_12>np</P_12> (podczas gdy <P_13_10> odpowiada <P_12>oo</P_12>)
+    const p13_8Val =
+      rawP13_8 !== undefined
+        ? parseXsdKwotowyToGroszeStrict(rawP13_8, 'P_13_8', isCorrectionInvoice)
+        : 0;
+    const p13_9Val =
+      rawP13_9 !== undefined
+        ? parseXsdKwotowyToGroszeStrict(rawP13_9, 'P_13_9', isCorrectionInvoice)
+        : 0;
+    const nonOoNpLines = npSubBuckets.np1 + npSubBuckets.np2;
+    if (p13_8Val + p13_9Val !== nonOoNpLines) {
+      throw new AccountingWorkspaceError(
+        422,
+        'ksef_summary_net_mismatch',
+        `Suma netto w <P_13_8>+<P_13_9> (${formatPlnFromGrosze(p13_8Val + p13_9Val)} PLN) nie zgadza się z sumą wierszy "np" (${formatPlnFromGrosze(nonOoNpLines)} PLN).`,
+      );
     }
   }
 

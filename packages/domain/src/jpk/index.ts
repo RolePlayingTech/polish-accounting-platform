@@ -1,4 +1,6 @@
 import { validateKsefNumber } from '../ksef/index.js';
+import { assertValidIsoCalendarDate } from '../legal-rules/index.js';
+import { validatePolishNip } from '../money.js';
 import type { AccountingTaxProfileCode } from '../tax-rules/index.js';
 
 export type OfficialJpkStructureCode =
@@ -187,12 +189,16 @@ function assertValidNip10(nip: string, label: string): void {
   if (!/^[1-9]((\d[1-9])|([1-9]\d))\d{7}$/.test(nip)) {
     throw new Error(`Invalid Polish 10-digit NIP for ${label}: "${nip}".`);
   }
+  const check = validatePolishNip(nip);
+  if (!check.valid) {
+    throw new Error(
+      `Invalid Polish NIP modulo-11 checksum for ${label} ("${nip}"): ${check.reason ?? 'checksum mismatch'}.`,
+    );
+  }
 }
 
 function assertValidIsoDate(date: string, label: string): void {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    throw new Error(`Invalid YYYY-MM-DD date for ${label}: "${date}".`);
-  }
+  assertValidIsoCalendarDate(date, label);
 }
 
 function assertValidIsoDateTimeUtc(dateTime: string, label: string): void {
@@ -360,11 +366,12 @@ export interface JpkV7PurchaseRowInput {
 }
 
 export type JpkVatRefundTimeframe =
-  | '15_days' // P_540
-  | '25_days' // P_55
-  | '40_days' // P_56
-  | '60_days' // P_560
-  | '180_days'; // P_58
+  | '15_days' // P_540: rachunek rozliczeniowy podatnika w terminie 15 dni
+  | '25_days_vat_account' // P_55: rachunek VAT podatnika w terminie 25 dni
+  | '25_days_art87_6' // P_56: rachunek rozliczeniowy w terminie 25 dni (art. 87 ust. 6 ustawy o VAT)
+  | '40_days' // P_560: rachunek rozliczeniowy w terminie 40 dni (podstawowy termin zwrotu od 2026-02 w KSeF)
+  | '60_days' // P_57: rachunek rozliczeniowy w terminie 60 dni (WYŁĄCZNIE archiwalny JPK_V7M(2)!)
+  | '180_days'; // P_58: rachunek rozliczeniowy w terminie 180 dni
 
 export interface GenerateJpkV7Input {
   variant: 'JPK_V7M(3)' | 'JPK_V7K(3)' | 'JPK_V7M(2)';
@@ -799,17 +806,25 @@ export function generateJpkV7Xml(input: GenerateJpkV7Input): string {
       lines.push(`      <P_53>${p53}</P_53>`);
     }
     if (requestedRefundPln > 0) {
-      const timeframe = input.refundTimeframe ?? '60_days';
+      const timeframe: JpkVatRefundTimeframe =
+        input.refundTimeframe ?? (isV3 ? '40_days' : '60_days');
+      if (timeframe === '60_days' && isV3) {
+        throw new Error(
+          `60-day VAT refund (P_57) was abolished starting 2026-02-01 in ${input.variant}; use "40_days" (P_560), "25_days_vat_account" (P_55), "25_days_art87_6" (P_56), "15_days" (P_540), or "180_days" (P_58).`,
+        );
+      }
       const refundTag =
         timeframe === '15_days'
           ? 'P_540'
-          : timeframe === '25_days'
+          : timeframe === '25_days_vat_account'
             ? 'P_55'
-            : timeframe === '40_days'
+            : timeframe === '25_days_art87_6'
               ? 'P_56'
-              : timeframe === '60_days'
+              : timeframe === '40_days'
                 ? 'P_560'
-                : 'P_58';
+                : timeframe === '60_days'
+                  ? 'P_57'
+                  : 'P_58';
       lines.push(`      <P_54>${requestedRefundPln}</P_54>`);
       lines.push(`      <${refundTag}>1</${refundTag}>`);
     }
@@ -912,6 +927,12 @@ export function generateJpkPkpir3Xml(input: GenerateJpkPkpir3Input): string {
   assertValidIsoDate(input.dateFrom, 'DataOd');
   assertValidIsoDate(input.dateTo, 'DataDo');
   assertValidTaxOfficeCode(input.taxOfficeCode);
+
+  if (input.rows.length === 0) {
+    throw new Error(
+      'JPK_PKPIR(3) requires at least one PKPIRWiersz entry (XSD PKPIRCtrl/LiczbaWierszy is TNaturalnyJPK >= 1).',
+    );
+  }
 
   let totalRevenueGrosze = 0;
   let totalGoodsAndIncidentalGrosze = 0;
@@ -1077,6 +1098,12 @@ export function generateJpkEwp4Xml(input: GenerateJpkEwp4Input): string {
   assertValidIsoDate(input.dateTo, 'DataDo');
   assertValidTaxOfficeCode(input.taxOfficeCode);
 
+  if (input.rows.length === 0) {
+    throw new Error(
+      'JPK_EWP(4) requires at least one EWPWiersz entry (XSD EWPCtrl/LiczbaWierszy is TNaturalnyJPK >= 1).',
+    );
+  }
+
   let totalRevenueGrosze = 0;
   const rowXmlLines: string[] = [];
 
@@ -1151,6 +1178,15 @@ export function generateJpkEwp4Xml(input: GenerateJpkEwp4Input): string {
 
 export type JpkAcquisitionModeCode = 'S' | 'D' | 'N' | 'W' | 'F' | 'I';
 export type JpkDepreciationMethodCode = 'D' | 'L' | 'J' | 'I' | 'X';
+export type JpkStDisposalReasonCode = 'S' | 'X' | 'K' | 'D' | 'N' | 'I';
+export type JpkStKrDisposalReasonCode = 'A' | JpkStDisposalReasonCode;
+
+export interface JpkStDisposalInput {
+  disposalDate: string; // F_12 / G_18
+  reasonCode: JpkStDisposalReasonCode; // F_13 / G_19
+  disposalDocumentNumber: string; // F_14 / G_20
+  ksefNumbers?: ReadonlyArray<string>; // KSeF/F_15 or KSeF/G_21
+}
 
 export interface JpkStPkpirAssetRowInput {
   assetKind: 'tangible' | 'intangible'; // G_2 vs G_3
@@ -1165,7 +1201,9 @@ export interface JpkStPkpirAssetRowInput {
   initialValueGrosze: number; // G_12
   annualTaxDepreciationGrosze: number; // G_14
   cumulativeTaxDepreciationGrosze: number; // G_15
-  hasKsefDocument?: 1 | 2; // G_22
+  disposal?: JpkStDisposalInput; // G_18..G_21
+  /** G_22: Reklasyfikacja KŚT w trakcie roku (1 - TAK; 2 - NIE, domyślnie 2) */
+  kstReclassifiedInYear?: 1 | 2;
 }
 
 export interface JpkStEwpAssetRowInput {
@@ -1178,7 +1216,9 @@ export interface JpkStEwpAssetRowInput {
   kstSymbol?: string; // F_8
   annualRatePercent: number; // F_9
   initialValueGrosze: number; // F_10
-  hasKsefDocument?: 1 | 2; // F_16
+  disposal?: JpkStDisposalInput; // F_12..F_15
+  /** F_16: Reklasyfikacja KŚT w trakcie roku (1 - TAK; 2 - NIE, domyślnie 2) */
+  kstReclassifiedInYear?: 1 | 2;
 }
 
 export type GenerateJpkSt1Input = {
@@ -1241,7 +1281,24 @@ export function generateJpkSt1Xml(input: GenerateJpkSt1Input): string {
       }
       lines.push(`      <F_9>${row.annualRatePercent.toFixed(2)}</F_9>`);
       lines.push(`      <F_10>${formatGroszeDecimal(row.initialValueGrosze)}</F_10>`);
-      lines.push(`      <F_16>${row.hasKsefDocument ?? 2}</F_16>`);
+      if (row.disposal) {
+        assertValidIsoDate(row.disposal.disposalDate, `EWP.Wiersz[${idx + 1}].F_12`);
+        lines.push(`      <F_12>${escapeXml(row.disposal.disposalDate)}</F_12>`);
+        lines.push(`      <F_13>${row.disposal.reasonCode}</F_13>`);
+        lines.push(`      <F_14>${escapeXml(row.disposal.disposalDocumentNumber)}</F_14>`);
+        if (row.disposal.ksefNumbers && row.disposal.ksefNumbers.length > 0) {
+          lines.push('      <KSeF>');
+          for (const ksefNo of row.disposal.ksefNumbers) {
+            const check = validateKsefNumber(ksefNo);
+            if (!check.valid) {
+              throw new Error(`Invalid F_15 NrKSeF "${ksefNo}": ${check.reason}`);
+            }
+            lines.push(`        <F_15>${escapeXml(ksefNo)}</F_15>`);
+          }
+          lines.push('      </KSeF>');
+        }
+      }
+      lines.push(`      <F_16>${row.kstReclassifiedInYear ?? 2}</F_16>`);
       lines.push('    </Wiersz>');
     });
     lines.push('  </EWP>');
@@ -1268,7 +1325,24 @@ export function generateJpkSt1Xml(input: GenerateJpkSt1Input): string {
       lines.push(`      <G_12>${formatGroszeDecimal(row.initialValueGrosze)}</G_12>`);
       lines.push(`      <G_14>${formatGroszeDecimal(row.annualTaxDepreciationGrosze)}</G_14>`);
       lines.push(`      <G_15>${formatGroszeDecimal(row.cumulativeTaxDepreciationGrosze)}</G_15>`);
-      lines.push(`      <G_22>${row.hasKsefDocument ?? 2}</G_22>`);
+      if (row.disposal) {
+        assertValidIsoDate(row.disposal.disposalDate, `PKPIR.Wiersz[${idx + 1}].G_18`);
+        lines.push(`      <G_18>${escapeXml(row.disposal.disposalDate)}</G_18>`);
+        lines.push(`      <G_19>${row.disposal.reasonCode}</G_19>`);
+        lines.push(`      <G_20>${escapeXml(row.disposal.disposalDocumentNumber)}</G_20>`);
+        if (row.disposal.ksefNumbers && row.disposal.ksefNumbers.length > 0) {
+          lines.push('      <KSeF>');
+          for (const ksefNo of row.disposal.ksefNumbers) {
+            const check = validateKsefNumber(ksefNo);
+            if (!check.valid) {
+              throw new Error(`Invalid G_21 NrKSeF "${ksefNo}": ${check.reason}`);
+            }
+            lines.push(`        <G_21>${escapeXml(ksefNo)}</G_21>`);
+          }
+          lines.push('      </KSeF>');
+        }
+      }
+      lines.push(`      <G_22>${row.kstReclassifiedInYear ?? 2}</G_22>`);
       lines.push('    </Wiersz>');
     });
     lines.push('  </PKPIR>');
@@ -1289,9 +1363,9 @@ export interface JpkKrPdCounterpartyInput {
 }
 
 export interface JpkKrPdZois7AccountInput {
-  accountId: string; // S_1
-  accountName: string; // S_2
-  accountTypeLabel: string; // S_3
+  accountId: string; // S_1: Identyfikator konta ostatecznego zapisu
+  accountName: string; // S_2: Nazwa konta
+  parentAccountId: string; // S_3: Identyfikator konta nadrzędnego
   openingDebitGrosze: number; // S_4
   openingCreditGrosze: number; // S_5
   turnoverPeriodDebitGrosze: number; // S_6
@@ -1328,14 +1402,22 @@ export interface JpkKrPdJournalEntryInput {
 }
 
 export interface JpkKrPdRpdSummaryInput {
-  nonTaxableAccountingRevenuesGrosze?: number; // K_1
-  taxableNonAccountingRevenuesGrosze?: number; // K_2
-  nonDeductibleAccountingCostsGrosze?: number; // K_3
-  deductibleNonAccountingCostsGrosze?: number; // K_4
-  taxExemptIncomeGrosze?: number; // K_5
-  foreignSourceIncomeGrosze?: number; // K_6
-  otherTaxBaseDeductionsGrosze?: number; // K_7
-  otherTaxBaseAdditionsGrosze?: number; // K_8
+  /** K_1: Przychody zwolnione z opodatkowania (trwałe różnice rachunkowo-podatkowe) */
+  k1ExemptRevenuesPermanentGrosze?: number;
+  /** K_2: Przychody niepodlegające opodatkowaniu w roku bieżącym */
+  k2NonTaxableCurrentYearRevenuesGrosze?: number;
+  /** K_3: Przychody podlegające opodatkowaniu w roku bieżącym, ujęte w księgach rachunkowych lat ubiegłych */
+  k3TaxableCurrentYearPriorLedgerRevenuesGrosze?: number;
+  /** K_4: Koszty niestanowiące kosztów uzyskania przychodów (trwałe różnice rachunkowo-podatkowe) */
+  k4NonDeductibleCostsPermanentGrosze?: number;
+  /** K_5: Koszty nieuznawane za koszty uzyskania przychodów w bieżącym roku */
+  k5NonDeductibleCurrentYearCostsGrosze?: number;
+  /** K_6: Koszty uznawane za koszty uzyskania przychodów w roku bieżącym, ujęte w księgach lat ubiegłych */
+  k6DeductibleCurrentYearPriorLedgerCostsGrosze?: number;
+  /** K_7: Przychody podlegające opodatkowaniu nie ujmowane w księgach rachunkowych */
+  k7OffLedgerTaxableRevenuesGrosze?: number;
+  /** K_8: Koszty uznawane za koszty uzyskania przychodów nie ujmowane w księgach rachunkowych */
+  k8OffLedgerDeductibleCostsGrosze?: number;
 }
 
 export interface GenerateJpkKrPd1Input {
@@ -1537,7 +1619,7 @@ export function generateJpkKrPd1Xml(input: GenerateJpkKrPd1Input): string {
     lines.push('    <ZOiS7>');
     lines.push(`      <S_1>${escapeXml(acc.accountId)}</S_1>`);
     lines.push(`      <S_2>${escapeXml(acc.accountName)}</S_2>`);
-    lines.push(`      <S_3>${escapeXml(acc.accountTypeLabel)}</S_3>`);
+    lines.push(`      <S_3>${escapeXml(acc.parentAccountId)}</S_3>`);
     lines.push(`      <S_4>${formatGroszeDecimal(acc.openingDebitGrosze)}</S_4>`);
     lines.push(`      <S_5>${formatGroszeDecimal(acc.openingCreditGrosze)}</S_5>`);
     lines.push(`      <S_6>${formatGroszeDecimal(acc.turnoverPeriodDebitGrosze)}</S_6>`);
@@ -1569,14 +1651,22 @@ export function generateJpkKrPd1Xml(input: GenerateJpkKrPd1Input): string {
 
   const rpd = input.rpd ?? {};
   lines.push('  <RPD>');
-  lines.push(`    <K_1>${formatGroszeDecimal(rpd.nonTaxableAccountingRevenuesGrosze ?? 0)}</K_1>`);
-  lines.push(`    <K_2>${formatGroszeDecimal(rpd.taxableNonAccountingRevenuesGrosze ?? 0)}</K_2>`);
-  lines.push(`    <K_3>${formatGroszeDecimal(rpd.nonDeductibleAccountingCostsGrosze ?? 0)}</K_3>`);
-  lines.push(`    <K_4>${formatGroszeDecimal(rpd.deductibleNonAccountingCostsGrosze ?? 0)}</K_4>`);
-  lines.push(`    <K_5>${formatGroszeDecimal(rpd.taxExemptIncomeGrosze ?? 0)}</K_5>`);
-  lines.push(`    <K_6>${formatGroszeDecimal(rpd.foreignSourceIncomeGrosze ?? 0)}</K_6>`);
-  lines.push(`    <K_7>${formatGroszeDecimal(rpd.otherTaxBaseDeductionsGrosze ?? 0)}</K_7>`);
-  lines.push(`    <K_8>${formatGroszeDecimal(rpd.otherTaxBaseAdditionsGrosze ?? 0)}</K_8>`);
+  lines.push(`    <K_1>${formatGroszeDecimal(rpd.k1ExemptRevenuesPermanentGrosze ?? 0)}</K_1>`);
+  lines.push(
+    `    <K_2>${formatGroszeDecimal(rpd.k2NonTaxableCurrentYearRevenuesGrosze ?? 0)}</K_2>`,
+  );
+  lines.push(
+    `    <K_3>${formatGroszeDecimal(rpd.k3TaxableCurrentYearPriorLedgerRevenuesGrosze ?? 0)}</K_3>`,
+  );
+  lines.push(`    <K_4>${formatGroszeDecimal(rpd.k4NonDeductibleCostsPermanentGrosze ?? 0)}</K_4>`);
+  lines.push(
+    `    <K_5>${formatGroszeDecimal(rpd.k5NonDeductibleCurrentYearCostsGrosze ?? 0)}</K_5>`,
+  );
+  lines.push(
+    `    <K_6>${formatGroszeDecimal(rpd.k6DeductibleCurrentYearPriorLedgerCostsGrosze ?? 0)}</K_6>`,
+  );
+  lines.push(`    <K_7>${formatGroszeDecimal(rpd.k7OffLedgerTaxableRevenuesGrosze ?? 0)}</K_7>`);
+  lines.push(`    <K_8>${formatGroszeDecimal(rpd.k8OffLedgerDeductibleCostsGrosze ?? 0)}</K_8>`);
   lines.push('  </RPD>');
 
   lines.push('</JPK>');
@@ -1589,6 +1679,13 @@ export function generateJpkKrPd1Xml(input: GenerateJpkKrPd1Input): string {
 
 export type JpkDepreciationFrequencyCode = 'M' | 'K' | 'R' | 'J' | 'S' | 'I' | 'X';
 
+export interface JpkStKrDisposalInput {
+  disposalDate: string; // E_28
+  reasonCode: JpkStKrDisposalReasonCode; // E_29
+  disposalDocumentNumber: string; // E_30
+  ksefNumbers?: ReadonlyArray<string>; // KSeF/E_31
+}
+
 export interface JpkStKrAssetRowInput {
   inventoryNumber: string; // E_1
   assetKind: 'tangible' | 'intangible'; // E_2 vs E_3
@@ -1598,19 +1695,34 @@ export interface JpkStKrAssetRowInput {
   acquisitionMode: JpkAcquisitionModeCode; // E_6
   assetName: string; // E_7
   kstSymbol?: string; // E_8
-  depreciationMethod: JpkDepreciationMethodCode; // E_9_1
-  accountingRatePercent: number; // E_10A
-  accountingAnnualAmountGrosze: number; // E_10B
-  accountingInitialValueGrosze: number; // E_12
-  depreciationFrequency: JpkDepreciationFrequencyCode; // E_17
-  accountingPeriodDepreciationGrosze: number; // E_19
-  accountingCumulativeDepreciationGrosze: number; // E_20
-  taxInitialValueGrosze: number; // E_21
-  taxRatePercent: number; // E_25A
-  taxAnnualAmountGrosze: number; // E_25B
-  taxPeriodDepreciationGrosze: number; // E_26
-  taxCumulativeDepreciationGrosze: number; // E_27
-  hasKsefDocument?: 1 | 2; // E_32
+  /** E_9_1: Metoda amortyzacji podatkowa */
+  depreciationMethod: JpkDepreciationMethodCode;
+  /** E_10A: Stawka amortyzacyjna podatkowa podstawowa (procentowa) */
+  taxRatePercent: number;
+  /** E_10B: Stawka amortyzacyjna podatkowa podstawowa (kwotowa) */
+  taxAnnualAmountGrosze: number;
+  /** E_12: Wartość początkowa podatkowa */
+  taxInitialValueGrosze: number;
+  /** E_17: Częstotliwość odpisu */
+  depreciationFrequency: JpkDepreciationFrequencyCode;
+  /** E_19: Suma odpisów amortyzacyjnych podatkowych dla danego roku */
+  taxPeriodDepreciationGrosze: number;
+  /** E_20: Suma odpisów amortyzacyjnych podatkowych narastająco */
+  taxCumulativeDepreciationGrosze: number;
+  /** E_21: Wartość początkowa rachunkowa */
+  accountingInitialValueGrosze: number;
+  /** E_25A: Stawka amortyzacyjna rachunkowa (procentowa) */
+  accountingRatePercent: number;
+  /** E_25B: Stawka amortyzacyjna rachunkowa (kwotowa) */
+  accountingAnnualAmountGrosze: number;
+  /** E_26: Suma odpisów amortyzacyjnych rachunkowych dla danego roku */
+  accountingPeriodDepreciationGrosze: number;
+  /** E_27: Suma odpisów amortyzacyjnych rachunkowych narastająco */
+  accountingCumulativeDepreciationGrosze: number;
+  /** E_28..E_31: Opcjonalne wykreślenie z ewidencji (w tym numery KSeF zbycia E_31) */
+  disposal?: JpkStKrDisposalInput;
+  /** E_32: Reklasyfikacja KŚT w trakcie roku (1 - TAK; 2 - NIE, domyślnie 2) */
+  kstReclassifiedInYear?: 1 | 2;
 }
 
 export interface GenerateJpkStKr1Input {
@@ -1686,20 +1798,37 @@ export function generateJpkStKr1Xml(input: GenerateJpkStKr1Input): string {
       lines.push(`    <E_8>${escapeXml(asset.kstSymbol)}</E_8>`);
     }
     lines.push(`    <E_9_1>${asset.depreciationMethod}</E_9_1>`);
-    lines.push(`    <E_10A>${asset.accountingRatePercent.toFixed(2)}</E_10A>`);
-    lines.push(`    <E_10B>${formatGroszeDecimal(asset.accountingAnnualAmountGrosze)}</E_10B>`);
-    lines.push(`    <E_12>${formatGroszeDecimal(asset.accountingInitialValueGrosze)}</E_12>`);
+    lines.push(`    <E_10A>${asset.taxRatePercent.toFixed(2)}</E_10A>`);
+    lines.push(`    <E_10B>${formatGroszeDecimal(asset.taxAnnualAmountGrosze)}</E_10B>`);
+    lines.push(`    <E_12>${formatGroszeDecimal(asset.taxInitialValueGrosze)}</E_12>`);
     lines.push(`    <E_17>${asset.depreciationFrequency}</E_17>`);
-    lines.push(`    <E_19>${formatGroszeDecimal(asset.accountingPeriodDepreciationGrosze)}</E_19>`);
+    lines.push(`    <E_19>${formatGroszeDecimal(asset.taxPeriodDepreciationGrosze)}</E_19>`);
+    lines.push(`    <E_20>${formatGroszeDecimal(asset.taxCumulativeDepreciationGrosze)}</E_20>`);
+    lines.push(`    <E_21>${formatGroszeDecimal(asset.accountingInitialValueGrosze)}</E_21>`);
+    lines.push(`    <E_25A>${asset.accountingRatePercent.toFixed(2)}</E_25A>`);
+    lines.push(`    <E_25B>${formatGroszeDecimal(asset.accountingAnnualAmountGrosze)}</E_25B>`);
+    lines.push(`    <E_26>${formatGroszeDecimal(asset.accountingPeriodDepreciationGrosze)}</E_26>`);
     lines.push(
-      `    <E_20>${formatGroszeDecimal(asset.accountingCumulativeDepreciationGrosze)}</E_20>`,
+      `    <E_27>${formatGroszeDecimal(asset.accountingCumulativeDepreciationGrosze)}</E_27>`,
     );
-    lines.push(`    <E_21>${formatGroszeDecimal(asset.taxInitialValueGrosze)}</E_21>`);
-    lines.push(`    <E_25A>${asset.taxRatePercent.toFixed(2)}</E_25A>`);
-    lines.push(`    <E_25B>${formatGroszeDecimal(asset.taxAnnualAmountGrosze)}</E_25B>`);
-    lines.push(`    <E_26>${formatGroszeDecimal(asset.taxPeriodDepreciationGrosze)}</E_26>`);
-    lines.push(`    <E_27>${formatGroszeDecimal(asset.taxCumulativeDepreciationGrosze)}</E_27>`);
-    lines.push(`    <E_32>${asset.hasKsefDocument ?? 2}</E_32>`);
+    if (asset.disposal) {
+      assertValidIsoDate(asset.disposal.disposalDate, `ST_KR[${idx + 1}].E_28`);
+      lines.push(`    <E_28>${escapeXml(asset.disposal.disposalDate)}</E_28>`);
+      lines.push(`    <E_29>${asset.disposal.reasonCode}</E_29>`);
+      lines.push(`    <E_30>${escapeXml(asset.disposal.disposalDocumentNumber)}</E_30>`);
+      if (asset.disposal.ksefNumbers && asset.disposal.ksefNumbers.length > 0) {
+        lines.push('    <KSeF>');
+        for (const ksefNo of asset.disposal.ksefNumbers) {
+          const check = validateKsefNumber(ksefNo);
+          if (!check.valid) {
+            throw new Error(`Invalid E_31 NrKSeF "${ksefNo}": ${check.reason}`);
+          }
+          lines.push(`      <E_31>${escapeXml(ksefNo)}</E_31>`);
+        }
+        lines.push('    </KSeF>');
+      }
+    }
+    lines.push(`    <E_32>${asset.kstReclassifiedInYear ?? 2}</E_32>`);
     lines.push('  </ST_KR>');
   });
 
