@@ -7,6 +7,7 @@ import type {
   VatRateCode,
 } from '@pap/domain';
 import { OidcServiceUnavailableError } from '../../../../lib/oidc-client';
+import { formatUserFacingErrorPl } from '../../../../lib/error-messages-pl';
 import { assertSameOriginMutation } from '../../../../lib/request-security';
 import {
   persistUpdatedSessionContext,
@@ -260,21 +261,56 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
       case 'create_manual_document': {
         const ksefRef = str(payload['ksefReferenceNumber']).trim();
+        const saleDate = str(payload['saleDate']).trim();
+        const counterpartyAddress = str(payload['counterpartyAddress']).trim();
+        const correctedDocumentNumber = str(payload['correctedDocumentNumber']).trim();
+        const correctionReason = str(payload['correctionReason']).trim();
+        const rawLines = Array.isArray(payload['lines']) ? payload['lines'] : [];
+        const lines = rawLines.map((item) => {
+          const rec = (item ?? {}) as Record<string, unknown>;
+          return {
+            description: str(rec['description']),
+            quantity: str(rec['quantity'], '1'),
+            unit: str(rec['unit'], 'usł.'),
+            netPln: str(rec['netPln'], '0.00'),
+            vatRate: (str(rec['vatRate']) || '23') as VatRateCode,
+            annex15Item: Boolean(rec['annex15Item']),
+          };
+        });
+        const expenseQualification = str(payload['expenseQualification']).trim() as
+          KpirExpenseQualificationKind | '';
+        const vatDeductionMode = str(payload['vatDeductionMode']).trim() as VatDeductionMode | '';
+        const ryczaltRate = str(payload['ryczaltRate']).trim() as RyczaltRateCode | '';
+
         const created = await createOrImportDocumentMutation(session, {
           mode: 'manual',
           documentKind: (str(payload['documentKind']) || 'purchase') as DocumentKind,
           direction: payload['direction'] === 'sales' ? 'sales' : 'purchase',
           documentNumber: str(payload['documentNumber']),
           issueDate: str(payload['issueDate'], `${session.context.period}-16`),
+          ...(saleDate ? { saleDate } : {}),
           dueDate: str(payload['dueDate'], `${session.context.period}-28`),
           counterpartyName: str(payload['counterpartyName']),
           counterpartyNip: str(payload['counterpartyNip']),
-          description: str(payload['description']),
-          netPln: str(payload['netPln'], '0.00'),
-          vatRate: (str(payload['vatRate']) || '23') as VatRateCode,
+          noPolishNip: Boolean(payload['noPolishNip']),
+          ...(counterpartyAddress ? { counterpartyAddress } : {}),
+          ...(lines.length > 0
+            ? { lines }
+            : {
+                description: str(payload['description']),
+                netPln: str(payload['netPln'], '0.00'),
+                vatRate: (str(payload['vatRate']) || '23') as VatRateCode,
+                annex15Item: Boolean(payload['annex15Item']),
+              }),
           ksefMarker: (str(payload['ksefMarker']) || 'BFK') as 'NrKSeF' | 'OFF' | 'BFK' | 'DI',
           ...(ksefRef ? { ksefReferenceNumber: ksefRef } : {}),
-          annex15Item: Boolean(payload['annex15Item']),
+          isCorrection:
+            Boolean(payload['isCorrection']) || payload['documentKind'] === 'correction',
+          ...(correctedDocumentNumber ? { correctedDocumentNumber } : {}),
+          ...(correctionReason ? { correctionReason } : {}),
+          ...(expenseQualification ? { expenseQualification } : {}),
+          ...(vatDeductionMode ? { vatDeductionMode } : {}),
+          ...(ryczaltRate ? { ryczaltRate } : {}),
         });
         return NextResponse.json({ ok: true, document: created });
       }
@@ -292,17 +328,23 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
 
       case 'approve_and_post_document': {
+        const ryczaltRate = str(payload['ryczaltRate']).trim() as RyczaltRateCode | '';
         const updated = await approveAndPostDocumentMutation(session, {
           documentId: str(payload['documentId']),
           documentNumber: str(payload['documentNumber']),
           counterpartyName: str(payload['counterpartyName']),
           counterpartyNip: str(payload['counterpartyNip']),
+          noPolishNip: Boolean(payload['noPolishNip']),
           issueDate: str(payload['issueDate']),
           netPln: str(payload['netPln'], '0.00'),
           vatPln: str(payload['vatPln'], '0.00'),
+          ...(typeof payload['amountsEdited'] === 'boolean'
+            ? { amountsEdited: payload['amountsEdited'] }
+            : {}),
           expenseQualification: (str(payload['expenseQualification']) ||
             'other_expenses_100_col13') as KpirExpenseQualificationKind,
           vatDeductionMode: (str(payload['vatDeductionMode']) || 'full_100') as VatDeductionMode,
+          ...(ryczaltRate ? { ryczaltRate } : {}),
         });
         return NextResponse.json({ ok: true, document: updated });
       }
@@ -460,7 +502,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     }
     if (err instanceof WorkspaceAccessError) {
       return NextResponse.json(
-        { ok: false, reasonCode: err.reasonCode, error: err.message },
+        {
+          ok: false,
+          reasonCode: err.reasonCode,
+          error: formatUserFacingErrorPl({
+            status: err.statusCode,
+            reasonCode: err.reasonCode,
+            rawMessage: err.message,
+          }),
+        },
         { status: err.statusCode },
       );
     }
@@ -468,7 +518,11 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       {
         ok: false,
         reasonCode: 'validation_or_domain_error',
-        error: err instanceof Error ? err.message : 'Nie udało się wykonać operacji księgowej.',
+        error: formatUserFacingErrorPl({
+          status: 400,
+          rawMessage: err instanceof Error ? err.message : undefined,
+          fallbackPl: 'Nie udało się wykonać operacji księgowej. Sprawdź wymagane pola formularza.',
+        }),
       },
       { status: 400 },
     );

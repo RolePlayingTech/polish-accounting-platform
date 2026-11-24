@@ -1,11 +1,17 @@
 import type {
   KpirExpenseQualificationKind,
   KsefInvoiceMarker,
+  RyczaltRateCode,
   TaxProfileCode,
   VatDeductionMode,
   VatRateCode,
 } from '@pap/domain';
 import type { AiConfidenceLevel } from '@pap/ui';
+import {
+  buildSampleDocumentJson,
+  buildSampleMultiRateDocumentCsv,
+  buildSampleSingleRateDocumentCsv,
+} from './sample-import-templates';
 import type { PersonaId } from './session';
 
 export type NotificationFrequency = 'standard' | 'daily_digest' | 'disabled';
@@ -198,6 +204,21 @@ export interface AiExtractedFieldsSnapshot {
   readonly grossGrosze: number;
 }
 
+export interface WorkspaceDocumentLineItem {
+  readonly lineNumber: number;
+  readonly description: string;
+  readonly quantity: string;
+  readonly unit: string;
+  readonly netGrosze: number;
+  readonly vatRate: VatRateCode;
+  readonly vatGrosze: number;
+  readonly grossGrosze: number;
+  readonly annex15Item: boolean;
+}
+
+export type KsefVerificationStatus =
+  'not_applicable' | 'declared_unverified' | 'parsed_xml_unverified' | 'verified_ksef';
+
 export interface WorkspaceDocumentRecord {
   readonly documentId: string;
   readonly tenantId: string;
@@ -216,6 +237,7 @@ export interface WorkspaceDocumentRecord {
   readonly counterpartyIban: string;
   readonly description: string;
   readonly vatRate: VatRateCode;
+  readonly lines?: readonly WorkspaceDocumentLineItem[];
   readonly netGrosze: number;
   readonly vatGrosze: number;
   readonly grossGrosze: number;
@@ -234,6 +256,11 @@ export interface WorkspaceDocumentRecord {
     | 'Propozycja MCP';
   readonly ksefMarker: KsefInvoiceMarker;
   readonly ksefReferenceNumber?: string;
+  readonly ksefVerificationStatus?: KsefVerificationStatus;
+  readonly isCorrection?: boolean;
+  readonly correctedDocumentNumber?: string;
+  readonly correctionReason?: string;
+  readonly ryczaltRate?: RyczaltRateCode;
   readonly gtuCodes: readonly string[];
   readonly procedureCodes: readonly string[];
   readonly annex15Item: boolean;
@@ -475,25 +502,11 @@ export const SAMPLE_KSEF_FA2_XML = `<?xml version="1.0" encoding="UTF-8"?>
   </Fa>
 </Faktura>`;
 
-export const SAMPLE_INVOICE_CSV = `Numer;Data wystawienia;Kontrahent;Kwota netto;Stawka VAT;NIP;Opis
-FV/2026/03/019;2026-03-18;Innowacje Bałtyckie Sp. z o.o.;8500.00;23;7792301205;Projekt makiety produktu cyfrowego UX/UI`;
+export const SAMPLE_INVOICE_CSV = buildSampleSingleRateDocumentCsv('2026-03');
 
-export const SAMPLE_INVOICE_JSON = JSON.stringify(
-  {
-    documentNumber: 'FV-JSON/2026/03/012',
-    direction: 'purchase',
-    issueDate: '2026-03-19',
-    eventDate: '2026-03-19',
-    dueDate: '2026-04-02',
-    counterpartyName: 'Audyt Systemowy Syntetyk Sp. z o.o.',
-    counterpartyNip: '5250004007',
-    netGrosze: 320000,
-    vatRate: '23',
-    description: 'Audyt bezpieczeństwa aplikacji i przegląd konfiguracji KSeF (dane syntetyczne)',
-  },
-  null,
-  2,
-);
+export const SAMPLE_MULTI_RATE_INVOICE_CSV = buildSampleMultiRateDocumentCsv('2026-03');
+
+export const SAMPLE_INVOICE_JSON = buildSampleDocumentJson('2026-03');
 
 export const SAMPLE_BANK_CSV = `Data księgowania;Data waluty;Kontrahent;Rachunek kontrahenta;Tytuł;Kwota;Waluta;Nr referencyjny
 2026-03-19;2026-03-19;Syntetyczny Software House Sp. z o.o.;PL61109010140000071219812874;Zapłata za fakturę FV/2026/03/001 NIP 5250002008;24600,00;PLN;BNK-20260319-001

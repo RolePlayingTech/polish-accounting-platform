@@ -74,6 +74,7 @@ export default async function KpirPage() {
       <div className="space-y-6">
         <KpirWorkbench
           activeCompany={kpir.activeCompany}
+          accessibleCompanies={dash.accessibleCompanies}
           period={session.context.period}
           canWrite={kpir.activeCompany.grantedActions.includes('write')}
           rows={rows}

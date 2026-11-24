@@ -35,16 +35,7 @@ const FORBIDDEN_ID_TOKEN_HEADER_TYPS = new Set([
 const PRIVATE_JWK_FIELDS = ['d', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k'] as const;
 
 export type AsymmetricJwsAlg =
-  | 'RS256'
-  | 'RS384'
-  | 'RS512'
-  | 'PS256'
-  | 'PS384'
-  | 'PS512'
-  | 'ES256'
-  | 'ES384'
-  | 'ES512'
-  | 'EdDSA';
+  'RS256' | 'RS384' | 'RS512' | 'PS256' | 'PS384' | 'PS512' | 'ES256' | 'ES384' | 'ES512' | 'EdDSA';
 
 const ALLOWED_ASYMMETRIC_ALGS: ReadonlySet<AsymmetricJwsAlg> = new Set([
   'RS256',
@@ -180,10 +171,7 @@ function resolveRawWebSessionSecret(
     return Buffer.from(configured, 'utf8');
   }
 
-  if (
-    env['NODE_ENV'] === 'test' &&
-    env['PAP_REQUIRE_EXPLICIT_WEB_SESSION_SECRET'] !== 'true'
-  ) {
+  if (env['NODE_ENV'] === 'test' && env['PAP_REQUIRE_EXPLICIT_WEB_SESSION_SECRET'] !== 'true') {
     return Buffer.from(DETERMINISTIC_TEST_BFF_SECRET, 'utf8');
   }
 
@@ -280,7 +268,11 @@ export function verifyOidcFlowBindingCookie(
   expectedStateHash: string,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): boolean {
-  if (!cookieValue || typeof cookieValue !== 'string' || !/^[0-9a-f]{64}$/.test(expectedStateHash)) {
+  if (
+    !cookieValue ||
+    typeof cookieValue !== 'string' ||
+    !/^[0-9a-f]{64}$/.test(expectedStateHash)
+  ) {
     return false;
   }
   const parts = cookieValue.trim().split('.');
@@ -337,6 +329,19 @@ export interface BffRpcCallOptions {
   readonly timeoutMs?: number | undefined;
 }
 
+function isEffectiveProductionOidcEnv(
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): boolean {
+  if (env['NODE_ENV'] !== 'production') {
+    return false;
+  }
+  const isLocalOidcE2eTest =
+    env['PAP_OIDC_ENV'] === 'test' &&
+    env['PAP_ENV'] !== 'staging' &&
+    env['PAP_DATABASE_ENV'] !== 'staging';
+  return !isLocalOidcE2eTest;
+}
+
 export async function callApiBffSessionRpc<T>(
   subPath:
     | '/oidc-state/create'
@@ -355,7 +360,7 @@ export async function callApiBffSessionRpc<T>(
   const hmacKey = deriveHkdfKey(BFF_INTERNAL_HMAC_INFO, env);
   const baseUrl = resolveValidatedApiBaseUrl({
     apiBaseUrl: options.apiBaseUrl ?? env['API_BASE_URL'],
-    isProduction: env['NODE_ENV'] === 'production',
+    isProduction: isEffectiveProductionOidcEnv(env),
   });
   if (!baseUrl) {
     throw new OidcServiceUnavailableError(
@@ -530,7 +535,7 @@ export function loadWebOidcClientConfig(
     );
   }
 
-  const isNodeProduction = env['NODE_ENV'] === 'production';
+  const isNodeProduction = isEffectiveProductionOidcEnv(env);
   const rawIssuer = env['PAP_OIDC_ISSUER'];
   if (!rawIssuer || rawIssuer.trim().endsWith('/')) {
     throw new OidcConfigurationError(
@@ -803,7 +808,10 @@ export function clearWebOidcMetadataCachesForTesting(): void {
 
 export async function resolveOidcProviderMetadata(
   config: WebOidcClientConfig,
-  options?: { readonly fetcher?: typeof fetch | undefined; readonly isProduction?: boolean | undefined },
+  options?: {
+    readonly fetcher?: typeof fetch | undefined;
+    readonly isProduction?: boolean | undefined;
+  },
 ): Promise<ResolvedOidcProviderMetadata> {
   if (config.authorizationEndpoint && config.tokenEndpoint && config.jwksUri) {
     return {
@@ -861,7 +869,7 @@ export async function resolveOidcProviderMetadata(
     );
   }
 
-  const isProd = options?.isProduction ?? process.env.NODE_ENV === 'production';
+  const isProd = options?.isProduction ?? isEffectiveProductionOidcEnv(process.env);
   const issuerOrigin = new URL(config.issuer).origin;
   const checkEndpoint = (raw: unknown, fieldName: string): string => {
     if (typeof raw !== 'string') {
@@ -882,8 +890,7 @@ export async function resolveOidcProviderMetadata(
     authorizationEndpoint:
       config.authorizationEndpoint ??
       checkEndpoint(doc['authorization_endpoint'], 'authorization_endpoint'),
-    tokenEndpoint:
-      config.tokenEndpoint ?? checkEndpoint(doc['token_endpoint'], 'token_endpoint'),
+    tokenEndpoint: config.tokenEndpoint ?? checkEndpoint(doc['token_endpoint'], 'token_endpoint'),
     jwksUri: config.jwksUri ?? checkEndpoint(doc['jwks_uri'], 'jwks_uri'),
     ...(config.endSessionEndpoint
       ? { endSessionEndpoint: config.endSessionEndpoint }
@@ -1053,7 +1060,10 @@ function verifyJwsSignatureWithNodeCrypto(
 
 function decodeJwtSegment(segment: string): Record<string, unknown> {
   if (!segment || !/^[A-Za-z0-9_-]+$/.test(segment)) {
-    throw new OidcSecurityValidationError('malformed_id_token', 'Nieprawidłowy segment tokena JWS.');
+    throw new OidcSecurityValidationError(
+      'malformed_id_token',
+      'Nieprawidłowy segment tokena JWS.',
+    );
   }
   try {
     const parsed: unknown = JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
@@ -1076,7 +1086,10 @@ export async function verifyOidcIdToken(input: {
 }): Promise<VerifiedOidcIdTokenClaims> {
   const { rawIdToken, config, jwksUri, expectedNonce, fetcher } = input;
   if (!rawIdToken || rawIdToken.length > 8_192 || /\s/.test(rawIdToken)) {
-    throw new OidcSecurityValidationError('malformed_id_token', 'Brak lub uszkodzony ID Token OIDC.');
+    throw new OidcSecurityValidationError(
+      'malformed_id_token',
+      'Brak lub uszkodzony ID Token OIDC.',
+    );
   }
 
   const parts = rawIdToken.split('.');
@@ -1121,7 +1134,10 @@ export async function verifyOidcIdToken(input: {
     if (typeof header['typ'] !== 'string') {
       throw new OidcSecurityValidationError('invalid_token_type', 'Nieprawidłowy nagłówek typ.');
     }
-    const normTyp = header['typ'].trim().toLowerCase().replace(/^application\//, '');
+    const normTyp = header['typ']
+      .trim()
+      .toLowerCase()
+      .replace(/^application\//, '');
     if (FORBIDDEN_ID_TOKEN_HEADER_TYPS.has(normTyp)) {
       throw new OidcSecurityValidationError(
         'invalid_token_type',
@@ -1405,7 +1421,9 @@ export async function exchangeAuthorizationCode(input: {
     const oauthErr =
       typeof tokenJson['error'] === 'string' ? tokenJson['error'] : 'authorization_code_rejected';
     throw new OidcSecurityValidationError(
-      oauthErr === 'invalid_grant' ? 'invalid_or_expired_authorization_code' : 'token_exchange_denied',
+      oauthErr === 'invalid_grant'
+        ? 'invalid_or_expired_authorization_code'
+        : 'token_exchange_denied',
       'Kod autoryzacyjny OIDC jest nieprawidłowy, wygasł lub został już wcześniej wykorzystany.',
       401,
     );
@@ -1559,10 +1577,7 @@ export async function refreshBffSessionTokens(input: {
         { apiBaseUrl: input.apiBaseUrl, env, fetcher: input.fetcher },
       );
 
-      if (
-        latest.ok &&
-        latest.session.refreshGeneration > input.session.refreshGeneration
-      ) {
+      if (latest.ok && latest.session.refreshGeneration > input.session.refreshGeneration) {
         const winningTokens = decryptBffPayload<StoredBffTokenBundle>(
           latest.session.encryptedTokens,
           aad,

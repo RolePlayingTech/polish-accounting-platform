@@ -67,6 +67,7 @@ export default async function FullLedgerPage() {
       <div className="space-y-6">
         <LedgerWorkbench
           activeCompany={ledger.activeCompany}
+          accessibleCompanies={dash.accessibleCompanies}
           period={session.context.period}
           canWrite={ledger.activeCompany.grantedActions.includes('write')}
           chartOfAccounts={ledger.chartOfAccounts}

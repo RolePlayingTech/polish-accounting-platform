@@ -150,9 +150,9 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
     );
 
     // Brak lub zbyt krótki PAP_WEB_SESSION_SECRET w produkcji rzuca OidcServiceUnavailableError (503 fail-closed)
-    expect(() =>
-      encryptBffPayload({ a: 1 }, 'ctx', { NODE_ENV: 'production' }),
-    ).toThrow(OidcServiceUnavailableError);
+    expect(() => encryptBffPayload({ a: 1 }, 'ctx', { NODE_ENV: 'production' })).toThrow(
+      OidcServiceUnavailableError,
+    );
     expect(() =>
       encryptBffPayload({ a: 1 }, 'ctx', {
         NODE_ENV: 'production',
@@ -182,12 +182,12 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
       PAP_OIDC_JWKS_URI: `${issuer}/protocol/openid-connect/certs`,
     });
 
-    expect(
-      resolveRedirectUriForOrigin(config, 'https://ksiegowosc.roleplayingtech.com'),
-    ).toBe('https://ksiegowosc.roleplayingtech.com/api/session/oidc/callback');
-    expect(() =>
-      resolveRedirectUriForOrigin(config, 'https://evil.attacker.example'),
-    ).toThrow(OidcSecurityValidationError);
+    expect(resolveRedirectUriForOrigin(config, 'https://ksiegowosc.roleplayingtech.com')).toBe(
+      'https://ksiegowosc.roleplayingtech.com/api/session/oidc/callback',
+    );
+    expect(() => resolveRedirectUriForOrigin(config, 'https://evil.attacker.example')).toThrow(
+      OidcSecurityValidationError,
+    );
 
     expect(() =>
       loadWebOidcClientConfig({
@@ -236,9 +236,11 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
     const signRsaToken = (header: Record<string, unknown>, payload: Record<string, unknown>) => {
       const h = Buffer.from(JSON.stringify(header), 'utf8').toString('base64url');
       const p = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-      const s = cryptoSign('RSA-SHA256', Buffer.from(`${h}.${p}`, 'ascii'), rsaPair.privateKey).toString(
-        'base64url',
-      );
+      const s = cryptoSign(
+        'RSA-SHA256',
+        Buffer.from(`${h}.${p}`, 'ascii'),
+        rsaPair.privateKey,
+      ).toString('base64url');
       return `${h}.${p}.${s}`;
     };
 
@@ -440,7 +442,12 @@ describe('Wave 2 Slice 2 — tryb uruchomieniowy PAP_RUNTIME_MODE, AEAD sesji BF
         if (grantType === 'authorization_code') {
           const code = params.get('code') ?? '';
           const rec = oidcCodes.get(code);
-          if (!rec || rec.consumed || rec.expired || rec.redirectUri !== params.get('redirect_uri')) {
+          if (
+            !rec ||
+            rec.consumed ||
+            rec.expired ||
+            rec.redirectUri !== params.get('redirect_uri')
+          ) {
             sendJson(res, 400, { error: 'invalid_grant' });
             return;
           }

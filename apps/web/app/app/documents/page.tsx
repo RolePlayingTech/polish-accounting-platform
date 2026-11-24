@@ -69,6 +69,7 @@ export default async function DocumentsPage() {
     >
       <div className="space-y-6">
         <DocumentsWorkbench
+          activeCompany={dash.activeCompany}
           documents={documents}
           period={session.context.period}
           canWrite={dash.activeCompany.grantedActions.includes('write')}

@@ -4,7 +4,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { expect, test } from '@playwright/test';
 
 const repositoryRoot = process.cwd();
-const apiPort = 41_607;
+const apiPort = Number(process.env['PAP_E2E_API_PORT'] || 41_607);
 const apiBaseUrl = `http://127.0.0.1:${apiPort}`;
 
 let apiProcess: ChildProcess | undefined;
@@ -12,12 +12,20 @@ let apiProcess: ChildProcess | undefined;
 async function startApi(): Promise<ChildProcess> {
   const child = spawn(process.execPath, [resolve(repositoryRoot, 'apps/api/dist/main.js')], {
     cwd: repositoryRoot,
-    env: { ...process.env, HOST: '127.0.0.1', PORT: String(apiPort) },
+    env: {
+      ...process.env,
+      NODE_ENV: 'test',
+      HOST: '127.0.0.1',
+      PORT: String(apiPort),
+      PAP_OIDC_ENV: 'test',
+      PAP_SANDBOX_AUTH_ENABLED: 'true',
+      PAP_SANDBOX_OIDC_ISSUER: `http://127.0.0.1:${String(apiPort)}`,
+    },
     stdio: 'ignore',
   });
   apiProcess = child;
 
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`API zakończyło pracę przed startem (kod ${child.exitCode}).`);
@@ -58,11 +66,11 @@ async function stopApi(child: ChildProcess | undefined): Promise<void> {
 }
 
 test('pokazuje stan rzeczywistego API i uczciwie opisuje jego niedostępność', async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(180_000);
 
   try {
     const server = await startApi();
-    await page.goto('/app');
+    await page.goto('/app', { waitUntil: 'domcontentloaded' });
 
     await expect(page.getByText('API odpowiada', { exact: true })).toBeVisible();
     const availabilityCard = page

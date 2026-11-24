@@ -14,6 +14,7 @@ import {
   type LedgerColumn,
 } from '@pap/ui';
 import { AlertBanner, Button } from '../../../components/ui-controls';
+import { formatUserFacingErrorPl } from '../../../lib/error-messages-pl';
 import type { PersonaId } from '../../../lib/session';
 import {
   MCP_TOOLS_CATALOG,
@@ -162,6 +163,7 @@ export function McpWorkbench({
       });
       const data = (await res.json()) as {
         ok?: boolean;
+        reasonCode?: string;
         error?: string;
         confirmationCode?: string;
         confirmedProposalId?: string;
@@ -172,7 +174,12 @@ export function McpWorkbench({
         setFeedback({
           tone: 'danger',
           title: `Odmowa operacji MCP (HTTP ${String(res.status)})`,
-          detail: data.error ?? 'Operacja nie powiodła się.',
+          detail: formatUserFacingErrorPl({
+            status: res.status,
+            reasonCode: data.reasonCode,
+            rawMessage: data.error,
+            fallbackPl: 'Operacja MCP nie powiodła się.',
+          }),
         });
       } else {
         if (data.confirmedProposalId) {
@@ -209,6 +216,12 @@ export function McpWorkbench({
           router.refresh();
         }
       }
+    } catch {
+      setFeedback({
+        tone: 'danger',
+        title: 'Błąd połączenia z warstwą sesji BFF',
+        detail: 'Nie udało się wykonać operacji MCP.',
+      });
     } finally {
       setBusy(false);
     }

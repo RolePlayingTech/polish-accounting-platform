@@ -5,7 +5,9 @@ import { expect, test, type Page } from '@playwright/test';
 import { ACADEMY_ALL_LESSONS, ACADEMY_DISCLAIMER } from '@pap/domain/academy';
 
 const repositoryRoot = process.cwd();
-const apiPort = 41_607;
+const webPort = Number(process.env['PAP_E2E_WEB_PORT'] || 31_607);
+const webBaseUrl = `http://127.0.0.1:${String(webPort)}`;
+const apiPort = Number(process.env['PAP_E2E_API_PORT'] || 41_607);
 const apiBaseUrl = `http://127.0.0.1:${String(apiPort)}`;
 
 const TENANT_1_ID = '11111111-1111-4111-8111-111111111100';
@@ -104,11 +106,36 @@ async function switchCompanyViaHeader(page: Page, legalEntityId: string): Promis
   expect(contextResp.ok()).toBe(true);
 }
 
+async function prewarmNextDevRoutes(): Promise<void> {
+  const routes = [
+    '/login',
+    '/app',
+    '/app/documents',
+    '/app/kpir',
+    '/app/vat',
+    '/app/finance',
+    '/app/notifications',
+    '/app/mcp',
+    '/app/companies',
+    '/app/ledger',
+    '/app/ryczalt',
+    '/academy',
+  ];
+  for (const route of routes) {
+    try {
+      await fetch(`${webBaseUrl}${route}`, { redirect: 'manual' });
+    } catch {
+      // Ignoruj przejściowy błąd rozgrzewania pojedynczej trasy
+    }
+  }
+}
+
 test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', () => {
   // eslint-disable-next-line no-empty-pattern
   test.beforeAll(async ({}, testInfo) => {
-    testInfo.setTimeout(90_000);
+    testInfo.setTimeout(210_000);
     await startSandboxApi();
+    await prewarmNextDevRoutes();
   });
 
   // eslint-disable-next-line no-empty-pattern
@@ -509,5 +536,140 @@ test.describe('Przekrojowe przepływy księgowe, RBAC, MCP i Akademia (E2E)', ()
         page.getByTestId('kpir-ledger-table').getByText('FA3/10/2026/084').first(),
       ).toBeVisible();
     }
+  });
+
+  test('8. weryfikuje profilową nawigację (#120), wielostawkowy formularz i import CSV bez fikcyjnego NrKSeF (#102, #114, #115), pomoc stawek VAT/ryczałtu (#103), polską walidację dekretu (#105) i bramkę reżimu (#101, #104)', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+
+    await loginAsPersona(page, /Zaloguj jako Jan Testowy/i, 'Jan Testowy');
+    await switchCompanyViaHeader(page, COMPANY_JDG_KPIR_ID);
+
+    // #120: Nawigacja boczna dla JDG KPiR + VAT czynny pokazuje wyłącznie KPiR, bez ryczałtu i pełnych ksiąg
+    const sidebar = page.getByLabel('Główna nawigacja aplikacji');
+    await expect(sidebar.getByRole('link', { name: /KPiR i zaliczka PIT/i })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: 'Rejestry VAT i JPK_V7M' })).toBeVisible();
+    await expect(
+      sidebar.getByRole('link', { name: /Ewidencja przychodów \(ryczałt\)/i }),
+    ).toHaveCount(0);
+    await expect(sidebar.getByRole('link', { name: /Księga główna, ZOiS i CIT/i })).toHaveCount(0);
+
+    // Zwijana sekcja „Więcej narzędzi”
+    const moreToggle = sidebar.getByTestId('nav-section-toggle-wiecej-narzedzi');
+    await expect(moreToggle).toHaveAttribute('aria-expanded', 'false');
+    await moreToggle.click();
+    await expect(moreToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(sidebar.getByRole('link', { name: 'Klienci AI i kolejka MCP' })).toBeVisible();
+
+    // #102, #115, #114, #103: Formularz dokumentów bez fikcyjnego NrKSeF i zaszytych danych + działający CSV
+    await page.goto('/app/documents');
+    await expect(page.locator('#manual-doc-number')).toHaveValue('');
+    await expect(page.locator('#manual-counterparty-name')).toHaveValue('');
+    await expect(page.locator('#manual-ksef-marker')).toHaveValue('BFK');
+    await expect(page.locator('#manual-ksef-ref')).toHaveCount(0);
+
+    // Przewodnik stawek VAT (#103)
+    await page.getByTestId('vat-rate-contextual-guide-trigger').click();
+    const vatGuide = page.getByTestId('vat-rate-contextual-guide-panel');
+    await expect(vatGuide).toBeVisible();
+    await expect(vatGuide.getByText(/240\s*000 PLN/)).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(vatGuide).toHaveCount(0);
+
+    // Import wbudowanego przykładowego CSV (#114) bez błędu 400 invalid_document_csv_headers
+    await page.getByRole('button', { name: 'Wczytaj przykładowy plik CSV' }).click();
+    await page.getByRole('button', { name: 'Importuj i utwórz propozycję do weryfikacji' }).click();
+    await expect(
+      page.getByText('Dokument przyjęty jako propozycja do weryfikacji człowieka'),
+    ).toBeVisible();
+
+    // Wielopozycyjna faktura ręczna z dwiema różnymi stawkami VAT (23% + 8%) i uczciwym statusem BFK (#102, #115)
+    const uniqueDocNum = `FV/MULTI/2026/${String(Date.now()).slice(-4)}`;
+    await page.locator('#manual-doc-number').fill(uniqueDocNum);
+    await page.locator('#manual-counterparty-name').fill('Wydawnictwo Techniczne Alfa Sp. z o.o.');
+    await page.locator('#manual-counterparty-nip').fill('5261040828');
+    await page
+      .locator('#manual-line-desc-0')
+      .fill('Licencja elektroniczna systemu obliczeniowego (stawka 23%)');
+    await page.locator('#manual-line-net-0').fill('1000.00');
+    await page.locator('#manual-line-vat-rate-0').selectOption('23');
+
+    await page.getByTestId('add-invoice-line-button').click();
+    await page
+      .locator('#manual-line-desc-1')
+      .fill('Czasopismo specjalistyczne branżowe (stawka 8%)');
+    await page.locator('#manual-line-net-1').fill('500.00');
+    await page.locator('#manual-line-vat-rate-1').selectOption('8');
+
+    await expect(page.getByTestId('invoice-totals-summary')).toContainText('1 500,00 zł');
+    await expect(page.getByTestId('invoice-totals-summary')).toContainText('270,00 zł');
+    await expect(page.getByTestId('invoice-totals-summary')).toContainText('1 770,00 zł');
+
+    await page
+      .getByRole('button', { name: 'Dodaj dokument do obiegu (do weryfikacji Split-View)' })
+      .click();
+    const openSplitLink = page.getByRole('link', { name: /Otwórz Split-View weryfikacji/i });
+    await expect(openSplitLink).toBeVisible();
+    await openSplitLink.click();
+
+    await page.waitForURL('**/app/documents/**', { timeout: 30_000 });
+    await expect(page.getByText('Poza KSeF (BFK — nieprzesłano)')).toBeVisible();
+    const linesTable = page.getByTestId('split-view-document-lines-table');
+    await expect(linesTable).toContainText('Licencja elektroniczna systemu obliczeniowego');
+    await expect(linesTable).toContainText('Czasopismo specjalistyczne branżowe');
+
+    await page.getByRole('button', { name: 'Zatwierdź i zaksięguj dokument' }).first().click();
+    const postDialog = page.getByRole('alertdialog');
+    await expect(postDialog).toBeVisible();
+    await postDialog.getByRole('button', { name: 'Zatwierdź i zaksięguj dokument' }).click();
+    await expect(
+      page.getByText(/Dokument zatwierdzony przez człowieka i zaksięgowany/i),
+    ).toBeVisible();
+
+    // Bezpośrednie wejście na /app/ledger na firmie JDG KPiR -> bramka niezgodnego reżimu (#101, #104)
+    await page.goto('/app/ledger');
+    const gateBanner = page.getByTestId('incompatible-regime-banner-full_ledger');
+    await expect(gateBanner).toBeVisible();
+    await expect(
+      page.getByRole('button', {
+        name: /Zapis zablokowany — aktywna firma nie prowadzi pełnych ksiąg/i,
+      }),
+    ).toBeDisabled();
+
+    // Przełączenie na realnie dostępną Sp. z o.o. przyciskiem w bramce (#101, #104)
+    await gateBanner
+      .getByRole('button', { name: /Przełącz na: Syntetyczna Technologia Test Sp\. z o\.o\./i })
+      .click();
+    await expect(page.getByTestId('incompatible-regime-banner-full_ledger')).toHaveCount(0);
+    await expect(sidebar.getByRole('link', { name: 'Księga główna, ZOiS i CIT' })).toBeVisible();
+    await expect(sidebar.getByRole('link', { name: /KPiR/i })).toHaveCount(0);
+
+    // #105: Walidacja pustej treści operacji gospodarczej w języku polskim + wskazówka merytoryczna kont
+    await page.locator('#jrn-doc').fill('PK/2026/10/99');
+    await page.locator('#jrn-desc').fill('');
+    await page.getByRole('button', { name: 'Zaksięguj dekret w Dzienniku' }).click();
+    await expect(page.getByText(/Uzupełnij treść operacji gospodarczej/i)).toBeVisible();
+    await expect(page.locator('body')).not.toContainText('Too small: expected string');
+
+    await page.locator('#jrn-acc-1').selectOption('010');
+    await page.locator('#jrn-amt-0').fill('1000.00');
+    await page.locator('#jrn-ldesc-0').fill('Koszt usług');
+    await page.locator('#jrn-amt-1').fill('1000.00');
+    await page.locator('#jrn-ldesc-1').fill('Zobowiązanie wobec dostawcy');
+    await expect(page.getByTestId('journal-semantic-warnings')).toContainText('Zespołu 2');
+
+    // Przełączenie w nagłówku na JDG Ryczałt na trasie /app/ledger -> automatyczne przekierowanie na /app/ryczalt (#120)
+    await switchCompanyViaHeader(page, COMPANY_JDG_RYCZALT_ID);
+    await page.waitForURL('**/app/ryczalt', { timeout: 30_000 });
+    await expect(
+      sidebar.getByRole('link', { name: 'Ewidencja przychodów (ryczałt)' }),
+    ).toBeVisible();
+    await expect(
+      sidebar.getByRole('link', { name: /Status VAT i limit zwolnienia/i }),
+    ).toBeVisible();
+
+    await page.getByTestId('ryczalt-pkwiu-guide-trigger').click();
+    await expect(page.getByTestId('ryczalt-pkwiu-guide-panel')).toBeVisible();
   });
 });

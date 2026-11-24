@@ -994,5 +994,39 @@ describe('Design System „Księga Współczesna” (@pap/ui)', () => {
       expect(lessonSafeHtml).toContain('<img');
       expect(lessonSafeHtml).toContain('src="/screenshots/verify-invoice.png"');
     });
+
+    it('obsługuje zwijane sekcje nawigacji AppShell (collapsible + defaultCollapsed) i automatycznie rozwija sekcję z aktywną trasą (#120)', () => {
+      const sections = [
+        {
+          id: 'main',
+          title: 'Moja księgowość',
+          items: [{ id: 'dash', label: 'Pulpit dziś', href: '/app' }],
+        },
+        {
+          id: 'more',
+          title: 'Więcej narzędzi',
+          collapsible: true,
+          defaultCollapsed: true,
+          items: [{ id: 'mcp', label: 'Klienci AI i kolejka MCP', href: '/app/mcp' }],
+        },
+      ] as const;
+
+      const collapsedHtml = renderHtml(
+        <AppShell activeHref="/app" sections={sections}>
+          <p>Pulpit</p>
+        </AppShell>,
+      );
+      expect(collapsedHtml).toContain('data-testid="nav-section-toggle-more"');
+      expect(collapsedHtml).toContain('aria-expanded="false"');
+      expect(collapsedHtml).not.toContain('Klienci AI i kolejka MCP');
+
+      const autoExpandedHtml = renderHtml(
+        <AppShell activeHref="/app/mcp" sections={sections}>
+          <p>MCP</p>
+        </AppShell>,
+      );
+      expect(autoExpandedHtml).toContain('aria-expanded="true"');
+      expect(autoExpandedHtml).toContain('Klienci AI i kolejka MCP');
+    });
   });
 });
