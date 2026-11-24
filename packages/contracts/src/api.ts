@@ -10,6 +10,7 @@ import {
   AccountingDocumentSchema,
   BankReconciliationMatchSchema,
   BankStatementTransactionSchema,
+  CitPreferentialAttestationSchema,
   DocumentLineItemSchema,
   HealthContributionTierSchema,
   JournalEntryLineSchema,
@@ -276,6 +277,7 @@ export const CreateCompanyRequestSchema = z
     healthContributionTier: HealthContributionTierSchema.optional(),
     accidentRateBps: z.number().int().min(0).max(500).optional(),
     insuredPersonsCount: z.number().int().min(0).optional(),
+    citPreferentialAttestation: CitPreferentialAttestationSchema.optional(),
   })
   .strict()
   .superRefine((val, ctx) => {
@@ -441,6 +443,9 @@ export const CalendarObligationItemSchema = z
     workflowStatus: CalendarWorkflowStatusSchema,
     estimatedAmountGrosze: NonNegativeGroszeSchema.nullable(),
     estimatedAmountFormatted: z.string().nullable(),
+    accruedGrosze: NonNegativeGroszeSchema.nullable().optional(),
+    paidGrosze: NonNegativeGroszeSchema.nullable().optional(),
+    remainingGrosze: NonNegativeGroszeSchema.nullable().optional(),
     paidAt: IsoUtcTimestampSchema.nullable(),
     explanation: LegalExplanationSchema,
   })
@@ -576,6 +581,7 @@ export const UpdateCompanySettingsRequestSchema = z
     taxOfficeName: z.string().min(1).max(240).optional(),
     effectiveFrom: IsoCalendarDateSchema.optional(),
     changeSummaryPl: z.string().min(3).max(400).optional(),
+    citPreferentialAttestation: CitPreferentialAttestationSchema.nullable().optional(),
   })
   .strict();
 
@@ -1887,5 +1893,156 @@ export const RejectTenantInvitationResponseSchema = z
   })
   .strict();
 export type RejectTenantInvitationResponse = z.infer<typeof RejectTenantInvitationResponseSchema>;
+
+/** 18. Wave 2: Accounting Period Close (#116) & Due vs Paid Public-Law Obligations (#81) */
+export const AccountingPeriodCloseStatusSchema = z.enum(['open', 'reconciling', 'closed']);
+export type AccountingPeriodCloseStatusContract = z.infer<typeof AccountingPeriodCloseStatusSchema>;
+
+export const PeriodCloseChecklistItemSchema = z
+  .object({
+    code: z.enum([
+      'UNVERIFIED_DOCUMENTS',
+      'PENDING_MCP_PROPOSALS',
+      'UNRECONCILED_BANK_TRANSACTIONS',
+      'GL_TRIAL_BALANCE',
+    ]),
+    labelPl: z.string().min(1),
+    passed: z.boolean(),
+    blocking: z.boolean(),
+    count: z.number().int().nonnegative(),
+    detailsPl: z.string().min(1),
+  })
+  .strict();
+export type PeriodCloseChecklistItemContract = z.infer<typeof PeriodCloseChecklistItemSchema>;
+
+export const PeriodCloseStatusResponseSchema = z
+  .object({
+    tenantId: UuidSelectorSchema,
+    legalEntityId: UuidSelectorSchema,
+    period: TaxPeriodMonthSchema,
+    status: AccountingPeriodCloseStatusSchema,
+    readyToClose: z.boolean(),
+    blockingItemsCount: z.number().int().nonnegative(),
+    checklist: z.array(PeriodCloseChecklistItemSchema),
+    version: z.number().int().nonnegative(),
+    updatedAt: IsoUtcTimestampSchema.nullable(),
+    closedAt: IsoUtcTimestampSchema.nullable(),
+    closedByUserId: UuidSelectorSchema.nullable(),
+    note: z.string().nullable(),
+  })
+  .strict();
+export type PeriodCloseStatusResponse = z.infer<typeof PeriodCloseStatusResponseSchema>;
+
+export const CloseAccountingPeriodRequestSchema = z
+  .object({
+    confirmClose: z.boolean(),
+    status: z.enum(['reconciling', 'closed']).optional(),
+    note: z.string().min(1).max(500).optional(),
+  })
+  .strict();
+export type CloseAccountingPeriodRequest = z.infer<typeof CloseAccountingPeriodRequestSchema>;
+
+export const PublicLawObligationKindSchema = z.enum([
+  'zus_social',
+  'zus_health',
+  'zus_labor_fund',
+  'pit_advance',
+  'ryczalt_advance',
+  'cit_advance',
+  'vat_settlement',
+]);
+export type PublicLawObligationKindContract = z.infer<typeof PublicLawObligationKindSchema>;
+
+export const ObligationLifecycleStatusSchema = z.enum([
+  'accrued_not_yet_due',
+  'due_unpaid',
+  'partially_paid',
+  'paid',
+  'overpaid',
+]);
+export type ObligationLifecycleStatusContract = z.infer<typeof ObligationLifecycleStatusSchema>;
+
+export const VerifiedTaxOrZusPaymentContractSchema = z
+  .object({
+    paymentId: z.string().min(1).max(128),
+    obligationKind: PublicLawObligationKindSchema,
+    targetPeriod: TaxPeriodMonthSchema,
+    paidDate: IsoCalendarDateSchema,
+    amountGrosze: NonNegativeGroszeSchema.refine((v) => v > 0, {
+      message: 'Kwota zweryfikowanej płatności musi być dodatnia (> 0 gr).',
+    }),
+    bankTransactionId: z.string().min(1).max(256),
+  })
+  .strict();
+export type VerifiedTaxOrZusPaymentContract = z.infer<typeof VerifiedTaxOrZusPaymentContractSchema>;
+
+export const RecordVerifiedTaxPaymentRequestSchema = z
+  .object({
+    paymentId: z.string().min(1).max(128).optional(),
+    obligationKind: PublicLawObligationKindSchema,
+    targetPeriod: TaxPeriodMonthSchema,
+    paidDate: IsoCalendarDateSchema,
+    amountGrosze: NonNegativeGroszeSchema.refine((v) => v > 0, {
+      message: 'Kwota zweryfikowanej płatności musi być dodatnia (> 0 gr).',
+    }),
+    bankTransactionId: z.string().min(1).max(256),
+  })
+  .strict();
+export type RecordVerifiedTaxPaymentRequest = z.infer<typeof RecordVerifiedTaxPaymentRequestSchema>;
+
+export const TaxObligationSettlementItemSchema = z
+  .object({
+    obligationKind: PublicLawObligationKindSchema,
+    labelPl: z.string().min(1),
+    period: TaxPeriodMonthSchema,
+    statutoryDueDate: IsoCalendarDateSchema,
+    accruedGrosze: NonNegativeGroszeSchema,
+    accruedFormatted: z.string().min(1),
+    paidGrosze: NonNegativeGroszeSchema,
+    paidFormatted: z.string().min(1),
+    remainingGrosze: NonNegativeGroszeSchema,
+    remainingFormatted: z.string().min(1),
+    overpaymentGrosze: NonNegativeGroszeSchema,
+    status: ObligationLifecycleStatusSchema,
+    appliedPaymentIds: z.array(z.string().min(1)),
+  })
+  .strict();
+export type TaxObligationSettlementItemContract = z.infer<typeof TaxObligationSettlementItemSchema>;
+
+export const PeriodTaxObligationsResponseSchema = z
+  .object({
+    tenantId: UuidSelectorSchema,
+    legalEntityId: UuidSelectorSchema,
+    period: TaxPeriodMonthSchema,
+    profileCode: TaxProfileCodeSchema,
+    evaluationDate: IsoCalendarDateSchema,
+    bindingForDeclaration: z.boolean(),
+    items: z.array(TaxObligationSettlementItemSchema),
+    verifiedPayments: z.array(VerifiedTaxOrZusPaymentContractSchema),
+    totals: z
+      .object({
+        totalAccruedGrosze: NonNegativeGroszeSchema,
+        totalAccruedFormatted: z.string().min(1),
+        totalPaidGrosze: NonNegativeGroszeSchema,
+        totalPaidFormatted: z.string().min(1),
+        totalRemainingGrosze: NonNegativeGroszeSchema,
+        totalRemainingFormatted: z.string().min(1),
+      })
+      .strict(),
+    paidSocialZusUsedInTaxBaseGrosze: NonNegativeGroszeSchema,
+    paidHealthZusUsedInTaxBaseGrosze: NonNegativeGroszeSchema,
+    citRateDetails: z
+      .object({
+        operatingAppliedRatePct: z.union([z.literal(9), z.literal(19)]),
+        capitalGainsAppliedRatePct: z.literal(19),
+        taxYearMonths: z.number().int().positive(),
+        operatingIncomeYtdGrosze: NonNegativeGroszeSchema,
+      })
+      .strict()
+      .nullable(),
+    explanation: LegalExplanationSchema,
+  })
+  .strict();
+export type PeriodTaxObligationsResponse = z.infer<typeof PeriodTaxObligationsResponseSchema>;
 
 export { DocumentLineItemSchema, JournalEntryLineSchema };

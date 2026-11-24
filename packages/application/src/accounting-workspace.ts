@@ -46,6 +46,7 @@ import {
   tenantId as parseTenantId,
   userId as parseUserId,
   validatePolishNip,
+  validateVerifiedPaymentRecord,
   type AccountNature,
   type BankStatementTransaction,
   type CompanyAccessGrant,
@@ -69,11 +70,13 @@ import {
   type VatDeductionMode,
   type VatRateCode,
   type VatRegisterEntry,
+  type VerifiedTaxOrZusPayment,
 } from '@pap/domain';
 import {
   AccessMutationResponseSchema,
   ApproveAndPostDocumentRequestSchema,
   CalendarViewResponseSchema,
+  CloseAccountingPeriodRequestSchema,
   CompanyAccessResponseSchema,
   CompanyAuditListResponseSchema,
   CompanyDocumentItemSchema,
@@ -109,7 +112,10 @@ import {
   ListSandboxPersonasResponseSchema,
   McpProposalsListResponseSchema,
   NotificationsViewResponseSchema,
+  PeriodCloseStatusResponseSchema,
+  PeriodTaxObligationsResponseSchema,
   ReconcileBankRequestSchema,
+  RecordVerifiedTaxPaymentRequestSchema,
   RejectMcpProposalRequestSchema,
   RejectMcpProposalResponseSchema,
   RevokeCompanyAccessRequestSchema,
@@ -124,6 +130,7 @@ import {
   type ApproveAndPostDocumentRequest,
   type CalendarObligationItemContract,
   type CalendarViewResponse,
+  type CloseAccountingPeriodRequest,
   type CompanyAccessResponse,
   type CompanyAddressContract,
   type CompanyAuditItemContract,
@@ -172,7 +179,10 @@ import {
   type McpProposalListItemContract,
   type McpProposalsListResponse,
   type NotificationsViewResponse,
+  type PeriodCloseStatusResponse,
+  type PeriodTaxObligationsResponse,
   type ReconcileBankRequest,
+  type RecordVerifiedTaxPaymentRequest,
   type RejectMcpProposalRequest,
   type RejectMcpProposalResponse,
   type RevokeCompanyAccessRequest,
@@ -190,6 +200,7 @@ import {
   RyczaltEntrySchema,
   type AccountingDocumentContract,
   type BankReconciliationMatchContract,
+  type CitPreferentialAttestationContract,
   type DocumentLineItemContract,
   type JournalEntryContract,
   type KpirEntryContract,
@@ -279,6 +290,29 @@ import type {
   VerifiedOidcIdentity,
 } from './oidc-authentication.js';
 import type { SecurityAuditEvent, SecurityAuditRecorder } from './security-audit.js';
+import type {
+  ExternalCompanyAuditRecord,
+  UnreconciledBankTransactionRecord,
+  VatPeriodPreviewSnapshot,
+} from './mcp/types.js';
+import {
+  AccountingWorkspaceAccessError,
+  AccountingWorkspaceConflictError,
+  AccountingWorkspaceError,
+  AccountingWorkspaceValidationError,
+  assertAccountingRegimeSupportsAction,
+  assertApproveOverridesMatchRegime,
+  assertPeriodOpenForWrite,
+  assertTaxProfileMutationAllowed,
+  assertValidPeriodMonth,
+  computeCompanyPeriodTaxObligations,
+  computeUnreconciledBankTransactionsForPeriod,
+  evaluatePeriodCloseStatus,
+  listClosedPeriods,
+  syncSpzooBankReconciliationJournalEntries,
+  transitionPeriodCloseState,
+  type PeriodCloseState,
+} from './accounting/index.js';
 import {
   systemClock,
   type Clock,
@@ -286,6 +320,14 @@ import {
   type TenantAuthorizationFacts,
   type TenantAuthorizationQuery,
 } from './tenant-authorization.js';
+
+export {
+  AccountingWorkspaceAccessError,
+  AccountingWorkspaceConflictError,
+  AccountingWorkspaceError,
+  AccountingWorkspaceValidationError,
+};
+export type { PeriodCloseState };
 
 type CompanySettingsHistoryItem = CompanySettingsResponse['history'][number];
 type RegimeComparisonSummary = NonNullable<
@@ -316,45 +358,6 @@ export const SANDBOX_ALLOWED_EMAIL_DOMAINS = [
 ] as const;
 
 export const DEFAULT_SANDBOX_SENDER_EMAIL = 'powiadomienia@platforma-rachunkowa.example' as const;
-
-export class AccountingWorkspaceError extends Error {
-  readonly statusCode: 400 | 401 | 403 | 404 | 409 | 422;
-  readonly reasonCode: string;
-
-  constructor(statusCode: 400 | 401 | 403 | 404 | 409 | 422, reasonCode: string, message: string) {
-    super(message);
-    this.name = 'AccountingWorkspaceError';
-    this.statusCode = statusCode;
-    this.reasonCode = reasonCode;
-  }
-}
-
-export class AccountingWorkspaceAccessError extends AccountingWorkspaceError {
-  declare readonly statusCode: 403 | 404;
-
-  constructor(statusCode: 403 | 404, reasonCode: string, message: string) {
-    super(statusCode, reasonCode, message);
-    this.name = 'AccountingWorkspaceAccessError';
-  }
-}
-
-export class AccountingWorkspaceValidationError extends AccountingWorkspaceError {
-  declare readonly statusCode: 400 | 422;
-
-  constructor(statusCode: 400 | 422, reasonCode: string, message: string) {
-    super(statusCode, reasonCode, message);
-    this.name = 'AccountingWorkspaceValidationError';
-  }
-}
-
-export class AccountingWorkspaceConflictError extends AccountingWorkspaceError {
-  declare readonly statusCode: 409;
-
-  constructor(reasonCode: string, message: string) {
-    super(409, reasonCode, message);
-    this.name = 'AccountingWorkspaceConflictError';
-  }
-}
 
 export class SandboxRecipientBlockedError extends AccountingWorkspaceError {
   declare readonly statusCode: 403;
@@ -432,6 +435,8 @@ export interface WorkspaceCompanyState {
   paidObligationsByKey: Map<string, string>;
   explanationsById: Map<string, AccountingItemExplanationRecord>;
   vatPeriodSettlements?: Map<string, VatPeriodSettlementState> | undefined;
+  periodCloseStates?: Map<string, PeriodCloseState> | undefined;
+  verifiedTaxPayments?: VerifiedTaxOrZusPayment[] | undefined;
 }
 
 export interface WorkspaceStoredMcpProposal {
@@ -1112,6 +1117,13 @@ export interface PapMcpDomainPort
     proposalId: string,
     input: ConfirmMcpProposalRequest,
   ): Promise<ConfirmMcpProposalResponse>;
+  applyConfirmedMonthClose?(params: {
+    readonly tenantId: TenantId;
+    readonly legalEntityId: LegalEntityId;
+    readonly period: string;
+    readonly confirmedByUserId: UserId;
+    readonly note?: string | undefined;
+  }): Promise<{ readonly closedAt: string }>;
   createBoundMcpGateway(
     verifier: OidcAccessTokenVerifier,
     options?: {
@@ -1842,7 +1854,21 @@ export class AccountingWorkspaceService {
       ...(req.legalForm === 'sp_z_o_o'
         ? { krsRegisteredBefore2025: false }
         : { ceidgRegisteredBefore2025: false }),
+      ...(req.citPreferentialAttestation !== undefined
+        ? { citPreferentialAttestation: req.citPreferentialAttestation }
+        : {}),
     };
+
+    assertTaxProfileMutationAllowed({
+      legalForm: req.legalForm,
+      currentProfileCode: profileCode,
+      nextProfileCode: profileCode,
+      postedDocumentsCount: 0,
+      kpirEntriesCount: 0,
+      ryczaltEntriesCount: 0,
+      journalEntriesCount: 0,
+      vatEntriesCount: 0,
+    });
 
     const state: WorkspaceCompanyState = {
       tenantId: tId,
@@ -1875,6 +1901,8 @@ export class AccountingWorkspaceService {
       paidObligationsByKey: new Map(),
       explanationsById: new Map(),
       vatPeriodSettlements: new Map(),
+      periodCloseStates: new Map(),
+      verifiedTaxPayments: [],
     };
 
     this.store.saveCompany(state);
@@ -2044,6 +2072,24 @@ export class AccountingWorkspaceService {
     const req = UpdateCompanySettingsRequestSchema.parse(rawRequest);
     const updatedName = req.displayName ?? req.companyName ?? company.displayName;
     const updatedProfileCode = req.profileCode ?? company.taxProfile.profileCode;
+
+    assertTaxProfileMutationAllowed({
+      legalForm: company.legalForm,
+      currentProfileCode: company.taxProfile.profileCode,
+      nextProfileCode: updatedProfileCode,
+      postedDocumentsCount: company.documents.filter((d) => d.status === 'posted').length,
+      kpirEntriesCount: company.kpirEntries.length,
+      ryczaltEntriesCount: company.ryczaltEntries.length,
+      journalEntriesCount: company.journalEntries.length,
+      vatEntriesCount: company.vatEntries.length,
+    });
+    if (
+      req.citPreferentialAttestation !== undefined &&
+      req.citPreferentialAttestation !== null &&
+      updatedProfileCode !== 'spzoo_pelne_ksiegi'
+    ) {
+      assertAccountingRegimeSupportsAction(updatedProfileCode, 'full_ledger_manual_write');
+    }
     const updatedVatStatus: TaxProfileConfigContract['vatStatus'] =
       req.vatStatus === 'zwolniony'
         ? 'zwolniony_art_113'
@@ -2092,8 +2138,15 @@ export class AccountingWorkspaceService {
       };
     }
 
+    const { citPreferentialAttestation: prevCitAttestation, ...restPrevProfile } =
+      company.taxProfile;
+    const nextCitAttestation =
+      req.citPreferentialAttestation === null
+        ? undefined
+        : (req.citPreferentialAttestation ?? prevCitAttestation);
+
     const updatedProfile: TaxProfileConfigContract = {
-      ...company.taxProfile,
+      ...restPrevProfile,
       companyName: updatedName,
       profileCode: updatedProfileCode,
       vatStatus: updatedVatStatus,
@@ -2120,6 +2173,9 @@ export class AccountingWorkspaceService {
       ...(cityVal !== undefined ? { city: cityVal } : {}),
       ...(voivodeshipVal !== undefined ? { voivodeship: voivodeshipVal } : {}),
       ...(taxOfficeNameVal !== undefined ? { taxOfficeName: taxOfficeNameVal } : {}),
+      ...(nextCitAttestation !== undefined
+        ? { citPreferentialAttestation: nextCitAttestation }
+        : {}),
     };
 
     company.displayName = updatedName;
@@ -3323,6 +3379,8 @@ export class AccountingWorkspaceService {
       );
     }
 
+    assertApproveOverridesMatchRegime(company.taxProfile.profileCode, overrides);
+
     let doc = existing.document;
     const effectiveVatRateOverride = overrides?.vatRate ?? overrides?.vatRateCode;
     const effectiveVatDeductionOverride = overrides?.vatDeductionMode ?? overrides?.deductionMode;
@@ -3579,6 +3637,11 @@ export class AccountingWorkspaceService {
     });
 
     const period = doc.eventDate.slice(0, 7);
+    assertPeriodOpenForWrite(
+      company.periodCloseStates,
+      period,
+      `księgowanie dokumentu ${doc.documentNumber}`,
+    );
     const vatActive = company.taxProfile.vatStatus === 'czynny';
     if (vatActive) {
       const existingSettlement = company.vatPeriodSettlements?.get(period);
@@ -4018,6 +4081,7 @@ export class AccountingWorkspaceService {
           documentNumber: doc.documentNumber,
           description: `${existing.isCorrection ? 'Faktura korygująca' : doc.direction === 'sales' ? 'Faktura sprzedaży' : 'Faktura zakupu'} ${doc.documentNumber} (${doc.counterpartyName})`,
           lines,
+          closedPeriods: listClosedPeriods(company.periodCloseStates),
         });
         company.journalEntries.push(journalEntry);
         journalEntryId = journalEntry.id;
@@ -4494,6 +4558,33 @@ export class AccountingWorkspaceService {
     };
   }
 
+  private computeCompanyPeriodTaxObligationsInternal(
+    company: WorkspaceCompanyState,
+    period: string,
+    options?: {
+      readonly requestPreferentialCit9Pct?: boolean | undefined;
+      readonly citPreferentialAttestation?: CitPreferentialAttestationContract | undefined;
+    },
+  ) {
+    const vatJpk =
+      company.taxProfile.vatStatus === 'czynny'
+        ? this.calculateCompanyVatSettlementForPeriod(company, period).jpk
+        : null;
+    return computeCompanyPeriodTaxObligations({
+      period,
+      todayIso: this.todayIso(),
+      taxProfile: company.taxProfile,
+      kpirEntries: company.kpirEntries,
+      ryczaltEntries: company.ryczaltEntries,
+      journalEntries: company.journalEntries,
+      ytdCitNkupGrosze: this.computeYtdCitNkupGroszeInternal(company, period),
+      vatJpk,
+      verifiedPayments: company.verifiedTaxPayments ?? [],
+      requestPreferentialCit9Pct: options?.requestPreferentialCit9Pct,
+      citPreferentialAttestationOverride: options?.citPreferentialAttestation,
+    });
+  }
+
   getKpirView(
     actor: WorkspaceActorContext,
     rawTenantId: string,
@@ -4519,6 +4610,24 @@ export class AccountingWorkspaceService {
     const summary = summarizeKpirPeriod(company.kpirEntries, period);
     const taxForm: 'skala' | 'liniowy' =
       company.taxProfile.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala';
+
+    const verifiedPayments = company.verifiedTaxPayments ?? [];
+    const cutOffDate = `${period}-${String(
+      new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).getUTCDate(),
+    ).padStart(2, '0')}`;
+    const yearStart = `${period.slice(0, 4)}-01-01`;
+    const confirmedPaidSocialYtd = verifiedPayments
+      .filter(
+        (p) =>
+          p.obligationKind === 'zus_social' && p.paidDate >= yearStart && p.paidDate <= cutOffDate,
+      )
+      .reduce((s, p) => s + p.amountGrosze, 0);
+    const confirmedPaidHealthYtd = verifiedPayments
+      .filter(
+        (p) =>
+          p.obligationKind === 'zus_health' && p.paidDate >= yearStart && p.paidDate <= cutOffDate,
+      )
+      .reduce((s, p) => s + p.amountGrosze, 0);
     const ytdZusAndPit = this.computeYtdKpirZusAndPriorPitInternal(company, period, taxForm);
 
     const pitAdvance = calculateKpirPitAdvance({
@@ -4526,8 +4635,8 @@ export class AccountingWorkspaceService {
       taxForm,
       ytdRevenueGrosze: summary.yearToDateTotals.col9TotalRevenueGrosze,
       ytdCostsGrosze: summary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-      paidSocialZusYtdGrosze: ytdZusAndPit.paidSocialZusYtdGrosze,
-      paidHealthInsuranceYtdGrosze: ytdZusAndPit.paidHealthInsuranceYtdGrosze,
+      paidSocialZusYtdGrosze: confirmedPaidSocialYtd,
+      paidHealthInsuranceYtdGrosze: confirmedPaidHealthYtd,
       previousAdvancesPaidYtdGrosze: ytdZusAndPit.previousAdvancesPaidYtdGrosze,
     });
 
@@ -4537,7 +4646,7 @@ export class AccountingWorkspaceService {
       period,
       summary.yearToDateTotals.col9TotalRevenueGrosze,
       summary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-      ytdZusAndPit.paidSocialZusYtdGrosze,
+      confirmedPaidSocialYtd,
     );
 
     return KpirViewResponseSchema.parse({
@@ -4573,6 +4682,7 @@ export class AccountingWorkspaceService {
       'write',
       'create_kpir_entry',
     );
+    assertAccountingRegimeSupportsAction(company.taxProfile.profileCode, 'kpir_manual_write');
     const req = CreateKpirEntryRequestSchema.parse(rawRequest);
     const nextOrdinal = company.kpirEntries.length + 1;
 
@@ -4586,10 +4696,16 @@ export class AccountingWorkspaceService {
           `Nie znaleziono oryginalnego wpisu KPiR (${origId ?? 'brak'}) do storna czerwonego.`,
         );
       }
+      const corrDate = req.correctionDate ?? req.eventDate ?? `${DEMO_DEFAULT_PERIOD}-28`;
+      assertPeriodOpenForWrite(
+        company.periodCloseStates,
+        corrDate.slice(0, 7),
+        `storno wpisu KPiR (${origEntry.documentNumber})`,
+      );
       const storno = createKpirStornoEntry({
         id: randomUUID(),
         ordinalNumber: nextOrdinal,
-        correctionDate: req.correctionDate ?? req.eventDate ?? `${DEMO_DEFAULT_PERIOD}-28`,
+        correctionDate: corrDate,
         originalEntry: origEntry,
         correctionDocumentNumber:
           req.correctionDocumentNumber ??
@@ -4604,6 +4720,11 @@ export class AccountingWorkspaceService {
     }
 
     const eventDate = req.eventDate ?? `${DEMO_DEFAULT_PERIOD}-20`;
+    assertPeriodOpenForWrite(
+      company.periodCloseStates,
+      eventDate.slice(0, 7),
+      `ręczny wpis KPiR (${req.documentNumber ?? eventDate})`,
+    );
     const netGrosze = req.netGrosze ?? 100_00;
     const vatRate = req.vatRate ?? '23';
     const calcVat = calculateInvoiceLineFromNet(netGrosze, vatRate);
@@ -4694,13 +4815,36 @@ export class AccountingWorkspaceService {
       'get_ryczalt_view',
     );
     const periodEntries = company.ryczaltEntries.filter((e) => e.period === period);
-    const zus = this.computeCompanyZusInternal(company, period);
+    const verifiedPayments = company.verifiedTaxPayments ?? [];
+    const cutOffDate = `${period}-${String(
+      new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).getUTCDate(),
+    ).padStart(2, '0')}`;
+    const paidSocialInMonth = verifiedPayments
+      .filter(
+        (p) =>
+          p.obligationKind === 'zus_social' &&
+          p.paidDate >= `${period}-01` &&
+          p.paidDate <= cutOffDate,
+      )
+      .reduce((s, p) => s + p.amountGrosze, 0);
+    const paidHealthInMonth = verifiedPayments
+      .filter(
+        (p) =>
+          p.obligationKind === 'zus_health' &&
+          p.paidDate >= `${period}-01` &&
+          p.paidDate <= cutOffDate,
+      )
+      .reduce((s, p) => s + p.amountGrosze, 0);
     const calc = calculateMonthlyRyczalt({
       period,
       entries: periodEntries,
-      paidSocialZusInMonthGrosze: zus?.socialContributionsTotalGrosze ?? 0,
-      paidHealthInsuranceInMonthGrosze: zus?.healthContributionGrosze ?? 0,
+      paidSocialZusInMonthGrosze: paidSocialInMonth,
+      paidHealthInsuranceInMonthGrosze: paidHealthInMonth,
     });
+    const dueTaxGrosze =
+      company.taxProfile.profileCode === 'jdg_ryczalt'
+        ? this.computeCompanyPeriodTaxObligationsInternal(company, period).incomeTaxAccruedGrosze
+        : calc.taxDueGrosze;
 
     const revenueByRate: Record<string, number> = {};
     for (const rateCode of RYCZALT_RATE_ORDER) {
@@ -4741,8 +4885,8 @@ export class AccountingWorkspaceService {
       monthlySummary: {
         grossRevenueGrosze: calc.totalNetRevenueGrosze,
         grossRevenueFormatted: formatPlnFromGrosze(calc.totalNetRevenueGrosze),
-        taxDueRoundedPlnGrosze: calc.taxDueGrosze,
-        taxDueFormatted: formatPlnFromGrosze(calc.taxDueGrosze),
+        taxDueRoundedPlnGrosze: dueTaxGrosze,
+        taxDueFormatted: formatPlnFromGrosze(dueTaxGrosze),
         revenueByRate,
         explanation: calc.explanation,
       },
@@ -4773,7 +4917,13 @@ export class AccountingWorkspaceService {
       'write',
       'create_ryczalt_entry',
     );
+    assertAccountingRegimeSupportsAction(company.taxProfile.profileCode, 'ryczalt_manual_write');
     const req = CreateRyczaltEntryRequestSchema.parse(rawRequest);
+    assertPeriodOpenForWrite(
+      company.periodCloseStates,
+      req.revenueDate.slice(0, 7),
+      `ręczny wpis ryczałtu (${req.documentNumber})`,
+    );
     if (!req.isCorrection && !req.correctedEntryId) {
       this.assertNoManualLedgerDuplicateForPosting({
         company,
@@ -4896,6 +5046,11 @@ export class AccountingWorkspaceService {
       'configure_vat_period_settlement',
     );
     const req = ConfigureVatPeriodSettlementRequestSchema.parse(rawRequest);
+    assertPeriodOpenForWrite(
+      company.periodCloseStates,
+      req.period,
+      `konfiguracja rozliczenia VAT za ${req.period}`,
+    );
     if (company.taxProfile.vatStatus !== 'czynny') {
       throw new AccountingWorkspaceValidationError(
         422,
@@ -5142,15 +5297,29 @@ export class AccountingWorkspaceService {
     const pnl = generateProfitAndLoss(entriesUpToPeriod);
 
     const ytdCitNkupGrosze = this.computeYtdCitNkupGroszeInternal(company, period);
-    const cit = calculateCitAdvance({
-      period,
-      ytdTaxableRevenuesGrosze: pnl.totalRevenuesGrosze,
-      ytdTaxDeductibleCostsGrosze: Math.max(
-        0,
-        pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
-      ),
-      smallTaxpayerStatus: company.taxProfile.smallTaxpayer,
-    });
+    const citObligations =
+      company.taxProfile.profileCode === 'spzoo_pelne_ksiegi'
+        ? this.computeCompanyPeriodTaxObligationsInternal(company, period)
+        : null;
+    const fallbackCit = citObligations
+      ? null
+      : calculateCitAdvance({
+          period,
+          ytdTaxableRevenuesGrosze: pnl.totalRevenuesGrosze,
+          ytdTaxDeductibleCostsGrosze: Math.max(
+            0,
+            pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
+          ),
+          smallTaxpayerStatus: false,
+        });
+    const appliedCitRatePct =
+      citObligations?.citRateDetails?.operatingAppliedRatePct ?? fallbackCit!.appliedRatePct;
+    const citTaxableIncomeGrosze =
+      citObligations?.citRateDetails?.operatingIncomeYtdGrosze ??
+      Math.max(0, fallbackCit!.ytdTaxIncomeGrosze);
+    const citAdvanceDueGrosze =
+      citObligations?.incomeTaxAccruedGrosze ?? fallbackCit!.advanceDueGrosze;
+    const citExplanation = citObligations?.explanation ?? fallbackCit!.explanation;
 
     return LedgerViewResponseSchema.parse({
       period,
@@ -5191,12 +5360,12 @@ export class AccountingWorkspaceService {
         netFinancialResultFormatted: formatPlnFromGrosze(pnl.netProfitOrLossGrosze),
       },
       citAdvance: {
-        citRateKind: cit.appliedRatePct === 9 ? 'small_9' : 'standard_19',
-        citRateBps: cit.appliedRatePct === 9 ? 900 : 1900,
-        taxableIncomeGrosze: Math.max(0, cit.ytdTaxIncomeGrosze),
-        citAdvanceDueRoundedPlnGrosze: cit.advanceDueGrosze,
-        citAdvanceDueFormatted: formatPlnFromGrosze(cit.advanceDueGrosze),
-        explanation: cit.explanation,
+        citRateKind: appliedCitRatePct === 9 ? 'small_9' : 'standard_19',
+        citRateBps: appliedCitRatePct === 9 ? 900 : 1900,
+        taxableIncomeGrosze: citTaxableIncomeGrosze,
+        citAdvanceDueRoundedPlnGrosze: citAdvanceDueGrosze,
+        citAdvanceDueFormatted: formatPlnFromGrosze(citAdvanceDueGrosze),
+        explanation: citExplanation,
       },
     });
   }
@@ -5214,7 +5383,16 @@ export class AccountingWorkspaceService {
       'write',
       'create_journal_entry',
     );
+    assertAccountingRegimeSupportsAction(
+      company.taxProfile.profileCode,
+      'full_ledger_manual_write',
+    );
     const req = CreateJournalEntryRequestSchema.parse(rawRequest);
+    assertPeriodOpenForWrite(
+      company.periodCloseStates,
+      req.bookingDate.slice(0, 7),
+      `księgowanie dekretu ${req.documentNumber}`,
+    );
     const hasRedStornoLine = req.lines.some((l) => l.isRedStorno === true);
     if (!hasRedStornoLine) {
       const docNumNorm = normalizeCanonicalDocNumber(req.documentNumber);
@@ -5264,6 +5442,7 @@ export class AccountingWorkspaceService {
           ...(l.isRedStorno !== undefined ? { isRedStorno: l.isRedStorno } : {}),
           ...(l.stornoReason !== undefined ? { stornoReason: l.stornoReason } : {}),
         })),
+        closedPeriods: listClosedPeriods(company.periodCloseStates),
       });
     } catch (error) {
       if (error instanceof DoubleEntryValidationError) {
@@ -5393,6 +5572,11 @@ export class AccountingWorkspaceService {
             }
             continue;
           }
+          assertPeriodOpenForWrite(
+            company.periodCloseStates,
+            tx.bookingDate.slice(0, 7),
+            `import wyciągu bankowego (${tx.bookingDate})`,
+          );
           company.bankTransactions.push(tx);
           newlyAdded.push(tx);
           existingById.set(tx.transactionId, tx);
@@ -5477,6 +5661,17 @@ export class AccountingWorkspaceService {
           });
         }
 
+        if (shouldApply) {
+          syncSpzooBankReconciliationJournalEntries({
+            profileCode: company.taxProfile.profileCode,
+            bankTransactions: company.bankTransactions,
+            settlements: company.settlements,
+            reconciliationMatches: company.reconciliationMatches,
+            journalEntries: company.journalEntries,
+            closedPeriods: listClosedPeriods(company.periodCloseStates),
+          });
+        }
+
         this.store.saveCompany(company);
         return ImportBankStatementResponseSchema.parse({
           importedTransactionsCount: newlyAdded.length,
@@ -5538,6 +5733,11 @@ export class AccountingWorkspaceService {
               `Niezgodność kierunku przepływu: transakcja bankowa (${tx.direction}) nie może rozliczać rozrachunku typu ${settlement.direction}.`,
             );
           }
+          assertPeriodOpenForWrite(
+            company.periodCloseStates,
+            tx.bookingDate.slice(0, 7),
+            `uzgodnienie wyciągu bankowego (${tx.bookingDate})`,
+          );
           const list = itemsByTxId.get(item.transactionId) ?? [];
           itemsByTxId.set(item.transactionId, [...list, item]);
         }
@@ -5715,6 +5915,14 @@ export class AccountingWorkspaceService {
 
         company.settlements = workingSettlements;
         company.reconciliationMatches = workingMatches;
+        syncSpzooBankReconciliationJournalEntries({
+          profileCode: company.taxProfile.profileCode,
+          bankTransactions: company.bankTransactions,
+          settlements: company.settlements,
+          reconciliationMatches: company.reconciliationMatches,
+          journalEntries: company.journalEntries,
+          closedPeriods: listClosedPeriods(company.periodCloseStates),
+        });
         this.store.saveCompany(company);
         return this.buildFinanceResponseInternal(company);
       },
@@ -5751,47 +5959,8 @@ export class AccountingWorkspaceService {
       company.taxProfile.vatStatus === 'czynny'
         ? this.calculateCompanyVatSettlementForPeriod(company, period).jpk
         : null;
-
-    let estimatedIncomeTaxGrosze = 0;
-    if (
-      company.taxProfile.profileCode === 'jdg_kpir_skala' ||
-      company.taxProfile.profileCode === 'jdg_kpir_liniowy'
-    ) {
-      const sum = summarizeKpirPeriod(company.kpirEntries, period);
-      const taxForm = company.taxProfile.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala';
-      const ytdZusAndPit = this.computeYtdKpirZusAndPriorPitInternal(company, period, taxForm);
-      const pit = calculateKpirPitAdvance({
-        period,
-        taxForm,
-        ytdRevenueGrosze: sum.yearToDateTotals.col9TotalRevenueGrosze,
-        ytdCostsGrosze: sum.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-        paidSocialZusYtdGrosze: ytdZusAndPit.paidSocialZusYtdGrosze,
-        paidHealthInsuranceYtdGrosze: ytdZusAndPit.paidHealthInsuranceYtdGrosze,
-        previousAdvancesPaidYtdGrosze: ytdZusAndPit.previousAdvancesPaidYtdGrosze,
-      });
-      estimatedIncomeTaxGrosze = pit.advanceDueGrosze;
-    } else if (company.taxProfile.profileCode === 'jdg_ryczalt') {
-      const r = calculateMonthlyRyczalt({
-        period,
-        entries: company.ryczaltEntries.filter((e) => e.period === period),
-        paidSocialZusInMonthGrosze: zus?.socialContributionsTotalGrosze ?? 0,
-        paidHealthInsuranceInMonthGrosze: zus?.healthContributionGrosze ?? 0,
-      });
-      estimatedIncomeTaxGrosze = r.taxDueGrosze;
-    } else {
-      const pnl = generateProfitAndLoss(company.journalEntries.filter((je) => je.period <= period));
-      const ytdCitNkupGrosze = this.computeYtdCitNkupGroszeInternal(company, period);
-      const cit = calculateCitAdvance({
-        period,
-        ytdTaxableRevenuesGrosze: pnl.totalRevenuesGrosze,
-        ytdTaxDeductibleCostsGrosze: Math.max(
-          0,
-          pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
-        ),
-        smallTaxpayerStatus: company.taxProfile.smallTaxpayer,
-      });
-      estimatedIncomeTaxGrosze = cit.advanceDueGrosze;
-    }
+    const taxObl = this.computeCompanyPeriodTaxObligationsInternal(company, period);
+    const estimatedIncomeTaxGrosze = taxObl.incomeTaxAccruedGrosze;
 
     return generated.map((ob) => {
       const obligationId = deterministicUuidV4(
@@ -5810,22 +5979,60 @@ export class AccountingWorkspaceService {
           86_400_000,
       );
 
-      const workflowStatus: CalendarObligationItemContract['workflowStatus'] = paidAt
-        ? 'paid'
-        : diffDays < 0
-          ? 'overdue'
-          : diffDays <= 7
-            ? 'due_soon'
-            : 'upcoming';
-
       let estGrosze: number | null = null;
+      let accruedGrosze: number | null = null;
+      let paidGrosze: number | null = null;
+      let remainingGrosze: number | null = null;
       if (ob.category === 'zus' && zus) {
         estGrosze = zus.totalZusToPayGrosze;
+        const zusItems = taxObl.items.filter(
+          (i) =>
+            i.obligationKind === 'zus_social' ||
+            i.obligationKind === 'zus_health' ||
+            i.obligationKind === 'zus_labor_fund',
+        );
+        if (zusItems.length > 0) {
+          accruedGrosze = zusItems.reduce((s, i) => s + i.accruedGrosze, 0);
+          paidGrosze = zusItems.reduce((s, i) => s + i.paidGrosze, 0);
+          remainingGrosze = zusItems.reduce((s, i) => s + i.remainingGrosze, 0);
+        }
       } else if (ob.category === 'vat' && jpk) {
         estGrosze = jpk.taxDueToPayP51Grosze;
+        const vatItem = taxObl.items.find((i) => i.obligationKind === 'vat_settlement');
+        if (vatItem) {
+          accruedGrosze = vatItem.accruedGrosze;
+          paidGrosze = vatItem.paidGrosze;
+          remainingGrosze = vatItem.remainingGrosze;
+        }
       } else if (ob.category === 'pit' || ob.category === 'ryczalt' || ob.category === 'cit') {
         estGrosze = estimatedIncomeTaxGrosze;
+        const incItem = taxObl.items.find(
+          (i) =>
+            i.obligationKind === 'pit_advance' ||
+            i.obligationKind === 'ryczalt_advance' ||
+            i.obligationKind === 'cit_advance',
+        );
+        if (incItem) {
+          accruedGrosze = incItem.accruedGrosze;
+          paidGrosze = incItem.paidGrosze;
+          remainingGrosze = incItem.remainingGrosze;
+        }
       }
+
+      const settledByVerifiedPayment =
+        accruedGrosze !== null &&
+        accruedGrosze > 0 &&
+        remainingGrosze === 0 &&
+        (paidGrosze ?? 0) >= accruedGrosze;
+
+      const workflowStatus: CalendarObligationItemContract['workflowStatus'] =
+        paidAt || settledByVerifiedPayment
+          ? 'paid'
+          : diffDays < 0
+            ? 'overdue'
+            : diffDays <= 7
+              ? 'due_soon'
+              : 'upcoming';
 
       return {
         obligationId,
@@ -5843,6 +6050,9 @@ export class AccountingWorkspaceService {
         workflowStatus,
         estimatedAmountGrosze: estGrosze,
         estimatedAmountFormatted: estGrosze !== null ? formatPlnFromGrosze(estGrosze) : null,
+        ...(accruedGrosze !== null ? { accruedGrosze } : {}),
+        ...(paidGrosze !== null ? { paidGrosze } : {}),
+        ...(remainingGrosze !== null ? { remainingGrosze } : {}),
         paidAt,
         explanation: toContractExplanation(ob.explanation),
       };
@@ -5960,6 +6170,8 @@ export class AccountingWorkspaceService {
     let incomeTaxGrosze: number;
     let regimeComparison: RegimeComparisonSummary | null = null;
 
+    const taxObl = this.computeCompanyPeriodTaxObligationsInternal(company, period);
+
     if (
       company.taxProfile.profileCode === 'jdg_kpir_skala' ||
       company.taxProfile.profileCode === 'jdg_kpir_liniowy'
@@ -5971,36 +6183,26 @@ export class AccountingWorkspaceService {
       const taxForm = company.taxProfile.profileCode === 'jdg_kpir_liniowy' ? 'liniowy' : 'skala';
       incomeTaxLabelPl =
         taxForm === 'liniowy' ? 'Zaliczka PIT-36L (19%)' : 'Zaliczka PIT-36 (skala 12%/32%)';
-      const ytdZusAndPit = this.computeYtdKpirZusAndPriorPitInternal(company, period, taxForm);
-      const pit = calculateKpirPitAdvance({
-        period,
-        taxForm,
-        ytdRevenueGrosze: kpirSummary.yearToDateTotals.col9TotalRevenueGrosze,
-        ytdCostsGrosze: kpirSummary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-        paidSocialZusYtdGrosze: ytdZusAndPit.paidSocialZusYtdGrosze,
-        paidHealthInsuranceYtdGrosze: ytdZusAndPit.paidHealthInsuranceYtdGrosze,
-        previousAdvancesPaidYtdGrosze: ytdZusAndPit.previousAdvancesPaidYtdGrosze,
-      });
-      incomeTaxGrosze = pit.advanceDueGrosze;
+      incomeTaxGrosze = taxObl.incomeTaxAccruedGrosze;
       regimeComparison = this.computeRegimeComparisonInternal(
         company,
         period,
         kpirSummary.yearToDateTotals.col9TotalRevenueGrosze,
         kpirSummary.yearToDateTotals.totalTaxDeductibleCostsGrosze,
-        ytdZusAndPit.paidSocialZusYtdGrosze,
+        taxObl.paidSocialZusUsedInTaxBaseGrosze,
       );
     } else if (company.taxProfile.profileCode === 'jdg_ryczalt') {
       const rycz = calculateMonthlyRyczalt({
         period,
         entries: company.ryczaltEntries.filter((e) => e.period === period),
-        paidSocialZusInMonthGrosze: zus?.socialContributionsTotalGrosze ?? 0,
-        paidHealthInsuranceInMonthGrosze: zus?.healthContributionGrosze ?? 0,
+        paidSocialZusInMonthGrosze: 0,
+        paidHealthInsuranceInMonthGrosze: 0,
       });
       revenueGrosze = rycz.totalNetRevenueGrosze;
       expensesKupGrosze = 0;
       incomeOrProfitGrosze = rycz.totalNetRevenueGrosze;
       incomeTaxLabelPl = 'Ryczałt od przychodów ewidencjonowanych (PIT-28)';
-      incomeTaxGrosze = rycz.taxDueGrosze;
+      incomeTaxGrosze = taxObl.incomeTaxAccruedGrosze;
     } else {
       const entriesUpTo = company.journalEntries.filter((je) => je.period <= period);
       const pnl = generateProfitAndLoss(entriesUpTo);
@@ -6011,17 +6213,9 @@ export class AccountingWorkspaceService {
         pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
       );
       incomeOrProfitGrosze = pnl.netProfitOrLossGrosze;
-      const cit = calculateCitAdvance({
-        period,
-        ytdTaxableRevenuesGrosze: pnl.totalRevenuesGrosze,
-        ytdTaxDeductibleCostsGrosze: Math.max(
-          0,
-          pnl.totalOperatingAndFinancialExpensesGrosze - ytdCitNkupGrosze,
-        ),
-        smallTaxpayerStatus: company.taxProfile.smallTaxpayer,
-      });
-      incomeTaxLabelPl = `Zaliczka CIT-8 (${cit.appliedRatePct}%)`;
-      incomeTaxGrosze = cit.advanceDueGrosze;
+      const appliedRate = taxObl.citRateDetails?.operatingAppliedRatePct ?? 19;
+      incomeTaxLabelPl = `Zaliczka CIT-8 (${appliedRate}%)`;
+      incomeTaxGrosze = taxObl.incomeTaxAccruedGrosze;
     }
 
     let vatLabelPl = 'Zwolnienie z VAT (art. 113)';
@@ -6098,6 +6292,282 @@ export class AccountingWorkspaceService {
       },
       recentAuditEvents,
     });
+  }
+
+  getPeriodCloseStatus(
+    actor: WorkspaceActorContext,
+    rawTenantId: string,
+    rawLegalEntityId: string,
+    period: string,
+  ): PeriodCloseStatusResponse {
+    assertValidPeriodMonth(period);
+    const { company, tId, leId } = this.authorizeCompanyOperation(
+      actor,
+      rawTenantId,
+      rawLegalEntityId,
+      'read',
+      'get_period_close_status',
+    );
+    const pendingMcpCount = this.store
+      .listMcpProposals(tId, leId)
+      .filter(
+        (p) => p.status === 'pending_human_approval' && p.invoice.issueDate.startsWith(period),
+      ).length;
+    const evaluated = evaluatePeriodCloseStatus({
+      tenantId: tId,
+      legalEntityId: leId,
+      period,
+      profileCode: company.taxProfile.profileCode,
+      documents: company.documents,
+      pendingMcpProposalsCount: pendingMcpCount,
+      bankTransactions: company.bankTransactions,
+      reconciliationMatches: company.reconciliationMatches,
+      verifiedTaxPayments: company.verifiedTaxPayments,
+      journalEntries: company.journalEntries,
+      existingState: company.periodCloseStates?.get(period),
+    });
+    return PeriodCloseStatusResponseSchema.parse(evaluated);
+  }
+
+  closeAccountingPeriod(
+    actor: WorkspaceActorContext,
+    rawTenantId: string,
+    rawLegalEntityId: string,
+    period: string,
+    rawRequest: CloseAccountingPeriodRequest,
+  ): PeriodCloseStatusResponse {
+    assertValidPeriodMonth(period);
+    const { company, tId, leId, uId } = this.authorizeCompanyOperation(
+      actor,
+      rawTenantId,
+      rawLegalEntityId,
+      'write',
+      'close_accounting_period',
+    );
+    this.assertHumanApprovalActorScopes(actor, tId, leId, 'close_accounting_period');
+    const req = CloseAccountingPeriodRequestSchema.parse(rawRequest);
+
+    return this.runWithInMemoryIdempotency(
+      `closeAccountingPeriod:${tId}:${leId}:${uId}:${period}`,
+      actor.idempotencyKey,
+      req,
+      () => {
+        company.periodCloseStates ??= new Map<string, PeriodCloseState>();
+        const pendingMcpCount = this.store
+          .listMcpProposals(tId, leId)
+          .filter(
+            (p) => p.status === 'pending_human_approval' && p.invoice.issueDate.startsWith(period),
+          ).length;
+        const evaluatedBefore = evaluatePeriodCloseStatus({
+          tenantId: tId,
+          legalEntityId: leId,
+          period,
+          profileCode: company.taxProfile.profileCode,
+          documents: company.documents,
+          pendingMcpProposalsCount: pendingMcpCount,
+          bankTransactions: company.bankTransactions,
+          reconciliationMatches: company.reconciliationMatches,
+          verifiedTaxPayments: company.verifiedTaxPayments,
+          journalEntries: company.journalEntries,
+          existingState: company.periodCloseStates.get(period),
+        });
+
+        const nextState = transitionPeriodCloseState({
+          evaluated: evaluatedBefore,
+          existingState: company.periodCloseStates.get(period),
+          actorUserId: uId,
+          nowIso: this.nowIso(),
+          confirmClose: req.confirmClose,
+          requestedStatus: req.status,
+          note: req.note,
+        });
+        company.periodCloseStates.set(period, nextState);
+        this.store.saveCompany(company);
+
+        this.recordAudit({
+          channel: 'accounting',
+          action:
+            nextState.status === 'closed'
+              ? 'accounting_period_closed'
+              : 'accounting_period_reconciling',
+          actorUserId: uId,
+          actorDisplayLabel: this.resolveDisplayLabel(uId),
+          tenantId: tId,
+          legalEntityId: leId,
+          outcome: 'allow',
+          reasonCode:
+            nextState.status === 'closed' ? 'period_closed_by_human' : 'period_marked_reconciling',
+          summaryPl:
+            nextState.status === 'closed'
+              ? `Zamknięto okres sprawozdawczy ${period} (v${nextState.version}).${nextState.note ? ` Notatka: ${nextState.note}` : ''}`
+              : `Oznaczono okres sprawozdawczy ${period} jako w trakcie uzgadniania (v${nextState.version}).`,
+        });
+
+        const evaluatedAfter = evaluatePeriodCloseStatus({
+          tenantId: tId,
+          legalEntityId: leId,
+          period,
+          profileCode: company.taxProfile.profileCode,
+          documents: company.documents,
+          pendingMcpProposalsCount: pendingMcpCount,
+          bankTransactions: company.bankTransactions,
+          reconciliationMatches: company.reconciliationMatches,
+          verifiedTaxPayments: company.verifiedTaxPayments,
+          journalEntries: company.journalEntries,
+          existingState: nextState,
+        });
+        return PeriodCloseStatusResponseSchema.parse(evaluatedAfter);
+      },
+    );
+  }
+
+  getPeriodTaxObligations(
+    actor: WorkspaceActorContext,
+    rawTenantId: string,
+    rawLegalEntityId: string,
+    period: string = DEMO_DEFAULT_PERIOD,
+    options?: {
+      readonly requestPreferentialCit9Pct?: boolean | undefined;
+    },
+  ): PeriodTaxObligationsResponse {
+    assertValidPeriodMonth(period);
+    const { company, tId, leId } = this.authorizeCompanyOperation(
+      actor,
+      rawTenantId,
+      rawLegalEntityId,
+      'read',
+      'get_period_tax_obligations',
+    );
+    const computed = this.computeCompanyPeriodTaxObligationsInternal(company, period, {
+      requestPreferentialCit9Pct: options?.requestPreferentialCit9Pct,
+    });
+    const periodVerifiedPayments = (company.verifiedTaxPayments ?? []).filter(
+      (p) => p.targetPeriod === period || p.paidDate.startsWith(period),
+    );
+    return PeriodTaxObligationsResponseSchema.parse({
+      tenantId: tId,
+      legalEntityId: leId,
+      period,
+      profileCode: computed.profileCode,
+      evaluationDate: computed.evaluationDate,
+      bindingForDeclaration: computed.bindingForDeclaration,
+      items: computed.items,
+      verifiedPayments: periodVerifiedPayments,
+      totals: computed.totals,
+      paidSocialZusUsedInTaxBaseGrosze: computed.paidSocialZusUsedInTaxBaseGrosze,
+      paidHealthZusUsedInTaxBaseGrosze: computed.paidHealthZusUsedInTaxBaseGrosze,
+      citRateDetails: computed.citRateDetails,
+      explanation: toContractExplanation(computed.explanation),
+    });
+  }
+
+  recordVerifiedTaxPayment(
+    actor: WorkspaceActorContext,
+    rawTenantId: string,
+    rawLegalEntityId: string,
+    rawRequest: RecordVerifiedTaxPaymentRequest,
+  ): PeriodTaxObligationsResponse {
+    const { company, tId, leId, uId } = this.authorizeCompanyOperation(
+      actor,
+      rawTenantId,
+      rawLegalEntityId,
+      'write',
+      'record_verified_tax_payment',
+    );
+    const req = RecordVerifiedTaxPaymentRequestSchema.parse(rawRequest);
+
+    return this.runWithInMemoryIdempotency(
+      `recordVerifiedTaxPayment:${tId}:${leId}:${uId}`,
+      actor.idempotencyKey,
+      req,
+      () => {
+        company.verifiedTaxPayments ??= [];
+        const matchedBankTx = company.bankTransactions.find(
+          (t) =>
+            t.transactionId === req.bankTransactionId ||
+            deterministicUuidV4(`bank-tx:${tId}:${leId}:${t.transactionId}`).toLowerCase() ===
+              req.bankTransactionId.toLowerCase(),
+        );
+        if (!matchedBankTx || matchedBankTx.direction !== 'debit') {
+          throw new AccountingWorkspaceValidationError(
+            422,
+            'unverified_bank_transaction_reference',
+            `Dowód zapłaty zobowiązania publicznoprawnego wymaga istniejącej transakcji obciążeniowej (debit) na wyciągu bankowym firmy (brak transakcji "${req.bankTransactionId}").`,
+          );
+        }
+
+        const canonicalTxId = matchedBankTx.transactionId;
+        const resolvedPaymentId =
+          req.paymentId?.trim() ||
+          deterministicUuidV4(
+            `tax-pay:${tId}:${leId}:${canonicalTxId}:${req.obligationKind}:${req.targetPeriod}`,
+          );
+
+        const existingById = company.verifiedTaxPayments.find(
+          (p) => p.paymentId === resolvedPaymentId,
+        );
+        if (existingById) {
+          if (
+            existingById.obligationKind === req.obligationKind &&
+            existingById.targetPeriod === req.targetPeriod &&
+            existingById.paidDate === req.paidDate &&
+            existingById.amountGrosze === req.amountGrosze &&
+            existingById.bankTransactionId === canonicalTxId
+          ) {
+            return this.getPeriodTaxObligations(
+              actor,
+              rawTenantId,
+              rawLegalEntityId,
+              req.targetPeriod,
+            );
+          }
+          throw new AccountingWorkspaceConflictError(
+            'duplicate_tax_payment_conflict',
+            `Dowód zapłaty "${resolvedPaymentId}" istnieje już z innymi parametrami kwoty lub okresu.`,
+          );
+        }
+
+        const commercialAllocated = company.reconciliationMatches
+          .filter((m) => m.transactionId === canonicalTxId && m.settledAmountGrosze > 0)
+          .reduce((s, m) => s + m.settledAmountGrosze, 0);
+        const taxAllocated = company.verifiedTaxPayments
+          .filter((p) => p.bankTransactionId === canonicalTxId)
+          .reduce((s, p) => s + p.amountGrosze, 0);
+        if (commercialAllocated + taxAllocated + req.amountGrosze > matchedBankTx.amountGrosze) {
+          throw new AccountingWorkspaceValidationError(
+            422,
+            'allocation_exceeds_transaction_amount',
+            `Suma przypisanych płatności przekracza kwotę przelewu bankowego (${matchedBankTx.amountFormatted}).`,
+          );
+        }
+
+        const record: VerifiedTaxOrZusPayment = {
+          paymentId: resolvedPaymentId,
+          obligationKind: req.obligationKind,
+          targetPeriod: req.targetPeriod,
+          paidDate: req.paidDate,
+          amountGrosze: req.amountGrosze,
+          bankTransactionId: canonicalTxId,
+        };
+        validateVerifiedPaymentRecord(record);
+        company.verifiedTaxPayments.push(record);
+        this.store.saveCompany(company);
+
+        this.recordAudit({
+          channel: 'accounting',
+          action: 'verified_tax_payment_recorded',
+          actorUserId: uId,
+          actorDisplayLabel: this.resolveDisplayLabel(uId),
+          tenantId: tId,
+          legalEntityId: leId,
+          outcome: 'allow',
+          reasonCode: 'verified_bank_tax_payment',
+          summaryPl: `Powiązano zweryfikowaną płatność ${req.obligationKind} za ${req.targetPeriod} (${formatPlnFromGrosze(req.amountGrosze)}, przelew ${canonicalTxId}).`,
+        });
+
+        return this.getPeriodTaxObligations(actor, rawTenantId, rawLegalEntityId, req.targetPeriod);
+      },
+    );
   }
 
   private buildNotificationsViewInternal(
@@ -6446,6 +6916,11 @@ export class AccountingWorkspaceService {
       'write',
       'mcp_prepare_invoice_proposal',
     );
+    assertPeriodOpenForWrite(
+      company.periodCloseStates,
+      input.invoice.issueDate.slice(0, 7),
+      `przygotowanie propozycji MCP (${input.invoice.invoiceNumber})`,
+    );
 
     const nipCheck = validatePolishNip(input.invoice.counterpartyNip);
     if (!nipCheck.valid) {
@@ -6723,22 +7198,30 @@ export class AccountingWorkspaceService {
     const netGrosze = parsePlnToGrosze(proposal.invoice.netAmountPln);
     const vatGrosze = parsePlnToGrosze(proposal.invoice.vatAmountPln);
     const grossGrosze = parsePlnToGrosze(proposal.invoice.grossAmountPln);
-    const extendedInvoice = proposal.invoice as PrepareInvoiceAndPostingProposalInput['invoice'] & {
+    const extendedInvoice = proposal.invoice as Omit<
+      PrepareInvoiceAndPostingProposalInput['invoice'],
+      'lines'
+    > & {
       readonly vatRate?: VatRateCode | undefined;
       readonly ryczaltRate?: RyczaltRateCode | undefined;
       readonly isCorrection?: boolean | undefined;
       readonly correctedDocumentNumber?: string | undefined;
       readonly correctionReason?: string | undefined;
-      readonly lines?: readonly {
-        readonly description: string;
-        readonly quantity?: string | undefined;
-        readonly unit?: string | undefined;
-        readonly netGrosze: number;
-        readonly vatRate: VatRateCode;
-        readonly vatGrosze?: number | undefined;
-        readonly grossGrosze?: number | undefined;
-        readonly annex15Item?: boolean | undefined;
-      }[];
+      readonly lines?:
+        | readonly {
+            readonly description: string;
+            readonly quantity?: string | undefined;
+            readonly unit?: string | undefined;
+            readonly netGrosze?: number | undefined;
+            readonly netAmountPln?: string | undefined;
+            readonly vatRate: VatRateCode;
+            readonly vatGrosze?: number | undefined;
+            readonly vatAmountPln?: string | undefined;
+            readonly grossGrosze?: number | undefined;
+            readonly grossAmountPln?: string | undefined;
+            readonly annex15Item?: boolean | undefined;
+          }[]
+        | undefined;
     };
 
     const candidateOpKey = computeEconomicOperationKey({
@@ -6801,7 +7284,36 @@ export class AccountingWorkspaceService {
     }[];
 
     if (extendedInvoice.lines && extendedInvoice.lines.length > 0) {
-      resolvedLines = extendedInvoice.lines;
+      resolvedLines = extendedInvoice.lines.map((line, idx) => {
+        const lineNet =
+          line.netGrosze !== undefined
+            ? line.netGrosze
+            : line.netAmountPln !== undefined
+              ? parsePlnToGrosze(line.netAmountPln)
+              : 0;
+        const lineVat =
+          line.vatGrosze !== undefined
+            ? line.vatGrosze
+            : line.vatAmountPln !== undefined
+              ? parsePlnToGrosze(line.vatAmountPln)
+              : undefined;
+        const lineGross =
+          line.grossGrosze !== undefined
+            ? line.grossGrosze
+            : line.grossAmountPln !== undefined
+              ? parsePlnToGrosze(line.grossAmountPln)
+              : undefined;
+        return {
+          description: line.description || `${proposal.invoice.expenseDescription} (#${idx + 1})`,
+          ...(line.quantity !== undefined ? { quantity: line.quantity } : {}),
+          ...(line.unit !== undefined ? { unit: line.unit } : {}),
+          netGrosze: lineNet,
+          vatRate: line.vatRate,
+          ...(lineVat !== undefined ? { vatGrosze: lineVat } : {}),
+          ...(lineGross !== undefined ? { grossGrosze: lineGross } : {}),
+          ...(line.annex15Item !== undefined ? { annex15Item: line.annex15Item } : {}),
+        };
+      });
     } else {
       let resolvedVatRate: VatRateCode;
       if (extendedInvoice.vatRate !== undefined) {
@@ -7342,34 +7854,240 @@ export class AccountingWorkspaceService {
           d.document.eventDate.startsWith(period) &&
           (d.status === 'needs_verification' || d.status === 'ai_proposed' || d.status === 'draft'),
       );
-      const missingDocuments = unverifiedDocs.map((d) => ({
-        code: `UNVERIFIED_DOC_${d.documentId.slice(0, 8).toUpperCase()}`,
-        descriptionPl: `Dokument ${d.document.documentNumber} oczekuje na weryfikację i zatwierdzenie człowieka.`,
-        blocking: true,
-        contextNote: `${d.document.counterpartyName} (${d.document.totalGrossFormatted})`,
-      }));
+      const pendingProposals = this.store
+        .listMcpProposals(tId, leId)
+        .filter(
+          (p) => p.status === 'pending_human_approval' && p.invoice.issueDate.startsWith(period),
+        );
+      const missingDocuments = [
+        ...unverifiedDocs.map((d) => ({
+          code: `UNVERIFIED_DOC_${d.documentId.slice(0, 8).toUpperCase()}`,
+          descriptionPl: `Dokument ${d.document.documentNumber} oczekuje na weryfikację i zatwierdzenie człowieka.`,
+          blocking: true,
+          contextNote: `${d.document.counterpartyName} (${d.document.totalGrossFormatted})`,
+        })),
+        ...pendingProposals.map((p) => ({
+          code: `PENDING_MCP_${p.proposalId.slice(0, 8).toUpperCase()}`,
+          descriptionPl: `Propozycja MCP ${p.invoice.invoiceNumber} oczekuje na decyzję człowieka.`,
+          blocking: true,
+          contextNote: `${p.invoice.counterpartyName} (${p.invoice.grossAmountPln} PLN)`,
+        })),
+      ];
 
-      const matchedTxIds = new Set(
-        comp.reconciliationMatches
-          .filter((m) => m.status === 'matched_exact' || m.status === 'matched_partial')
-          .map((m) => m.transactionId),
-      );
       const uuidRegex =
         /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      const unreconciledBankTransfers = comp.bankTransactions
-        .filter((tx) => tx.bookingDate.startsWith(period) && !matchedTxIds.has(tx.transactionId))
-        .map((tx) => ({
+      const unreconciledItems = computeUnreconciledBankTransactionsForPeriod({
+        bankTransactions: comp.bankTransactions,
+        reconciliationMatches: comp.reconciliationMatches,
+        verifiedTaxPayments: comp.verifiedTaxPayments,
+        period,
+      });
+      const unreconciledBankTransfers = unreconciledItems.map(
+        ({ tx, remainingUnallocatedGrosze }) => ({
           bankTransactionId: uuidRegex.test(tx.transactionId)
-            ? tx.transactionId
+            ? tx.transactionId.toLowerCase()
             : deterministicUuidV4(`bank-tx:${tId}:${leId}:${tx.transactionId}`),
           bookingDate: tx.bookingDate,
           amountPln: formatGroszeDecimalPln(
-            tx.direction === 'debit' ? -tx.amountGrosze : tx.amountGrosze,
+            tx.direction === 'debit' ? -remainingUnallocatedGrosze : remainingUnallocatedGrosze,
           ),
+          counterpartyName: tx.counterpartyName,
           transferTitle: tx.title,
-        }));
+        }),
+      );
 
       return { missingDocuments, unreconciledBankTransfers };
+    };
+
+    const listUnreconciledBankTransactions = async (
+      tId: TenantId,
+      leId: LegalEntityId,
+      period?: string,
+    ): Promise<readonly UnreconciledBankTransactionRecord[]> => {
+      const comp = this.store.getCompany(tId, leId);
+      if (!comp) {
+        return [];
+      }
+      const uuidRegex =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const unreconciled = computeUnreconciledBankTransactionsForPeriod({
+        bankTransactions: comp.bankTransactions,
+        reconciliationMatches: comp.reconciliationMatches,
+        verifiedTaxPayments: comp.verifiedTaxPayments,
+        period,
+      });
+      return unreconciled.map(({ tx, remainingUnallocatedGrosze }) => ({
+        bankTransactionId: uuidRegex.test(tx.transactionId)
+          ? tx.transactionId.toLowerCase()
+          : deterministicUuidV4(`bank-tx:${tId}:${leId}:${tx.transactionId}`),
+        tenantId: tId,
+        legalEntityId: leId,
+        bookingDate: tx.bookingDate,
+        direction: tx.direction,
+        amountPln: formatGroszeDecimalPln(tx.amountGrosze),
+        remainingUnallocatedPln: formatGroszeDecimalPln(remainingUnallocatedGrosze),
+        counterpartyName: tx.counterpartyName,
+        transferTitle: tx.title,
+      }));
+    };
+
+    const applyConfirmedBankReconciliation = async (params: {
+      readonly tenantId: TenantId;
+      readonly legalEntityId: LegalEntityId;
+      readonly bankTransactionId: string;
+      readonly invoiceId: string;
+      readonly allocationGrossPln: string;
+      readonly confirmedByUserId: UserId;
+    }): Promise<{
+      readonly reconciliationEntryId: string;
+      readonly remainingInvoiceGrossAfterPln: string;
+    }> => {
+      const comp = this.store.getCompany(params.tenantId, params.legalEntityId);
+      if (!comp) {
+        throw new AccountingWorkspaceAccessError(
+          404,
+          'company_not_found',
+          'Nie znaleziono firmy dla zatwierdzanego uzgodnienia bankowego MCP.',
+        );
+      }
+      const tx = comp.bankTransactions.find(
+        (t) =>
+          t.transactionId.toLowerCase() === params.bankTransactionId.toLowerCase() ||
+          deterministicUuidV4(
+            `bank-tx:${params.tenantId}:${params.legalEntityId}:${t.transactionId}`,
+          ).toLowerCase() === params.bankTransactionId.toLowerCase(),
+      );
+      const settlement = comp.settlements.find(
+        (s) =>
+          s.documentId.toLowerCase() === params.invoiceId.toLowerCase() ||
+          s.settlementId.toLowerCase() === params.invoiceId.toLowerCase(),
+      );
+      if (!tx || !settlement) {
+        throw new AccountingWorkspaceAccessError(
+          404,
+          'reconcile_target_not_found',
+          'Nie znaleziono transakcji bankowej lub rozrachunku faktury dla uzgodnienia MCP.',
+        );
+      }
+
+      const addGrosze = parsePlnToGrosze(params.allocationGrossPln);
+      const existingMatchesForTx = comp.reconciliationMatches.filter(
+        (m) =>
+          m.transactionId === tx.transactionId &&
+          m.matchedDocumentId !== undefined &&
+          m.settledAmountGrosze > 0,
+      );
+      const mergedBySettlementId = new Map<string, number>();
+      for (const m of existingMatchesForTx) {
+        const sItem = comp.settlements.find((s) => s.documentId === m.matchedDocumentId);
+        if (sItem) {
+          mergedBySettlementId.set(
+            sItem.settlementId,
+            (mergedBySettlementId.get(sItem.settlementId) ?? 0) + m.settledAmountGrosze,
+          );
+        }
+      }
+      const nextForTarget = (mergedBySettlementId.get(settlement.settlementId) ?? 0) + addGrosze;
+      mergedBySettlementId.set(settlement.settlementId, nextForTarget);
+
+      const batchMatches = [...mergedBySettlementId.entries()].map(
+        ([settlementId, amountGrosze]) => ({
+          transactionId: tx.transactionId,
+          settlementId,
+          amountGrosze,
+        }),
+      );
+
+      const finance = this.reconcileBank(
+        {
+          userId: params.confirmedByUserId,
+          scopes: ['pap:ui:accounting'],
+        },
+        params.tenantId,
+        params.legalEntityId,
+        { matches: batchMatches },
+      );
+
+      const updatedSettlement = finance.settlements.find(
+        (s) => s.settlementId === settlement.settlementId,
+      );
+      return {
+        reconciliationEntryId: deterministicUuidV4(
+          `mcp-bank-rec:${params.tenantId}:${params.legalEntityId}:${tx.transactionId}:${settlement.settlementId}:${nextForTarget}`,
+        ),
+        remainingInvoiceGrossAfterPln: formatGroszeDecimalPln(
+          updatedSettlement?.remainingGrosze ?? 0,
+        ),
+      };
+    };
+
+    const getVatPeriodPreviewSnapshot = async (
+      tId: TenantId,
+      leId: LegalEntityId,
+      period: string,
+    ): Promise<VatPeriodPreviewSnapshot | null> => {
+      const comp = this.store.getCompany(tId, leId);
+      if (!comp || comp.taxProfile.vatStatus !== 'czynny') {
+        return null;
+      }
+      const periodVat = comp.vatEntries.filter((e) => e.period === period);
+      const { jpk } = this.calculateCompanyVatSettlementForPeriod(comp, period);
+      return {
+        salesEntriesCount: periodVat.filter((e) => e.registerType === 'sales').length,
+        purchaseEntriesCount: periodVat.filter((e) => e.registerType === 'purchase').length,
+        outputVatPln: formatGroszeDecimalPln(jpk.outputVatRoundedPlnGrosze),
+        deductibleInputVatPln: formatGroszeDecimalPln(jpk.totalInputVatPlnGrosze),
+        taxDuePln: formatGroszeDecimalPln(jpk.taxDueToPayP51Grosze),
+        excessCarryForwardPln: formatGroszeDecimalPln(jpk.carryForwardToNextPeriodP62Grosze),
+      };
+    };
+
+    const listCompanyAuditEvents = async (
+      tId: TenantId,
+      leId: LegalEntityId,
+    ): Promise<readonly ExternalCompanyAuditRecord[]> => {
+      return this.store.listAuditEvents({ tenantId: tId, legalEntityId: leId }).map((ev) => ({
+        auditEventId: ev.auditEventId,
+        occurredAt: ev.occurredAt,
+        channel: ev.channel,
+        action: ev.action,
+        outcome: ev.outcome,
+        reasonCode: ev.reasonCode,
+        summaryPl: ev.summaryPl,
+      }));
+    };
+
+    const isPeriodClosed = async (
+      tId: TenantId,
+      leId: LegalEntityId,
+      period: string,
+    ): Promise<boolean> => {
+      const comp = this.store.getCompany(tId, leId);
+      return comp?.periodCloseStates?.get(period)?.status === 'closed';
+    };
+
+    const applyConfirmedMonthClose = async (params: {
+      readonly tenantId: TenantId;
+      readonly legalEntityId: LegalEntityId;
+      readonly period: string;
+      readonly confirmedByUserId: UserId;
+      readonly note?: string | undefined;
+    }): Promise<{ readonly closedAt: string }> => {
+      const closed = this.closeAccountingPeriod(
+        {
+          userId: params.confirmedByUserId,
+          scopes: ['pap:ui:accounting'],
+        },
+        params.tenantId,
+        params.legalEntityId,
+        params.period,
+        {
+          confirmClose: true,
+          status: 'closed',
+          ...(params.note ? { note: params.note } : {}),
+        },
+      );
+      return { closedAt: closed.closedAt ?? this.nowIso() };
     };
 
     const port: PapMcpDomainPort = {
@@ -7384,6 +8102,12 @@ export class AccountingWorkspaceService {
       getAccountingItemExplanation,
       getLegalBasisEntry,
       getMonthCloseRawData,
+      listUnreconciledBankTransactions,
+      applyConfirmedBankReconciliation,
+      getVatPeriodPreviewSnapshot,
+      listCompanyAuditEvents,
+      isPeriodClosed,
+      applyConfirmedMonthClose,
       prepare_invoice_draft: async (actor, input) => this.prepareMcpProposal(actor, input),
       issue_human_confirmation_token: async (actor, tId, leId, propId) =>
         this.issueMcpProposalChallenge(actor, tId, leId, propId),
@@ -7668,6 +8392,8 @@ export class AccountingWorkspaceService {
         paidObligationsByKey: new Map(),
         explanationsById: new Map(),
         vatPeriodSettlements: new Map(),
+        periodCloseStates: new Map(),
+        verifiedTaxPayments: [],
       });
     }
 

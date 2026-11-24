@@ -252,6 +252,15 @@ export const DEMO_COMPANIES_SEED: readonly DemoCompanySeedDefinition[] = [
       smallTaxpayer: true,
       ksefSales2024Above200M: false,
       krsRegisteredBefore2025: true,
+      citPreferentialAttestation: {
+        smallTaxpayerVerified: true,
+        priorYearGrossSalesGrosze: 300_000_000,
+        isFirstTaxYearNewEntityVerified: false,
+        excludedRestructuringArt19Ust1aVerified: false,
+        excludedTaxCapitalGroupOrSplitVerified: false,
+        taxYearStartDate: '2026-01-01',
+        taxYearEndDate: '2026-12-31',
+      },
     },
   },
   {

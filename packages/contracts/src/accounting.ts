@@ -47,6 +47,19 @@ export const ZusSchemeSchema = z.enum([
 export const HealthContributionTierSchema = z.enum(['low', 'medium', 'middle', 'high', 'standard']);
 export type HealthContributionTierContract = z.infer<typeof HealthContributionTierSchema>;
 
+export const CitPreferentialAttestationSchema = z
+  .object({
+    smallTaxpayerVerified: z.boolean(),
+    priorYearGrossSalesGrosze: NonNegativeGroszeSchema.optional(),
+    isFirstTaxYearNewEntityVerified: z.boolean(),
+    excludedRestructuringArt19Ust1aVerified: z.boolean(),
+    excludedTaxCapitalGroupOrSplitVerified: z.boolean(),
+    taxYearStartDate: IsoCalendarDateSchema,
+    taxYearEndDate: IsoCalendarDateSchema,
+  })
+  .strict();
+export type CitPreferentialAttestationContract = z.infer<typeof CitPreferentialAttestationSchema>;
+
 export const TaxProfileConfigSchema = z
   .object({
     profileCode: TaxProfileCodeSchema,
@@ -87,6 +100,7 @@ export const TaxProfileConfigSchema = z
     ksefEnabled: z.boolean().optional(),
     ryczaltDefaultRate: RyczaltRateCodeSchema.optional(),
     healthContributionTier: HealthContributionTierSchema.optional(),
+    citPreferentialAttestation: CitPreferentialAttestationSchema.optional(),
   })
   .strict();
 

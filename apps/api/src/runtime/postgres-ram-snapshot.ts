@@ -34,6 +34,15 @@ interface InspectableMcpGateway {
   readonly prepareIdempotency: Map<string, unknown>;
   readonly confirmIdempotency: Map<string, unknown>;
   readonly humanChallengesByProposal: Map<string, unknown>;
+  readonly env?: {
+    readonly state?: {
+      readonly bankProposalsById?: Map<string, unknown>;
+      readonly bankPrepareIdempotency?: Map<string, unknown>;
+      readonly bankConfirmIdempotency?: Map<string, unknown>;
+      readonly monthCloseProposalsById?: Map<string, unknown>;
+      readonly monthCloseIdempotency?: Map<string, unknown>;
+    };
+  };
 }
 
 interface GatewayRamSnapshot {
@@ -42,6 +51,11 @@ interface GatewayRamSnapshot {
   readonly prepareIdempotency: Map<string, unknown>;
   readonly confirmIdempotency: Map<string, unknown>;
   readonly humanChallengesByProposal: Map<string, unknown>;
+  readonly bankProposalsById: Map<string, unknown> | null;
+  readonly bankPrepareIdempotency: Map<string, unknown> | null;
+  readonly bankConfirmIdempotency: Map<string, unknown> | null;
+  readonly monthCloseProposalsById: Map<string, unknown> | null;
+  readonly monthCloseIdempotency: Map<string, unknown> | null;
 }
 
 export interface WorkspaceRamSnapshot {
@@ -119,12 +133,24 @@ export function captureWorkspaceRamSnapshot(
 
   for (const gateway of gateways) {
     const gw = gateway as unknown as InspectableMcpGateway;
+    const st = gw.env?.state;
     gatewaySnapshots.push({
       gateway,
       proposalsById: cloneMap(gw.proposalsById),
       prepareIdempotency: cloneMap(gw.prepareIdempotency),
       confirmIdempotency: cloneMap(gw.confirmIdempotency),
       humanChallengesByProposal: cloneMap(gw.humanChallengesByProposal),
+      bankProposalsById: st?.bankProposalsById ? cloneMap(st.bankProposalsById) : null,
+      bankPrepareIdempotency: st?.bankPrepareIdempotency
+        ? cloneMap(st.bankPrepareIdempotency)
+        : null,
+      bankConfirmIdempotency: st?.bankConfirmIdempotency
+        ? cloneMap(st.bankConfirmIdempotency)
+        : null,
+      monthCloseProposalsById: st?.monthCloseProposalsById
+        ? cloneMap(st.monthCloseProposalsById)
+        : null,
+      monthCloseIdempotency: st?.monthCloseIdempotency ? cloneMap(st.monthCloseIdempotency) : null,
     });
   }
 
@@ -183,9 +209,25 @@ export function restoreWorkspaceRamSnapshot(
       continue;
     }
     const gw = gwSnap.gateway as unknown as InspectableMcpGateway;
+    const st = gw.env?.state;
     restoreMapInPlace(gw.proposalsById, gwSnap.proposalsById);
     restoreMapInPlace(gw.prepareIdempotency, gwSnap.prepareIdempotency);
     restoreMapInPlace(gw.confirmIdempotency, gwSnap.confirmIdempotency);
     restoreMapInPlace(gw.humanChallengesByProposal, gwSnap.humanChallengesByProposal);
+    if (st?.bankProposalsById && gwSnap.bankProposalsById) {
+      restoreMapInPlace(st.bankProposalsById, gwSnap.bankProposalsById);
+    }
+    if (st?.bankPrepareIdempotency && gwSnap.bankPrepareIdempotency) {
+      restoreMapInPlace(st.bankPrepareIdempotency, gwSnap.bankPrepareIdempotency);
+    }
+    if (st?.bankConfirmIdempotency && gwSnap.bankConfirmIdempotency) {
+      restoreMapInPlace(st.bankConfirmIdempotency, gwSnap.bankConfirmIdempotency);
+    }
+    if (st?.monthCloseProposalsById && gwSnap.monthCloseProposalsById) {
+      restoreMapInPlace(st.monthCloseProposalsById, gwSnap.monthCloseProposalsById);
+    }
+    if (st?.monthCloseIdempotency && gwSnap.monthCloseIdempotency) {
+      restoreMapInPlace(st.monthCloseIdempotency, gwSnap.monthCloseIdempotency);
+    }
   }
 }
