@@ -1,5 +1,7 @@
 # 03. Katalog funkcjonalności
 
+> **Rozszerzenie wizji (2026-11-23):** Ten historyczny, wąski katalog P0–P2 jest zachowany jako opis pierwotnych etapów. Docelowy, pełny katalog polskiej księgowości, finansów, kadr/płac, magazynu, środków trwałych, biura rachunkowego, rozliczeń międzynarodowych i premium SaaS znajduje się w [mapie funkcjonalności](product/full-spectrum-capability-map.md). Kontrakty architektoniczne: [modułowość i skalowanie](architecture/modularity-and-saas-growth.md), [MCP-native](agents/mcp-native-capability-contract.md); koordynacja [Epic #123](https://github.com/RolePlayingTech/polish-accounting-platform/issues/123). Lista nie dowodzi implementacji ani gotowości prawnej. Priorytety najbliższej iteracji to poprawki #119 i testy, nie budowa wszystkich modułów.
+
 Priorytety: P0 — fundament, P1 — pierwsza księgowość JDG, P2 — pełne księgi i rozszerzenia.
 
 ## P0 — administracja
