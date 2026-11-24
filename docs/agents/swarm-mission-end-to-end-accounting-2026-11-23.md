@@ -33,7 +33,7 @@ Zwiększ znacznie funkcjonalność PAP w jednym zintegrowanym programie prac, za
 - **Web UX/accessibility — Argon/Hydrogen**: #101/#104/#105/#114/#120, interfejs i kontrakty; nie dodaje osobnych reguł księgowych w Next.
 - **MCP/API interface lead — Carbon/Argon**: typed catalog, safe approvals, zdalny prawdziwy klient, retry/denies; kod domeny nie trafia do transportu.
 - **Independent adversarial QA — Carbon**: nie zatwierdza własnych zmian jako niezależnych; testy E2E obu kanałów, izolacja tenantów, race/retry, XML injection, evidence report, root causes.
-  
+
 W Antigravity `/swarm` każdy worker ma izolowane git worktree; komunikację przez shared board, contract decisions przez zaakceptowany ADR i issue, małe reviewowalne PR. Nie istnieje obowiązek trzymania stale 8 agentów aktywnych: dobieraj liczbę ról do rzeczywistych zależności i budżetu; najtrudniejsze rozumowanie i verification przypisz Carbon.
 
 ## 4. Execution stages (dependency gates)
@@ -93,7 +93,7 @@ Zostaw:
 4. End-to-end sample accounting periods dla A/B/C, zestaw rzeczywistych *syntetycznych* XML faktur i JPK, testy negative i procedurę bezpiecznego odtworzenia.
 5. Finalny **GO/NO-GO** osobno: dev merge, sandbox KSeF, pilot na danych syntetycznych, własne prawdziwe dane, przyszły SaaS. Osobno wypisz brak zewnętrznej księgowej, brak urzędowego podpisu, licencji lub credentials, brak testu `NOT RUN`.
 6. Każdy nowy dług ma ownera, issue, koszt/ryzyko, ograniczający test i warunek spłaty. Nigdy nie przedstawiaj niedokończonego modułu jako kompletnej księgowości.
-  
+
 ## 8. Bezwzględne granice uprawnień
 
 Autonomia projektowa i kodowa **TAK**. Operacje finansowe na prawdziwych danych i samodzielny audit merytoryczny przez AI **NIE**. Brak prod/staging deploy, migracji działającej instancji, realnych klientów, maili do kontrahentów, produkcyjnych faktur KSeF, podatkowych/zusowskich wysyłek i przelewów bez **odrębnej zgody** użytkownika, właściwych uprawnień i niezależnej kontroli. Nie uruchamiać GitHub Actions. Jeśli realne środowisko sandbox jest niedostępne: nie wyłączaj zabezpieczeń i nie dopisuj fikcyjnego PASS.
