@@ -1,5 +1,7 @@
 # 32. Wersjonowany rejestr reguł prawnych (2025–2026) i matryca profilu pilota JDG KPiR
 
+> **Ważna nota audytowa (2026-11-24):** Oznaczenie `supported` w sekcji 4.1 poniżej dotyczy wyłącznie **czystych, deterministycznych kalkulatorów w pakiecie `@pap/domain`**, a nie pełnego przepływu wykonawczego aplikacji (`UI → BFF → API → PostgreSQL 18.6 + MCP`). W warstwie aplikacyjnej i integracyjnej otwarte pozostają błędy P0/P1 z [audytu #119](https://github.com/RolePlayingTech/polish-accounting-platform/issues/119) (`#106`, `#118`, `#110`, `#107`, `#108`, `#81`, `#82`, `#98`) oraz wymóg niezależnego odbioru księgowego w [#100](https://github.com/RolePlayingTech/polish-accounting-platform/issues/100) (**`NO-GO` dla danych rzeczywistych**). Obowiązujący status end-to-end per profil i rok prowadzi [rejestr capability i bramek](product/capability-and-gate-registry.md).
+
 **Status:** wdrożony w warstwie czystej domeny (`@pap/domain`) oraz kontraktach (`@pap/contracts`) w ramach realizacji **Issue #1** (profil pilota JDG KPiR), **Issue #4** (rejestr źródeł prawa i proces aktualizacji reguł) oraz **Issue #44** (Strumień S2 — deterministyczny silnik polskiej księgowości i podatków).
 
 Dokument opisuje:

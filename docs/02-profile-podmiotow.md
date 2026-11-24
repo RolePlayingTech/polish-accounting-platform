@@ -1,5 +1,7 @@
 # 02. Profile podmiotów i ewidencji
 
+> **Aktualne matryce wykonawcze (2026-11-24):** Szczegółowa matryca profilu pilota JDG KPiR (`#1`) znajduje się w [dokumencie 32](32-rejestr-regul-prawnych-i-matryca-jdg.md), a bieżący status weryfikacji end-to-end wszystkich profili (`JDG KPiR`, `JDG ryczałt`, `Sp. z o.o. UoR`), źródeł XSD i bramek wydania (`#124`, `#119`, `#100`) prowadzi [rejestr capability i bramek](product/capability-and-gate-registry.md).
+
 ## Model
 
 Należy rozdzielić:
