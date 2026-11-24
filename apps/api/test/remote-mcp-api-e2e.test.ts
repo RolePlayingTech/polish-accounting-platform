@@ -109,11 +109,11 @@ describe('Live Streamable HTTP MCP (/api/v1/mcp) inside @pap/api', () => {
     expect(spoofHeader.status).toBe(401);
   });
 
-  it('exposes 18 MCP tools and 3 MCP resources, reads KPiR/month-close & legal rules, neutralizes prompt injection in prepare_*, and posts to KPiR only after human challenge confirmation', async () => {
+  it('exposes 24 MCP tools and 3 MCP resources, reads KPiR/month-close & legal rules, neutralizes prompt injection in prepare_*, and posts to KPiR only after human challenge confirmation', async () => {
     await withMcpClient(janToken, async (client) => {
-      // 1. listTools() -> 18 registered MCP tools + listResources() -> 3 resources
+      // 1. listTools() -> 24 registered MCP tools + listResources() -> 3 resources
       const toolsResult = await client.listTools();
-      expect(toolsResult.tools).toHaveLength(18);
+      expect(toolsResult.tools).toHaveLength(24);
       expect(toolsResult.tools.map((t) => t.name).sort()).toEqual(
         [
           'system_status',
@@ -126,6 +126,7 @@ describe('Live Streamable HTTP MCP (/api/v1/mcp) inside @pap/api', () => {
           'confirm_prepared_proposal',
           'get_monthly_tax_obligations',
           'explain_accounting_item',
+          'explain_tax_calculation',
           'get_legal_basis',
           'preview_jpk_export',
           'list_unreconciled_bank_transactions',
@@ -133,7 +134,12 @@ describe('Live Streamable HTTP MCP (/api/v1/mcp) inside @pap/api', () => {
           'confirm_bank_reconciliation_proposal',
           'get_month_close_checklist',
           'prepare_month_close',
+          'confirm_month_close_proposal',
           'get_audit_lineage',
+          'list_my_cases',
+          'get_consultation_case',
+          'create_consultation_draft',
+          'reply_to_consultation_case',
         ].sort(),
       );
 

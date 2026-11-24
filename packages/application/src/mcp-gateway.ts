@@ -3,15 +3,20 @@ import type { SystemStatus } from '@pap/contracts';
 import {
   UuidSelectorSchema,
   type ConfirmBankReconciliationOutput,
+  type ConfirmMonthCloseOutput,
   type ConfirmPreparedProposalOutput,
+  type CreateConsultationDraftOutput,
   type ExplainAccountingItemOutput,
+  type ExplainTaxCalculationOutput,
   type GetAuditLineageOutput,
   type GetCompanyProfileOutput,
+  type GetConsultationCaseOutput,
   type GetLegalBasisOutput,
   type GetMonthCloseChecklistOutput,
   type GetMonthlyTaxObligationsOutput,
   type ListAvailableCapabilitiesOutput,
   type ListMyCompaniesOutput,
+  type ListMyConsultationCasesOutput,
   type ListUnpaidInvoicesOutput,
   type ListUnreconciledBankTransactionsOutput,
   type McpToolDescriptor,
@@ -20,6 +25,7 @@ import {
   type PrepareMonthCloseOutput,
   type PreviewInvoicePostingOutput,
   type PreviewJpkExportOutput,
+  type ReplyToConsultationCaseOutput,
 } from '@pap/contracts/mcp-tools';
 import {
   legalEntityId as parseLegalEntityId,
@@ -35,25 +41,33 @@ import { authorizeAuthenticatedCompanyAction } from './oidc-authentication.js';
 import { getSystemStatus } from './system-status.js';
 import { systemClock } from './tenant-authorization.js';
 import {
+  AccountantConsultationService,
+  InMemoryAccountantConsultationStore,
   InMemoryMcpAuditSink,
   InMemoryPapMcpDataSource,
   KeyedAsyncMutex,
   McpSlidingWindowRateLimiter,
   PAP_MCP_TOOL_DESCRIPTORS,
+  SYNTHETIC_CONSULTATION_STAGE_AB_DISCLAIMER_PL,
   VERIFIED_POLISH_LEGAL_BASIS_CATALOG,
   computeCanonicalMcpInvoicePayloadHash,
   computeProposedAccountingPreview,
   evaluateCompanyCapabilities,
   handleConfirmBankReconciliationProposal,
+  handleConfirmMonthCloseProposal,
   handleConfirmPreparedProposal,
+  handleCreateConsultationDraft,
   handleExplainAccountingItem,
+  handleExplainTaxCalculation,
   handleGetAuditLineage,
   handleGetCompanyProfile,
+  handleGetConsultationCase,
   handleGetLegalBasis,
   handleGetMonthCloseChecklist,
   handleGetMonthlyTaxObligations,
   handleListAvailableCapabilities,
   handleListMyCompanies,
+  handleListMyConsultationCases,
   handleListUnpaidInvoices,
   handleListUnreconciledBankTransactions,
   handlePrepareBankReconciliation,
@@ -61,8 +75,10 @@ import {
   handlePrepareMonthClose,
   handlePreviewInvoicePosting,
   handlePreviewJpkExport,
+  handleReplyToConsultationCase,
   isSelfApprovalForbiddenForChallengeIssuer,
   maskNip,
+  parsePlnToGrosze,
   redactSecretsAndPiiForMcp,
   recordMcpAuditFailClosed,
   resolveCompanyProfileSupportStatus,
@@ -70,11 +86,15 @@ import {
   sanitizeUntrustedDocumentTextForMcp,
   sha256Hex,
   validateAndResolveMcpInvoiceVat,
+  type AccountantConsultationServiceDependencies,
+  type AccountantConsultationStorePort,
   type AccountingItemExplanationRecord,
   type CompanyDirectoryRecord,
   type CompanyTaxProfile,
   type CompanyTaxRegime,
   type CompanyVatStatus,
+  type ConsultationCallContext,
+  type ConsultationServiceResult,
   type ExternalCompanyAuditRecord,
   type LegalBasisCatalogEntry,
   type McpAuditEvent,
@@ -82,10 +102,14 @@ import {
   type McpCallContext,
   type McpGateEnvironment,
   type McpGatewayToolResult,
+  type McpJpkPeriodSourceData,
+  type McpTaxCalculationSourceData,
   type MonthCloseRawData,
   type PapMcpDataSource,
   type PapMcpGatewayDependencies,
   type StoredBankReconciliationProposal,
+  type StoredConsultationCaseRecord,
+  type StoredConsultationMessageRecord,
   type StoredMonthCloseProposal,
   type StoredPreparedProposal,
   type UnpaidInvoiceRecord,
@@ -94,9 +118,12 @@ import {
 } from './mcp/index.js';
 
 export {
+  AccountantConsultationService,
+  InMemoryAccountantConsultationStore,
   InMemoryMcpAuditSink,
   InMemoryPapMcpDataSource,
   PAP_MCP_TOOL_DESCRIPTORS,
+  SYNTHETIC_CONSULTATION_STAGE_AB_DISCLAIMER_PL,
   VERIFIED_POLISH_LEGAL_BASIS_CATALOG,
   computeCanonicalMcpInvoicePayloadHash,
   computeProposedAccountingPreview,
@@ -113,12 +140,16 @@ export {
 };
 
 export type {
+  AccountantConsultationServiceDependencies,
+  AccountantConsultationStorePort,
   AccountingItemExplanationRecord,
   CompanyAccessGrant,
   CompanyDirectoryRecord,
   CompanyTaxProfile,
   CompanyTaxRegime,
   CompanyVatStatus,
+  ConsultationCallContext,
+  ConsultationServiceResult,
   ExternalCompanyAuditRecord,
   LegalBasisCatalogEntry,
   LegalEntityId,
@@ -126,10 +157,14 @@ export type {
   McpAuditSink,
   McpCallContext,
   McpGatewayToolResult,
+  McpJpkPeriodSourceData,
+  McpTaxCalculationSourceData,
   MonthCloseRawData,
   PapMcpDataSource,
   PapMcpGatewayDependencies,
   StoredBankReconciliationProposal,
+  StoredConsultationCaseRecord,
+  StoredConsultationMessageRecord,
   StoredMonthCloseProposal,
   StoredPreparedProposal,
   TenantId,
@@ -174,11 +209,40 @@ export class PapMcpGateway {
       },
     };
 
+    const mutableDataSourceRef: { current: PapMcpDataSource } = {
+      current: deps.dataSource,
+    };
+    const dynamicDataSource = new Proxy({} as PapMcpDataSource, {
+      get(_target, prop) {
+        const current = mutableDataSourceRef.current;
+        const val = Reflect.get(current, prop, current);
+        return typeof val === 'function' ? val.bind(current) : val;
+      },
+    });
+
+    const consultationService =
+      deps.consultationService ??
+      new AccountantConsultationService({
+        verifier: deps.verifier,
+        identityResolver: deps.identityResolver,
+        authorizationDataSource: deps.authorizationDataSource,
+        securityAudit,
+        clock,
+        listCandidateCompaniesForUser: async (uId) => {
+          const candidates = await dynamicDataSource.listCandidateCompaniesForUser(uId);
+          return candidates.map((c) => ({
+            tenantId: c.tenantId,
+            legalEntityId: c.legalEntityId,
+          }));
+        },
+      });
+
+    this.mutableDataSourceRef = mutableDataSourceRef;
     this.env = {
       verifier: deps.verifier,
       identityResolver: deps.identityResolver,
       authorizationDataSource: deps.authorizationDataSource,
-      dataSource: deps.dataSource,
+      dataSource: dynamicDataSource,
       securityAudit,
       auditSink,
       clock,
@@ -189,6 +253,7 @@ export class PapMcpGateway {
         maxCalls: deps.rateLimitMaxCallsPerMinute ?? 240,
         windowMs: 60_000,
       }),
+      consultationService,
       state: {
         proposalsById: new Map(),
         prepareIdempotency: new Map(),
@@ -198,6 +263,7 @@ export class PapMcpGateway {
         bankConfirmIdempotency: new Map(),
         monthCloseProposalsById: new Map(),
         monthCloseIdempotency: new Map(),
+        monthCloseConfirmIdempotency: new Map(),
         humanChallengesByProposal: new Map(),
         recordedAuditHistory: [],
       },
@@ -206,6 +272,33 @@ export class PapMcpGateway {
     this.prepareIdempotency = this.env.state.prepareIdempotency;
     this.confirmIdempotency = this.env.state.confirmIdempotency;
     this.humanChallengesByProposal = this.env.state.humanChallengesByProposal;
+  }
+
+  private readonly mutableDataSourceRef: { current: PapMcpDataSource };
+
+  getConsultationService(): AccountantConsultationService {
+    return this.env.consultationService;
+  }
+
+  /**
+   * Attaches live read/write adapter overrides onto the underlying MCP data source
+   * without breaking existing bound workspace references.
+   */
+  attachLiveDataSourceOverrides(overrides: Partial<PapMcpDataSource>): void {
+    const base = this.mutableDataSourceRef.current;
+    this.mutableDataSourceRef.current = new Proxy(base, {
+      get(target, prop, receiver) {
+        if (
+          typeof prop === 'string' &&
+          Object.prototype.hasOwnProperty.call(overrides, prop) &&
+          overrides[prop as keyof PapMcpDataSource] !== undefined
+        ) {
+          return overrides[prop as keyof PapMcpDataSource];
+        }
+        const val: unknown = Reflect.get(target, prop, receiver);
+        return typeof val === 'function' ? val.bind(target) : val;
+      },
+    });
   }
 
   getSystemStatus(): SystemStatus {
@@ -367,14 +460,22 @@ export class PapMcpGateway {
     }
 
     return this.env.mutex.runExclusive(
-      [`proposal:${safeProposalId}`, `bank-proposal:${safeProposalId}`],
+      [
+        `proposal:${safeProposalId}`,
+        `bank-proposal:${safeProposalId}`,
+        `month-close-proposal:${safeProposalId}`,
+      ],
       async () => {
         const invoiceProposal = this.env.state.proposalsById.get(safeProposalId);
         const bankProposal = this.env.state.bankProposalsById.get(safeProposalId);
-        const proposal = invoiceProposal ?? bankProposal;
-        const proposalKind: 'invoice_posting' | 'bank_reconciliation' = invoiceProposal
-          ? 'invoice_posting'
-          : 'bank_reconciliation';
+        const monthCloseProposal = this.env.state.monthCloseProposalsById.get(safeProposalId);
+        const proposal = invoiceProposal ?? bankProposal ?? monthCloseProposal;
+        const proposalKind: 'invoice_posting' | 'bank_reconciliation' | 'month_close' =
+          invoiceProposal
+            ? 'invoice_posting'
+            : bankProposal
+              ? 'bank_reconciliation'
+              : 'month_close';
 
         if (
           !proposal ||
@@ -500,9 +601,18 @@ export class PapMcpGateway {
     if (!found) {
       return undefined;
     }
+    const enrichedLines = found.invoice.lines?.map((l) => ({
+      ...l,
+      netGrosze: Number(parsePlnToGrosze(l.netAmountPln)),
+      vatGrosze: Number(parsePlnToGrosze(l.vatAmountPln)),
+      grossGrosze: Number(parsePlnToGrosze(l.grossAmountPln)),
+    }));
     return Object.freeze({
       ...found,
-      invoice: Object.freeze({ ...found.invoice }),
+      invoice: Object.freeze({
+        ...found.invoice,
+        ...(enrichedLines ? { lines: enrichedLines } : {}),
+      }),
       proposedPosting: Object.freeze({
         ...found.proposedPosting,
         appliedRule: Object.freeze({ ...found.proposedPosting.appliedRule }),
@@ -512,10 +622,19 @@ export class PapMcpGateway {
 
   syncProposalFromWorkspace(proposal: StoredPreparedProposal): void {
     const key = proposal.proposalId.toLowerCase();
+    const enrichedLines = proposal.invoice.lines?.map((l) => ({
+      ...l,
+      netGrosze: Number(parsePlnToGrosze(l.netAmountPln)),
+      vatGrosze: Number(parsePlnToGrosze(l.vatAmountPln)),
+      grossGrosze: Number(parsePlnToGrosze(l.grossAmountPln)),
+    }));
     this.env.state.proposalsById.set(key, {
       ...proposal,
       proposalId: key,
-      invoice: { ...proposal.invoice },
+      invoice: {
+        ...proposal.invoice,
+        ...(enrichedLines ? { lines: enrichedLines } : {}),
+      },
       proposedPosting: {
         ...proposal.proposedPosting,
         appliedRule: { ...proposal.proposedPosting.appliedRule },
@@ -563,9 +682,14 @@ export class PapMcpGateway {
   }): void {
     const key = challenge.proposalId.toLowerCase();
     const isBank = this.env.state.bankProposalsById.has(key);
+    const isMonthClose = this.env.state.monthCloseProposalsById.has(key);
     this.env.state.humanChallengesByProposal.set(key, {
       challengeId: randomUUID(),
-      proposalKind: isBank ? 'bank_reconciliation' : 'invoice_posting',
+      proposalKind: isBank
+        ? 'bank_reconciliation'
+        : isMonthClose
+          ? 'month_close'
+          : 'invoice_posting',
       proposalId: key,
       tenantId: challenge.tenantId,
       legalEntityId: challenge.legalEntityId,
@@ -609,17 +733,26 @@ export class PapMcpGateway {
     if (existingBank) {
       existingBank.status = 'rejected';
     }
+    const existingMonthClose = this.env.state.monthCloseProposalsById.get(key);
+    if (existingMonthClose) {
+      existingMonthClose.status = 'rejected';
+    }
     this.env.state.humanChallengesByProposal.delete(key);
   }
 
   tamperStoredProposalPayloadHashForTestOnly(proposalId: string, mutatedHash: string): void {
-    const existing = this.env.state.proposalsById.get(proposalId.toLowerCase());
+    const key = proposalId.toLowerCase();
+    const existing = this.env.state.proposalsById.get(key);
     if (existing) {
       existing.payloadHash = mutatedHash;
     }
-    const existingBank = this.env.state.bankProposalsById.get(proposalId.toLowerCase());
+    const existingBank = this.env.state.bankProposalsById.get(key);
     if (existingBank) {
       existingBank.payloadHash = mutatedHash;
+    }
+    const existingMonthClose = this.env.state.monthCloseProposalsById.get(key);
+    if (existingMonthClose) {
+      existingMonthClose.payloadHash = mutatedHash;
     }
   }
 
@@ -688,6 +821,13 @@ export class PapMcpGateway {
     return handleExplainAccountingItem(this.env, callContext, rawInput);
   }
 
+  explainTaxCalculation(
+    callContext: McpCallContext,
+    rawInput: unknown,
+  ): Promise<McpGatewayToolResult<ExplainTaxCalculationOutput>> {
+    return handleExplainTaxCalculation(this.env, callContext, rawInput);
+  }
+
   getLegalBasis(
     callContext: McpCallContext,
     rawInput: unknown,
@@ -716,6 +856,13 @@ export class PapMcpGateway {
     return handlePrepareMonthClose(this.env, callContext, rawInput);
   }
 
+  confirmMonthCloseProposal(
+    callContext: McpCallContext,
+    rawInput: unknown,
+  ): Promise<McpGatewayToolResult<ConfirmMonthCloseOutput>> {
+    return handleConfirmMonthCloseProposal(this.env, callContext, rawInput);
+  }
+
   listUnreconciledBankTransactions(
     callContext: McpCallContext,
     rawInput: unknown,
@@ -742,5 +889,33 @@ export class PapMcpGateway {
     rawInput: unknown,
   ): Promise<McpGatewayToolResult<GetAuditLineageOutput>> {
     return handleGetAuditLineage(this.env, callContext, rawInput);
+  }
+
+  listMyCases(
+    callContext: McpCallContext,
+    rawInput: unknown,
+  ): Promise<McpGatewayToolResult<ListMyConsultationCasesOutput>> {
+    return handleListMyConsultationCases(this.env, callContext, rawInput);
+  }
+
+  getConsultationCase(
+    callContext: McpCallContext,
+    rawInput: unknown,
+  ): Promise<McpGatewayToolResult<GetConsultationCaseOutput>> {
+    return handleGetConsultationCase(this.env, callContext, rawInput);
+  }
+
+  createConsultationDraft(
+    callContext: McpCallContext,
+    rawInput: unknown,
+  ): Promise<McpGatewayToolResult<CreateConsultationDraftOutput>> {
+    return handleCreateConsultationDraft(this.env, callContext, rawInput);
+  }
+
+  replyToConsultationCase(
+    callContext: McpCallContext,
+    rawInput: unknown,
+  ): Promise<McpGatewayToolResult<ReplyToConsultationCaseOutput>> {
+    return handleReplyToConsultationCase(this.env, callContext, rawInput);
   }
 }

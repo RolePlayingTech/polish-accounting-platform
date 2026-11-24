@@ -161,6 +161,9 @@ export const McpToolErrorCodeSchema = z.enum([
   'capability_unsupported',
   'rate_limit_exceeded',
   'period_closed',
+  'checklist_blocked',
+  'conflict',
+  'xsd_validation_failed',
   'idempotency_key_payload_conflict',
   'proposal_not_found_or_forbidden',
   'proposal_expired',
@@ -275,6 +278,17 @@ export const GetMonthlyTaxObligationsInputSchema = z
 
 export type GetMonthlyTaxObligationsInput = z.infer<typeof GetMonthlyTaxObligationsInputSchema>;
 
+export const ObligationSettlementLifecycleStatusSchema = z.enum([
+  'accrued_not_yet_due',
+  'due_unpaid',
+  'partially_paid',
+  'paid',
+  'overpaid',
+]);
+export type ObligationSettlementLifecycleStatus = z.infer<
+  typeof ObligationSettlementLifecycleStatusSchema
+>;
+
 export const MonthlyTaxObligationSchema = z
   .object({
     obligationId: UuidSelectorSchema,
@@ -284,6 +298,10 @@ export const MonthlyTaxObligationSchema = z
     dueDate: IsoDateSchema,
     status: z.enum(['upcoming', 'due_soon', 'overdue', 'completed', 'not_applicable']),
     estimatedAmountPln: NonNegativePlnDecimalStringSchema.nullable(),
+    accruedAmountPln: NonNegativePlnDecimalStringSchema.nullable().optional(),
+    confirmedPaidAmountPln: NonNegativePlnDecimalStringSchema.nullable().optional(),
+    remainingUnpaidAmountPln: NonNegativePlnDecimalStringSchema.nullable().optional(),
+    settlementLifecycleStatus: ObligationSettlementLifecycleStatusSchema.nullable().optional(),
     legalBasis: LegalBasisReferenceSchema,
   })
   .strict();

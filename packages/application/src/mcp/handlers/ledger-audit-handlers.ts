@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ConfirmMonthCloseInputSchema,
+  ConfirmMonthCloseOutputSchema,
   GetAuditLineageInputSchema,
   GetAuditLineageOutputSchema,
   GetMonthCloseChecklistInputSchema,
@@ -8,6 +10,7 @@ import {
   PrepareMonthCloseOutputSchema,
   Sha256HexSchema,
   UuidSelectorSchema,
+  type ConfirmMonthCloseOutput,
   type GetAuditLineageOutput,
   type GetMonthCloseChecklistOutput,
   type McpAuditLineageItem,
@@ -18,6 +21,7 @@ import {
   authorizeCompanyScopedMcpTool,
   buildAuditUnavailableError,
   denyMcpToolCall,
+  isAutonomousAgentToken,
   recordMcpAuditFailClosed,
   type McpGateEnvironment,
 } from '../gate-runner.js';
@@ -297,6 +301,20 @@ export async function handlePrepareMonthClose(
         });
       }
 
+      let liveStatus = existingIdem.responseData.status;
+      let livePeriodClosed = existingIdem.responseData.periodClosed;
+      if (existingIdem.responseData.proposalId) {
+        const liveProp = env.state.monthCloseProposalsById.get(
+          existingIdem.responseData.proposalId,
+        );
+        if (liveProp?.status === 'confirmed') {
+          liveStatus = 'confirmed';
+          livePeriodClosed = true;
+        } else if (liveProp && env.clock.now().getTime() >= liveProp.expiresAtMs) {
+          liveStatus = 'expired';
+        }
+      }
+
       const replayAuditId = await recordMcpAuditFailClosed(env, {
         toolName: 'prepare_month_close',
         correlationId,
@@ -320,6 +338,8 @@ export async function handlePrepareMonthClose(
         ok: true,
         data: PrepareMonthCloseOutputSchema.parse({
           ...existingIdem.responseData,
+          status: liveStatus,
+          periodClosed: livePeriodClosed,
           idempotentReplay: true,
           auditEventId: replayAuditId,
         }),
@@ -390,6 +410,11 @@ export async function handlePrepareMonthClose(
       return buildAuditUnavailableError();
     }
 
+    const now = env.clock.now();
+    const createdAtIso = now.toISOString();
+    const expiresAtMs = now.getTime() + env.proposalTtlMs;
+    const expiresAtIso = new Date(expiresAtMs).toISOString();
+
     if (proposalId) {
       env.state.monthCloseProposalsById.set(proposalId, {
         proposalId,
@@ -399,8 +424,12 @@ export async function handlePrepareMonthClose(
         createdByUserId: auth.actor.userId,
         idempotencyKey: normalizedIdemKey,
         payloadHash,
-        createdAtIso: env.clock.now().toISOString(),
+        createdAtIso,
+        expiresAtMs,
+        expiresAtIso,
         status: 'pending_human_approval',
+        closedAtIso: null,
+        confirmedByUserId: null,
       });
     }
 
@@ -417,6 +446,7 @@ export async function handlePrepareMonthClose(
       idempotencyKey: normalizedIdemKey,
       idempotentReplay: false,
       payloadHash,
+      expiresAt: proposalId ? expiresAtIso : null,
       checklistSummary: {
         missingDocumentsCount: blockingMissingCount,
         unverifiedAiProposalsCount: evaluated.unverifiedAiProposals.length,
@@ -426,7 +456,7 @@ export async function handlePrepareMonthClose(
         ? 'Okres nie może zostać zamknięty przed rozwiązaniem wszystkich pozycji blokujących checklisty.'
         : isDryRun
           ? 'Symulacja zamknięcia okresu pozytywna (dryRun=true) — okres pozostaje otwarty.'
-          : 'Plan zamknięcia okresu oczekuje na zatwierdzenie przez uprawnionego człowieka w interfejsie aplikacji (periodClosed=false).',
+          : 'Plan zamknięcia okresu oczekuje na niezależne zatwierdzenie przez uprawnionego człowieka (confirm_month_close_proposal z kodem confirmationCode; periodClosed=false).',
       auditEventId,
     });
 
@@ -440,6 +470,404 @@ export async function handlePrepareMonthClose(
       data: output,
     };
   });
+}
+
+export async function handleConfirmMonthCloseProposal(
+  env: McpGateEnvironment,
+  callContext: McpCallContext,
+  rawInput: unknown,
+): Promise<McpGatewayToolResult<ConfirmMonthCloseOutput>> {
+  const { correlationId } = resolveSafeRequestCorrelationId(callContext.correlationId);
+  const parsed = ConfirmMonthCloseInputSchema.safeParse(rawInput);
+  if (!parsed.success) {
+    return denyMcpToolCall(env, {
+      toolName: 'confirm_month_close_proposal',
+      correlationId,
+      errorCode: 'validation_failed',
+      reasonCode: 'invalid_input_schema',
+      messagePl:
+        'Nieprawidłowe parametry potwierdzenia zamknięcia okresu (wymagane proposalId, expectedPayloadHash, confirmationCode oraz UUID idempotencyKey).',
+    });
+  }
+
+  const input = parsed.data;
+  const normalizedIdemKey = input.idempotencyKey.toLowerCase();
+  const normalizedProposalId = input.proposalId.toLowerCase();
+
+  const auth = await authorizeCompanyScopedMcpTool(env, {
+    toolName: 'confirm_month_close_proposal',
+    correlationId,
+    rawBearerToken: callContext.rawBearerToken,
+    tenantId: input.tenantId,
+    legalEntityId: input.legalEntityId,
+    action: 'write',
+    requiredScopes: ['pap:mcp:prepare'],
+    idempotencyKey: normalizedIdemKey,
+  });
+  if (!auth.ok) {
+    return auth;
+  }
+
+  if (isAutonomousAgentToken(auth.actor.identity)) {
+    return denyMcpToolCall(env, {
+      toolName: 'confirm_month_close_proposal',
+      correlationId,
+      actorUserId: auth.actor.userId,
+      actorIssuer: auth.actor.identity.issuer,
+      actorSubject: auth.actor.identity.subject,
+      tenantId: auth.actor.tenantId,
+      legalEntityId: auth.actor.legalEntityId,
+      idempotencyKey: normalizedIdemKey,
+      proposalId: normalizedProposalId,
+      errorCode: 'agent_self_approval_forbidden',
+      reasonCode: 'autonomous_agent_cannot_confirm_month_close',
+      messagePl:
+        'Agent autonomiczny MCP nie może samodzielnie zamknąć okresu sprawozdawczego (#116). Wymagane niezależne zatwierdzenie człowieka.',
+    });
+  }
+
+  const persistMonthClose = env.dataSource.applyConfirmedMonthClose;
+  if (!persistMonthClose) {
+    return denyMcpToolCall(env, {
+      toolName: 'confirm_month_close_proposal',
+      correlationId,
+      actorUserId: auth.actor.userId,
+      actorIssuer: auth.actor.identity.issuer,
+      actorSubject: auth.actor.identity.subject,
+      tenantId: auth.actor.tenantId,
+      legalEntityId: auth.actor.legalEntityId,
+      idempotencyKey: normalizedIdemKey,
+      proposalId: normalizedProposalId,
+      errorCode: 'capability_unsupported',
+      reasonCode: 'month_close_persistence_adapter_missing',
+      messagePl:
+        'Zatwierdzanie zamknięcia okresu przez MCP wymaga aktywnego adaptera trwałego zapisu statusu okresu (#116 — brak pozornego zamknięcia wyłącznie w RAM).',
+    });
+  }
+
+  const idemSlotKey = `${auth.actor.userId}:${auth.actor.tenantId}:${normalizedIdemKey}`;
+  const confirmRequestHash = sha256Hex(
+    JSON.stringify({
+      tenantId: auth.actor.tenantId,
+      legalEntityId: auth.actor.legalEntityId,
+      proposalId: normalizedProposalId,
+      expectedPayloadHash: input.expectedPayloadHash,
+      note: input.note ?? null,
+    }),
+  );
+
+  return env.mutex.runExclusive(
+    [`month-close-proposal:${normalizedProposalId}`, `month-close-confirm-idem:${idemSlotKey}`],
+    async () => {
+      const existingConfirm = env.state.monthCloseConfirmIdempotency.get(idemSlotKey);
+      if (existingConfirm) {
+        if (!constantTimeHexEquals(existingConfirm.requestCanonicalHash, confirmRequestHash)) {
+          return denyMcpToolCall(env, {
+            toolName: 'confirm_month_close_proposal',
+            correlationId,
+            actorUserId: auth.actor.userId,
+            actorIssuer: auth.actor.identity.issuer,
+            actorSubject: auth.actor.identity.subject,
+            tenantId: auth.actor.tenantId,
+            legalEntityId: auth.actor.legalEntityId,
+            idempotencyKey: normalizedIdemKey,
+            proposalId: normalizedProposalId,
+            errorCode: 'idempotency_key_payload_conflict',
+            reasonCode: 'month_close_confirm_idempotency_conflict',
+            messagePl:
+              'Klucz idempotencyKey został już użyty do potwierdzenia innej operacji zamknięcia okresu.',
+          });
+        }
+
+        const replayAuditId = await recordMcpAuditFailClosed(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          outcome: 'allow',
+          reasonCode: 'month_close_confirm_idempotent_replay',
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          payloadHash: existingConfirm.responseData.confirmedPayloadHash,
+          promptInjectionSuspected: false,
+        });
+        if (!replayAuditId) {
+          return buildAuditUnavailableError();
+        }
+
+        return {
+          ok: true,
+          data: ConfirmMonthCloseOutputSchema.parse({
+            ...existingConfirm.responseData,
+            idempotentReplay: true,
+            auditEventId: replayAuditId,
+          }),
+        };
+      }
+
+      const proposal = env.state.monthCloseProposalsById.get(normalizedProposalId);
+      if (
+        !proposal ||
+        proposal.tenantId !== auth.actor.tenantId ||
+        proposal.legalEntityId !== auth.actor.legalEntityId
+      ) {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'proposal_not_found_or_forbidden',
+          reasonCode: 'month_close_proposal_not_found_in_authorized_entity',
+          messagePl: 'Nie znaleziono wskazanej propozycji zamknięcia okresu w wybranej firmie.',
+        });
+      }
+
+      const now = env.clock.now();
+      const nowMs = now.getTime();
+      const nowIso = now.toISOString();
+
+      if (proposal.status !== 'pending_human_approval') {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'proposal_already_processed',
+          reasonCode: 'month_close_proposal_not_pending',
+          messagePl: 'Propozycja zamknięcia okresu została już wcześniej przetworzona.',
+        });
+      }
+
+      if (nowMs >= proposal.expiresAtMs) {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'proposal_expired',
+          reasonCode: 'month_close_proposal_ttl_expired',
+          messagePl: 'Ważność propozycji zamknięcia okresu wygasła.',
+        });
+      }
+
+      if (!constantTimeHexEquals(proposal.payloadHash, input.expectedPayloadHash)) {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'payload_hash_mismatch',
+          reasonCode: 'month_close_proposal_payload_hash_mismatch',
+          messagePl: 'Skrót propozycji zamknięcia okresu (payloadHash) uległ zmianie.',
+        });
+      }
+
+      const challenge = env.state.humanChallengesByProposal.get(normalizedProposalId);
+      if (!challenge || challenge.proposalKind !== 'month_close') {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'human_confirmation_required',
+          reasonCode: 'missing_fresh_human_confirmation_challenge',
+          messagePl: 'Brak świeżego potwierdzenia człowieka dla propozycji zamknięcia okresu.',
+        });
+      }
+
+      const providedCodeHash = sha256Hex(input.confirmationCode.trim());
+      const challengeMatches =
+        !challenge.consumingInFlight &&
+        challenge.consumedAtIso === null &&
+        nowMs < challenge.expiresAtMs &&
+        challenge.authorizedHumanUserId === auth.actor.userId &&
+        challenge.tenantId === auth.actor.tenantId &&
+        challenge.legalEntityId === auth.actor.legalEntityId &&
+        constantTimeHexEquals(challenge.expectedPayloadHash, proposal.payloadHash) &&
+        constantTimeHexEquals(challenge.codeSha256Hex, providedCodeHash);
+
+      if (!challengeMatches) {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'invalid_confirmation_code',
+          reasonCode: 'confirmation_code_invalid_expired_or_wrong_actor',
+          messagePl:
+            'Kod potwierdzenia człowieka jest nieprawidłowy, wygasł, został już użyty lub należy do innego użytkownika.',
+        });
+      }
+
+      if (
+        env.dataSource.isPeriodClosed &&
+        (await env.dataSource.isPeriodClosed(
+          auth.actor.tenantId,
+          auth.actor.legalEntityId,
+          proposal.period,
+        ))
+      ) {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'period_closed',
+          reasonCode: 'period_already_closed',
+          messagePl: `Okres ${proposal.period} został już zamknięty.`,
+        });
+      }
+
+      const liveChecklist = await evaluateMonthCloseChecklistInternal(
+        env,
+        auth.actor.tenantId,
+        auth.actor.legalEntityId,
+        proposal.period,
+      );
+      if (liveChecklist.blockingItemsCount > 0) {
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'checklist_blocked',
+          reasonCode: 'month_close_checklist_no_longer_clean',
+          messagePl: `Okres ${proposal.period} nie może zostać zamknięty: pojawiły się nowe pozycje blokujące (${liveChecklist.blockingItemsCount}).`,
+        });
+      }
+
+      proposal.status = 'confirming';
+      challenge.consumingInFlight = true;
+
+      const auditEventId = await recordMcpAuditFailClosed(env, {
+        toolName: 'confirm_month_close_proposal',
+        correlationId,
+        actorUserId: auth.actor.userId,
+        actorIssuer: auth.actor.identity.issuer,
+        actorSubject: auth.actor.identity.subject,
+        tenantId: auth.actor.tenantId,
+        legalEntityId: auth.actor.legalEntityId,
+        outcome: 'allow',
+        reasonCode: 'month_close_confirmed_with_human_token',
+        idempotencyKey: normalizedIdemKey,
+        proposalId: normalizedProposalId,
+        payloadHash: proposal.payloadHash,
+        promptInjectionSuspected: liveChecklist.anyInjection,
+      });
+
+      if (!auditEventId) {
+        proposal.status = 'pending_human_approval';
+        challenge.consumingInFlight = false;
+        return buildAuditUnavailableError();
+      }
+
+      let closedAtIso = nowIso;
+      try {
+        const applied = await persistMonthClose.call(env.dataSource, {
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          period: proposal.period,
+          proposalId: proposal.proposalId,
+          confirmedByUserId: auth.actor.userId,
+          note: input.note,
+        });
+        if (applied && typeof applied === 'object' && applied.closedAt) {
+          closedAtIso = applied.closedAt;
+        }
+      } catch {
+        proposal.status = 'pending_human_approval';
+        challenge.consumingInFlight = false;
+        return denyMcpToolCall(env, {
+          toolName: 'confirm_month_close_proposal',
+          correlationId,
+          actorUserId: auth.actor.userId,
+          actorIssuer: auth.actor.identity.issuer,
+          actorSubject: auth.actor.identity.subject,
+          tenantId: auth.actor.tenantId,
+          legalEntityId: auth.actor.legalEntityId,
+          idempotencyKey: normalizedIdemKey,
+          proposalId: normalizedProposalId,
+          errorCode: 'checklist_blocked',
+          reasonCode: 'month_close_persistence_rejected',
+          messagePl:
+            'Trwały zapis zamknięcia okresu został odrzucony (okres już zamknięty lub wykryto równoległą blokadę).',
+        });
+      }
+
+      challenge.consumingInFlight = false;
+      challenge.consumedAtIso = nowIso;
+      proposal.status = 'confirmed';
+      proposal.closedAtIso = closedAtIso;
+      proposal.confirmedByUserId = auth.actor.userId;
+
+      const output = ConfirmMonthCloseOutputSchema.parse({
+        proposalId: proposal.proposalId,
+        tenantId: proposal.tenantId,
+        legalEntityId: proposal.legalEntityId,
+        period: proposal.period,
+        status: 'confirmed',
+        periodClosed: true,
+        closedAt: closedAtIso,
+        confirmedPayloadHash: proposal.payloadHash,
+        idempotencyKey: normalizedIdemKey,
+        idempotentReplay: false,
+        auditEventId,
+      });
+
+      env.state.monthCloseConfirmIdempotency.set(idemSlotKey, {
+        requestCanonicalHash: confirmRequestHash,
+        responseData: output,
+      });
+
+      return {
+        ok: true,
+        data: output,
+      };
+    },
+  );
 }
 
 export async function handleGetAuditLineage(

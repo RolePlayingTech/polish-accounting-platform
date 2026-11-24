@@ -8,6 +8,8 @@ import type {
   CompanyTaxProfile,
   ExternalCompanyAuditRecord,
   LegalBasisCatalogEntry,
+  McpJpkPeriodSourceData,
+  McpTaxCalculationSourceData,
   MonthCloseRawData,
   PapMcpDataSource,
   UnpaidInvoiceRecord,
@@ -25,6 +27,8 @@ export class InMemoryPapMcpDataSource implements PapMcpDataSource {
   private readonly monthCloseData = new Map<string, MonthCloseRawData>();
   private readonly bankTransactions: UnreconciledBankTransactionRecord[] = [];
   private readonly vatSnapshots = new Map<string, VatPeriodPreviewSnapshot>();
+  private readonly jpkSources = new Map<string, McpJpkPeriodSourceData>();
+  private readonly taxCalcSources = new Map<string, McpTaxCalculationSourceData>();
   private readonly externalAuditByEntity = new Map<string, ExternalCompanyAuditRecord[]>();
   private readonly closedPeriods = new Set<string>();
 
@@ -89,6 +93,24 @@ export class InMemoryPapMcpDataSource implements PapMcpDataSource {
     snapshot: VatPeriodPreviewSnapshot,
   ): void {
     this.vatSnapshots.set(`${tenantIdVal}:${legalEntityIdVal}:${period}`, snapshot);
+  }
+
+  seedJpkPeriodSourceData(
+    tenantIdVal: TenantId,
+    legalEntityIdVal: LegalEntityId,
+    period: string,
+    source: McpJpkPeriodSourceData,
+  ): void {
+    this.jpkSources.set(`${tenantIdVal}:${legalEntityIdVal}:${period}`, source);
+  }
+
+  seedTaxCalculationSourceData(
+    tenantIdVal: TenantId,
+    legalEntityIdVal: LegalEntityId,
+    period: string,
+    source: McpTaxCalculationSourceData,
+  ): void {
+    this.taxCalcSources.set(`${tenantIdVal}:${legalEntityIdVal}:${period}`, source);
   }
 
   seedExternalAuditEvents(
@@ -370,6 +392,36 @@ export class InMemoryPapMcpDataSource implements PapMcpDataSource {
     period: string,
   ): Promise<VatPeriodPreviewSnapshot | null> {
     return this.vatSnapshots.get(`${tenantIdVal}:${legalEntityIdVal}:${period}`) ?? null;
+  }
+
+  async getJpkPeriodSourceData(
+    tenantIdVal: TenantId,
+    legalEntityIdVal: LegalEntityId,
+    period: string,
+  ): Promise<McpJpkPeriodSourceData | null> {
+    return this.jpkSources.get(`${tenantIdVal}:${legalEntityIdVal}:${period}`) ?? null;
+  }
+
+  async getTaxCalculationSourceData(
+    tenantIdVal: TenantId,
+    legalEntityIdVal: LegalEntityId,
+    period: string,
+  ): Promise<McpTaxCalculationSourceData | null> {
+    return this.taxCalcSources.get(`${tenantIdVal}:${legalEntityIdVal}:${period}`) ?? null;
+  }
+
+  async applyConfirmedMonthClose(params: {
+    readonly tenantId: TenantId;
+    readonly legalEntityId: LegalEntityId;
+    readonly period: string;
+    readonly confirmedByUserId: UserId;
+    readonly note?: string | undefined;
+  }): Promise<{ readonly closedAt: string; readonly closeEventId: string }> {
+    this.closedPeriods.add(`${params.tenantId}:${params.legalEntityId}:${params.period}`);
+    return {
+      closedAt: new Date().toISOString(),
+      closeEventId: randomUUID(),
+    };
   }
 
   async listCompanyAuditEvents(
