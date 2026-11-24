@@ -23,6 +23,22 @@
     "./demo-seed": {
       "types": "./dist/demo-seed.d.ts",
       "import": "./dist/demo-seed.js"
+    },
+    "./xsd": {
+      "types": "./dist/xsd/index.d.ts",
+      "import": "./dist/xsd/index.js"
+    },
+    "./source-archive": {
+      "types": "./dist/source-archive/index.d.ts",
+      "import": "./dist/source-archive/index.js"
+    },
+    "./jpk": {
+      "types": "./dist/jpk/index.d.ts",
+      "import": "./dist/jpk/index.js"
+    },
+    "./ksef": {
+      "types": "./dist/ksef/index.d.ts",
+      "import": "./dist/ksef/index.js"
     }
   },
   "dependencies": {

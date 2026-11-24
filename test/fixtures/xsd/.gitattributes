@@ -1,0 +1,3 @@
+# Preserve byte-exact official Polish Ministry of Finance (MF / CRD) XSD schemas
+# (original government files use CRLF/CR line endings verified by SHA-256 in manifest.json).
+*.xsd -text -whitespace

@@ -1,0 +1,301 @@
+{
+  "manifestVersion": "2026-11-24.1",
+  "verifiedAt": "2026-11-24",
+  "ksefOpenApi": {
+    "version": "2.10.0",
+    "build": "2.10.0-te-20261117.2+ace86902e3d938fefd6ddc577c64d175b1d63d20",
+    "testOpenApiUrl": "https://api-test.ksef.mf.gov.pl/docs/v2/openapi.json",
+    "testBaseUrl": "https://api-test.ksef.mf.gov.pl/v2",
+    "demoBaseUrl": "https://api-demo.ksef.mf.gov.pl/v2",
+    "officialDocsRepo": "https://github.com/CIRFMF/ksef-api",
+    "sha256AtVerification": "314d27ae8260dcf265c3a11b64b05e4092371d7ef20b220de4d3f8ef7aeaf4c4"
+  },
+  "schemas": [
+    {
+      "schemaCode": "FA(2)",
+      "fileName": "fa2_schemat.xsd",
+      "targetNamespace": "http://crd.gov.pl/wzor/2023/06/29/12648/",
+      "rootElement": "Faktura",
+      "formCode": "FA",
+      "systemCode": "FA (2)",
+      "schemaVersion": "1-0E",
+      "formVariant": 2,
+      "officialSourceUrl": "https://crd.gov.pl/wzor/2023/06/29/12648/schemat.xsd",
+      "mirrorSourceUrl": "https://raw.githubusercontent.com/CIRFMF/ksef-api/main/faktury/schemy/FA/schemat_FA(2)_v1-0E.xsd",
+      "effectiveFrom": "2023-09-01",
+      "effectiveTo": "2026-01-31",
+      "applicableProfiles": [
+        "jdg_kpir_skala",
+        "jdg_kpir_liniowy",
+        "jdg_ryczalt",
+        "spzoo_pelne_ksiegi"
+      ],
+      "limitations": "Archiwalna struktura faktury ustrukturyzowanej FA(2) akceptowana do importu archiwalnego oraz na środowisku KSeF 2.0 TEST; od 2026-02-01 produkcyjnie i na DEMO obowiązuje FA(3).",
+      "sha256": "b8acb60f0692ac2b05ac40ffcb1929b4d68c12b3c486cac4322e1699796f6999",
+      "sizeBytes": 170674
+    },
+    {
+      "schemaCode": "FA(3)",
+      "fileName": "fa3_schemat.xsd",
+      "targetNamespace": "http://crd.gov.pl/wzor/2025/06/25/13775/",
+      "rootElement": "Faktura",
+      "formCode": "FA",
+      "systemCode": "FA (3)",
+      "schemaVersion": "1-0E",
+      "formVariant": 3,
+      "officialSourceUrl": "https://crd.gov.pl/wzor/2025/06/25/13775/schemat.xsd",
+      "mirrorSourceUrl": "https://raw.githubusercontent.com/CIRFMF/ksef-api/main/faktury/schemy/FA/schemat_FA(3)_v1-0E.xsd",
+      "effectiveFrom": "2026-02-01",
+      "effectiveTo": null,
+      "applicableProfiles": [
+        "jdg_kpir_skala",
+        "jdg_kpir_liniowy",
+        "jdg_ryczalt",
+        "spzoo_pelne_ksiegi"
+      ],
+      "limitations": "Obowiązująca struktura logiczna FA(3) dla KSeF 2.0. W pilocie księgowanie obsługuje walutę PLN; inne waluty wymagają osobnego modułu różnic kursowych.",
+      "sha256": "b646b6b525f51adf1bb2545f111fc8ca6e7aa6dd2f98948f1667d3695c06d958",
+      "sizeBytes": 183798
+    },
+    {
+      "schemaCode": "JPK_V7M(2)",
+      "fileName": "jpk_v7m2_schemat.xsd",
+      "targetNamespace": "http://crd.gov.pl/wzor/2021/12/27/11148/",
+      "rootElement": "JPK",
+      "formCode": "JPK_VAT",
+      "systemCode": "JPK_V7M (2)",
+      "schemaVersion": "1-0E",
+      "formVariant": 2,
+      "officialSourceUrl": "https://crd.gov.pl/wzor/2021/12/27/11148/schemat.xsd",
+      "effectiveFrom": "2022-01-01",
+      "effectiveTo": "2026-01-31",
+      "applicableProfiles": [
+        "jdg_kpir_skala",
+        "jdg_kpir_liniowy",
+        "jdg_ryczalt",
+        "spzoo_pelne_ksiegi"
+      ],
+      "limitations": "Struktura archiwalna dla rozliczeń miesięcznych VAT do stycznia 2026 r. włącznie (bez oznaczeń KSeF NrKSeF/OFF/BFK/DI).",
+      "sha256": "90cb53e1217449f3ebc671962922fd62f7a892cca26be46a6f5de3d0dc01b96b",
+      "sizeBytes": 64441
+    },
+    {
+      "schemaCode": "JPK_V7M(3)",
+      "fileName": "jpk_v7m3_schemat.xsd",
+      "targetNamespace": "http://crd.gov.pl/wzor/2025/12/19/14090/",
+      "rootElement": "JPK",
+      "formCode": "JPK_VAT",
+      "systemCode": "JPK_V7M (3)",
+      "schemaVersion": "1-0E",
+      "formVariant": 3,
+      "officialSourceUrl": "https://crd.gov.pl/wzor/2025/12/19/14090/schemat.xsd",
+      "effectiveFrom": "2026-02-01",
+      "effectiveTo": null,
+      "applicableProfiles": [
+        "jdg_kpir_skala",
+        "jdg_kpir_liniowy",
+        "jdg_ryczalt",
+        "spzoo_pelne_ksiegi"
+      ],
+      "limitations": "Obowiązuje od rozliczenia za luty 2026 r. (Dz.U. 2025 poz. 1800). Eksport generuje plik XML z walidacją XSD offline do podpisu zewnętrznego; brak automatycznej wysyłki produkcyjnej e-Deklaracje/JPK.",
+      "sha256": "1870324001ba1318f0535841b963571e970b45ef32ba5ca3d433f0dc5da412df",
+      "sizeBytes": 69394
+    },
+    {
+      "schemaCode": "JPK_V7K(3)",
+      "fileName": "jpk_v7k3_schemat.xsd",
+      "targetNamespace": "http://crd.gov.pl/wzor/2025/12/19/14089/",
+      "rootElement": "JPK",
+      "formCode": "JPK_VAT",
+      "systemCode": "JPK_V7K (3)",
+      "schemaVersion": "1-0E",
+      "formVariant": 3,
+      "officialSourceUrl": "https://crd.gov.pl/wzor/2025/12/19/14089/schemat.xsd",
+      "effectiveFrom": "2026-02-01",
+      "effectiveTo": null,
+      "applicableProfiles": [
+        "jdg_kpir_skala",
+        "jdg_kpir_liniowy",
+        "jdg_ryczalt",
+        "spzoo_pelne_ksiegi"
+      ],
+      "limitations": "Struktura kwartalna VAT od lutego 2026 r.: za 1. i 2. miesiąc kwartału część Ewidencja, za 3. miesiąc kwartału Ewidencja + Deklaracja VAT-7K(17).",
+      "sha256": "3e7b70f30debf7ffe35127ac694b465004a45c0786b3267a92d91c7c29595d34",
+      "sizeBytes": 69459
+    },
+    {
+      "schemaCode": "JPK_PKPIR(3)",
+      "fileName": "jpk_pkpir3_v1-0.xsd",
+      "targetNamespace": "http://jpk.mf.gov.pl/wzor/2024/10/30/10302/",
+      "rootElement": "JPK",
+      "formCode": "JPK_PKPIR",
+      "systemCode": "JPK_PKPIR (3)",
+      "schemaVersion": "1-0",
+      "formVariant": 3,
+      "officialSourceUrl": "https://www.gov.pl/attachment/70b78fa0-9183-400d-a967-eeacdcb87e57",
+      "catalogPageUrl": "https://www.gov.pl/web/kas/struktury-jpk-w-podatkach-dochodowych",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": null,
+      "applicableProfiles": ["jdg_kpir_skala", "jdg_kpir_liniowy"],
+      "limitations": "Obowiązek JPK_PD od roku podatkowego 2026 dla podatników PIT na JPK_V7M (od 2027 r. dla pozostałych). Wymaga weryfikacji spisów z natury przez księgowego przed podpisem.",
+      "sha256": "a09c8f5f0812fa78fb103366d77fd8e31b45e9f9cfdb0bdb33a3950e578a4498",
+      "sizeBytes": 18657
+    },
+    {
+      "schemaCode": "JPK_EWP(4)",
+      "fileName": "jpk_ewp4_v1-0.xsd",
+      "targetNamespace": "http://jpk.mf.gov.pl/wzor/2024/10/30/10301/",
+      "rootElement": "JPK",
+      "formCode": "JPK_EWP",
+      "systemCode": "JPK_EWP (4)",
+      "schemaVersion": "1-0",
+      "formVariant": 4,
+      "officialSourceUrl": "https://www.gov.pl/attachment/67b55c59-e05c-42f0-be4c-28afcca460b6",
+      "catalogPageUrl": "https://www.gov.pl/web/kas/struktury-jpk-w-podatkach-dochodowych",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": null,
+      "applicableProfiles": ["jdg_ryczalt"],
+      "limitations": "Obowiązek JPK_PD od roku 2026 dla ryczałtowców składających JPK_V7M (od 2027 r. dla zwolnionych z VAT / JPK_V7K). Uwaga XSD MF: typ TStawkaPodatku w JPK_EWP(4) v1-0 dopuszcza enum 17|15|14|12.5|12|10|8.5|5.5|3 (stawka 2% z art. 12 ust. 1 pkt 8 nie występuje w enum XSD).",
+      "sha256": "0061478a2af63894bf2ea6293eaf6ebd3da18a26ab43076899a20d3c3f32a79b",
+      "sizeBytes": 14714
+    },
+    {
+      "schemaCode": "JPK_ST(1)",
+      "fileName": "jpk_st1_v1-2.xsd",
+      "targetNamespace": "http://jpk.mf.gov.pl/wzor/2024/11/26/11262/",
+      "rootElement": "JPK",
+      "formCode": "JPK_ST",
+      "systemCode": "JPK_ST (1)",
+      "schemaVersion": "1-2",
+      "formVariant": 1,
+      "officialSourceUrl": "https://www.gov.pl/attachment/aa2ea22c-afdf-42bb-a607-8907afd321a6",
+      "catalogPageUrl": "https://www.gov.pl/web/kas/struktury-jpk-w-podatkach-dochodowych",
+      "effectiveFrom": "2026-01-01",
+      "effectiveTo": null,
+      "applicableProfiles": ["jdg_kpir_skala", "jdg_kpir_liniowy", "jdg_ryczalt"],
+      "limitations": "Wykaz środków trwałych i WNiP dla podatników prowadzących PKPiR (gałąź <PKPIR>) lub EWP (gałąź <EWP>). Automatyczne naliczanie odpisów amortyzacyjnych KŚT pozostaje poza zakresem pilota — eksport przyjmuje jawne pozycje ewidencji lub pusty wykaz.",
+      "sha256": "e2f063617fb2c4ec5e477be992f9818a7f270939cb8d35915157d0a15f6fbe0d",
+      "sizeBytes": 25658
+    },
+    {
+      "schemaCode": "JPK_KR_PD(1)",
+      "fileName": "jpk_kr_pd1_v1-1.xsd",
+      "targetNamespace": "http://jpk.mf.gov.pl/wzor/2024/09/04/09041/",
+      "rootElement": "JPK",
+      "formCode": "JPK_KR_PD",
+      "systemCode": "JPK_KR_PD (1)",
+      "schemaVersion": "1-1",
+      "formVariant": 1,
+      "officialSourceUrl": "https://www.gov.pl/attachment/4ec8f106-032c-42f2-9fb5-15b5ec5ca670",
+      "catalogPageUrl": "https://www.gov.pl/web/kas/struktury-jpk-w-podatkach-dochodowych",
+      "effectiveFrom": "2025-01-01",
+      "effectiveTo": null,
+      "applicableProfiles": ["spzoo_pelne_ksiegi"],
+      "limitations": "Księgi rachunkowe JPK_CIT (ZOiS7 dla jednostek pozostałych, Dziennik, KontoZapis, Ctrl, RPD). Mapowanie znaczników kont S_12_1/S_12_3 wymaga zatwierdzenia głównego księgowego przed wysyłką roczną.",
+      "sha256": "251bab822af09d638225068538dcd64c0b3b56c11a13a0c7cda0f709e0d5063a",
+      "sizeBytes": 358556
+    },
+    {
+      "schemaCode": "JPK_ST_KR(1)",
+      "fileName": "jpk_st_kr1_v1-0.xsd",
+      "targetNamespace": "http://jpk.mf.gov.pl/wzor/2024/04/24/04242/",
+      "rootElement": "JPK",
+      "formCode": "JPK_ST_KR",
+      "systemCode": "JPK_ST_KR (1)",
+      "schemaVersion": "1-0",
+      "formVariant": 1,
+      "officialSourceUrl": "https://www.gov.pl/attachment/336fb09b-ea93-475d-a895-0ef5b8b72a0b",
+      "catalogPageUrl": "https://www.gov.pl/web/kas/struktury-jpk-w-podatkach-dochodowych",
+      "effectiveFrom": "2025-01-01",
+      "effectiveTo": null,
+      "applicableProfiles": ["spzoo_pelne_ksiegi"],
+      "limitations": "Ewidencja środków trwałych i WNiP dla ksiąg rachunkowych (wymaga co najmniej 1 pozycji <ST_KR> przy wystąpieniu środków trwałych; przy braku środków trwałych plik nie jest generowany lub wymaga pozycji).",
+      "sha256": "2e82f260f04595e2e25d6db1634e3fc1ebe46a2ca4ec38e591754c71f5ac80d1",
+      "sizeBytes": 53045
+    },
+    {
+      "schemaCode": "KSEF_UPO(4-3)",
+      "fileName": "ksef_upo_v4-3.xsd",
+      "targetNamespace": "http://upo.schematy.mf.gov.pl/KSeF/v4-3",
+      "rootElement": "Potwierdzenie",
+      "formCode": "UPO",
+      "systemCode": "UPO v4-3",
+      "schemaVersion": "4-3",
+      "formVariant": 4,
+      "officialSourceUrl": "https://raw.githubusercontent.com/CIRFMF/ksef-api/main/faktury/upo/schemy/upo-v4-3.xsd",
+      "effectiveFrom": "2026-02-01",
+      "effectiveTo": null,
+      "applicableProfiles": [
+        "jdg_kpir_skala",
+        "jdg_kpir_liniowy",
+        "jdg_ryczalt",
+        "spzoo_pelne_ksiegi"
+      ],
+      "limitations": "Walidacja wyłącznie dla autentycznych dokumentów UPO pobranych z KSeF 2.0 (zakaz generowania fikcyjnych UPO przez aplikację).",
+      "sha256": "1e5ff386a29324021a9e0126319680aec0b1e0d4f4a18add30b2f5d12ce6fa86",
+      "sizeBytes": 11461
+    }
+  ],
+  "dependencies": [
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2021/06/08/eD/DefinicjeTypy/ElementarneTypyDanych_v8-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2021__06__08__eD__DefinicjeTypy__ElementarneTypyDanych_v8-0E.xsd",
+      "sha256": "bf2a183d31da73dfb5605e919302083db0a813ee96f86d2b562c886ecc7b371c",
+      "sizeBytes": 12366
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2021/06/08/eD/DefinicjeTypy/KodyKrajow_v8-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2021__06__08__eD__DefinicjeTypy__KodyKrajow_v8-0E.xsd",
+      "sha256": "b7a3d01f05abdc7782e7fff6806859ed43d7883a12faf8c73ed69b817b7745ad",
+      "sizeBytes": 40729
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2021/06/08/eD/DefinicjeTypy/KodyUrzedowSkarbowych_v7-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2021__06__08__eD__DefinicjeTypy__KodyUrzedowSkarbowych_v7-0E.xsd",
+      "sha256": "bb256afa9202c8db2fcdb01cb6d4f220011be5621e899a13e9125b82bd187ec9",
+      "sizeBytes": 70510
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2021/06/08/eD/DefinicjeTypy/StrukturyDanych_v8-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2021__06__08__eD__DefinicjeTypy__StrukturyDanych_v8-0E.xsd",
+      "sha256": "ec0ee83d06b076c1ba4ad038f31aa0c35e3083fd19359fdb4c5cc20acaca4bba",
+      "sizeBytes": 31546
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2022/01/05/eD/DefinicjeTypy/ElementarneTypyDanych_v10-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2022__01__05__eD__DefinicjeTypy__ElementarneTypyDanych_v10-0E.xsd",
+      "sha256": "8a531cb181d3e298d11b28766655ae91fee2d7851440095932ffc82137ed2be1",
+      "sizeBytes": 12228
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2022/01/05/eD/DefinicjeTypy/KodyKrajow_v10-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2022__01__05__eD__DefinicjeTypy__KodyKrajow_v10-0E.xsd",
+      "sha256": "1d41a1b3184188f2d20a51d3afde26204dda182ec5dacf018204dcc9870dc644",
+      "sizeBytes": 40729
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2022/01/05/eD/DefinicjeTypy/StrukturyDanych_v10-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2022__01__05__eD__DefinicjeTypy__StrukturyDanych_v10-0E.xsd",
+      "sha256": "1137ce6e3c11c2b9ef3f05e4e72d6dcd6b4fa94908ea558f2ba15de0259bb2aa",
+      "sizeBytes": 31547
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2022/01/05/eD/KodyUrzedowSkarbowych/KodyUrzedowSkarbowych_v8-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2022__01__05__eD__KodyUrzedowSkarbowych__KodyUrzedowSkarbowych_v8-0E.xsd",
+      "sha256": "af27f583ea1ceb44ed37e0ec0d9bfdf2bfda74aadd5841ccbf0fc241175c2e91",
+      "sizeBytes": 70526
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2022/09/13/eD/DefinicjeTypy/StrukturyDanych_v12-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2022__09__13__eD__DefinicjeTypy__StrukturyDanych_v12-0E.xsd",
+      "sha256": "01c45f7515f46cfa9bec843feef1409c126af3bee4d4e25f0325ae6323a9d512",
+      "sizeBytes": 23755
+    },
+    {
+      "canonicalUrl": "http://crd.gov.pl/xml/schematy/dziedzinowe/mf/2023/09/06/eD/KodyKrajow/KodyKrajow_v13-0E.xsd",
+      "localPath": "deps/crd.gov.pl__xml__schematy__dziedzinowe__mf__2023__09__06__eD__KodyKrajow__KodyKrajow_v13-0E.xsd",
+      "sha256": "a9a531883c0c35d38e8ad619d1042830affa17fd464f97fbbae8d8fa17d2e553",
+      "sizeBytes": 39640
+    }
+  ]
+}
